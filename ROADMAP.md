@@ -1,0 +1,40 @@
+# Roadmap
+
+Source of truth: [`docs/PRD.md`](docs/PRD.md) §5 (MoSCoW). This file is the
+short, scannable view; commits land features here when they ship.
+
+## v0 — M0–M3 (daily-driver)
+
+### Must
+
+- [ ] `F-foundations` — workspace, core, CI, store, single-instance, tracing
+- [ ] `F-app-shell` — window, lifecycle, bounds, menu
+- [ ] `F-session-browser` — scan + derive + group + list
+- [ ] `F-builtin-terminal` — PTY + native terminal widget
+- [ ] `F-fts-search` — SQLite FTS5 over content
+- [ ] `F-status-notifications` — busy / waiting / permission from OSC
+- [ ] `F-settings` (thin) — shell select, theme, window prefs
+- [ ] `F-packaging-ci-mac` — signed mac-ARM build + CI gate
+- [ ] `F-session-tabs` — tabbed open sessions
+- [ ] `F-terminal-split` — split panes (h/v), focus, resize
+- [ ] `F-keyboard-shortcuts` — configurable keymap → actions
+
+### Should (post v0)
+
+- [ ] `F-fork-detection`
+- [ ] `F-session-metadata`
+- [ ] `F-jsonl-viewer`
+- [ ] `F-plans-memory`
+- [ ] `F-auto-update`
+
+### Could
+
+- [ ] `F-activity-stats`
+- [ ] `F-session-grid` — a layout preset over the pane model
+- [ ] `F-scheduled-tasks`
+- [ ] `F-packaging-ci-other` (win/linux)
+
+### Unsure (deferred)
+
+- [ ] `F-file-diff-panel`
+- [ ] `F-mcp-ide-bridge`

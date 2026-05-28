@@ -1,0 +1,5 @@
+# Production code stays strict (no unwrap/expect/panic in core / claude).
+# Tests are allowed to use them so the discipline doesn't fight the harness.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

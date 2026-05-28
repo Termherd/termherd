@@ -1,0 +1,22 @@
+[package]
+name = "agentmux-app"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "agentmux"
+path = "src/main.rs"
+
+[dependencies]
+agentmux-core = { path = "../core" }
+agentmux-claude = { path = "../claude" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+single-instance = "0.3"
+
+[lints]
+workspace = true

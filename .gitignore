@@ -1,0 +1,12 @@
+/target
+**/*.rs.bk
+.DS_Store
+
+# editor
+/.idea
+/.vscode
+*.swp
+*.swo
+
+# personal notes (not part of the project)
+/.personal/

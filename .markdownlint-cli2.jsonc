@@ -1,0 +1,10 @@
+{
+  // Project docs: enforce 80-col prose, but don't fight tables / code blocks /
+  // anchor HTML / cosmetic table-pipe alignment.
+  "config": {
+    "MD013": { "line_length": 80, "tables": false, "code_blocks": false },
+    "MD033": false,
+    "MD060": false
+  },
+  "ignores": ["target/**", "node_modules/**"]
+}
