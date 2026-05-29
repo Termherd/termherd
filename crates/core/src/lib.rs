@@ -1,4 +1,4 @@
-//! agentmux-core — domain + headless `App` + workspace + keymap + ports.
+//! termherd-core — domain + headless `App` + workspace + keymap + ports.
 //!
 //! No I/O. No global mutable state. Pure, testable. See `docs/ARCHITECTURE.md`
 //! §5 (headless core) and §6 (workspace/input model).

@@ -1,13 +1,13 @@
-//! agentmux — entry point.
+//! termherd — entry point.
 //!
 //! M0: initialise tracing, enforce single-instance, log a startup line.
-//! M1+: wire concrete adapters into `agentmux_core::App` and launch the GUI.
+//! M1+: wire concrete adapters into `termherd_core::App` and launch the GUI.
 
 use single_instance::SingleInstance;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-const INSTANCE_ID: &str = "dev.gallay.agentmux";
+const INSTANCE_ID: &str = "dev.gallay.termherd";
 
 fn main() {
     init_tracing();
@@ -20,18 +20,18 @@ fn main() {
         }
     };
     if !instance.is_single() {
-        warn!("another agentmux instance is already running; exiting");
+        warn!("another termherd instance is already running; exiting");
         // Non-zero so a launcher can tell the difference from a clean shutdown.
         std::process::exit(2);
     }
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
-        "agentmux starting (M0 scaffold)"
+        "termherd starting (M0 scaffold)"
     );
 
     // TODO M1: construct adapters, build core::App, run iced event loop.
-    let _app = agentmux_core::App::new();
+    let _app = termherd_core::App::new();
 }
 
 fn init_tracing() {

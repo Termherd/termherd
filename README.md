@@ -1,6 +1,6 @@
-# agentmux
+# termherd
 
-> **Working name** — a Rust replatform experiment for a Claude Code session
+> A Rust replatform experiment for a Claude Code session
 > workspace. Native, terminal-multiplexer-style (tabs + splits + keyboard
 > driven), with the quality bar the predecessor lacked.
 
@@ -14,7 +14,7 @@ This is an early scaffold. Status, scope, and design live in:
 ## Run
 
 ```bash
-cargo run -p agentmux-app
+cargo run -p termherd-app
 ```
 
 ## Test

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`agentmux` (working name) is a Rust replatform of an Electron Claude Code session
+`termherd` is a Rust replatform of an Electron Claude Code session
 manager. The product is a **terminal workspace for Claude Code sessions** —
 browse, launch, arrange (tabs + splits), monitor, search — driven from the
 keyboard, on macOS Apple Silicon. The restart exists to fix four quality gaps
@@ -17,10 +17,10 @@ them.
 ## Commands
 
 ```bash
-cargo run -p agentmux-app          # run the binary (M0: tracing + single-instance stub)
+cargo run -p termherd-app          # run the binary (M0: tracing + single-instance stub)
 cargo test --workspace             # all tests
-cargo test -p agentmux-core        # tests for one crate
-cargo test -p agentmux-core workspace::tests::split_wraps_leaf  # one test by path
+cargo test -p termherd-core        # tests for one crate
+cargo test -p termherd-core workspace::tests::split_wraps_leaf  # one test by path
 
 # CI gates — mirror locally before pushing (CI runs all of these and they are blocking)
 cargo fmt --all --check

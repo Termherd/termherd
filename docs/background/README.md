@@ -1,4 +1,4 @@
-# Background — why agentmux exists
+# Background — why termherd exists
 
 These four documents are **dated snapshots from 2026-05-27**. They are the
 analysis that produced the restart decision and informed the v0 scope. They
@@ -15,7 +15,7 @@ this folder as the project's *reasoning archive*.
 
 ## Notes on framing
 
-- `assessment.md` predates the rename to agentmux and is written from the
+- `assessment.md` predates the rename to termherd and is written from the
   perspective of evaluating `doctly/switchboard` (which the author did not own).
   Its conclusions — restart, MIT-lift the domain modules, defer the IDE — are
   preserved verbatim because they are *the reason this repo exists*.

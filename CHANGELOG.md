@@ -14,11 +14,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - CI: `fmt`, `clippy -D warnings`, `cargo test`, `cargo-deny`, markdownlint
   required on PR (Q2).
 - `F-foundations` (M0): workspace skeleton, dependency rule, `tracing` init,
-  single-instance lock in `agentmux-app`.
+  single-instance lock in `termherd-app`.
 - First TDD targets:
-  - `agentmux-core::workspace` — pane tree + tabs with unit tests
+  - `termherd-core::workspace` — pane tree + tabs with unit tests
     (open / split / focus).
-  - `agentmux-claude::path` — `encode_project_path`, byte-faithful port of
+  - `termherd-claude::path` — `encode_project_path`, byte-faithful port of
     the JS reference, with unit tests.
 - `docs/background/` — imported the four 2026-05-27 analysis docs that
   produced the restart decision (assessment, feature sizing, the Electron

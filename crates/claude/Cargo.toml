@@ -1,5 +1,5 @@
 [package]
-name = "agentmux-claude"
+name = "termherd-claude"
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
