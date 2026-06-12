@@ -15,6 +15,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   required on PR (Q2).
 - `F-foundations` (M0): workspace skeleton, dependency rule, `tracing` init,
   single-instance lock in `termherd-app`.
+- `F-app-shell` (M0, partial): iced 0.14 window shell (OQ1 settled on
+  iced) — placeholder view, window bounds persisted to
+  `~/.termherd/window.json` on close and restored on launch (FR12); close
+  requests intercepted so bounds always save. Menu still to come.
 - First TDD targets:
   - `termherd-core::workspace` — pane tree + tabs with unit tests
     (open / split / focus).
