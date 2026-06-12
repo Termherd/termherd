@@ -20,6 +20,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (open / split / focus).
   - `termherd-claude::path` — `encode_project_path`, byte-faithful port of
     the JS reference, with unit tests.
+  - `termherd-claude::derive` — real-project-path recovery (`extract_cwd`
+    from JSONL, worktree collapse), ported from `derive-project-path.js`;
+    unit + property tests.
+  - `termherd-claude::digest` — session digest (summary, title precedence
+    per the #46 contract, message counts, FTS text), ported from
+    `read-session-file.js`; deliberately skips corrupt lines instead of
+    dropping the whole session (Q5); unit + property tests.
+  - `termherd-claude::osc` — PTY status decoding (busy spinner / ✳ idle /
+    OSC 9 notifications / alt-screen / bell), ported from the inline
+    `main.js` parsing; unit + property tests.
+  - Codec validated against a real `~/.claude/projects` tree: every derived
+    `cwd` re-encodes to its folder name; all sessions digested.
 - `docs/background/` — imported the four 2026-05-27 analysis docs that
   produced the restart decision (assessment, feature sizing, the Electron
   app's architecture and NFRs) plus an index README.
