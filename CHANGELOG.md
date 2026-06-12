@@ -15,10 +15,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   required on PR (Q2).
 - `F-foundations` (M0): workspace skeleton, dependency rule, `tracing` init,
   single-instance lock in `termherd-app`.
-- `F-app-shell` (M0, partial): iced 0.14 window shell (OQ1 settled on
-  iced) — placeholder view, window bounds persisted to
-  `~/.termherd/window.json` on close and restored on launch (FR12); close
-  requests intercepted so bounds always save. Menu still to come.
+- `F-app-shell` (M0): iced 0.14 window shell (OQ1 settled on iced) —
+  placeholder view, window bounds persisted to `~/.termherd/window.json`
+  on close and restored on launch (FR12); close requests intercepted so
+  bounds always save. The menu is deferred to M3: iced has no native menu
+  API, and the menu will mirror keymap actions (`F-keyboard-shortcuts`),
+  so they land together.
+- `F-packaging-ci` (M0, unsigned): cargo-dist 0.32 release pipeline —
+  tag-triggered GitHub workflow building mac (ARM + x64), Linux
+  (x64 + ARM) and Windows artifacts with shell/PowerShell installers and
+  checksums. Windows artifact verified locally (10.6 MB binary vs the
+  Electron app's ~150 MB). Signing/notarization pending certificates
+  (OQ5).
 - First TDD targets:
   - `termherd-core::workspace` — pane tree + tabs with unit tests
     (open / split / focus).

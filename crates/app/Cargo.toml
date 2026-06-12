@@ -5,11 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
 publish.workspace = true
 
 [[bin]]
 name = "termherd"
 path = "src/main.rs"
+
+# The workspace is publish = false (crates.io), but the binary IS shipped
+# via dist (GitHub Releases) — opt it in explicitly.
+[package.metadata.dist]
+dist = true
 
 [dependencies]
 termherd-core = { path = "../core" }
