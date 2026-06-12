@@ -20,6 +20,7 @@ dist = true
 [dependencies]
 termherd-core = { path = "../core" }
 termherd-claude = { path = "../claude" }
+termherd-scan = { path = "../scan" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 single-instance = "0.3"

@@ -3013,6 +3013,7 @@ dependencies = [
  "single-instance",
  "termherd-claude",
  "termherd-core",
+ "termherd-scan",
  "tracing",
  "tracing-subscriber",
 ]
@@ -3031,6 +3032,16 @@ version = "0.0.0"
 dependencies = [
  "termherd-claude",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "termherd-scan"
+version = "0.0.0"
+dependencies = [
+ "tempfile",
+ "termherd-claude",
+ "termherd-core",
+ "tracing",
 ]
 
 [[package]]

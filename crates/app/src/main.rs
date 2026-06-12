@@ -1,13 +1,17 @@
-//! termherd — entry point.
+//! termherd — entry point and composition root.
 //!
-//! M0: initialise tracing, enforce single-instance, run the iced shell
-//! with persisted window bounds. M1+: construct concrete adapters here and
-//! wire them into `termherd_core::App`.
+//! Constructs the concrete adapters here and injects them (Q4 — no
+//! require-time singletons): tracing, single-instance, the filesystem
+//! scanner, then the iced shell.
 
 mod shell;
 mod window_config;
 
+use std::sync::Arc;
+
 use single_instance::SingleInstance;
+use termherd_core::ports::{ProjectScanner, ScanError};
+use termherd_scan::FsScanner;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -31,13 +35,31 @@ fn main() -> iced::Result {
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
-        "termherd starting (M0 shell)"
+        "termherd starting (M1 browser)"
     );
 
-    let result = shell::run();
+    let scanner: Arc<dyn ProjectScanner> = match FsScanner::claude_default() {
+        Some(s) => Arc::new(s),
+        None => {
+            warn!("no home directory found; session browser will be empty");
+            Arc::new(NoScanner)
+        }
+    };
+
+    let result = shell::run(scanner);
     // Hold the lock for the whole GUI lifetime.
     drop(instance);
     result
+}
+
+/// Fallback scanner when no home directory exists — an empty browser is
+/// better than refusing to start.
+struct NoScanner;
+
+impl ProjectScanner for NoScanner {
+    fn scan(&self) -> Result<Vec<termherd_core::SessionRecord>, ScanError> {
+        Ok(Vec::new())
+    }
 }
 
 fn init_tracing() {

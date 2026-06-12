@@ -1,0 +1,19 @@
+[package]
+name = "termherd-scan"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+termherd-core = { path = "../core" }
+termherd-claude = { path = "../claude" }
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -21,6 +21,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bounds always save. The menu is deferred to M3: iced has no native menu
   API, and the menu will mirror keymap actions (`F-keyboard-shortcuts`),
   so they land together.
+- `F-session-browser` (M1, first slice): `termherd-scan` adapter — walks
+  `~/.claude/projects` with upstream's exact derivation order (direct
+  JSONL, then session subdirs and `subagents/`), worktree collapse with
+  the fs existence check, underivable folders dropped like upstream but
+  logged; `core::browser` — pure grouping (one group per real path, FR1;
+  recency ordering) behind `Event::ScanCompleted`; the shell scans off
+  the UI thread at startup (FR2, initial scan only) and renders the
+  sidebar. Live `notify` updates and FTS search still to come in M1.
 - `F-packaging-ci` (M0, unsigned): cargo-dist 0.32 release pipeline —
   tag-triggered GitHub workflow building mac (ARM + x64), Linux
   (x64 + ARM) and Windows artifacts with shell/PowerShell installers and
