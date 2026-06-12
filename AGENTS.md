@@ -5,7 +5,8 @@
 `termherd` is a Rust replatform of an Electron Claude Code session
 manager. The product is a **terminal workspace for Claude Code sessions** —
 browse, launch, arrange (tabs + splits), monitor, search — driven from the
-keyboard, on macOS Apple Silicon. The restart exists to fix four quality gaps
+keyboard, on macOS, Windows, and Linux (all three first-class). The restart
+exists to fix four quality gaps
 (god-object, races, silent catches, untestable design) **by construction**.
 
 Authoritative design lives in `docs/PRD.md` and `docs/ARCHITECTURE.md`. Read

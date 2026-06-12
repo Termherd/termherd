@@ -14,7 +14,7 @@ short, scannable view; commits land features here when they ship.
 - [ ] `F-fts-search` — SQLite FTS5 over content
 - [ ] `F-status-notifications` — busy / waiting / permission from OSC
 - [ ] `F-settings` (thin) — shell select, theme, window prefs
-- [ ] `F-packaging-ci-mac` — signed mac-ARM build + CI gate
+- [ ] `F-packaging-ci` — signed mac/win/linux builds + CI gate (3-OS matrix)
 - [ ] `F-session-tabs` — tabbed open sessions
 - [ ] `F-terminal-split` — split panes (h/v), focus, resize
 - [ ] `F-keyboard-shortcuts` — configurable keymap → actions
@@ -32,7 +32,6 @@ short, scannable view; commits land features here when they ship.
 - [ ] `F-activity-stats`
 - [ ] `F-session-grid` — a layout preset over the pane model
 - [ ] `F-scheduled-tasks`
-- [ ] `F-packaging-ci-other` (win/linux)
 
 ### Unsure (deferred)
 

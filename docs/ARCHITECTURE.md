@@ -1,8 +1,10 @@
 # TermHerd — Architecture
 
-**Date:** 2026-05-27 (rev. 2 — session-workspace product, IDE deferred)
+**Date:** 2026-06-12 (rev. 3 — Windows + Linux first-class at v1; rev. 2
+2026-05-27 session-workspace product, IDE deferred)
 **Status:** proposal (pairs with the Rust PRD)
-**Target:** pure-native Rust, macOS Apple Silicon, MVP core then iterate.
+**Target:** pure-native Rust, macOS (Apple Silicon) + Windows + Linux — all
+first-class at v1 — MVP core then iterate.
 **North star:** keep the product's value; fix the four quality gaps *by
 construction*. Every choice is justified against a gap from the review.
 
@@ -43,7 +45,7 @@ validated: a session workspace is squarely in pure-native-Rust territory.
 | FS scan/watch | **notify** + **rayon** | debounced watch + parallel scan off the UI thread | Must |
 | Async runtime | **tokio** | PTY read loops, fs watch, (later) MCP | Must |
 | Errors / logging | **thiserror**/`anyhow` + **tracing** | typed errors, structured logs | Must |
-| Release/update | **dist** (cargo-dist) + axoupdater | mac-ARM signed installer, GitHub release, self-update | Must (update = Should) |
+| Release/update | **dist** (cargo-dist) + axoupdater | signed installers for mac/win/linux, GitHub release, self-update | Must (update = Should) |
 | MCP/IDE server | tokio-tungstenite | per-session WS + JSON-RPC | **Deferred (Unsure)** |
 | Diff / highlight | `similar` + `syntect` | diff + syntax for the panel | **Deferred (Unsure)** |
 
@@ -289,10 +291,14 @@ TermHerd does **not** register as an IDE and Claude uses the real editor.
 
 ## 14. Build, release, signing, update
 
-- **`dist` (cargo-dist):** mac-ARM signed `.dmg`, GitHub Release, self-update —
-  the Rust-native analogue of electron-builder + electron-updater.
+- **`dist` (cargo-dist):** one release pipeline for all three platforms —
+  mac-ARM signed `.dmg`, Windows installer, Linux package (format OQ5) — on
+  GitHub Releases with self-update; the Rust-native analogue of
+  electron-builder + electron-updater.
 - **macOS:** hardened runtime + notarization, **no** JIT/unsigned-memory/
-  library-validation entitlements (Q9). Win/Linux keep building in CI (Could).
+  library-validation entitlements (Q9). **Windows:** Authenticode signing
+  (certificate sourcing OQ5). **Linux:** signed checksums. CI builds and
+  tests on a 3-OS matrix from M0.
 - Toolchain pinned via `rust-toolchain.toml`; custom steps (icons, dmg layout)
   live in `xtask`, keeping CI YAML thin.
 

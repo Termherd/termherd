@@ -1,9 +1,12 @@
 # TermHerd — Product Requirements Document
 
-**Date:** 2026-05-27 (rev. 2 — re-prioritised to a session-workspace product)
+**Date:** 2026-06-12 (rev. 3 — Windows + Linux promoted to first-class at
+v1, same level as macOS; rev. 2 2026-05-27 re-prioritised to a
+session-workspace product)
 **Status:** proposal
 **Decision basis:** the `.personal/` analysis set + the owner's MoSCoW.
-**Chosen path:** pure-native Rust GUI · MVP-core first · **macOS Apple Silicon**.
+**Chosen path:** pure-native Rust GUI · MVP-core first · **macOS (Apple
+Silicon) · Windows · Linux — all first-class at v1**.
 
 ## 1. Product framing (what changed in rev. 2)
 
@@ -36,15 +39,15 @@ the terminal's own output (OSC sequences).
 - G3 — Native performance (low idle CPU/mem, fast start); no Electron.
 - G4 — Stay a drop-in *reader* of Claude CLI files so it can run beside the
   Electron app during the parity gap.
+- G5 — First-class macOS, Windows, and Linux from v1 — same features, same
+  release pipeline, shipped together.
 
 ### Non-goals (v1)
 
 - N1 — IDE emulation / in-app diff review (MCP). Deferred to "Unsure"; Claude
   uses the real editor.
-- N2 — First-class Windows/Linux. macOS Apple Silicon only at v1; the pipeline
-  stays cross-platform-capable.
-- N3 — The Could features: stats, schedules, cross-platform packaging.
-- N4 — Reusing Electron/JS code. Domain *knowledge* is ported; code is not.
+- N2 — The Could features: stats, schedules.
+- N3 — Reusing Electron/JS code. Domain *knowledge* is ported; code is not.
 
 ## 3. Users & jobs-to-be-done
 
@@ -93,7 +96,7 @@ Feature IDs carry over; three **net-new** features (not in v0.0.30) get new IDs.
 | `F-fts-search` | SQLite FTS5 over content | M | needs digest parse |
 | `F-status-notifications` | busy / waiting / permission from OSC | M | no MCP needed |
 | `F-settings` (thin) | shell select, theme, window prefs | S | full version later |
-| `F-packaging-ci-mac` | signed mac-ARM build + CI gate | S | `dist` |
+| `F-packaging-ci` | signed mac/win/linux builds + CI gate | M | `dist`, 3-OS CI matrix |
 | `F-session-tabs` ⭐ | tabbed open sessions | M | **net-new** |
 | `F-terminal-split` ⭐ | split panes (h/v), focus, resize | L | **net-new** |
 | `F-keyboard-shortcuts` ⭐ | configurable keymap → actions | M | **net-new** |
@@ -111,8 +114,7 @@ Feature IDs carry over; three **net-new** features (not in v0.0.30) get new IDs.
 ### Could
 
 `F-activity-stats` (M), `F-session-grid` (S — a *layout preset* once the pane
-model exists, so cheap), `F-scheduled-tasks` (M), `F-packaging-ci-other`
-(Win/Linux, M).
+model exists, so cheap), `F-scheduled-tasks` (M).
 
 ### Unsure (deferred, possibly never)
 
@@ -170,10 +172,13 @@ Abbreviated acceptance criteria.
 
 Mapped from the NFR scorecard; each prior gap becomes a requirement.
 
-- **Packaging** — signed macOS Apple-Silicon `.dmg` via `dist` (cargo-dist);
-  Windows/Linux stay building in CI but are not shipped at v1.
-- **Signing** — hardened runtime + notarization **without** JIT/unsigned-memory/
-  library-validation entitlements (Q9) — a security upgrade over Electron.
+- **Packaging** — signed installers for all three platforms via `dist`
+  (cargo-dist): macOS Apple-Silicon `.dmg`, Windows installer, Linux package
+  (format OQ5); CI builds and tests on a macOS/Windows/Linux matrix.
+- **Signing** — macOS: hardened runtime + notarization **without**
+  JIT/unsigned-memory/library-validation entitlements (Q9) — a security
+  upgrade over Electron. Windows: Authenticode (certificate sourcing is OQ5).
+  Linux: signed checksums on releases.
 - **Auto-update** — Should; background check/download from GitHub Releases.
 - **Security** — no webview ⇒ no remote-content/CSP surface; fs access scoped
   to `~/.claude` (read) and `~/.termherd` (read/write); **no
@@ -204,21 +209,23 @@ Native rewrite midpoints: S 1.5 · M 3.5 · L 6.5 PD.
 
 | Milestone | Delivers (F-IDs) | ~PD |
 | --------- | ---------------- | --- |
-| M0 — Foundation & shell | foundations, app-shell, single-instance, CI, packaging-mac | 7 |
+| M0 — Foundation & shell | foundations, app-shell, single-instance, CI, packaging (3 OS) | 9 |
 | M1 — Browser & search | session-browser, fts-search | 9 |
 | M2 — Terminal & status | builtin-terminal, status-notifications | 10 |
 | M3 — Workspace & input | session-tabs, terminal-split, keyboard-shortcuts, settings(thin) | 13 |
-| **Daily-driver switch** | end of M3 | **~39** |
+| **Daily-driver switch** | end of M3 | **~41** |
 | Should | fork-detection, metadata, jsonl-viewer, plans-memory, auto-update | +11 |
-| Could | activity-stats, grid, schedules, Win/Linux packaging | +12 |
+| Could | activity-stats, grid, schedules | +9 |
 | Unsure | file-diff-panel, mcp-ide-bridge (coupled) | +8 |
 
 **Honesty on the budget.** The *parity* part of Must (browser, terminal,
 search, status, settings, shell, packaging, foundations) is bounded by the
 original ~55 PD. But tabs + splits + shortcuts are **net-new scope** the
-Electron app never had (~13 PD), so Must as a whole is additive, not strictly
-"≤ original." Deferring diff+MCP (Unsure, ~8 PD) is what keeps M0–M3 at ~39 PD
-and pulls the hardest widget off the critical path.
+Electron app never had (~13 PD), and shipping Windows + Linux at v1 (rev. 3)
+adds ~2 PD of packaging scope to M0 — the stack itself is already
+cross-platform. So Must as a whole is additive, not strictly "≤ original."
+Deferring diff+MCP (Unsure, ~8 PD) is what keeps M0–M3 at ~41 PD and pulls
+the hardest widget off the critical path.
 
 ## 10. Risks & mitigations
 
@@ -229,6 +236,7 @@ and pulls the hardest widget off the critical path.
 | Native terminal widget cost | Med | `alacritty_terminal` does ANSI/grid; widget is render+input |
 | Scope creep from net-new features | Med | MoSCoW is the contract; Could/Unsure stay out of M0–M3 |
 | Claude format/OSC drift | Med | isolated, property-tested `claude` crate |
+| **3-OS surface at v1** (PTY, shells, fs paths, signing differ per platform) | Med | stack chosen cross-platform (`portable-pty`, `notify`, `iced`, `dist`); platform code isolated in adapters; CI matrix on all 3 OSes from M0 so drift is caught per-commit, not at release |
 
 ## 11. Open questions
 
@@ -239,3 +247,7 @@ and pulls the hardest widget off the critical path.
   Electron DB, or read the existing schema? (Recommend: fresh + import.)
 - OQ4 — Do tabs and splits share one focus model with the Could `F-session-grid`
   (grid = a saved layout preset)? (Recommend: yes — design once.)
+- OQ5 — Windows code-signing certificate sourcing, and the Linux package
+  format (AppImage vs `.deb`/`.rpm` vs tarball + shell installer)?
+  (Recommend: start with cargo-dist defaults — tarball/shell + `.msi` — and
+  add formats on demand.)
