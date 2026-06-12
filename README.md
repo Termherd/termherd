@@ -1,8 +1,12 @@
-# termherd
+# TermHerd
 
 > A Rust replatform experiment for a Claude Code session
 > workspace. Native, terminal-multiplexer-style (tabs + splits + keyboard
 > driven), with the quality bar the predecessor lacked.
+
+Inspired by [doctly/switchboard](https://github.com/doctly/switchboard), the
+Electron app it replatforms; see [`docs/background/`](docs/background/) for
+the full reasoning archive.
 
 This is an early scaffold. Status, scope, and design live in:
 

@@ -180,14 +180,18 @@ anyone searches for.
 
 ### Action items
 
-- [ ] Pick: Termherd vs Foredeck — owner's call
+- [x] Pick: Termherd vs Foredeck — owner's call → **Termherd** (repo:
+  `termherd`, product name: TermHerd)
 - [ ] Once picked: register the relevant domain(s), GitHub org, reserve
   crate name on crates.io (publish a 0.0.0 placeholder)
-- [ ] Mass-rename across workspace: `Cargo.toml` package names
+- [x] Mass-rename across workspace: `Cargo.toml` package names
   (`agentmux-app` → `<name>-app`, etc.), `README.md`, `CLAUDE.md`,
   `docs/PRD.md` (currently titled "Switchboard"), `docs/ARCHITECTURE.md`
-- [ ] Decide whether to keep `Switchboard` as a doc-internal codename or
-  retire it fully
+  — done 2026-06-12; "Switchboard-rs" / `~/.switchboard` replaced with
+  TermHerd / `~/.termherd` in PRD + ARCHITECTURE
+- [x] Decide whether to keep `Switchboard` as a doc-internal codename or
+  retire it fully → **retired**; "Switchboard" now refers only to the
+  upstream Electron app (`doctly/switchboard`) in `docs/background/`
 
 ---
 

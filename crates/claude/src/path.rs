@@ -1,8 +1,8 @@
 //! Project-path encoding mirrors Claude CLI's folder-naming scheme so we read
 //! and write the same folder names the CLI does for any given project path.
 //!
-//! Reverse-engineered from claude CLI 2.1.126 (ported from
-//! `switchboard/encode-project-path.js`).
+//! Reverse-engineered from claude CLI 2.1.126 (ported from the upstream
+//! Electron app's `encode-project-path.js`, `doctly/switchboard`).
 
 /// Encode a project path into the folder name Claude CLI uses under
 /// `~/.claude/projects/`.

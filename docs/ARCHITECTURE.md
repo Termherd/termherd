@@ -1,4 +1,4 @@
-# Switchboard (Rust) — Architecture
+# TermHerd — Architecture
 
 **Date:** 2026-05-27 (rev. 2 — session-workspace product, IDE deferred)
 **Status:** proposal (pairs with the Rust PRD)
@@ -58,7 +58,7 @@ structurally prevents a new god-object.
 
 ```text
                        ┌──────────────────────────────────┐
-                       │  crates/app   (bin: switchboard)  │
+                       │  crates/app   (bin: termherd)     │
                        │  iced GUI — tab bar, split panes,  │
                        │  terminal widget; thin translator  │
                        └─────────────────┬─────────────────┘
@@ -244,12 +244,12 @@ geometry. Fully testable without a GUI.
 
 If the Unsure bet is taken: CLI → WS `openDiff` → `Event::DiffRequested` → diff
 panel → `Effect::ReplyDiff`, with a timeout bound (Q7). Until then,
-Switchboard-rs does **not** register as an IDE and Claude uses the real editor.
+TermHerd does **not** register as an IDE and Claude uses the real editor.
 
 ## 11. Data, storage & Claude compatibility
 
-- App data: `~/.switchboard/` SQLite (WAL, FTS5); fresh schema + one-time import
-  from the Electron DB (OQ3).
+- App data: `~/.termherd/` SQLite (WAL, FTS5); fresh schema + one-time import
+  from the Electron app's DB (`~/.switchboard/switchboard.db`, OQ3).
 - Reads `~/.claude/projects/**` and `~/.claude/` unchanged. **v1 writes nothing
   under `~/.claude/ide`** (no IDE registration) — one less coordination point.
 - **Coexistence:** because reads are unchanged, the Rust app runs beside the

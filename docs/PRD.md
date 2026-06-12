@@ -1,4 +1,4 @@
-# Switchboard (Rust) — Product Requirements Document
+# TermHerd — Product Requirements Document
 
 **Date:** 2026-05-27 (rev. 2 — re-prioritised to a session-workspace product)
 **Status:** proposal
@@ -11,7 +11,7 @@ The owner's prioritisation moves **IDE emulation and diff review to "Unsure"**
 and promotes **tabs, terminal splits, keyboard shortcuts, status
 notifications, and search** to Must. That reframes the product:
 
-> Switchboard-rs is a **terminal workspace for Claude Code sessions** — browse,
+> TermHerd is a **terminal workspace for Claude Code sessions** — browse,
 > launch, arrange (tabs + splits), monitor, and search many sessions from one
 > native window. It is **not** an IDE: Claude continues to use the user's real
 > editor for file edits.
@@ -21,7 +21,7 @@ single largest, hardest native build — leaves the critical path**, and the new
 risk concentration (terminal multiplexing) is exactly the capability the owner
 wants. Risk now aligns with value.
 
-Dropping IDE emulation has one clean consequence: Switchboard-rs does **not**
+Dropping IDE emulation has one clean consequence: TermHerd does **not**
 register in `~/.claude/ide`, so the CLI falls back to the user's configured
 editor (VS Code / Cursor) — the behaviour the Electron app already exposes as a
 toggle. Status notifications do **not** depend on this; they come from parsing
@@ -176,7 +176,7 @@ Mapped from the NFR scorecard; each prior gap becomes a requirement.
   library-validation entitlements (Q9) — a security upgrade over Electron.
 - **Auto-update** — Should; background check/download from GitHub Releases.
 - **Security** — no webview ⇒ no remote-content/CSP surface; fs access scoped
-  to `~/.claude` (read) and `~/.switchboard` (read/write); **no
+  to `~/.claude` (read) and `~/.termherd` (read/write); **no
   `~/.claude/ide` writes in v1** (no IDE registration); external links via OS
   opener.
 - **Single-instance** — never races on the DB (Q8).
@@ -184,7 +184,7 @@ Mapped from the NFR scorecard; each prior gap becomes a requirement.
   < 1 s, scan of 1k sessions < 2 s off-thread; many concurrent terminals stay
   smooth (GPU-accelerated rendering).
 - **Observability** — single `tracing` stack, structured, leveled (Q11).
-- **Data/storage** — SQLite (WAL, FTS5) at `~/.switchboard/`; reads
+- **Data/storage** — SQLite (WAL, FTS5) at `~/.termherd/`; reads
   `~/.claude/projects` + `~/.claude/` unchanged ⇒ coexistence with Electron.
 - **Toolchain** — `rust-toolchain.toml` pins the version (Q10).
 
@@ -235,7 +235,7 @@ and pulls the hardest widget off the critical path.
 - OQ1 — Final GUI crate: `iced` (recommended — Elm/testable, the pane tree maps
   cleanly to it) vs `egui` (faster MVP) vs `GPUI` (best terminal primitives).
 - OQ2 — Keymap config format (TOML keymap file? defaults + overrides?).
-- OQ3 — Storage: fresh `~/.switchboard` schema + one-time import from the
+- OQ3 — Storage: fresh `~/.termherd` schema + one-time import from the
   Electron DB, or read the existing schema? (Recommend: fresh + import.)
 - OQ4 — Do tabs and splits share one focus model with the Could `F-session-grid`
   (grid = a saved layout preset)? (Recommend: yes — design once.)

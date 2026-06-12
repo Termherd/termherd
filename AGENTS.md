@@ -44,8 +44,8 @@ app  ──►  core  ◄──  adapters          (adapters depend on core, nev
          claude   (pure codec; no I/O)
 ```
 
-- `crates/core` — domain, headless `App` state machine, `Workspace` (pane tree
-  + tabs), keymap, port traits. **Depends only on `claude`.** No I/O, no
+- `crates/core` — domain, headless `App` state machine, `Workspace` (pane
+  tree + tabs), keymap, port traits. **Depends only on `claude`.** No I/O, no
   globals, no `unwrap`/`expect`/`panic` (these are clippy-denied here, see
   `crates/core/Cargo.toml`).
 - `crates/claude` — pure Claude CLI format codec (path encode/derive, JSONL
