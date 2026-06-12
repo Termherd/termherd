@@ -14,12 +14,19 @@ allow = [
     "CC0-1.0",
     "Zlib",
     "MPL-2.0",
+    # Boost Software License — OSI-approved permissive; pulled in by iced's
+    # Windows clipboard support (clipboard-win, error-code).
+    "BSL-1.0",
 ]
 confidence-threshold = 0.8
 
 [advisories]
 yanked = "warn"
-ignore = []
+ignore = [
+    # `paste` is unmaintained (no vulnerability) and a transitive dep of
+    # iced; drops out whenever iced's tree moves off it.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained, transitive via iced" },
+]
 
 [bans]
 multiple-versions = "warn"
