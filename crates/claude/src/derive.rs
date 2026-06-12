@@ -14,25 +14,19 @@
 
 /// Extract the first `cwd` value from JSONL content.
 ///
-/// Mirrors `extractCwdFromJsonl`: scan lines in order, skip empty lines and
-/// lines that fail to parse as JSON, and return the first non-empty string
-/// `cwd`. (The JS reference accepts any truthy `cwd`; in practice the CLI
-/// always writes a string, so non-strings are skipped here.)
+/// Mirrors `extractCwdFromJsonl`: scan entries in order (line policy in
+/// [`crate::jsonl`]) and return the first non-empty string `cwd`. (The JS
+/// reference accepts any truthy `cwd`; in practice the CLI always writes a
+/// string, so non-strings are skipped here.)
 pub fn extract_cwd(jsonl: &str) -> Option<String> {
-    for line in jsonl.lines() {
-        if line.is_empty() {
-            continue;
+    crate::jsonl::entries(jsonl).find_map(|value| {
+        let cwd = value.get("cwd")?.as_str()?;
+        if cwd.is_empty() {
+            None
+        } else {
+            Some(cwd.to_owned())
         }
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if let Some(cwd) = value.get("cwd").and_then(serde_json::Value::as_str)
-            && !cwd.is_empty()
-        {
-            return Some(cwd.to_owned());
-        }
-    }
-    None
+    })
 }
 
 /// If `cwd` points inside a worktree checkout, return the main project path

@@ -6,12 +6,8 @@
 //! (file stem) and created/modified timestamps come from the filesystem and
 //! are the scan adapter's job.
 //!
-//! **Deliberate deviation from upstream:** the JS reference runs
-//! `JSON.parse` unguarded inside its line loop, so a single corrupt line
-//! makes the whole session vanish from the browser — and torn lines are
-//! routine while the CLI is appending to a live session. Here a line that
-//! fails to parse is skipped and the rest of the file is still digested
-//! (Q5: predictable failure, never panic).
+//! Malformed lines are skipped, not fatal — the policy (a deliberate
+//! deviation from upstream) lives in [`crate::jsonl`].
 
 /// What the browser and the FTS index need from one session JSONL.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +44,15 @@ fn non_empty(s: &str) -> Option<&str> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+/// A string field of a transcript entry, with JS-truthiness semantics:
+/// missing, non-string, or empty all count as absent.
+fn non_empty_str<'a>(entry: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    entry
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .and_then(non_empty)
+}
+
 /// Maximum UTF-16 length of the summary (JS `text.slice(0, 120)`).
 const SUMMARY_MAX_UNITS: usize = 120;
 /// Per-message contribution to `text_content` (JS `text.slice(0, 500)`).
@@ -69,18 +74,9 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
     let mut custom_title: Option<String> = None;
     let mut ai_title: Option<String> = None;
 
-    for line in content.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        // Deviation: skip unparseable lines instead of aborting the file.
-        let Ok(entry) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-
+    for entry in crate::jsonl::entries(content) {
         if slug.is_none()
-            && let Some(s) = entry.get("slug").and_then(serde_json::Value::as_str)
-            && !s.is_empty()
+            && let Some(s) = non_empty_str(&entry, "slug")
         {
             slug = Some(s.to_owned());
         }
@@ -89,14 +85,12 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         let role = entry.get("role").and_then(serde_json::Value::as_str);
 
         if entry_type == Some("custom-title")
-            && let Some(t) = entry.get("customTitle").and_then(serde_json::Value::as_str)
-            && !t.is_empty()
+            && let Some(t) = non_empty_str(&entry, "customTitle")
         {
             custom_title = Some(t.to_owned());
         }
         if entry_type == Some("ai-title")
-            && let Some(t) = entry.get("aiTitle").and_then(serde_json::Value::as_str)
-            && !t.is_empty()
+            && let Some(t) = non_empty_str(&entry, "aiTitle")
         {
             ai_title = Some(t.to_owned());
         }
