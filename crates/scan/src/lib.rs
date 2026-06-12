@@ -12,11 +12,14 @@
 //! only. A folder whose path cannot be derived is dropped, like upstream —
 //! but logged, not silent (Q5).
 //!
-//! Still to come in M1: `notify` watching for live updates (FR2) and
-//! `rayon` parallel parsing for large trees.
+//! [`watch_changes`] provides the debounced fs watch behind live sidebar
+//! updates (FR2). Still to come: `rayon` parallel parsing for large trees.
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use notify::{RecursiveMode, Watcher};
 
 use termherd_claude::derive::{collapse_worktree, extract_cwd};
 use termherd_claude::digest::digest_session;
@@ -44,6 +47,54 @@ impl FsScanner {
             PathBuf::from(home).join(".claude").join("projects"),
         ))
     }
+
+    /// The projects root this scanner walks.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+/// Keeps the fs watcher and its coalescing thread alive; dropping it stops
+/// both.
+pub struct WatchHandle {
+    _watcher: notify::RecommendedWatcher,
+}
+
+/// Watch `root` recursively and invoke `on_change` once per debounced
+/// burst of filesystem events (the CLI appends JSONL lines continuously;
+/// without coalescing every keystroke of a session would trigger a
+/// rescan). The callback runs on a background thread.
+pub fn watch_changes(
+    root: PathBuf,
+    debounce: Duration,
+    mut on_change: impl FnMut() + Send + 'static,
+) -> Result<WatchHandle, ScanError> {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        if event.is_ok() {
+            let _ = tx.send(());
+        }
+    })
+    .map_err(|e| ScanError::Unreadable(format!("watcher: {e}")))?;
+    watcher
+        .watch(&root, RecursiveMode::Recursive)
+        .map_err(|e| ScanError::Unreadable(format!("{}: {e}", root.display())))?;
+
+    std::thread::Builder::new()
+        .name("termherd-fs-watch".into())
+        .spawn(move || {
+            // One blocking recv starts a burst; keep draining until the
+            // tree has been quiet for `debounce`, then fire once.
+            while rx.recv().is_ok() {
+                while rx.recv_timeout(debounce).is_ok() {}
+                on_change();
+            }
+            debug!("fs watch channel closed; coalescing thread exiting");
+        })
+        .map_err(|e| ScanError::Unreadable(format!("watch thread: {e}")))?;
+
+    Ok(WatchHandle { _watcher: watcher })
 }
 
 impl ProjectScanner for FsScanner {
@@ -243,5 +294,39 @@ mod tests {
     fn missing_root_is_a_typed_error() {
         let scanner = FsScanner::new(PathBuf::from("/definitely/not/here"));
         assert!(scanner.scan().is_err());
+    }
+
+    #[test]
+    fn watch_fires_once_per_debounced_burst() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let _handle = watch_changes(
+            tmp.path().to_owned(),
+            std::time::Duration::from_millis(200),
+            move || {
+                let _ = tx.send(());
+            },
+        )
+        .unwrap();
+
+        // A burst of writes…
+        for i in 0..5 {
+            fs::write(tmp.path().join(format!("f{i}.jsonl")), "x").unwrap();
+        }
+        // …yields at least one change signal (fs event latency varies by
+        // platform, so allow a generous window but require coalescing to
+        // have collapsed the burst into very few signals).
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok(),
+            "no change signal within 10s"
+        );
+        let extra =
+            std::iter::from_fn(|| rx.recv_timeout(std::time::Duration::from_millis(600)).ok())
+                .count();
+        assert!(
+            extra <= 2,
+            "burst was not coalesced: {} extra signals",
+            extra + 1
+        );
     }
 }

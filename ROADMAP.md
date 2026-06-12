@@ -10,11 +10,12 @@ short, scannable view; commits land features here when they ship.
 - [ ] `F-foundations` — workspace, core, CI, single-instance, tracing
 - [x] `F-app-shell` — window, lifecycle, bounds (menu: deferred to M3 with
   the keymap — no native menu API in iced; menu items mirror keymap actions)
-- [ ] `F-session-browser` — scan + derive + group + list — *scan adapter,
-  grouping and sidebar shipped; missing: live fs-watch updates (FR2)*
+- [x] `F-session-browser` — scan + derive + group + list + live fs-watch
+  updates (debounced `notify`, FR2)
 - [ ] `F-builtin-terminal` — PTY + native terminal widget
-- [ ] `F-search` — in-memory search over digests (was `F-fts-search`;
+- [x] `F-search` — in-memory search over digests (was `F-fts-search`;
   the SQLite FTS5 version moved to Should as `F-store-cache`, PRD rev. 4)
+  — case-insensitive, titles-only toggle (FR3)
 - [ ] `F-status-notifications` — busy / waiting / permission from OSC
 - [ ] `F-settings` (thin) — shell select, theme, window prefs
 - [ ] `F-packaging-ci` — signed mac/win/linux builds + CI gate (3-OS matrix)

@@ -62,6 +62,64 @@ pub fn group_projects(records: Vec<SessionRecord>) -> Vec<ProjectGroup> {
     groups
 }
 
+/// Filter groups for the search box (FR3): case-insensitive, matching the
+/// project path or, per session, the display title — plus summary, slug and
+/// indexed text unless `titles_only`. Groups keep their order; a group
+/// whose path matches is kept whole.
+#[must_use]
+pub fn filter_projects(
+    groups: &[ProjectGroup],
+    query: &str,
+    titles_only: bool,
+) -> Vec<ProjectGroup> {
+    let needle = query.trim().to_lowercase();
+    if needle.is_empty() {
+        return groups.to_vec();
+    }
+    groups
+        .iter()
+        .filter_map(|group| {
+            if group.path.to_lowercase().contains(&needle) {
+                return Some(group.clone());
+            }
+            let sessions: Vec<SessionRecord> = group
+                .sessions
+                .iter()
+                .filter(|s| session_matches(s, &needle, titles_only))
+                .cloned()
+                .collect();
+            if sessions.is_empty() {
+                None
+            } else {
+                Some(ProjectGroup {
+                    path: group.path.clone(),
+                    sessions,
+                })
+            }
+        })
+        .collect()
+}
+
+fn session_matches(session: &SessionRecord, needle_lower: &str, titles_only: bool) -> bool {
+    if session
+        .digest
+        .display_title(None)
+        .to_lowercase()
+        .contains(needle_lower)
+    {
+        return true;
+    }
+    if titles_only {
+        return false;
+    }
+    let d = &session.digest;
+    d.summary.to_lowercase().contains(needle_lower)
+        || d.slug
+            .as_deref()
+            .is_some_and(|s| s.to_lowercase().contains(needle_lower))
+        || d.text_content.to_lowercase().contains(needle_lower)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +187,49 @@ mod tests {
     #[test]
     fn empty_input_gives_empty_sidebar() {
         assert!(group_projects(vec![]).is_empty());
+    }
+
+    #[test]
+    fn empty_query_keeps_everything() {
+        let groups = group_projects(vec![record("/a", "s1", 1)]);
+        assert_eq!(filter_projects(&groups, "  ", false), groups);
+    }
+
+    #[test]
+    fn search_is_case_insensitive_over_content_and_titles() {
+        let mut r = record("/a", "s1", 1);
+        r.digest.text_content = "Fix the Login Bug\n".into();
+        let groups = group_projects(vec![r, record("/b", "s2", 2)]);
+
+        let hits = filter_projects(&groups, "lOgIn", false);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "/a");
+        // Content does not match in titles-only mode…
+        assert!(filter_projects(&groups, "login", true).is_empty());
+        // …but titles still do ("prompt s2" is the display title).
+        let hits = filter_projects(&groups, "PROMPT S2", true);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, "/b");
+    }
+
+    #[test]
+    fn matching_project_path_keeps_the_whole_group() {
+        let groups = group_projects(vec![
+            record("/apps/web", "s1", 1),
+            record("/apps/web", "s2", 2),
+        ]);
+        let hits = filter_projects(&groups, "web", true);
+        assert_eq!(hits[0].sessions.len(), 2);
+    }
+
+    #[test]
+    fn non_matching_sessions_are_dropped_from_a_group() {
+        let mut hit = record("/a", "findme", 1);
+        hit.digest.summary = "the needle".into();
+        let groups = group_projects(vec![hit, record("/a", "other", 2)]);
+        let filtered = filter_projects(&groups, "needle", false);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].sessions.len(), 1);
+        assert_eq!(filtered[0].sessions[0].session_id, "findme");
     }
 }

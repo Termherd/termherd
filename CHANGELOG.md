@@ -21,6 +21,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bounds always save. The menu is deferred to M3: iced has no native menu
   API, and the menu will mirror keymap actions (`F-keyboard-shortcuts`),
   so they land together.
+- `F-search` (M1): in-memory search (FR3) — case-insensitive over titles,
+  summaries, slugs and indexed text, titles-only toggle; pure
+  `filter_projects` in `core` behind `Event::SearchChanged`, search box +
+  checkbox in the sidebar.
+- `F-session-browser` (M1, completed): debounced `notify` watch on
+  `~/.claude/projects` (FR2) — bursts of fs events coalesce into one
+  rescan; the sidebar live-updates while Claude CLI writes. Verified
+  live: create/delete in the projects tree triggers a ~200 ms rescan.
 - `F-session-browser` (M1, first slice): `termherd-scan` adapter — walks
   `~/.claude/projects` with upstream's exact derivation order (direct
   JSONL, then session subdirs and `subagents/`), worktree collapse with

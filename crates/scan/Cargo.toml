@@ -11,6 +11,7 @@ publish.workspace = true
 termherd-core = { path = "../core" }
 termherd-claude = { path = "../claude" }
 tracing = "0.1"
+notify = "8.2.0"
 
 [dev-dependencies]
 tempfile = "3"

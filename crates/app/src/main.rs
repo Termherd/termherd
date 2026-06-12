@@ -38,15 +38,19 @@ fn main() -> iced::Result {
         "termherd starting (M1 browser)"
     );
 
-    let scanner: Arc<dyn ProjectScanner> = match FsScanner::claude_default() {
-        Some(s) => Arc::new(s),
-        None => {
-            warn!("no home directory found; session browser will be empty");
-            Arc::new(NoScanner)
-        }
-    };
+    let (scanner, watch_root): (Arc<dyn ProjectScanner>, Option<std::path::PathBuf>) =
+        match FsScanner::claude_default() {
+            Some(s) => {
+                let root = s.root().to_owned();
+                (Arc::new(s), Some(root))
+            }
+            None => {
+                warn!("no home directory found; session browser will be empty");
+                (Arc::new(NoScanner), None)
+            }
+        };
 
-    let result = shell::run(scanner);
+    let result = shell::run(scanner, watch_root);
     // Hold the lock for the whole GUI lifetime.
     drop(instance);
     result
