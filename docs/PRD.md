@@ -1,8 +1,10 @@
 # TermHerd — Product Requirements Document
 
-**Date:** 2026-06-12 (rev. 3 — Windows + Linux promoted to first-class at
-v1, same level as macOS; rev. 2 2026-05-27 re-prioritised to a
-session-workspace product)
+**Date:** 2026-06-12 (rev. 4 — SQLite store moved to Should: v1-Must
+search runs in-memory over scan digests, the SQLite cache + FTS5 index
+becomes `F-store-cache`; rev. 3 same day promoted Windows + Linux to
+first-class; rev. 2 2026-05-27 re-prioritised to a session-workspace
+product)
 **Status:** proposal
 **Decision basis:** the `.personal/` analysis set + the owner's MoSCoW.
 **Chosen path:** pure-native Rust GUI · MVP-core first · **macOS (Apple
@@ -89,11 +91,11 @@ Feature IDs carry over; three **net-new** features (not in v0.0.30) get new IDs.
 
 | F-ID | Feature | Size | Note |
 | ---- | ------- | ---- | ---- |
-| `F-foundations` | workspace, core, CI, store, single-instance, tracing | M | enabling |
+| `F-foundations` | workspace, core, CI, single-instance, tracing | M | enabling |
 | `F-app-shell` | window, lifecycle, bounds, menu | S | hosts tabs/splits |
 | `F-session-browser` | scan + derive + group + list | L | core view |
 | `F-builtin-terminal` | PTY + native terminal widget | L | the product surface |
-| `F-fts-search` | SQLite FTS5 over content | M | needs digest parse |
+| `F-search` | in-memory search over digests | S | was `F-fts-search`; the FTS5 version is `F-store-cache` (Should) |
 | `F-status-notifications` | busy / waiting / permission from OSC | M | no MCP needed |
 | `F-settings` (thin) | shell select, theme, window prefs | S | full version later |
 | `F-packaging-ci` | signed mac/win/linux builds + CI gate | M | `dist`, 3-OS CI matrix |
@@ -105,6 +107,7 @@ Feature IDs carry over; three **net-new** features (not in v0.0.30) get new IDs.
 
 | F-ID | Feature | Size |
 | ---- | ------- | ---- |
+| `F-store-cache` | SQLite (WAL) digest cache + FTS5 index — instant cold start on large trees; foundation for `F-session-metadata` | M |
 | `F-fork-detection` | fork / plan-accept detection | M |
 | `F-session-metadata` | star / rename / archive / titles | S |
 | `F-jsonl-viewer` | rich transcript viewer | M |
@@ -126,7 +129,7 @@ bet). Deferring both removes the hardest widget and an entire adapter from v1.
 
 The owner placed "jsonl parser" in Should. Split it: the **lightweight digest
 parse** (summary, titles, counts, searchable text) is required by
-`F-session-browser` + `F-fts-search`, so it lives in **`F-foundations`** (Must,
+`F-session-browser` + `F-search`, so it lives in **`F-foundations`** (Must,
 in the `claude` crate). Only the **rich transcript viewer** (`F-jsonl-viewer`)
 is Should.
 
@@ -140,8 +143,9 @@ Abbreviated acceptance criteria.
   the real project path (derived from JSONL `cwd`, worktrees collapsed); no
   duplicate-group bug (#41/#44 class), pinned by property tests.
 - FR2 — Scanning is off the UI thread; live-updates on fs changes.
-- FR3 — Full-text search over session content, case-insensitive, title-only
-  toggle; index maintained incrementally.
+- FR3 — Search over session content, case-insensitive, title-only toggle.
+  v1: in-memory over scan digests (their indexed text is capped per
+  session); the persisted FTS5 index arrives with `F-store-cache` (Should).
 
 ### Terminal, tabs & splits
 
@@ -189,7 +193,9 @@ Mapped from the NFR scorecard; each prior gap becomes a requirement.
   < 1 s, scan of 1k sessions < 2 s off-thread; many concurrent terminals stay
   smooth (GPU-accelerated rendering).
 - **Observability** — single `tracing` stack, structured, leveled (Q11).
-- **Data/storage** — SQLite (WAL, FTS5) at `~/.termherd/`; reads
+- **Data/storage** — v1 Must persists only small config files under
+  `~/.termherd/` (window, settings); the SQLite (WAL, FTS5) cache at
+  `~/.termherd/` is Should (`F-store-cache`, OQ3). Reads
   `~/.claude/projects` + `~/.claude/` unchanged ⇒ coexistence with Electron.
 - **Toolchain** — `rust-toolchain.toml` pins the version (Q10).
 
@@ -210,11 +216,11 @@ Native rewrite midpoints: S 1.5 · M 3.5 · L 6.5 PD.
 | Milestone | Delivers (F-IDs) | ~PD |
 | --------- | ---------------- | --- |
 | M0 — Foundation & shell | foundations, app-shell, single-instance, CI, packaging (3 OS) | 9 |
-| M1 — Browser & search | session-browser, fts-search | 9 |
+| M1 — Browser & search | session-browser, search (in-memory) | 8 |
 | M2 — Terminal & status | builtin-terminal, status-notifications | 10 |
 | M3 — Workspace & input | session-tabs, terminal-split, keyboard-shortcuts, settings(thin) | 13 |
-| **Daily-driver switch** | end of M3 | **~41** |
-| Should | fork-detection, metadata, jsonl-viewer, plans-memory, auto-update | +11 |
+| **Daily-driver switch** | end of M3 | **~40** |
+| Should | store-cache, fork-detection, metadata, jsonl-viewer, plans-memory, auto-update | +14 |
 | Could | activity-stats, grid, schedules | +9 |
 | Unsure | file-diff-panel, mcp-ide-bridge (coupled) | +8 |
 
@@ -224,8 +230,9 @@ original ~55 PD. But tabs + splits + shortcuts are **net-new scope** the
 Electron app never had (~13 PD), and shipping Windows + Linux at v1 (rev. 3)
 adds ~2 PD of packaging scope to M0 — the stack itself is already
 cross-platform. So Must as a whole is additive, not strictly "≤ original."
-Deferring diff+MCP (Unsure, ~8 PD) is what keeps M0–M3 at ~41 PD and pulls
-the hardest widget off the critical path.
+Deferring diff+MCP (Unsure, ~8 PD) and the SQLite store (rev. 4, Should)
+is what keeps M0–M3 at ~40 PD and pulls the hardest widget off the
+critical path.
 
 ## 10. Risks & mitigations
 

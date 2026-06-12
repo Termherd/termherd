@@ -53,8 +53,10 @@ app  ──►  core  ◄──  adapters          (adapters depend on core, nev
   digest, OSC decode). Same strict lint profile as `core`.
 - `crates/app` — iced GUI shell. Currently a tracing + single-instance stub;
   M1+ will construct adapters in `main()` and inject them into `core::App`.
-- Adapters (`store`, `pty`, `scan`, optional `mcp`) do not yet exist — they
-  land per the milestone plan in `docs/ARCHITECTURE.md` §15.
+- `crates/scan` — filesystem discovery adapter (walks `~/.claude/projects`
+  via the `claude` codec; implements `core::ports::ProjectScanner`).
+- Remaining adapters land per `docs/ARCHITECTURE.md` §15: `pty` (M2),
+  `store` (Should, PRD rev. 4), optional `mcp` (Unsure).
 
 When adding code, ask: *which crate does this belong in?* If the answer is
 "`core` should call this adapter directly," the answer is wrong — add a port

@@ -172,9 +172,10 @@ a window.
 
 Each adapter implements a `core` port and fixes a specific v0.0.30 defect.
 
-- **`store`** (`SessionStore`) — rusqlite, WAL, FTS5; migrations via `refinery`;
-  constructed in `main`, injected — not a require-time singleton (Q4); every
-  query returns `Result` (Q5).
+- **`store`** (`SessionStore`) — *Should, `F-store-cache` (PRD rev. 4)* —
+  rusqlite, WAL, FTS5; migrations via `refinery`; constructed in `main`,
+  injected — not a require-time singleton (Q4); every query returns
+  `Result` (Q5). v1 Must runs from in-memory scan results.
 - **`pty`** (`PtyHost`) — `portable-pty` spawns/resizes each session's process
   with a cleaned env; `alacritty_terminal` parses bytes into a grid and surfaces
   **OSC status** (busy/idle/notification) as typed events — replacing fragile
@@ -223,7 +224,8 @@ Swapping iced for egui/GPUI (OQ1) touches only this crate.
 
 1. `scan` (rayon) reads folders; `claude` derives the real path and parses each
    JSONL → digest. Parse errors are logged and skipped, never panic.
-2. Digests upserted into `store` (SQLite + FTS5) in a transaction.
+2. Digests upserted into `store` (SQLite + FTS5) in a transaction — once
+   `F-store-cache` (Should) lands; v1 Must keeps them in memory.
 3. `scan` emits `ScanCompleted`; `apply` rebuilds grouped projects; the sidebar
    re-renders. `notify` triggers incremental re-scans.
 
@@ -308,7 +310,7 @@ TermHerd does **not** register as an IDE and Claude uses the real editor.
 | ----- | -------------- | -------- | ------ |
 | `core` | domain + headless `App` + workspace + keymap + ports | `claude` | Must |
 | `claude` | Claude CLI format codec (pure) | — | Must |
-| `store` | SQLite cache, metadata, FTS5 | `rusqlite` | Must |
+| `store` | SQLite cache, metadata, FTS5 | `rusqlite` | Should (rev. 4) |
 | `pty` | PTY spawn + terminal grid/OSC, per-session task | `portable-pty`, `alacritty_terminal` | Must |
 | `scan` | fs scan + watch | `notify`, `rayon` | Must |
 | `app` | iced GUI: sidebar, tabs, splits, terminal | `iced` | Must |
