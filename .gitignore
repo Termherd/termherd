@@ -11,6 +11,9 @@
 # personal notes (not part of the project)
 /.personal/
 
+# generated review decks — keep the Typst source, not the rendered PDF
+/docs/reviews/*.pdf
+
 # Claude Code local (per-machine) settings — never shared. The shared
 # .claude/settings.json may be tracked; the *.local.json overlay is not.
 .claude/settings.local.json
