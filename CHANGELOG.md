@@ -9,6 +9,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `F-status-notifications` (M2, in progress): the `pty` reader thread
+  decodes each raw chunk with `termherd_claude::osc` *before* the bytes
+  reach `alacritty_terminal` (which would consume the sequences) and folds
+  busy/idle markers into a per-session status, emitting `PtyEvent::Status`
+  on change. The shell feeds it to `core` (`Event::StatusChanged`) and shows
+  a coloured activity badge on the focused terminal (FR8). Pending:
+  notification/permission distinction and sidebar/tab badges.
 - `F-builtin-terminal` (M2, in progress): `termherd-pty` adapter — one
   `portable-pty` PTY + `alacritty_terminal` grid per session, owned by its
   own reader thread (actor-per-session, the structural fix for the

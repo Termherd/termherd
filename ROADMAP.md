@@ -22,6 +22,10 @@ short, scannable view; commits land features here when they ship.
   the SQLite FTS5 version moved to Should as `F-store-cache`, PRD rev. 4)
   — case-insensitive, titles-only toggle (FR3)
 - [ ] `F-status-notifications` — busy / waiting / permission from OSC
+  *(M2 in progress: the `pty` reader decodes the raw byte stream with
+  `termherd_claude::osc` and emits busy/idle status; the shell shows a badge
+  on the focused terminal. Pending: notification/permission distinction,
+  sidebar + tab badges, bell/attention)*
 - [ ] `F-settings` (thin) — shell select, theme, window prefs
 - [ ] `F-packaging-ci` — signed mac/win/linux builds + CI gate (3-OS matrix)
   — *pipeline + CI gate in place; "signed" pending certificates (OQ5)*

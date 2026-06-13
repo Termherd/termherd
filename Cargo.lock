@@ -3279,6 +3279,7 @@ version = "0.0.0"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
+ "termherd-claude",
  "termherd-core",
  "tracing",
 ]

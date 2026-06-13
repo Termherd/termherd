@@ -17,7 +17,7 @@ use iced::{Element, Fill, Font, Point, Size, Subscription, Task, window};
 use termherd_core::ports::ProjectScanner;
 use termherd_core::ports::PtyHost;
 use termherd_core::workspace::SessionId;
-use termherd_core::{Effect, LaunchSpec, SessionRecord};
+use termherd_core::{Effect, LaunchSpec, SessionRecord, SessionStatus};
 use termherd_pty::PtyEvent;
 
 use crate::window_config::WindowConfig;
@@ -96,6 +96,11 @@ enum Message {
     PtyOutput {
         session: SessionId,
         screen: String,
+    },
+    /// A session's activity was reclassified from the OSC stream (FR8).
+    PtyStatus {
+        session: SessionId,
+        status: SessionStatus,
     },
     /// A session's process exited.
     PtyExited(SessionId),
@@ -201,6 +206,12 @@ impl Shell {
             }
             Message::PtyOutput { session, screen } => {
                 self.screens.insert(session, screen);
+                Task::none()
+            }
+            Message::PtyStatus { session, status } => {
+                let _ = self
+                    .core
+                    .apply(termherd_core::Event::StatusChanged { session, status });
                 Task::none()
             }
             Message::PtyExited(session) => {
@@ -355,11 +366,30 @@ impl Shell {
             .font(Font::MONOSPACE)
             .padding(8);
 
-        container(column![body, input].spacing(8).padding(8))
+        let mut pane = column![].spacing(8).padding(8);
+        if let Some(status) = focused.and_then(|id| self.core.sessions.get(&id)) {
+            pane = pane.push(status_badge(status.status));
+        }
+        container(pane.push(body).push(input))
             .width(Fill)
             .height(Fill)
             .into()
     }
+}
+
+/// A small per-session activity badge (FR8): a coloured dot + label for the
+/// focused terminal. Sidebar/tab integration follows with tabs in M3.
+fn status_badge(status: SessionStatus) -> Element<'static, Message> {
+    let (label, color) = match status {
+        SessionStatus::Starting => ("démarrage", iced::Color::from_rgb(0.6, 0.6, 0.6)),
+        SessionStatus::Busy => ("occupé", iced::Color::from_rgb(0.95, 0.7, 0.2)),
+        SessionStatus::Idle => ("prêt", iced::Color::from_rgb(0.3, 0.8, 0.4)),
+        SessionStatus::Exited => ("terminé", iced::Color::from_rgb(0.8, 0.3, 0.3)),
+    };
+    row![text("●").size(13).color(color), text(label).size(13),]
+        .spacing(6)
+        .align_y(iced::Center)
+        .into()
 }
 
 /// Streams PTY output/exit into the subscription. Wraps the channel receiver
@@ -394,6 +424,9 @@ fn pty_stream(output: &PtyOutput) -> impl Stream<Item = Message> + use<> {
                         let message = match event {
                             PtyEvent::Output { session, screen } => {
                                 Message::PtyOutput { session, screen }
+                            }
+                            PtyEvent::Status { session, status } => {
+                                Message::PtyStatus { session, status }
                             }
                             PtyEvent::Exited { session } => Message::PtyExited(session),
                         };

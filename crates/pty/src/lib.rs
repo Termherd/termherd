@@ -23,9 +23,10 @@ use alacritty_terminal::term::Config;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::Processor;
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use termherd_core::SpawnSpec;
+use termherd_claude::osc::{OscSignal, decode_chunk};
 use termherd_core::ports::{PtyError, PtyHost};
 use termherd_core::workspace::SessionId;
+use termherd_core::{SessionStatus, SpawnSpec};
 
 /// Read buffer for the per-session reader thread.
 const READ_BUF: usize = 8192;
@@ -36,8 +37,28 @@ const READ_BUF: usize = 8192;
 pub enum PtyEvent {
     /// New terminal screen contents (minimal slice: visible text, no styling).
     Output { session: SessionId, screen: String },
+    /// Activity reclassified from the OSC stream (FR8).
+    Status {
+        session: SessionId,
+        status: SessionStatus,
+    },
     /// The session's PTY process exited.
     Exited { session: SessionId },
+}
+
+/// Fold a chunk's OSC signals into the running activity status (FR8). Only
+/// busy/idle markers move it; notifications, bells and alt-screen toggles are
+/// surfaced elsewhere and do not change busy-vs-idle here.
+fn fold_status(current: SessionStatus, signals: &[OscSignal]) -> SessionStatus {
+    let mut status = current;
+    for signal in signals {
+        match signal {
+            OscSignal::Busy => status = SessionStatus::Busy,
+            OscSignal::Idle => status = SessionStatus::Idle,
+            OscSignal::Notification(_) | OscSignal::AltScreen(_) | OscSignal::Bell => {}
+        }
+    }
+    status
 }
 
 /// A sink for [`PtyEvent`]s. Cheap to clone, callable from the reader threads.
@@ -263,6 +284,7 @@ fn spawn_reader(
             );
             let mut parser: Processor = Processor::new();
             let mut buf = [0u8; READ_BUF];
+            let mut status = SessionStatus::Starting;
             loop {
                 if let Ok(mut pending) = pending_resize.lock()
                     && let Some((c, r)) = pending.take()
@@ -272,7 +294,16 @@ fn spawn_reader(
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        parser.advance(&mut term, &buf[..n]);
+                        let chunk = &buf[..n];
+                        // OSC status comes from the raw bytes — alacritty
+                        // consumes the sequences, so decode before parsing.
+                        let next =
+                            fold_status(status, &decode_chunk(&String::from_utf8_lossy(chunk)));
+                        if next != status {
+                            status = next;
+                            reader_sink(PtyEvent::Status { session, status });
+                        }
+                        parser.advance(&mut term, chunk);
                         reader_sink(PtyEvent::Output {
                             session,
                             screen: render_screen(&term),
@@ -367,6 +398,7 @@ mod tests {
                         break;
                     }
                 }
+                Ok(PtyEvent::Status { .. }) => continue,
                 Ok(PtyEvent::Exited { .. }) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(_) => break,
@@ -378,6 +410,31 @@ mod tests {
         );
 
         mgr.kill(id).expect("kill");
+    }
+
+    #[test]
+    fn fold_status_tracks_busy_idle_and_ignores_the_rest() {
+        use SessionStatus::*;
+        // The last busy/idle marker in the chunk wins.
+        assert_eq!(
+            fold_status(Starting, &[OscSignal::Busy, OscSignal::Idle]),
+            Idle
+        );
+        assert_eq!(fold_status(Idle, &[OscSignal::Busy]), Busy);
+        // Notifications, bells and alt-screen toggles leave it unchanged.
+        assert_eq!(
+            fold_status(
+                Busy,
+                &[
+                    OscSignal::Notification("x".into()),
+                    OscSignal::Bell,
+                    OscSignal::AltScreen(true),
+                ]
+            ),
+            Busy
+        );
+        // No signals at all keeps the current status (e.g. a plain shell).
+        assert_eq!(fold_status(Starting, &[]), Starting);
     }
 
     #[test]
