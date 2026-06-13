@@ -107,7 +107,7 @@
   #grid(columns: (auto, auto, auto, auto), gutter: 8pt,
     chip("19 commits", cyan),
     chip("~9,000 LOC", cyan),
-    chip("6 findings", amber),
+    chip("8 findings", amber),
     chip("0 crashers", accent),
   )
   #v(1fr)
@@ -155,17 +155,19 @@
 // ════════════════════════════════════════════════════════════════════════
 // THE VERDICT / MAP
 // ════════════════════════════════════════════════════════════════════════
-#slide(kick: "verdict", title: "Six findings — one theme")[
-  No correctness crashers survived verification. The real story is the
-  #text(fill: amber, weight: "bold")[PTY → GUI hot path].
+#slide(kick: "verdict", title: "Eight findings across two passes")[
+  Pass 1 (rows 1–6) covered `0fa45ff..` — no crashers, the
+  #text(fill: amber, weight: "bold")[PTY → GUI hot path]. Pass 2 (7–8) covers
+  `ce13614`, the #text(fill: amber, weight: "bold")[Attention status].
 
-  #v(6pt)
+  #v(4pt)
+  #set text(size: 11.5pt)
   #table(
     columns: (auto, 1fr, auto, auto),
     stroke: none,
     fill: (_, row) => if row == 0 { accent.transparentize(85%) }
                        else if calc.odd(row) { panel } else { none },
-    inset: (x: 8pt, y: 6pt),
+    inset: (x: 8pt, y: 4pt),
     align: (center, left, left, center),
     text(font: mono, size: 9pt, fill: accent)[\#],
     text(font: mono, size: 9pt, fill: accent)[FINDING],
@@ -178,16 +180,18 @@
     [4], [Hardcoded palette constant drifts from `pty`], [gui], chip("LOW", cyan),
     [5], [Blocking `scan()` inside an async task], [gui], chip("LOW", cyan),
     [6], [Focus + selection logic stranded in the shell], [altitude], chip("NOTE", dim),
+    [7], [`Attention` is sticky with no non-`Busy` escape (payload discarded)], [pty], chip("MED?", amber),
+    [8], [Status state machine split across `pty` + `core`], [altitude], chip("NOTE", dim),
   )
-  #v(4pt)
-  #text(size: 11pt, fill: dim)[Dropped on verify: empty-line selection panic (grid is always
+  #v(3pt)
+  #text(size: 10pt, fill: dim)[Dropped on verify: empty-line selection panic (grid is
   padded to `cols`); `u64` SessionId overflow (~1.8 × 10¹⁹ launches).]
 ]
 
 // ════════════════════════════════════════════════════════════════════════
 // FINDINGS
 // ════════════════════════════════════════════════════════════════════════
-#finding(1, 6, "HIGH · memory + cpu", red,
+#finding(1, 8, "HIGH · memory + cpu", red,
   "Snapshot-per-chunk over an unbounded channel",
   "crates/pty/src/lib.rs:525  ·  main.rs:57",
   [`spawn_term` clones the *entire* visible grid (`snapshot(&term)`) and sends a
@@ -241,7 +245,7 @@
     box(16.6, 0.2, 3.0, [GUI], accent, accent)
   }))
 
-#finding(2, 6, "MED · cpu + alloc", amber,
+#finding(2, 8, "MED · cpu + alloc", amber,
   "Per-cell allocation in the canvas draw loop",
   "crates/app/src/shell.rs:589",
   [Each redraw calls `cell.c.to_string()` per non-blank cell and renders with
@@ -253,7 +257,7 @@
    `String`. Cheaper alloc + cheaper shaping, identical output.],
 )
 
-#finding(3, 6, "MED · correctness", amber,
+#finding(3, 8, "MED · correctness", amber,
   "spawn() swallows a poisoned lock and returns Ok",
   "crates/pty/src/lib.rs:354",
   [`if let Ok(mut map) = self.sessions.lock()` skips the `insert` on a poisoned
@@ -297,7 +301,7 @@
     content((12.4, 2.7), text(size: 8pt, fill: accent)[✓ caller learns it failed])
   }))
 
-#finding(4, 6, "LOW · cleanup", cyan,
+#finding(4, 8, "LOW · cleanup", cyan,
   "Hardcoded palette constant drifts from pty",
   "crates/app/src/shell.rs:584",
   [Render skips the default background via `cell.bg != [0x11,0x13,0x18]` —
@@ -309,7 +313,7 @@
    from the shell. One source of truth.],
 )
 
-#finding(5, 6, "LOW · responsiveness", cyan,
+#finding(5, 8, "LOW · responsiveness", cyan,
   "Blocking scan() inside an async task",
   "crates/app/src/shell.rs:184",
   [`Task::perform(async move { scanner.scan() … })` runs a synchronous fs walk +
@@ -321,7 +325,7 @@
    executor stays free. Idiomatic async hygiene.],
 )
 
-#finding(6, 6, "NOTE · altitude", dim,
+#finding(6, 8, "NOTE · altitude", dim,
   "Domain logic stranded in the GUI shell",
   "crates/app/src/shell.rs:99 (Focus, selection_text)",
   [The `Focus` enum (input routing) and `selection_text` / `selection_span`
@@ -362,6 +366,78 @@
   }))
 
 // ════════════════════════════════════════════════════════════════════════
+// PASS 2 — new code (ce13614: Attention status + sidebar badges)
+// ════════════════════════════════════════════════════════════════════════
+#finding(7, 8, "MED? · ux — contingent", amber,
+  "Attention is sticky with no non-Busy escape",
+  "crates/pty/src/lib.rs · fold_status",
+  [*From the code:* any OSC 9 `Notification` → `Attention`; only `Busy` clears
+   it (not `Idle`); and `fold_status` discards the payload, so notification
+   types are indistinguishable.],
+  [*Contingent:* a "done"-type OSC 9 (if Claude sends one) leaves the row red
+   until the next `Busy` — maybe never, with no escape path. For a session
+   truly awaiting input, sticky is correct. So: a bug only given Claude's real
+   OSC 9 usage — which I did *not* verify.],
+  [First capture the OSC 9 payloads Claude actually emits. If non-attention
+   pings exist: branch on `Notification(payload)`, or let a focus/click
+   acknowledge `Attention` → `Idle`.],
+)
+
+#dia("finding 7 · diagram", "Where Attention gets stuck",
+  [`Busy`⇄`Idle` track work. An OSC 9 ping jumps to `Attention`, which `Idle`
+   can't leave — only `Busy` clears it. The risk lands *only if* non-permission
+   pings exist.],
+  cetz.canvas(length: 0.82cm, {
+    import cetz.draw: *
+    let node(x, y, label, c) = {
+      circle((x, y), radius: 1.05, fill: c.transparentize(82%), stroke: c + 1.1pt)
+      content((x, y), text(font: mono, size: 8.5pt, fill: c, weight: "bold")[#label])
+    }
+    let arr(a, b, c) = line(a, b, mark: (end: ">", fill: c), stroke: c + 1pt)
+
+    node(4.5, 4.6, [Busy], amber)
+    node(11.5, 4.6, [Idle], accent)
+    node(4.5, 1.3, [Atten-\ntion], red)
+
+    arr((5.55, 4.9), (10.45, 4.9), dim)
+    content((8.0, 5.25), text(font: mono, size: 7.5pt, fill: dim)[idle title])
+    arr((10.45, 4.3), (5.55, 4.3), dim)
+    content((8.0, 3.95), text(font: mono, size: 7.5pt, fill: dim)[busy title])
+
+    arr((4.05, 3.55), (4.05, 2.35), red)
+    content((3.1, 3.0), text(font: mono, size: 7.5pt, fill: red)[OSC 9])
+    arr((4.95, 2.35), (4.95, 3.55), accent)
+    content((6.0, 3.0), text(font: mono, size: 7.5pt, fill: accent)[Busy ✓])
+
+    arr((10.6, 3.7), (5.5, 1.75), red)
+    content((8.9, 2.95), text(font: mono, size: 7.5pt, fill: red)[OSC 9])
+
+    content((4.5, -0.15), text(font: mono, size: 7.5pt, fill: red)[↺ Idle keeps it here])
+
+    rect((8.4, 0.1), (17.6, 2.5), fill: red.transparentize(86%), stroke: red + 0.7pt, radius: 0.12)
+    content((13.0, 1.3), text(size: 8.5pt, fill: fg)[#box(width: 8.4cm)[
+      *Risk (if "done" pings exist):* such a ping with no later `Busy` stays red
+      — and the payload that could say "done" vs "permission" is thrown away.
+    ]])
+  }))
+
+#finding(8, 8, "NOTE · altitude", dim,
+  "The status state machine is split across two crates",
+  "pty · fold_status  +  core · StatusChanged",
+  [The rule "`Attention` is sticky and outranks `Idle`" lives in `pty`'s
+   `fold_status`; the rule "`Exited` is terminal" lives in `core`'s
+   `StatusChanged`. No single place holds the whole machine.],
+  [`core::apply` blindly accepts whatever status `pty` computed (except after
+   `Exited`), so the stickiness invariant can't be unit-tested in `core` and
+   can't be enforced if a second status producer ever appears. Reinforces
+   finding 6: domain rules leaking out of `core`. (Safe today — `pty` is the
+   sole producer and mirrors `core`.)],
+  [Move the transition rules (rank + stickiness) into a pure `core` helper that
+   `StatusChanged` calls; leave `pty` to emit raw signals. The whole machine
+   becomes one tested unit.],
+)
+
+// ════════════════════════════════════════════════════════════════════════
 // PLAN
 // ════════════════════════════════════════════════════════════════════════
 #slide(kick: "changes to make", title: "Recommended order")[
@@ -373,14 +449,15 @@
 
     chip("2 · QUICK WINS", amber),
     [*Consistent lock handling in `spawn()`* (#3) and *exported palette
-     constants* (#4). Small, isolated, low-risk diffs.],
+     constants* (#4) — small, low-risk diffs. Plus *confirm Claude's OSC 9
+     usage* (#7) before deciding whether Attention needs an escape path.],
 
     chip("3 · HYGIENE", cyan),
     [*`spawn_blocking` for `scan()`* (#5). One-line idiomatic fix.],
 
     chip("4 · BEFORE M3", dim),
-    [*Lift focus + selection into `core`* (#6). Do it before tabs/splits make
-     the duplication permanent.],
+    [*Lift focus + selection into `core`* (#6) and *fold the status machine into
+     `core`* (#8). Do it before tabs/splits make the duplication permanent.],
   )
   #v(10pt)
   #block(fill: accent.transparentize(88%), radius: 5pt, inset: 11pt, width: 100%,
