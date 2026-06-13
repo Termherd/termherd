@@ -13,12 +13,12 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::Config;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
@@ -234,15 +234,29 @@ pub struct PtyManager {
     sink: EventSink,
 }
 
-/// The control-side handle to one session. The reader half lives in the
-/// thread; this half resizes, writes and kills.
+/// A command for the per-session terminal thread, which owns the grid.
+enum TermCmd {
+    /// Raw bytes read from the PTY.
+    Bytes(Vec<u8>),
+    /// Resize the grid (the PTY itself is resized by the manager).
+    Resize(u16, u16),
+    /// Scroll the viewport by a line delta (positive = into history).
+    Scroll(i32),
+    /// The PTY reached end of file; the process is gone.
+    Eof,
+}
+
+/// The control-side handle to one session. The grid lives in the terminal
+/// thread; this half writes to the PTY, drives resize/scroll and kills.
 struct Session {
     master: Box<dyn MasterPty + Send>,
     writer: SharedWriter,
     killer: Box<dyn ChildKiller + Send + Sync>,
-    /// A resize the reader thread should apply to its grid on its next wake.
-    pending_resize: Arc<Mutex<Option<(u16, u16)>>>,
+    /// Commands to the terminal thread (resize / scroll). The reader thread
+    /// holds the other clone for `Bytes`/`Eof`.
+    ctrl: mpsc::Sender<TermCmd>,
     reader: Option<JoinHandle<()>>,
+    term: Option<JoinHandle<()>>,
 }
 
 impl PtyManager {
@@ -319,23 +333,23 @@ impl PtyHost for PtyManager {
             let _ = w.flush();
         }
 
-        let pending_resize = Arc::new(Mutex::new(None));
-        let handle = spawn_reader(
+        let (ctrl, ctrl_rx) = mpsc::channel::<TermCmd>();
+        let term = spawn_term(
             spec.session,
-            reader,
-            child,
+            ctrl_rx,
             (spec.cols, spec.rows),
-            pending_resize.clone(),
             writer.clone(),
             self.sink.clone(),
         );
+        let reader = spawn_reader(spec.session, reader, child, ctrl.clone(), self.sink.clone());
 
         let session = Session {
             master: pair.master,
             writer,
             killer,
-            pending_resize,
-            reader: Some(handle),
+            ctrl,
+            reader: Some(reader),
+            term: Some(term),
         };
         if let Ok(mut map) = self.sessions.lock() {
             map.insert(spec.session, session);
@@ -368,11 +382,9 @@ impl PtyHost for PtyManager {
         let s = map
             .get(&session)
             .ok_or(PtyError::NoSuchSession(session.0.get()))?;
-        // Tell the reader thread to resize its grid, then resize the PTY
-        // (which delivers SIGWINCH / a ConPTY resize and wakes the reader).
-        if let Ok(mut pending) = s.pending_resize.lock() {
-            *pending = Some((cols, rows));
-        }
+        // Resize the grid (terminal thread) and the PTY (delivers SIGWINCH /
+        // a ConPTY resize so the child redraws at the new size).
+        let _ = s.ctrl.send(TermCmd::Resize(cols, rows));
         s.master
             .resize(PtySize {
                 rows,
@@ -381,6 +393,19 @@ impl PtyHost for PtyManager {
                 pixel_height: 0,
             })
             .map_err(|e| PtyError::Io(e.to_string()))
+    }
+
+    fn scroll(&self, session: SessionId, delta: i32) -> Result<(), PtyError> {
+        let map = self
+            .sessions
+            .lock()
+            .map_err(|_| PtyError::Io("session lock poisoned".into()))?;
+        let s = map
+            .get(&session)
+            .ok_or(PtyError::NoSuchSession(session.0.get()))?;
+        s.ctrl
+            .send(TermCmd::Scroll(delta))
+            .map_err(|_| PtyError::Io("terminal thread gone".into()))
     }
 
     fn kill(&self, session: SessionId) -> Result<(), PtyError> {
@@ -393,8 +418,10 @@ impl PtyHost for PtyManager {
             .ok_or(PtyError::NoSuchSession(session.0.get()))?;
         let result = s.killer.kill();
         // Dropping the session drops the master/writer; the reader thread then
-        // sees EOF, reaps the child (`wait`) and emits `Exited` on its own.
+        // sees EOF, reaps the child (`wait`) and signals the terminal thread,
+        // which emits `Exited` on its own.
         drop(s.reader.take());
+        drop(s.term.take());
         // portable-pty's `WinChildKiller::kill` inverts its result — it
         // returns `Err(last_os_error())` when `TerminateProcess` *succeeds*
         // (non-zero return = success on Win32) — so its `Result` is unusable.
@@ -411,53 +438,28 @@ impl PtyHost for PtyManager {
     }
 }
 
-/// Spawn the per-session reader thread: it owns the PTY reader and the grid,
-/// feeds bytes through the VTE parser, and pushes a text snapshot per chunk.
+/// The PTY reader thread: blocking-reads bytes and forwards them to the
+/// terminal thread, then reaps the child and signals EOF. Reading is isolated
+/// here so the terminal thread can react to resize/scroll immediately, without
+/// waiting on a blocked `read` (FR4 scrollback).
 fn spawn_reader(
     session: SessionId,
     mut reader: Box<dyn Read + Send>,
     mut child: Box<dyn Child + Send + Sync>,
-    size: (u16, u16),
-    pending_resize: Arc<Mutex<Option<(u16, u16)>>>,
-    writer: SharedWriter,
+    ctrl: mpsc::Sender<TermCmd>,
     sink: EventSink,
 ) -> JoinHandle<()> {
-    let (cols, rows) = size;
-    let reader_sink = sink.clone();
     std::thread::Builder::new()
-        .name(format!("pty-{}", session.0.get()))
+        .name(format!("pty-rd-{}", session.0.get()))
         .spawn(move || {
-            let mut term = Term::new(
-                Config::default(),
-                &TermSize::new(cols as usize, rows as usize),
-                PtyResponder { writer },
-            );
-            let mut parser: Processor = Processor::new();
             let mut buf = [0u8; READ_BUF];
-            let mut status = SessionStatus::Starting;
             loop {
-                if let Ok(mut pending) = pending_resize.lock()
-                    && let Some((c, r)) = pending.take()
-                {
-                    term.resize(TermSize::new(c as usize, r as usize));
-                }
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        let chunk = &buf[..n];
-                        // OSC status comes from the raw bytes — alacritty
-                        // consumes the sequences, so decode before parsing.
-                        let next =
-                            fold_status(status, &decode_chunk(&String::from_utf8_lossy(chunk)));
-                        if next != status {
-                            status = next;
-                            reader_sink(PtyEvent::Status { session, status });
+                        if ctrl.send(TermCmd::Bytes(buf[..n].to_vec())).is_err() {
+                            break;
                         }
-                        parser.advance(&mut term, chunk);
-                        reader_sink(PtyEvent::Output {
-                            session,
-                            screen: snapshot(&term),
-                        });
                     }
                     Err(e) => {
                         tracing::debug!(%e, session = session.0.get(), "pty reader stopped");
@@ -465,13 +467,69 @@ fn spawn_reader(
                     }
                 }
             }
-            // Reap the child so it does not linger as a zombie.
+            // Reap the child so it does not linger as a zombie, then tell the
+            // terminal thread the session is over.
             let _ = child.wait();
-            reader_sink(PtyEvent::Exited { session });
+            let _ = ctrl.send(TermCmd::Eof);
         })
         .unwrap_or_else(|_| {
-            // Thread spawn failing is catastrophic and vanishingly rare; emit
-            // an immediate exit so the session does not hang half-open.
+            sink(PtyEvent::Exited { session });
+            std::thread::spawn(|| {})
+        })
+}
+
+/// The terminal thread: owns the `alacritty_terminal` grid and applies every
+/// [`TermCmd`] (bytes → parse + status, resize, scroll), emitting a fresh
+/// [`Screen`] each time. It exits — and reports [`PtyEvent::Exited`] — when the
+/// reader signals EOF or every command sender is dropped.
+fn spawn_term(
+    session: SessionId,
+    ctrl_rx: mpsc::Receiver<TermCmd>,
+    size: (u16, u16),
+    writer: SharedWriter,
+    sink: EventSink,
+) -> JoinHandle<()> {
+    let (cols, rows) = size;
+    let term_sink = sink.clone();
+    std::thread::Builder::new()
+        .name(format!("pty-tm-{}", session.0.get()))
+        .spawn(move || {
+            let mut term = Term::new(
+                Config::default(),
+                &TermSize::new(cols as usize, rows as usize),
+                PtyResponder { writer },
+            );
+            let mut parser: Processor = Processor::new();
+            let mut status = SessionStatus::Starting;
+            while let Ok(cmd) = ctrl_rx.recv() {
+                match cmd {
+                    TermCmd::Bytes(bytes) => {
+                        // OSC status comes from the raw bytes — alacritty
+                        // consumes the sequences, so decode before parsing.
+                        let next =
+                            fold_status(status, &decode_chunk(&String::from_utf8_lossy(&bytes)));
+                        if next != status {
+                            status = next;
+                            term_sink(PtyEvent::Status { session, status });
+                        }
+                        parser.advance(&mut term, &bytes);
+                    }
+                    TermCmd::Resize(c, r) => {
+                        term.resize(TermSize::new(c as usize, r as usize));
+                    }
+                    TermCmd::Scroll(delta) => {
+                        term.scroll_display(Scroll::Delta(delta));
+                    }
+                    TermCmd::Eof => break,
+                }
+                term_sink(PtyEvent::Output {
+                    session,
+                    screen: snapshot(&term),
+                });
+            }
+            term_sink(PtyEvent::Exited { session });
+        })
+        .unwrap_or_else(|_| {
             sink(PtyEvent::Exited { session });
             std::thread::spawn(|| {})
         })

@@ -150,6 +150,10 @@ enum Message {
     /// Give keyboard focus to the terminal / the search box.
     FocusTerminal,
     FocusSearch,
+    /// The mouse wheel scrolled the terminal by a line delta (FR4 scrollback).
+    TermScroll(i32),
+    /// Copy the given text (a terminal selection) to the clipboard (FR4).
+    CopySelection(String),
 }
 
 impl Shell {
@@ -195,6 +199,7 @@ impl Shell {
                     cols,
                     rows,
                 } => self.pty.resize(session, cols, rows),
+                Effect::Scroll { session, delta } => self.pty.scroll(session, delta),
                 Effect::Kill(session) => self.pty.kill(session),
             };
             if let Err(error) = outcome {
@@ -298,6 +303,22 @@ impl Shell {
             Message::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
+            }
+            Message::TermScroll(delta) => {
+                let Some(session) = self.core.workspace.focused_session() else {
+                    return Task::none();
+                };
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::TerminalScrolled { session, delta });
+                self.perform(effects)
+            }
+            Message::CopySelection(text) => {
+                if text.is_empty() {
+                    Task::none()
+                } else {
+                    iced::clipboard::write(text)
+                }
             }
         }
     }
@@ -475,17 +496,74 @@ impl Shell {
 }
 
 /// A canvas program that draws the visible terminal grid with per-cell colour
-/// and the cursor (FR4).
+/// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
 struct TerminalView<'a> {
     screen: &'a Screen,
 }
 
+/// Per-canvas selection state: the drag in progress and the last range.
+#[derive(Default)]
+struct TermState {
+    selecting: bool,
+    anchor: Option<(u16, u16)>,
+    head: Option<(u16, u16)>,
+}
+
 impl canvas::Program<Message> for TerminalView<'_> {
-    type State = ();
+    type State = TermState;
+
+    fn update(
+        &self,
+        state: &mut TermState,
+        event: &canvas::Event,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let canvas::Event::Mouse(event) = event else {
+            return None;
+        };
+        match event {
+            // Wheel scrolls the viewport into scrollback history (FR4).
+            mouse::Event::WheelScrolled { delta } => {
+                let lines = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => *y,
+                    mouse::ScrollDelta::Pixels { y, .. } => y / CELL_H,
+                };
+                let delta = lines.round() as i32;
+                (delta != 0).then(|| canvas::Action::publish(Message::TermScroll(delta)))
+            }
+            // Drag to select; the press is not captured so the wrapping
+            // `mouse_area` still hands keyboard focus to the terminal.
+            mouse::Event::ButtonPressed(mouse::Button::Left) => {
+                cell_at(cursor, bounds, self.screen).map(|cell| {
+                    state.selecting = true;
+                    state.anchor = Some(cell);
+                    state.head = Some(cell);
+                    canvas::Action::request_redraw()
+                })
+            }
+            mouse::Event::CursorMoved { .. } if state.selecting => {
+                cell_at(cursor, bounds, self.screen).map(|cell| {
+                    state.head = Some(cell);
+                    canvas::Action::request_redraw()
+                })
+            }
+            mouse::Event::ButtonReleased(mouse::Button::Left) if state.selecting => {
+                state.selecting = false;
+                match (state.anchor, state.head) {
+                    (Some(a), Some(b)) => Some(canvas::Action::publish(Message::CopySelection(
+                        selection_text(self.screen, a, b),
+                    ))),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
 
     fn draw(
         &self,
-        _state: &(),
+        state: &TermState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -520,6 +598,24 @@ impl canvas::Program<Message> for TerminalView<'_> {
             }
         }
 
+        // Translucent overlay over the selected range.
+        if let (Some(a), Some(b)) = (state.anchor, state.head) {
+            let (start, end) = ordered(a, b);
+            for r in start.1..=end.1 {
+                let (c0, c1) = selection_span(start, end, r, self.screen.cols);
+                let x = c0 as f32 * cell_w;
+                let w = (c1.saturating_sub(c0) + 1) as f32 * cell_w;
+                frame.fill_rectangle(
+                    Point::new(x, r as f32 * cell_h),
+                    Size::new(w, cell_h),
+                    Color {
+                        a: 0.3,
+                        ..rgb([0x55, 0x88, 0xff])
+                    },
+                );
+            }
+        }
+
         if let Some((cc, cr)) = self.screen.cursor {
             let x = cc as f32 * cell_w;
             let y = cr as f32 * cell_h;
@@ -539,6 +635,66 @@ impl canvas::Program<Message> for TerminalView<'_> {
 
 fn rgb([r, g, b]: [u8; 3]) -> Color {
     Color::from_rgb8(r, g, b)
+}
+
+/// The grid cell under the cursor, if any.
+fn cell_at(cursor: mouse::Cursor, bounds: Rectangle, screen: &Screen) -> Option<(u16, u16)> {
+    let p = cursor.position_in(bounds)?;
+    let cols = screen.cols.max(1);
+    let rows = screen.rows.max(1);
+    let cw = bounds.width / cols as f32;
+    let ch = bounds.height / rows as f32;
+    if cw <= 0.0 || ch <= 0.0 {
+        return None;
+    }
+    let c = (p.x / cw).floor().clamp(0.0, (cols - 1) as f32) as u16;
+    let r = (p.y / ch).floor().clamp(0.0, (rows - 1) as f32) as u16;
+    Some((c, r))
+}
+
+/// Order two cells in reading order (row, then column).
+fn ordered(a: (u16, u16), b: (u16, u16)) -> ((u16, u16), (u16, u16)) {
+    if (a.1, a.0) <= (b.1, b.0) {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
+/// The selected column span `[c0, c1]` on row `r` of an ordered selection.
+fn selection_span(start: (u16, u16), end: (u16, u16), r: u16, cols: u16) -> (u16, u16) {
+    let last = cols.saturating_sub(1);
+    if start.1 == end.1 {
+        (start.0.min(end.0), start.0.max(end.0))
+    } else if r == start.1 {
+        (start.0, last)
+    } else if r == end.1 {
+        (0, end.0)
+    } else {
+        (0, last)
+    }
+}
+
+/// Extract the selected text from the visible grid, trimming trailing blanks.
+fn selection_text(screen: &Screen, a: (u16, u16), b: (u16, u16)) -> String {
+    let (start, end) = ordered(a, b);
+    let mut out = String::new();
+    for r in start.1..=end.1 {
+        let Some(line) = screen.lines.get(r as usize) else {
+            continue;
+        };
+        let (c0, c1) = selection_span(start, end, r, screen.cols);
+        let c0 = c0 as usize;
+        let c1 = (c1 as usize).min(line.len().saturating_sub(1));
+        if c0 <= c1 {
+            let row: String = line[c0..=c1].iter().map(|cell| cell.c).collect();
+            out.push_str(row.trim_end());
+        }
+        if r != end.1 {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// A small per-session activity badge (FR8): a coloured dot + label for the

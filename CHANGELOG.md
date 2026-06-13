@@ -20,7 +20,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   session with `claude --resume <id>` when a session row is clicked. Verified
   end-to-end on Windows: clicking a session resumed a live Claude run inside
   TermHerd, its OSC activity drove the badge, and keystrokes reached it.
-  Pending FR4 items: scrollback and selection.
+- `F-builtin-terminal` (M2, completed): wheel scrollback and drag-to-select
+  with copy-to-clipboard close out FR4. The `pty` adapter now runs a reader
+  thread (blocking PTY reads) feeding a terminal thread that owns the grid
+  and applies bytes / resize / scroll commands, so the viewport reacts to the
+  wheel immediately instead of waiting on the next PTY output. Selection is
+  tracked in the canvas, highlighted, and copied on release.
 - `F-status-notifications` (M2, in progress): the `pty` reader thread
   decodes each raw chunk with `termherd_claude::osc` *before* the bytes
   reach `alacritty_terminal` (which would consume the sequences) and folds

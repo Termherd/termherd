@@ -101,6 +101,8 @@ pub enum Event {
         cols: u16,
         rows: u16,
     },
+    /// The user scrolled a terminal's viewport (FR4 scrollback).
+    TerminalScrolled { session: SessionId, delta: i32 },
     /// The OSC decoder reclassified a session's activity (FR8).
     StatusChanged {
         session: SessionId,
@@ -124,6 +126,8 @@ pub enum Effect {
         cols: u16,
         rows: u16,
     },
+    /// Scroll a session's viewport by a line delta (positive = into history).
+    Scroll { session: SessionId, delta: i32 },
     /// Terminate a session's PTY process.
     Kill(SessionId),
 }
@@ -169,6 +173,13 @@ impl App {
                         cols,
                         rows,
                     }]
+                } else {
+                    Vec::new()
+                }
+            }
+            Event::TerminalScrolled { session, delta } => {
+                if self.is_live(session) {
+                    vec![Effect::Scroll { session, delta }]
                 } else {
                     Vec::new()
                 }
