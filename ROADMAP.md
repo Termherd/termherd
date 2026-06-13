@@ -35,12 +35,13 @@ short, scannable view; commits land features here when they ship.
 
 ### Should (post v0)
 
-- [ ] `F-store-cache` — SQLite (WAL) digest cache + FTS5 index
 - [ ] `F-fork-detection`
 - [ ] `F-session-metadata`
 - [ ] `F-jsonl-viewer`
 - [ ] `F-plans-memory`
 - [ ] `F-auto-update`
+- [ ] `F-store-cache` — SQLite (WAL) digest cache + FTS5 index
+  (lowest Should priority; an optimisation over the in-memory scan/search)
 
 ### Could
 

@@ -1,10 +1,11 @@
 # TermHerd — Product Requirements Document
 
-**Date:** 2026-06-12 (rev. 4 — SQLite store moved to Should: v1-Must
-search runs in-memory over scan digests, the SQLite cache + FTS5 index
-becomes `F-store-cache`; rev. 3 same day promoted Windows + Linux to
-first-class; rev. 2 2026-05-27 re-prioritised to a session-workspace
-product)
+**Date:** 2026-06-13 (rev. 5 — `F-store-cache` (SQLite) moved to the bottom
+of Should: it is an optimisation over the in-memory scan/search, not a
+prerequisite for other Should items; rev. 4 2026-06-12 moved the SQLite
+store from Must to Should so v1-Must search runs in-memory over scan
+digests; rev. 3 same day promoted Windows + Linux to first-class; rev. 2
+2026-05-27 re-prioritised to a session-workspace product)
 **Status:** proposal
 **Decision basis:** the `.personal/` analysis set + the owner's MoSCoW.
 **Chosen path:** pure-native Rust GUI · MVP-core first · **macOS (Apple
@@ -107,12 +108,12 @@ Feature IDs carry over; three **net-new** features (not in v0.0.30) get new IDs.
 
 | F-ID | Feature | Size |
 | ---- | ------- | ---- |
-| `F-store-cache` | SQLite (WAL) digest cache + FTS5 index — instant cold start on large trees; foundation for `F-session-metadata` | M |
 | `F-fork-detection` | fork / plan-accept detection | M |
 | `F-session-metadata` | star / rename / archive / titles | S |
 | `F-jsonl-viewer` | rich transcript viewer | M |
 | `F-plans-memory` | plan + CLAUDE.md browse/edit | S |
 | `F-auto-update` | background update from GitHub | S |
+| `F-store-cache` | SQLite (WAL) digest cache + FTS5 index — instant cold start on large trees; an optimisation over the in-memory scan/search, so it sits at the bottom of Should | M |
 
 ### Could
 
