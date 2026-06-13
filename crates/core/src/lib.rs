@@ -9,6 +9,6 @@ pub mod keymap;
 pub mod ports;
 pub mod workspace;
 
-pub use app::{App, Effect, Event};
+pub use app::{App, Effect, Event, LaunchSpec, LiveSession, SessionStatus, SpawnSpec};
 pub use browser::{ProjectGroup, SessionRecord};
 pub use workspace::{Branch, Pane, SessionId, SplitDir, Tab, Workspace};

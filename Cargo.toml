@@ -4,6 +4,7 @@ members = [
     "crates/core",
     "crates/claude",
     "crates/scan",
+    "crates/pty",
     "crates/app",
 ]
 

@@ -9,6 +9,20 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `F-builtin-terminal` (M2, in progress): `termherd-pty` adapter — one
+  `portable-pty` PTY + `alacritty_terminal` grid per session, owned by its
+  own reader thread (actor-per-session, the structural fix for the
+  `realSessionId` race, Q6). A `PtyResponder` replies to cursor-position
+  queries (`ESC[6n`), without which ConPTY never starts the child on
+  Windows. The headless core gained the terminal lifecycle —
+  `Event::LaunchSession`/`TerminalInput`/`TerminalResized`/`PtyExited` and
+  `Effect::Spawn`/`Write`/`Resize`/`Kill` over a monotonic `SessionId`
+  registry — and the iced shell performs those effects against the
+  `PtyHost` port: clicking a project opens a terminal, its live screen
+  renders as monospace text with a line-input box. Verified end-to-end on
+  Windows ConPTY (spawn → reply → write → grid → kill) and visually in the
+  shell. Pending: raw key input, colours/cursor/selection, scrollback,
+  widget-driven resize.
 - Initial scaffold: Cargo workspace (`core` / `claude` / `app`), pinned
   toolchain (1.95.0), MIT license, README, deny config.
 - CI: `fmt`, `clippy -D warnings`, `cargo test`, `cargo-deny`, markdownlint

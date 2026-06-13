@@ -10,7 +10,8 @@ mod window_config;
 use std::sync::Arc;
 
 use single_instance::SingleInstance;
-use termherd_core::ports::{ProjectScanner, ScanError};
+use termherd_core::ports::{ProjectScanner, PtyHost, ScanError};
+use termherd_pty::{EventSink, PtyEvent, PtyManager};
 use termherd_scan::FsScanner;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -50,7 +51,16 @@ fn main() -> iced::Result {
             }
         };
 
-    let result = shell::run(scanner, watch_root);
+    // PTY output flows from the reader threads through this channel into the
+    // iced subscription (M2). The manager is built here and injected as a
+    // `dyn PtyHost` — no global state (Q4).
+    let (tx, pty_rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+    let sink: EventSink = Arc::new(move |event| {
+        let _ = tx.unbounded_send(event);
+    });
+    let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink));
+
+    let result = shell::run(scanner, watch_root, pty, pty_rx);
     // Hold the lock for the whole GUI lifetime.
     drop(instance);
     result
