@@ -35,8 +35,10 @@ jobs:
       actions: read            # required for private repos; harmless on public
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      # Honours rust-toolchain.toml (pinned 1.95.0, Q10) — no `toolchain:`.
+      # toolchain pinned to match rust-toolchain.toml / Cargo.toml (Q10).
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - name: Initialize CodeQL
         uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
