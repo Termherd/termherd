@@ -1,0 +1,51 @@
+name: CodeQL
+
+# Whole-program static analysis for the Rust workspace. CodeQL builds the
+# project, extracts a database, and runs the `security-and-quality` suite;
+# findings land in the Security tab. Complements cargo-deny (CVE-driven,
+# dependency-side) and Clippy (in-tree style + simple soundness) with taint
+# tracking and cross-function patterns those cannot see.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly: catches drift in the query packs themselves (new queries may
+    # flag code already on main).
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (Rust)
+    # No path gate: SAST covers every commit on the default branch.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload SARIF to code-scanning
+      actions: read            # required for private repos; harmless on public
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      # Honours rust-toolchain.toml (pinned 1.95.0, Q10) — no `toolchain:`.
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          languages: rust
+          queries: security-and-quality
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+      - name: Perform analysis
+        uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          category: "/language:rust"
