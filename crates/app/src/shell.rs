@@ -405,6 +405,22 @@ impl Shell {
             .text_size(11)
             .size(14);
 
+        // Live activity, keyed by the Claude session id each terminal resumed,
+        // so a browsed row can show its current status (FR8). If the same
+        // session is open twice, the most urgent status wins.
+        let mut live: HashMap<&str, SessionStatus> = HashMap::new();
+        for s in self.core.sessions.values() {
+            if let Some(resume) = s.resume.as_deref() {
+                live.entry(resume)
+                    .and_modify(|cur| {
+                        if status_rank(s.status) > status_rank(*cur) {
+                            *cur = s.status;
+                        }
+                    })
+                    .or_insert(s.status);
+            }
+        }
+
         let visible = self.core.visible_projects();
         let mut list = column![].spacing(16).padding(12);
         if let Some(error) = &self.scan_error {
@@ -424,20 +440,27 @@ impl Shell {
                 .padding(0);
             let mut g = column![open].spacing(4);
             for s in &group.sessions {
-                let row = button(
+                let mut content = row![].spacing(6).align_y(iced::Center);
+                // A coloured dot marks a session already open in TermHerd and
+                // carries its live activity (FR8).
+                if let Some(status) = live.get(s.session_id.as_str()) {
+                    content = content.push(text("●").size(9).color(status_style(*status).1));
+                }
+                content = content.push(
                     text(format!(
                         "{}  ·  {}",
                         clip(s.digest.display_title(None), 36),
                         s.digest.message_count
                     ))
                     .size(11),
-                )
-                .on_press(Message::LaunchSession {
-                    cwd: group.path.clone(),
-                    resume: s.session_id.clone(),
-                })
-                .style(button::text)
-                .padding(0);
+                );
+                let row = button(content)
+                    .on_press(Message::LaunchSession {
+                        cwd: group.path.clone(),
+                        resume: s.session_id.clone(),
+                    })
+                    .style(button::text)
+                    .padding(0);
                 g = g.push(row);
             }
             list = list.push(g);
@@ -697,15 +720,36 @@ fn selection_text(screen: &Screen, a: (u16, u16), b: (u16, u16)) -> String {
     out
 }
 
-/// A small per-session activity badge (FR8): a coloured dot + label for the
-/// focused terminal. Sidebar/tab integration follows with tabs in M3.
-fn status_badge(status: SessionStatus) -> Element<'static, Message> {
-    let (label, color) = match status {
-        SessionStatus::Starting => ("démarrage", Color::from_rgb(0.6, 0.6, 0.6)),
+/// Urgency order for collapsing duplicate live sessions in the sidebar: the
+/// status that most wants the user's eyes wins.
+fn status_rank(status: SessionStatus) -> u8 {
+    match status {
+        SessionStatus::Attention => 4,
+        SessionStatus::Busy => 3,
+        SessionStatus::Idle => 2,
+        SessionStatus::Starting => 1,
+        SessionStatus::Exited => 0,
+    }
+}
+
+/// The label and dot colour for an activity status (FR8). Shared by the
+/// focused-terminal badge and the sidebar's per-session dot so both stay in
+/// sync.
+fn status_style(status: SessionStatus) -> (&'static str, Color) {
+    match status {
+        SessionStatus::Starting => ("démarrage", Color::from_rgb(0.55, 0.55, 0.6)),
         SessionStatus::Busy => ("occupé", Color::from_rgb(0.95, 0.7, 0.2)),
         SessionStatus::Idle => ("prêt", Color::from_rgb(0.3, 0.8, 0.4)),
-        SessionStatus::Exited => ("terminé", Color::from_rgb(0.8, 0.3, 0.3)),
-    };
+        SessionStatus::Attention => ("attention", Color::from_rgb(0.95, 0.35, 0.35)),
+        SessionStatus::Exited => ("terminé", Color::from_rgb(0.5, 0.5, 0.5)),
+    }
+}
+
+/// A small per-session activity badge (FR8): a coloured dot + label for the
+/// focused terminal. The same dot annotates live rows in the sidebar; tab
+/// badges follow with tabs in M3.
+fn status_badge(status: SessionStatus) -> Element<'static, Message> {
+    let (label, color) = status_style(status);
     row![text("●").size(13).color(color), text(label).size(13)]
         .spacing(6)
         .align_y(iced::Center)

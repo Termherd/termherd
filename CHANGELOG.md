@@ -26,13 +26,19 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and applies bytes / resize / scroll commands, so the viewport reacts to the
   wheel immediately instead of waiting on the next PTY output. Selection is
   tracked in the canvas, highlighted, and copied on release.
-- `F-status-notifications` (M2, in progress): the `pty` reader thread
-  decodes each raw chunk with `termherd_claude::osc` *before* the bytes
-  reach `alacritty_terminal` (which would consume the sequences) and folds
-  busy/idle markers into a per-session status, emitting `PtyEvent::Status`
-  on change. The shell feeds it to `core` (`Event::StatusChanged`) and shows
-  a coloured activity badge on the focused terminal (FR8). Pending:
-  notification/permission distinction and sidebar/tab badges.
+- `F-status-notifications` (M2, completed for the current surfaces): the
+  `pty` reader thread decodes each raw chunk with `termherd_claude::osc`
+  *before* the bytes reach `alacritty_terminal` (which would consume the
+  sequences) and folds the markers into a per-session status, emitting
+  `PtyEvent::Status` on change. Beyond busy/idle, an OSC 9 notification — a
+  permission prompt or an explicit "needs your attention" ping — now maps to
+  a distinct `Attention` status; it is sticky against a bare idle prompt (the
+  user still has to act) and cleared only when work resumes. The shell feeds
+  it to `core` (`Event::StatusChanged`) and surfaces it as a coloured badge on
+  the focused terminal *and* as a per-session dot in the sidebar (`core` now
+  records which Claude session each terminal resumed, so a browsed row shows
+  its live activity). Tab badges arrive with tabs (M3); the bell is decoded
+  but deliberately not treated as an activity status.
 - `F-builtin-terminal` (M2, in progress): `termherd-pty` adapter — one
   `portable-pty` PTY + `alacritty_terminal` grid per session, owned by its
   own reader thread (actor-per-session, the structural fix for the

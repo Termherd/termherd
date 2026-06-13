@@ -184,17 +184,24 @@ fn resolve(color: Color) -> [u8; 3] {
     }
 }
 
-/// Fold a chunk's OSC signals into the running activity status (FR8). Only
-/// busy/idle markers move it; notifications, bells and alt-screen toggles are
-/// surfaced elsewhere and do not change busy-vs-idle here.
+/// Fold a chunk's OSC signals into the running activity status (FR8).
+///
+/// Busy/idle titles track work; an OSC 9 notification means the CLI wants the
+/// user (a permission prompt or an explicit ping) → [`SessionStatus::Attention`].
+/// Attention is sticky: a plain idle prompt does not clear it (the user still
+/// has to act); only real work resuming (`Busy`) does. Bells and alt-screen
+/// toggles never change the activity status.
 fn fold_status(current: SessionStatus, signals: &[OscSignal]) -> SessionStatus {
     let mut status = current;
     for signal in signals {
-        match signal {
-            OscSignal::Busy => status = SessionStatus::Busy,
-            OscSignal::Idle => status = SessionStatus::Idle,
-            OscSignal::Notification(_) | OscSignal::AltScreen(_) | OscSignal::Bell => {}
-        }
+        status = match signal {
+            OscSignal::Busy => SessionStatus::Busy,
+            // A pending attention request outranks a bare idle prompt.
+            OscSignal::Idle if status == SessionStatus::Attention => SessionStatus::Attention,
+            OscSignal::Idle => SessionStatus::Idle,
+            OscSignal::Notification(_) => SessionStatus::Attention,
+            OscSignal::AltScreen(_) | OscSignal::Bell => status,
+        };
     }
     status
 }
@@ -656,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_status_tracks_busy_idle_and_ignores_the_rest() {
+    fn fold_status_tracks_busy_idle_attention() {
         use SessionStatus::*;
         // The last busy/idle marker in the chunk wins.
         assert_eq!(
@@ -664,16 +671,17 @@ mod tests {
             Idle
         );
         assert_eq!(fold_status(Idle, &[OscSignal::Busy]), Busy);
-        // Notifications, bells and alt-screen toggles leave it unchanged.
+        // An OSC 9 notification means the CLI needs the user → Attention.
         assert_eq!(
-            fold_status(
-                Busy,
-                &[
-                    OscSignal::Notification("x".into()),
-                    OscSignal::Bell,
-                    OscSignal::AltScreen(true),
-                ]
-            ),
+            fold_status(Busy, &[OscSignal::Notification("x".into())]),
+            Attention
+        );
+        // Attention is sticky against a bare idle prompt, but Busy clears it.
+        assert_eq!(fold_status(Attention, &[OscSignal::Idle]), Attention);
+        assert_eq!(fold_status(Attention, &[OscSignal::Busy]), Busy);
+        // Bells and alt-screen toggles leave the status unchanged.
+        assert_eq!(
+            fold_status(Busy, &[OscSignal::Bell, OscSignal::AltScreen(true)]),
             Busy
         );
         // No signals at all keeps the current status (e.g. a plain shell).

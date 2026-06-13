@@ -42,6 +42,9 @@ pub struct LiveSession {
     pub id: SessionId,
     /// Real project path the PTY runs in, if known.
     pub cwd: Option<String>,
+    /// Claude session id this terminal resumed, if any — lets the sidebar map
+    /// a browsed session row to its live activity (FR8).
+    pub resume: Option<String>,
     /// Activity derived from the OSC stream (FR8).
     pub status: SessionStatus,
 }
@@ -56,6 +59,10 @@ pub enum SessionStatus {
     Busy,
     /// Idle, or waiting at a prompt for input.
     Idle,
+    /// Blocked needing the user: a permission prompt or an explicit "needs
+    /// your attention" notification (OSC 9). Outranks `Idle` — the user must
+    /// act — and is cleared only when work resumes (`Busy`).
+    Attention,
     /// The PTY process has exited.
     Exited,
 }
@@ -220,6 +227,7 @@ impl App {
             LiveSession {
                 id,
                 cwd: spec.cwd.clone(),
+                resume: spec.resume.clone(),
                 status: SessionStatus::Starting,
             },
         );
@@ -325,6 +333,18 @@ mod tests {
             }
             other => panic!("expected one Spawn, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn launching_a_resume_records_its_claude_id() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            resume: Some("abc-123".into()),
+            title: "proj".into(),
+        }));
+        let id = app.workspace.focused_session().expect("a focused session");
+        assert_eq!(app.sessions[&id].resume.as_deref(), Some("abc-123"));
     }
 
     #[test]
