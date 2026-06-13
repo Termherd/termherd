@@ -9,6 +9,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `F-builtin-terminal` (M2): the embedded terminal is now a real terminal.
+  The `pty` reader builds a `Screen` snapshot — the visible grid with per-cell
+  RGB (resolved from the xterm-256 palette), the cursor and a scrolled flag —
+  from `alacritty_terminal`'s renderable content. The shell draws it on an
+  iced `canvas` (colour cells + cursor), routes raw keyboard to the focused
+  PTY (control combos, named keys, cursor sequences, layout text; gated by a
+  terminal/search focus model so the search box keeps its own typing),
+  propagates window resize to the PTY's cell geometry, and resumes a Claude
+  session with `claude --resume <id>` when a session row is clicked. Verified
+  end-to-end on Windows: clicking a session resumed a live Claude run inside
+  TermHerd, its OSC activity drove the badge, and keystrokes reached it.
+  Pending FR4 items: scrollback and selection.
 - `F-status-notifications` (M2, in progress): the `pty` reader thread
   decodes each raw chunk with `termherd_claude::osc` *before* the bytes
   reach `alacritty_terminal` (which would consume the sequences) and folds

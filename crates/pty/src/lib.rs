@@ -7,8 +7,9 @@
 //! given at construction. There is no shared `&mut Session` — the structural
 //! fix for the `realSessionId` race (Q6, `docs/PRD.md` §4).
 //!
-//! Minimal slice (M2 tranche 2): output is the visible screen rendered to
-//! plain text. Colours, cursor, selection and scrollback come next.
+//! Output is a [`Screen`] snapshot of the visible grid: per-cell RGB (xterm
+//! 256 palette), the cursor, and a scrolled flag (FR4). Selection is the one
+//! FR4 item still pending.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -18,10 +19,10 @@ use std::thread::JoinHandle;
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::Config;
+use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::vte::ansi::Processor;
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use termherd_claude::osc::{OscSignal, decode_chunk};
 use termherd_core::ports::{PtyError, PtyHost};
@@ -35,8 +36,9 @@ const READ_BUF: usize = 8192;
 /// maps these onto `core` events.
 #[derive(Debug, Clone)]
 pub enum PtyEvent {
-    /// New terminal screen contents (minimal slice: visible text, no styling).
-    Output { session: SessionId, screen: String },
+    /// New terminal screen contents — the visible grid with per-cell colour
+    /// and the cursor (FR4).
+    Output { session: SessionId, screen: Screen },
     /// Activity reclassified from the OSC stream (FR8).
     Status {
         session: SessionId,
@@ -44,6 +46,142 @@ pub enum PtyEvent {
     },
     /// The session's PTY process exited.
     Exited { session: SessionId },
+}
+
+/// A snapshot of the visible terminal grid handed to the GUI for rendering.
+/// Colours are resolved to RGB here so the shell needs no terminal knowledge.
+#[derive(Debug, Clone)]
+pub struct Screen {
+    pub cols: u16,
+    pub rows: u16,
+    /// Visible rows, top to bottom; each is exactly `cols` cells wide.
+    pub lines: Vec<Vec<ScreenCell>>,
+    /// Cursor position as `(col, row)` in visible coordinates, if shown.
+    pub cursor: Option<(u16, u16)>,
+    /// True while the viewport is scrolled up into scrollback history.
+    pub scrolled: bool,
+}
+
+/// One rendered grid cell: a character and its resolved colours.
+#[derive(Debug, Clone, Copy)]
+pub struct ScreenCell {
+    pub c: char,
+    pub fg: [u8; 3],
+    pub bg: [u8; 3],
+    pub bold: bool,
+}
+
+impl ScreenCell {
+    const fn blank() -> Self {
+        Self {
+            c: ' ',
+            fg: DEFAULT_FG,
+            bg: DEFAULT_BG,
+            bold: false,
+        }
+    }
+}
+
+impl Screen {
+    /// Flatten the visible grid to plain text (trailing blanks trimmed) — for
+    /// logging and tests.
+    #[must_use]
+    pub fn text(&self) -> String {
+        let mut out = String::with_capacity(self.lines.len() * (self.cols as usize + 1));
+        for line in &self.lines {
+            let row: String = line.iter().map(|cell| cell.c).collect();
+            out.push_str(row.trim_end());
+            out.push('\n');
+        }
+        out.trim_end_matches('\n').to_string()
+    }
+}
+
+/// Default foreground/background when a cell uses the terminal's defaults.
+const DEFAULT_FG: [u8; 3] = [0xd0, 0xd0, 0xd0];
+const DEFAULT_BG: [u8; 3] = [0x11, 0x13, 0x18];
+
+/// The 16 ANSI colours (classic VGA palette), indices 0–15.
+const ANSI16: [[u8; 3]; 16] = [
+    [0x00, 0x00, 0x00],
+    [0xcc, 0x33, 0x33],
+    [0x33, 0xcc, 0x33],
+    [0xcc, 0xcc, 0x33],
+    [0x33, 0x66, 0xcc],
+    [0xcc, 0x33, 0xcc],
+    [0x33, 0xcc, 0xcc],
+    [0xcc, 0xcc, 0xcc],
+    [0x66, 0x66, 0x66],
+    [0xff, 0x66, 0x66],
+    [0x66, 0xff, 0x66],
+    [0xff, 0xff, 0x66],
+    [0x66, 0x99, 0xff],
+    [0xff, 0x66, 0xff],
+    [0x66, 0xff, 0xff],
+    [0xff, 0xff, 0xff],
+];
+
+/// Resolve an xterm 256-colour index to RGB (16 ANSI + 6×6×6 cube + ramp).
+fn indexed_rgb(i: u8) -> [u8; 3] {
+    match i {
+        0..=15 => ANSI16[i as usize],
+        16..=231 => {
+            let n = i - 16;
+            let levels = [0u8, 95, 135, 175, 215, 255];
+            [
+                levels[(n / 36) as usize],
+                levels[((n / 6) % 6) as usize],
+                levels[(n % 6) as usize],
+            ]
+        }
+        232..=255 => {
+            let v = 8 + 10 * (i - 232);
+            [v, v, v]
+        }
+    }
+}
+
+/// Resolve a named colour to RGB, falling back to the configured defaults.
+fn named_rgb(named: NamedColor) -> [u8; 3] {
+    use NamedColor::*;
+    match named {
+        Black => ANSI16[0],
+        Red => ANSI16[1],
+        Green => ANSI16[2],
+        Yellow => ANSI16[3],
+        Blue => ANSI16[4],
+        Magenta => ANSI16[5],
+        Cyan => ANSI16[6],
+        White => ANSI16[7],
+        BrightBlack => ANSI16[8],
+        BrightRed => ANSI16[9],
+        BrightGreen => ANSI16[10],
+        BrightYellow => ANSI16[11],
+        BrightBlue => ANSI16[12],
+        BrightMagenta => ANSI16[13],
+        BrightCyan => ANSI16[14],
+        BrightWhite => ANSI16[15],
+        DimBlack => ANSI16[0],
+        DimRed => [0x88, 0x22, 0x22],
+        DimGreen => [0x22, 0x88, 0x22],
+        DimYellow => [0x88, 0x88, 0x22],
+        DimBlue => [0x22, 0x44, 0x88],
+        DimMagenta => [0x88, 0x22, 0x88],
+        DimCyan => [0x22, 0x88, 0x88],
+        DimWhite => [0x88, 0x88, 0x88],
+        Foreground | BrightForeground => DEFAULT_FG,
+        DimForeground => [0x99, 0x99, 0x99],
+        Background => DEFAULT_BG,
+        Cursor => DEFAULT_FG,
+    }
+}
+
+fn resolve(color: Color) -> [u8; 3] {
+    match color {
+        Color::Spec(rgb) => [rgb.r, rgb.g, rgb.b],
+        Color::Indexed(i) => indexed_rgb(i),
+        Color::Named(named) => named_rgb(named),
+    }
 }
 
 /// Fold a chunk's OSC signals into the running activity status (FR8). Only
@@ -168,6 +306,18 @@ impl PtyHost for PtyManager {
                 .map_err(|e| PtyError::Spawn(e.to_string()))?,
         ));
         let killer = child.clone_killer();
+
+        // Resuming a Claude session: type the command into the fresh shell.
+        // Shells buffer stdin, so writing it immediately is safe even before
+        // the prompt appears, and it keeps `claude` resolution to the user's
+        // own shell + PATH (robust across platforms).
+        if let Some(resume) = &spec.resume
+            && let Ok(mut w) = writer.lock()
+        {
+            let command = format!("claude --resume {resume}\r");
+            let _ = w.write_all(command.as_bytes());
+            let _ = w.flush();
+        }
 
         let pending_resize = Arc::new(Mutex::new(None));
         let handle = spawn_reader(
@@ -306,7 +456,7 @@ fn spawn_reader(
                         parser.advance(&mut term, chunk);
                         reader_sink(PtyEvent::Output {
                             session,
-                            screen: render_screen(&term),
+                            screen: snapshot(&term),
                         });
                     }
                     Err(e) => {
@@ -327,23 +477,58 @@ fn spawn_reader(
         })
 }
 
-/// Render the visible grid to plain text (minimal slice). Trailing blank
-/// cells and lines are trimmed so the GUI shows a tidy screen.
-fn render_screen<T: EventListener>(term: &Term<T>) -> String {
-    let grid = term.grid();
-    let cols = grid.columns();
-    let lines = grid.screen_lines();
-    let mut out = String::with_capacity(cols * lines);
-    for l in 0..lines as i32 {
-        let row = &grid[Line(l)];
-        let mut line = String::with_capacity(cols);
-        for c in 0..cols {
-            line.push(row[Column(c)].c);
+/// Snapshot the visible grid into a [`Screen`] with resolved colours and the
+/// cursor (FR4). Wide-char spacer cells are dropped; the wide glyph keeps its
+/// own column.
+fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
+    let cols = term.columns() as u16;
+    let rows = term.screen_lines() as u16;
+    let mut lines = vec![vec![ScreenCell::blank(); cols as usize]; rows as usize];
+
+    let content = term.renderable_content();
+    let first_line = -(content.display_offset as i32);
+    let cursor_shape = content.cursor.shape;
+    let cursor_point = content.cursor.point;
+
+    for indexed in content.display_iter {
+        let row = indexed.point.line.0 - first_line;
+        let col = indexed.point.column.0;
+        if row < 0 || row as u16 >= rows || col as u16 >= cols {
+            continue;
         }
-        out.push_str(line.trim_end());
-        out.push('\n');
+        let cell = indexed.cell;
+        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            continue;
+        }
+        let bold = cell.flags.intersects(Flags::BOLD | Flags::DIM_BOLD);
+        let mut fg = resolve(cell.fg);
+        let mut bg = resolve(cell.bg);
+        if cell.flags.contains(Flags::INVERSE) {
+            std::mem::swap(&mut fg, &mut bg);
+        }
+        let c = if cell.flags.contains(Flags::HIDDEN) {
+            ' '
+        } else {
+            cell.c
+        };
+        lines[row as usize][col] = ScreenCell { c, fg, bg, bold };
     }
-    out.trim_end_matches('\n').to_string()
+
+    let cursor = (cursor_shape != CursorShape::Hidden)
+        .then(|| {
+            let row = cursor_point.line.0 - first_line;
+            (row >= 0 && (row as u16) < rows && (cursor_point.column.0 as u16) < cols)
+                .then_some((cursor_point.column.0 as u16, row as u16))
+        })
+        .flatten();
+
+    Screen {
+        cols,
+        rows,
+        lines,
+        cursor,
+        scrolled: content.display_offset > 0,
+    }
 }
 
 #[cfg(test)]
@@ -390,7 +575,7 @@ mod tests {
         while Instant::now() < deadline {
             match rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(PtyEvent::Output { screen: s, .. }) => {
-                    screen = s;
+                    screen = s.text();
                     // The command itself echoes the literal; a second line with
                     // just the marker means the shell actually ran it.
                     if screen.matches("TERMHERD_OK").count() >= 2 {
@@ -435,6 +620,29 @@ mod tests {
         );
         // No signals at all keeps the current status (e.g. a plain shell).
         assert_eq!(fold_status(Starting, &[]), Starting);
+    }
+
+    #[test]
+    fn colour_resolution_covers_the_256_palette() {
+        // ANSI 16.
+        assert_eq!(indexed_rgb(0), [0x00, 0x00, 0x00]);
+        assert_eq!(indexed_rgb(15), [0xff, 0xff, 0xff]);
+        // First cube entry (16) is black; last (231) is white.
+        assert_eq!(indexed_rgb(16), [0, 0, 0]);
+        assert_eq!(indexed_rgb(231), [255, 255, 255]);
+        // Grayscale ramp endpoints.
+        assert_eq!(indexed_rgb(232), [8, 8, 8]);
+        assert_eq!(indexed_rgb(255), [238, 238, 238]);
+        // Spec passes through; named foreground/background hit the defaults.
+        assert_eq!(
+            resolve(Color::Spec(alacritty_terminal::vte::ansi::Rgb {
+                r: 1,
+                g: 2,
+                b: 3
+            })),
+            [1, 2, 3]
+        );
+        assert_eq!(resolve(Color::Named(NamedColor::Background)), DEFAULT_BG);
     }
 
     #[test]

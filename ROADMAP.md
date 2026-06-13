@@ -12,12 +12,12 @@ short, scannable view; commits land features here when they ship.
   the keymap — no native menu API in iced; menu items mirror keymap actions)
 - [x] `F-session-browser` — scan + derive + group + list + live fs-watch
   updates (debounced `notify`, FR2)
-- [ ] `F-builtin-terminal` — PTY + native terminal widget *(M2 in progress:
-  `termherd-pty` adapter live — `portable-pty` + `alacritty_terminal`,
-  actor-per-session, cursor-report reply for ConPTY; iced shell launches a
-  session per project and renders its screen as text with a line-input box.
-  Pending: raw key input, colours/cursor/selection, scrollback, widget-driven
-  resize)
+- [ ] `F-builtin-terminal` — PTY + native terminal widget *(M2: `termherd-pty`
+  adapter (`portable-pty` + `alacritty_terminal`, actor-per-session,
+  cursor-report reply for ConPTY); iced `canvas` renders the colour grid +
+  cursor; raw keyboard routed to the focused PTY; `claude --resume` on a
+  session click; PTY resize follows the window. Verified end-to-end on Windows
+  resuming a real Claude session. Pending: scrollback + selection)
 - [x] `F-search` — in-memory search over digests (was `F-fts-search`;
   the SQLite FTS5 version moved to Should as `F-store-cache`, PRD rev. 4)
   — case-insensitive, titles-only toggle (FR3)
