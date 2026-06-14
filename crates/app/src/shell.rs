@@ -28,6 +28,7 @@ use termherd_core::workspace::SessionId;
 use termherd_core::{Effect, LaunchSpec, SessionRecord, SessionStatus};
 use termherd_pty::{PtyEvent, Screen};
 
+use crate::settings::ThemeChoice;
 use crate::window_config::WindowConfig;
 
 /// Quiet period before a burst of fs events triggers one rescan.
@@ -58,6 +59,7 @@ pub fn run(
     watch_root: Option<PathBuf>,
     pty: Arc<dyn PtyHost>,
     pty_rx: UnboundedReceiver<PtyEvent>,
+    theme: ThemeChoice,
 ) -> iced::Result {
     let config = WindowConfig::load();
     let position = match (config.x, config.y) {
@@ -73,6 +75,7 @@ pub fn run(
                 watch_root.clone(),
                 pty.clone(),
                 pty_output.clone(),
+                theme.to_iced(),
             );
             let initial_scan = shell.rescan();
             (shell, initial_scan)
@@ -81,6 +84,7 @@ pub fn run(
         Shell::view,
     )
     .title(|_: &Shell| String::from("TermHerd"))
+    .theme(Shell::theme)
     .window(window::Settings {
         size: Size::new(config.width, config.height),
         position,
@@ -118,6 +122,8 @@ struct Shell {
     focus: Focus,
     /// Last non-empty terminal selection, for the keyboard copy shortcut (FR4).
     selection: Option<String>,
+    /// GUI chrome theme (FR10).
+    theme: Theme,
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +177,7 @@ impl Shell {
         watch_root: Option<PathBuf>,
         pty: Arc<dyn PtyHost>,
         pty_output: PtyOutput,
+        theme: Theme,
     ) -> Self {
         Self {
             core: termherd_core::App::new(),
@@ -183,7 +190,13 @@ impl Shell {
             screens: HashMap::new(),
             focus: Focus::Search,
             selection: None,
+            theme,
         }
+    }
+
+    /// The GUI chrome theme (FR10); the terminal grid keeps its own colours.
+    fn theme(&self) -> Theme {
+        self.theme.clone()
     }
 
     /// Run one scan off the UI thread (FR2) and feed the result back.

@@ -4,6 +4,7 @@
 //! require-time singletons): tracing, single-instance, the filesystem
 //! scanner, then the iced shell.
 
+mod settings;
 mod shell;
 mod window_config;
 
@@ -11,7 +12,7 @@ use std::sync::Arc;
 
 use single_instance::SingleInstance;
 use termherd_core::ports::{ProjectScanner, PtyHost, ScanError};
-use termherd_pty::{EventSink, PtyEvent, PtyManager};
+use termherd_pty::{EventSink, PtyEvent, PtyManager, Shell};
 use termherd_scan::FsScanner;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
@@ -51,6 +52,15 @@ fn main() -> iced::Result {
             }
         };
 
+    // Thin user settings (FR10): the configured shell is injected into the PTY
+    // host, the theme into the iced shell. A corrupt file falls back to
+    // defaults rather than blocking startup.
+    let settings = settings::Settings::load();
+    let shell = settings.shell.as_ref().map(|s| Shell {
+        program: s.program.clone(),
+        args: s.args.clone(),
+    });
+
     // PTY output flows from the reader threads through this channel into the
     // iced subscription (M2). The manager is built here and injected as a
     // `dyn PtyHost` — no global state (Q4).
@@ -58,9 +68,9 @@ fn main() -> iced::Result {
     let sink: EventSink = Arc::new(move |event| {
         let _ = tx.unbounded_send(event);
     });
-    let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink));
+    let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink, shell));
 
-    let result = shell::run(scanner, watch_root, pty, pty_rx);
+    let result = shell::run(scanner, watch_root, pty, pty_rx, settings.theme);
     // Hold the lock for the whole GUI lifetime.
     drop(instance);
     result

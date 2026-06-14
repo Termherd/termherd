@@ -28,7 +28,12 @@ short, scannable view; commits land features here when they ship.
   (sticky over idle, cleared by work). Surfaced as a badge on the focused
   terminal, a per-session dot in the sidebar, and a dot on each tab (with
   `F-session-tabs`); the bell is decoded but not treated as activity
-- [ ] `F-settings` (thin) — shell select, theme, window prefs
+- [x] `F-settings` (thin) — shell select, theme, window prefs (M3):
+  `~/.termherd/settings.json` (serde, defaults on missing/corrupt) carries a
+  shell profile (program + args), injected into the `PtyManager` so each
+  session launches the chosen shell, and a GUI theme (dark/light) wired to the
+  iced chrome. Window bounds keep their own `window.json` (FR12). File-based
+  for now; an in-app settings panel is the full version later
 - [ ] `F-packaging-ci` — signed mac/win/linux builds + CI gate (3-OS matrix)
   — *pipeline + CI gate in place; "signed" pending certificates (OQ5)*
 - [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is

@@ -9,6 +9,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `F-settings` (M3, thin): user settings (FR10) persisted to
+  `~/.termherd/settings.json`. A **shell profile** (program + args) is injected
+  into the `PtyManager` so each session launches the chosen shell instead of
+  the platform default; a **GUI theme** (dark/light) dresses the iced chrome
+  (sidebar, tab strip, buttons) while the terminal grid keeps its own colours.
+  Every field defaults, so a missing or corrupt file still starts cleanly.
+  Window bounds keep their own `window.json` (FR12); an in-app settings panel
+  is the full version later, so for now the file is edited by hand.
 - `F-builtin-terminal` (M2): clipboard copy/paste shortcuts (FR4). `Ctrl+V` /
   `Ctrl+Shift+V` paste the clipboard into the focused PTY (previously only
   copy-on-select existed, so there was no way to paste at all); the chord
