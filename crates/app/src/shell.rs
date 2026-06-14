@@ -348,7 +348,7 @@ impl Shell {
                     .is_some_and(|screen| screen.bracketed_paste);
                 let effects = self.core.apply(termherd_core::Event::TerminalInput {
                     session,
-                    bytes: paste_bytes(&text, bracketed),
+                    bytes: termherd_pty::paste_bytes(&text, bracketed),
                 });
                 self.perform(effects)
             }
@@ -390,26 +390,19 @@ impl Shell {
         let Some(session) = self.core.workspace.focused_session() else {
             return Task::none();
         };
-        // Paste pulls the clipboard into the PTY (FR4). Ctrl+V / Ctrl+Shift+V,
-        // the Windows-terminal convention; this deliberately shadows the raw
-        // ^V control byte, which a Claude session never needs.
-        if modifiers.control()
-            && let keyboard::Key::Character(c) = &key
-            && c.eq_ignore_ascii_case("v")
-        {
-            return iced::clipboard::read().map(Message::Paste);
-        }
-        // Copy the last selection (Ctrl+Shift+C). Plain Ctrl+C stays the
-        // interrupt signal, as in every terminal.
-        if modifiers.control()
-            && modifiers.shift()
-            && let keyboard::Key::Character(c) = &key
-            && c.eq_ignore_ascii_case("c")
-        {
-            return match &self.selection {
-                Some(sel) if !sel.is_empty() => iced::clipboard::write(sel.clone()),
-                _ => Task::none(),
-            };
+        // Clipboard chords shadow the raw control bytes before key translation.
+        // Paste: Ctrl+V / Ctrl+Shift+V, the Windows-terminal convention (a
+        // Claude session never needs a raw ^V). Copy: Ctrl+Shift+C, leaving
+        // plain Ctrl+C as the interrupt signal, as in every terminal.
+        match ctrl_char(&key, modifiers) {
+            Some('v') => return iced::clipboard::read().map(Message::Paste),
+            Some('c') if modifiers.shift() => {
+                return match &self.selection {
+                    Some(sel) if !sel.is_empty() => iced::clipboard::write(sel.clone()),
+                    _ => Task::none(),
+                };
+            }
+            _ => {}
         }
         let Some(bytes) = key_to_bytes(&key, modifiers, text.as_deref()) else {
             return Task::none();
@@ -850,21 +843,17 @@ fn status_badge(status: SessionStatus) -> Element<'static, Message> {
         .into()
 }
 
-/// The bytes a paste sends to the PTY (FR4). Newlines are normalised to the
-/// carriage return the terminal expects for Enter; when the application has
-/// enabled bracketed paste, the text is wrapped in `ESC[200~`…`ESC[201~` so a
-/// multi-line paste arrives as one block instead of submitting each line.
-fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
-    let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
-    if bracketed {
-        let mut out = Vec::with_capacity(normalized.len() + 12);
-        out.extend_from_slice(b"\x1b[200~");
-        out.extend_from_slice(normalized.as_bytes());
-        out.extend_from_slice(b"\x1b[201~");
-        out
-    } else {
-        normalized.into_bytes()
+/// The control-combo character for a key press: the lowercased character when
+/// Ctrl is held and the key is a single character, else `None`. Lets the chord
+/// intercepts read like a table instead of repeating the let-chain.
+fn ctrl_char(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<char> {
+    if !modifiers.control() {
+        return None;
     }
+    let keyboard::Key::Character(c) = key else {
+        return None;
+    };
+    c.chars().next().map(|ch| ch.to_ascii_lowercase())
 }
 
 /// Translate a key press into the bytes a terminal expects (FR4): control
@@ -1074,13 +1063,13 @@ mod tests {
     }
 
     #[test]
-    fn paste_normalises_newlines_and_wraps_when_bracketed() {
-        // Plain paste: CRLF and LF collapse to the CR a terminal reads as Enter.
-        assert_eq!(paste_bytes("a\r\nb\nc", false), b"a\rb\rc".to_vec());
-        // Bracketed paste wraps the (normalised) text so it lands as one block.
-        assert_eq!(
-            paste_bytes("a\nb", true),
-            b"\x1b[200~a\rb\x1b[201~".to_vec()
-        );
+    fn ctrl_char_lowercases_only_with_control_held() {
+        let ctrl = Modifiers::CTRL;
+        let none = Modifiers::default();
+        assert_eq!(ctrl_char(&Key::Character("V".into()), ctrl), Some('v'));
+        assert_eq!(ctrl_char(&Key::Character("c".into()), ctrl), Some('c'));
+        // Without Ctrl, or for a named key, there is no control character.
+        assert_eq!(ctrl_char(&Key::Character("v".into()), none), None);
+        assert_eq!(ctrl_char(&Key::Named(Named::Enter), ctrl), None);
     }
 }

@@ -547,6 +547,26 @@ fn spawn_term(
         })
 }
 
+/// The bytes a paste sends to the PTY (FR4). Newlines are normalised to the
+/// carriage return the terminal expects for Enter; when the application has
+/// enabled bracketed paste (see [`Screen::bracketed_paste`]) the text is
+/// wrapped in `ESC[200~`…`ESC[201~` so a multi-line paste arrives as one block
+/// instead of submitting each line. Terminal byte protocol lives here, in the
+/// terminal adapter, not in the GUI shell.
+#[must_use]
+pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+    let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
+    if bracketed {
+        let mut out = Vec::with_capacity(normalized.len() + 12);
+        out.extend_from_slice(b"\x1b[200~");
+        out.extend_from_slice(normalized.as_bytes());
+        out.extend_from_slice(b"\x1b[201~");
+        out
+    } else {
+        normalized.into_bytes()
+    }
+}
+
 /// Snapshot the visible grid into a [`Screen`] with resolved colours and the
 /// cursor (FR4). Wide-char spacer cells are dropped; the wide glyph keeps its
 /// own column.
@@ -692,6 +712,17 @@ mod tests {
         );
         // No signals at all keeps the current status (e.g. a plain shell).
         assert_eq!(fold_status(Starting, &[]), Starting);
+    }
+
+    #[test]
+    fn paste_normalises_newlines_and_wraps_when_bracketed() {
+        // Plain paste: CRLF and LF collapse to the CR a terminal reads as Enter.
+        assert_eq!(paste_bytes("a\r\nb\nc", false), b"a\rb\rc".to_vec());
+        // Bracketed paste wraps the (normalised) text so it lands as one block.
+        assert_eq!(
+            paste_bytes("a\nb", true),
+            b"\x1b[200~a\rb\x1b[201~".to_vec()
+        );
     }
 
     #[test]
