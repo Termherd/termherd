@@ -239,11 +239,24 @@ impl EventListener for PtyResponder {
     }
 }
 
+/// How to launch a session's shell process (FR10). Built from the user's
+/// settings and injected into [`PtyManager`]; `None` uses the platform default
+/// login shell. Kept a plain type so the adapter never depends on serde.
+#[derive(Debug, Clone)]
+pub struct Shell {
+    /// The program to run, e.g. `pwsh` or `bash`.
+    pub program: String,
+    /// Arguments passed to the program.
+    pub args: Vec<String>,
+}
+
 /// Hosts every live session's PTY. Construct once in `main()` and inject as a
 /// `dyn PtyHost` (no global state, AGENTS.md quality bar).
 pub struct PtyManager {
     sessions: Mutex<HashMap<SessionId, Session>>,
     sink: EventSink,
+    /// User-configured shell; `None` falls back to the platform default.
+    shell: Option<Shell>,
 }
 
 /// A command for the per-session terminal thread, which owns the grid.
@@ -274,10 +287,13 @@ struct Session {
 impl PtyManager {
     /// `sink` receives every session's output and exit, from the reader
     /// threads. Wrap a channel sender to bridge into the GUI subscription.
-    pub fn new(sink: EventSink) -> Self {
+    /// `shell` is the configured shell to launch, or `None` for the platform
+    /// default (FR10).
+    pub fn new(sink: EventSink, shell: Option<Shell>) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             sink,
+            shell,
         }
     }
 
@@ -305,10 +321,20 @@ impl PtyHost for PtyManager {
             .openpty(size)
             .map_err(|e| PtyError::Spawn(e.to_string()))?;
 
-        // Default login shell, in the project directory, with a sane TERM.
-        // Resuming a real Claude session lands in a later slice; the id flows
-        // through so the adapter never has to invent one (Q6).
-        let mut cmd = CommandBuilder::new_default_prog();
+        // The configured shell, else the platform default login shell, in the
+        // project directory with a sane TERM. Resuming a real Claude session
+        // lands in a later slice; the id flows through so the adapter never has
+        // to invent one (Q6).
+        let mut cmd = match &self.shell {
+            Some(shell) => {
+                let mut c = CommandBuilder::new(&shell.program);
+                for arg in &shell.args {
+                    c.arg(arg);
+                }
+                c
+            }
+            None => CommandBuilder::new_default_prog(),
+        };
         if let Some(cwd) = &spec.cwd {
             cmd.cwd(cwd);
         }
@@ -651,7 +677,7 @@ mod tests {
         let sink: EventSink = Arc::new(move |ev| {
             let _ = tx.send(ev);
         });
-        let mgr = PtyManager::new(sink);
+        let mgr = PtyManager::new(sink, None);
         let id = sid(1);
 
         mgr.spawn(spec(id)).expect("spawn");
@@ -764,7 +790,7 @@ mod tests {
     #[test]
     fn control_methods_reject_unknown_sessions() {
         let sink: EventSink = Arc::new(|_| {});
-        let mgr = PtyManager::new(sink);
+        let mgr = PtyManager::new(sink, None);
         let id = sid(42);
         assert!(matches!(
             mgr.write(id, b"x"),
