@@ -372,6 +372,14 @@ impl Shell {
         }
     }
 
+    /// Copy the last terminal selection to the clipboard, if any (FR4).
+    fn copy_selection(&self) -> Task<Message> {
+        match &self.selection {
+            Some(sel) if !sel.is_empty() => iced::clipboard::write(sel.clone()),
+            _ => Task::none(),
+        }
+    }
+
     /// Route a key press to the focused terminal's PTY (FR4). Ignored unless a
     /// terminal holds focus, so the search box keeps its own typing.
     fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
@@ -391,18 +399,24 @@ impl Shell {
             return Task::none();
         };
         // Clipboard chords shadow the raw control bytes before key translation.
-        // Paste: Ctrl+V / Ctrl+Shift+V, the Windows-terminal convention (a
-        // Claude session never needs a raw ^V). Copy: Ctrl+Shift+C, leaving
-        // plain Ctrl+C as the interrupt signal, as in every terminal.
-        match ctrl_char(&key, modifiers) {
-            Some('v') => return iced::clipboard::read().map(Message::Paste),
-            Some('c') if modifiers.shift() => {
-                return match &self.selection {
-                    Some(sel) if !sel.is_empty() => iced::clipboard::write(sel.clone()),
-                    _ => Task::none(),
-                };
+        // macOS uses Cmd (the logo key), so Ctrl stays free for the interrupt
+        // signal and Cmd+C / Cmd+V copy and paste directly. Elsewhere copy is
+        // Ctrl+Shift+C (plain Ctrl+C stays the interrupt) and paste is Ctrl+V /
+        // Ctrl+Shift+V, the Windows-terminal convention.
+        let chord = key_char(&key);
+        if cfg!(target_os = "macos") && modifiers.logo() {
+            match chord {
+                Some('c') => return self.copy_selection(),
+                Some('v') => return iced::clipboard::read().map(Message::Paste),
+                _ => {}
             }
-            _ => {}
+        }
+        if modifiers.control() {
+            match chord {
+                Some('v') => return iced::clipboard::read().map(Message::Paste),
+                Some('c') if modifiers.shift() => return self.copy_selection(),
+                _ => {}
+            }
         }
         let Some(bytes) = key_to_bytes(&key, modifiers, text.as_deref()) else {
             return Task::none();
@@ -843,13 +857,10 @@ fn status_badge(status: SessionStatus) -> Element<'static, Message> {
         .into()
 }
 
-/// The control-combo character for a key press: the lowercased character when
-/// Ctrl is held and the key is a single character, else `None`. Lets the chord
-/// intercepts read like a table instead of repeating the let-chain.
-fn ctrl_char(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<char> {
-    if !modifiers.control() {
-        return None;
-    }
+/// The character of a single-character key press, lowercased; `None` for named
+/// keys. Lets the clipboard chord intercepts match on the letter alone, with
+/// the modifier (Ctrl or the macOS logo key) checked at the call site.
+fn key_char(key: &keyboard::Key) -> Option<char> {
     let keyboard::Key::Character(c) = key else {
         return None;
     };
@@ -1063,13 +1074,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_char_lowercases_only_with_control_held() {
-        let ctrl = Modifiers::CTRL;
-        let none = Modifiers::default();
-        assert_eq!(ctrl_char(&Key::Character("V".into()), ctrl), Some('v'));
-        assert_eq!(ctrl_char(&Key::Character("c".into()), ctrl), Some('c'));
-        // Without Ctrl, or for a named key, there is no control character.
-        assert_eq!(ctrl_char(&Key::Character("v".into()), none), None);
-        assert_eq!(ctrl_char(&Key::Named(Named::Enter), ctrl), None);
+    fn key_char_lowercases_character_keys_only() {
+        assert_eq!(key_char(&Key::Character("V".into())), Some('v'));
+        assert_eq!(key_char(&Key::Character("c".into())), Some('c'));
+        // Named keys carry no chord letter.
+        assert_eq!(key_char(&Key::Named(Named::Enter)), None);
     }
 }

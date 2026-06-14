@@ -14,7 +14,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   copy-on-select existed, so there was no way to paste at all); the chord
   shadows the raw `^V` control byte, the Windows-terminal convention.
   `Ctrl+Shift+C` copies the current selection — plain `Ctrl+C` stays the
-  interrupt signal, as in every terminal. Multi-line paste is handled
+  interrupt signal, as in every terminal. On macOS the Cmd key drives copy
+  (`Cmd+C`) and paste (`Cmd+V`) directly, leaving Ctrl free for the interrupt.
+  Multi-line paste is handled
   correctly: newlines normalise to carriage returns, and when the application
   has enabled bracketed paste (DECSET 2004, which the `pty` `Screen` now
   reports) the text is wrapped in `ESC[200~`…`ESC[201~` so it lands as one
