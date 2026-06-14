@@ -21,6 +21,27 @@ This is an early scaffold. Status, scope, and design live in:
 cargo run -p termherd-app
 ```
 
+## Configuration
+
+Optional user settings live in `~/.termherd/settings.json` (on Windows,
+`%USERPROFILE%\.termherd\settings.json`). The file is read at startup; if it
+is missing or invalid, TermHerd falls back to defaults rather than refusing to
+start. There is no in-app settings panel yet — edit the file and restart.
+
+```json
+{
+  "shell": { "program": "pwsh", "args": [] },
+  "theme": "dark"
+}
+```
+
+- `shell` — the shell launched for each session. Omit it (or set it to `null`)
+  to use the platform default login shell; `args` is optional.
+- `theme` — `"dark"` (default) or `"light"`, for the GUI chrome (sidebar, tab
+  strip, buttons). The terminal grid keeps its own colours.
+
+Window size and position persist separately to `~/.termherd/window.json`.
+
 ## Test
 
 ```bash
