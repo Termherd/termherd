@@ -98,6 +98,9 @@ exists). Do not relax them locally.
 
 ## Conventions
 
+- Coding standards (Tidy First, CUPID & YAGNI, TDD + Reflect, Clean Code) live
+  in [`CODING_STANDARDS.md`](CODING_STANDARDS.md). This file (AGENTS.md) takes
+  precedence where they collide.
 - Markdown prose: 80-col wrap (tables / code blocks exempt, see
   `.markdownlint-cli2.jsonc`).
 - Commit messages: no "Claude" signature (per global user instruction).
