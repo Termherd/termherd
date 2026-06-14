@@ -25,7 +25,9 @@ use iced::{
 };
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
-use termherd_core::{Effect, LaunchSpec, SessionRecord, SessionStatus};
+use termherd_core::{
+    Action, Effect, KeyChord, Keymap, LaunchSpec, SessionRecord, SessionStatus, keymap,
+};
 use termherd_pty::{PtyEvent, Screen};
 
 use crate::settings::ThemeChoice;
@@ -60,6 +62,7 @@ pub fn run(
     pty: Arc<dyn PtyHost>,
     pty_rx: UnboundedReceiver<PtyEvent>,
     theme: ThemeChoice,
+    keymap: Keymap,
 ) -> iced::Result {
     let config = WindowConfig::load();
     let position = match (config.x, config.y) {
@@ -76,6 +79,7 @@ pub fn run(
                 pty.clone(),
                 pty_output.clone(),
                 theme.to_iced(),
+                keymap.clone(),
             );
             let initial_scan = shell.rescan();
             (shell, initial_scan)
@@ -124,6 +128,8 @@ struct Shell {
     selection: Option<String>,
     /// GUI chrome theme (FR10).
     theme: Theme,
+    /// Configurable shortcut bindings (FR9).
+    keymap: Keymap,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +184,7 @@ impl Shell {
         pty: Arc<dyn PtyHost>,
         pty_output: PtyOutput,
         theme: Theme,
+        keymap: Keymap,
     ) -> Self {
         Self {
             core: termherd_core::App::new(),
@@ -191,6 +198,7 @@ impl Shell {
             focus: Focus::Search,
             selection: None,
             theme,
+            keymap,
         }
     }
 
@@ -365,24 +373,28 @@ impl Shell {
                 });
                 self.perform(effects)
             }
-            Message::CloseTab(index) => {
-                // Capture the sessions about to die so their cached screens
-                // don't outlive them in the shell.
-                let dying = self
-                    .core
-                    .workspace
-                    .tabs
-                    .get(index)
-                    .map(|tab| tab.sessions())
-                    .unwrap_or_default();
-                let effects = self.core.apply(termherd_core::Event::CloseTab(index));
-                for id in dying {
-                    self.screens.remove(&id);
-                }
-                let kill = self.perform(effects);
-                Task::batch([kill, self.resize_focused()])
-            }
+            Message::CloseTab(index) => self.close_tab(index),
         }
+    }
+
+    /// Close the tab at `index`, killing its session(s) (FR5). Shared by the
+    /// tab strip's close button and the `CloseFocused` keymap action.
+    fn close_tab(&mut self, index: usize) -> Task<Message> {
+        // Capture the sessions about to die so their cached screens don't
+        // outlive them in the shell.
+        let dying = self
+            .core
+            .workspace
+            .tabs
+            .get(index)
+            .map(|tab| tab.sessions())
+            .unwrap_or_default();
+        let effects = self.core.apply(termherd_core::Event::CloseTab(index));
+        for id in dying {
+            self.screens.remove(&id);
+        }
+        let kill = self.perform(effects);
+        Task::batch([kill, self.resize_focused()])
     }
 
     /// Copy the last terminal selection to the clipboard, if any (FR4).
@@ -390,6 +402,40 @@ impl Shell {
         match &self.selection {
             Some(sel) if !sel.is_empty() => iced::clipboard::write(sel.clone()),
             _ => Task::none(),
+        }
+    }
+
+    /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
+    /// `PrevTab`). No-op when nothing is open.
+    fn cycle_tab(&mut self, delta: i32) -> Task<Message> {
+        let count = self.core.workspace.tabs.len();
+        if count == 0 {
+            return Task::none();
+        }
+        let next = (self.core.workspace.active as i32 + delta).rem_euclid(count as i32) as usize;
+        let _ = self.core.apply(termherd_core::Event::ActivateTab(next));
+        self.focus = Focus::Terminal;
+        self.resize_focused()
+    }
+
+    /// Run a keymap [`Action`] (FR9). Clipboard actions become iced tasks; tab
+    /// actions drive `core`. Actions without a surface yet are no-ops.
+    fn run_action(&mut self, action: Action) -> Task<Message> {
+        match action {
+            Action::Copy => self.copy_selection(),
+            Action::Paste => iced::clipboard::read().map(Message::Paste),
+            Action::NextTab => self.cycle_tab(1),
+            Action::PrevTab => self.cycle_tab(-1),
+            Action::CloseFocused => self.close_tab(self.core.workspace.active),
+            Action::FocusSearch => {
+                self.focus = Focus::Search;
+                operate(focusable::focus(search_id()))
+            }
+            Action::OpenNewSession
+            | Action::SplitHorizontal
+            | Action::SplitVertical
+            | Action::FocusNext
+            | Action::FocusPrev => Task::none(),
         }
     }
 
@@ -411,25 +457,13 @@ impl Shell {
         let Some(session) = self.core.workspace.focused_session() else {
             return Task::none();
         };
-        // Clipboard chords shadow the raw control bytes before key translation.
-        // macOS uses Cmd (the logo key), so Ctrl stays free for the interrupt
-        // signal and Cmd+C / Cmd+V copy and paste directly. Elsewhere copy is
-        // Ctrl+Shift+C (plain Ctrl+C stays the interrupt) and paste is Ctrl+V /
-        // Ctrl+Shift+V, the Windows-terminal convention.
-        let chord = key_char(&key);
-        if cfg!(target_os = "macos") && modifiers.logo() {
-            match chord {
-                Some('c') => return self.copy_selection(),
-                Some('v') => return iced::clipboard::read().map(Message::Paste),
-                _ => {}
-            }
-        }
-        if modifiers.control() {
-            match chord {
-                Some('v') => return iced::clipboard::read().map(Message::Paste),
-                Some('c') if modifiers.shift() => return self.copy_selection(),
-                _ => {}
-            }
+        // A configured shortcut wins over raw terminal input: build the chord
+        // and run its action if the keymap binds one (FR9). Unbound keys fall
+        // through to the terminal, so plain Ctrl+C stays the interrupt signal.
+        if let Some(chord) = chord_of(&key, modifiers)
+            && let Some(action) = self.keymap.lookup(&chord)
+        {
+            return self.run_action(action);
         }
         let Some(bytes) = key_to_bytes(&key, modifiers, text.as_deref()) else {
             return Task::none();
@@ -870,14 +904,40 @@ fn status_badge(status: SessionStatus) -> Element<'static, Message> {
         .into()
 }
 
-/// The character of a single-character key press, lowercased; `None` for named
-/// keys. Lets the clipboard chord intercepts match on the letter alone, with
-/// the modifier (Ctrl or the macOS logo key) checked at the call site.
-fn key_char(key: &keyboard::Key) -> Option<char> {
-    let keyboard::Key::Character(c) = key else {
-        return None;
-    };
-    c.chars().next().map(|ch| ch.to_ascii_lowercase())
+/// The keymap chord for a key press (FR9): the key's normalised name plus the
+/// modifier bits. `None` for keys we do not bind (so they reach the terminal).
+fn chord_of(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<KeyChord> {
+    let name = key_name(key)?;
+    let mut mods = 0u8;
+    if modifiers.control() {
+        mods |= keymap::MOD_CTRL;
+    }
+    if modifiers.alt() {
+        mods |= keymap::MOD_ALT;
+    }
+    if modifiers.shift() {
+        mods |= keymap::MOD_SHIFT;
+    }
+    if modifiers.logo() {
+        mods |= keymap::MOD_CMD;
+    }
+    Some(KeyChord::new(name, mods))
+}
+
+/// The keymap name of an iced key: a lowercased character, or a handful of
+/// named keys that bindings use. `None` for keys no shortcut can target.
+fn key_name(key: &keyboard::Key) -> Option<String> {
+    use keyboard::key::Named;
+    match key {
+        keyboard::Key::Character(c) => c
+            .chars()
+            .next()
+            .map(|ch| ch.to_ascii_lowercase().to_string()),
+        keyboard::Key::Named(Named::Tab) => Some("tab".to_string()),
+        keyboard::Key::Named(Named::Enter) => Some("enter".to_string()),
+        keyboard::Key::Named(Named::Escape) => Some("escape".to_string()),
+        _ => None,
+    }
 }
 
 /// Translate a key press into the bytes a terminal expects (FR4): control
@@ -1087,10 +1147,17 @@ mod tests {
     }
 
     #[test]
-    fn key_char_lowercases_character_keys_only() {
-        assert_eq!(key_char(&Key::Character("V".into())), Some('v'));
-        assert_eq!(key_char(&Key::Character("c".into())), Some('c'));
-        // Named keys carry no chord letter.
-        assert_eq!(key_char(&Key::Named(Named::Enter)), None);
+    fn chord_of_builds_keymap_chords_from_key_events() {
+        let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
+        assert_eq!(
+            chord_of(&Key::Character("C".into()), ctrl_shift),
+            Some(KeyChord::new("c", keymap::MOD_CTRL | keymap::MOD_SHIFT))
+        );
+        assert_eq!(
+            chord_of(&Key::Named(Named::Tab), Modifiers::CTRL),
+            Some(KeyChord::new("tab", keymap::MOD_CTRL))
+        );
+        // Keys no shortcut targets carry no chord.
+        assert_eq!(chord_of(&Key::Named(Named::F2), Modifiers::default()), None);
     }
 }

@@ -43,7 +43,12 @@ short, scannable view; commits land features here when they ship.
   most-urgent `tab_status`) are pure in `core`. Drag-reorder (FR5) and
   keyboard switching (deferred to `F-keyboard-shortcuts`) still to come
 - [ ] `F-terminal-split` — split panes (h/v), focus, resize
-- [ ] `F-keyboard-shortcuts` — configurable keymap → actions
+- [x] `F-keyboard-shortcuts` — configurable keymap → actions (M3): pure
+  `KeyChord -> Action` map in `core::keymap` with a chord-string parser and
+  platform-aware defaults; the `keys` section of `settings.json` overrides any
+  action. Drives copy/paste, `Ctrl+Tab`/`Ctrl+Shift+Tab` cycling, close-tab
+  and focus-search today; `split-*` / `focus-next/prev` bind as those features
+  land
 
 ### Should (post v0)
 

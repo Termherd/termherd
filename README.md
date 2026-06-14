@@ -31,7 +31,12 @@ start. There is no in-app settings panel yet — edit the file and restart.
 ```json
 {
   "shell": { "program": "pwsh", "args": [] },
-  "theme": "dark"
+  "theme": "dark",
+  "keys": {
+    "copy": "ctrl+c",
+    "paste": ["ctrl+v", "ctrl+shift+v"],
+    "next-tab": "ctrl+tab"
+  }
 }
 ```
 
@@ -39,28 +44,32 @@ start. There is no in-app settings panel yet — edit the file and restart.
   to use the platform default login shell; `args` is optional.
 - `theme` — `"dark"` (default) or `"light"`, for the GUI chrome (sidebar, tab
   strip, buttons). The terminal grid keeps its own colours.
+- `keys` — keyboard overrides. Each entry binds an action to one chord or a
+  list of chords (`"ctrl+shift+c"`, order/case-insensitive; modifiers `ctrl`,
+  `shift`, `alt`, `cmd`). An entry replaces that action's default; unspecified
+  actions keep their per-platform defaults. Unknown actions and bad chords are
+  ignored. Actions: `copy`, `paste`, `next-tab`, `prev-tab`, `close-focused`,
+  `focus-search`.
 
 Window size and position persist separately to `~/.termherd/window.json`.
 
 ## Shortcuts
 
-Every shortcut is becoming configurable from the config file
-(`F-keyboard-shortcuts`); the table below lists the current defaults. In the
-focused terminal:
+All shortcuts are configurable via the `keys` section of the config file
+(above); the table lists the defaults. With a terminal focused:
 
-| Action             | Windows / Linux            | macOS    |
-| ------------------ | -------------------------- | -------- |
-| Copy selection     | `Ctrl+Shift+C`             | `Cmd+C`  |
-| Paste              | `Ctrl+V` / `Ctrl+Shift+V`  | `Cmd+V`  |
-| Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C` |
+| Action             | Windows / Linux            | macOS         |
+| ------------------ | -------------------------- | ------------- |
+| Copy selection     | `Ctrl+Shift+C`             | `Cmd+C`       |
+| Paste              | `Ctrl+V` / `Ctrl+Shift+V`  | `Cmd+V`       |
+| Next / prev tab    | `Ctrl+Tab` / `Ctrl+Shift+Tab` | (same)     |
+| Close tab          | `Ctrl+W`                   | `Cmd+W`       |
+| Focus search       | `Ctrl+F`                   | `Cmd+F`       |
+| Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C`      |
 
 Dragging a selection with the mouse also copies it on release, and the wheel
-scrolls back through history.
-
-Tabs and the browser are mouse-driven for now: click a project or session in
-the sidebar to open it, click a tab to switch, and a tab's `×` closes it
-(ending that session). Keyboard tab switching lands with the configurable
-keymap.
+scrolls back through history. In the sidebar, click a project or session to
+open it; a tab's `×` also closes it.
 
 ## Test
 

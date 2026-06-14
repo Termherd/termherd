@@ -60,6 +60,7 @@ fn main() -> iced::Result {
         program: s.program.clone(),
         args: s.args.clone(),
     });
+    let keymap = settings.keymap();
 
     // PTY output flows from the reader threads through this channel into the
     // iced subscription (M2). The manager is built here and injected as a
@@ -70,7 +71,7 @@ fn main() -> iced::Result {
     });
     let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink, shell));
 
-    let result = shell::run(scanner, watch_root, pty, pty_rx, settings.theme);
+    let result = shell::run(scanner, watch_root, pty, pty_rx, settings.theme, keymap);
     // Hold the lock for the whole GUI lifetime.
     drop(instance);
     result

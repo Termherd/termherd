@@ -3,9 +3,11 @@
 //! [`crate::window_config`]; `core` never sees it. Window bounds keep their
 //! own `window.json` (FR12).
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use termherd_core::{Action, KeyChord, Keymap};
 use tracing::warn;
 
 /// The persisted user settings. Every field defaults, so a missing or partial
@@ -18,6 +20,29 @@ pub struct Settings {
     pub shell: Option<ShellProfile>,
     /// GUI chrome theme (the terminal grid keeps its own colours).
     pub theme: ThemeChoice,
+    /// Keyboard overrides: action name (kebab-case) → one chord or a list of
+    /// chords. Each entry replaces that action's platform default (FR9). Same
+    /// table on every OS; unspecified actions keep their per-platform default.
+    pub keys: HashMap<String, ChordList>,
+}
+
+/// One or several chords bound to an action — a bare string for the common
+/// single-binding case, or an array for several.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ChordList {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl ChordList {
+    fn iter(&self) -> impl Iterator<Item = &str> {
+        match self {
+            ChordList::One(s) => std::slice::from_ref(s).iter(),
+            ChordList::Many(v) => v.iter(),
+        }
+        .map(String::as_str)
+    }
 }
 
 /// A shell to spawn instead of the platform default (e.g. `pwsh`, `bash`).
@@ -53,6 +78,32 @@ impl ThemeChoice {
 }
 
 impl Settings {
+    /// The active keymap: platform defaults with the user's `keys` overrides
+    /// applied (FR9). Unknown action names and unparsable chords are logged and
+    /// skipped, so a typo never breaks the rest of the bindings.
+    #[must_use]
+    pub fn keymap(&self) -> Keymap {
+        let mut keymap = Keymap::defaults();
+        for (name, list) in &self.keys {
+            let Some(action) = Action::from_config_name(name) else {
+                warn!(action = name, "unknown key action in settings; ignoring");
+                continue;
+            };
+            let mut chords = Vec::new();
+            for raw in list.iter() {
+                match KeyChord::parse(raw) {
+                    Ok(chord) => chords.push(chord),
+                    Err(e) => warn!(chord = raw, error = %e, "invalid chord; ignoring"),
+                }
+            }
+            // All chords invalid → leave the default binding untouched.
+            if !chords.is_empty() {
+                keymap.set(action, chords);
+            }
+        }
+        keymap
+    }
+
     /// Load persisted settings; any problem (no file, bad JSON) falls back to
     /// defaults — a corrupt config must never prevent startup.
     #[must_use]
@@ -104,6 +155,37 @@ mod tests {
         assert_eq!(json, "\"light\"");
         let back: ThemeChoice = serde_json::from_str(&json).expect("deserialise");
         assert_eq!(back, ThemeChoice::Light);
+    }
+
+    #[test]
+    fn keys_override_a_default_binding() {
+        use termherd_core::{Action, KeyChord, keymap::MOD_CTRL};
+        let s: Settings =
+            serde_json::from_str(r#"{ "keys": { "copy": "ctrl+y" } }"#).expect("valid json");
+        let map = s.keymap();
+        // The override takes effect…
+        assert_eq!(
+            map.lookup(&KeyChord::new("y", MOD_CTRL)),
+            Some(Action::Copy)
+        );
+        // …and a binding we did not touch keeps its default.
+        assert_eq!(
+            map.lookup(&KeyChord::new("tab", MOD_CTRL)),
+            Some(Action::NextTab)
+        );
+    }
+
+    #[test]
+    fn a_list_binds_several_chords_and_bad_entries_are_skipped() {
+        use termherd_core::{Action, KeyChord, keymap::MOD_CTRL};
+        let s: Settings =
+            serde_json::from_str(r#"{ "keys": { "paste": ["ctrl+y", "not a chord"] } }"#)
+                .expect("valid json");
+        let map = s.keymap();
+        assert_eq!(
+            map.lookup(&KeyChord::new("y", MOD_CTRL)),
+            Some(Action::Paste)
+        );
     }
 
     #[test]

@@ -9,6 +9,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `F-keyboard-shortcuts` (M3): a configurable keymap (FR9). Every shortcut is
+  now a `KeyChord -> Action` binding in `core::keymap` (pure, testable):
+  human chords (`"ctrl+shift+c"`, order/case-insensitive) parse to a chord,
+  platform-aware defaults bind copy/paste/close/search (⌘ on macOS, Ctrl
+  elsewhere) plus `Ctrl+Tab` / `Ctrl+Shift+Tab` tab cycling, and the `keys`
+  section of `settings.json` overrides any action (one chord or a list).
+  Unknown actions and unparsable chords are logged and skipped. The shell
+  builds a chord from each key event and runs the bound action, so the
+  hard-coded clipboard chords are gone and keyboard tab switching, tab close
+  and search focus now work; `split-*` / `focus-next/prev` actions are bound
+  as those features land.
 - `F-settings` (M3, thin): user settings (FR10) persisted to
   `~/.termherd/settings.json`. A **shell profile** (program + args) is injected
   into the `PtyManager` so each session launches the chosen shell instead of

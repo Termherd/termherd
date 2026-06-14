@@ -95,6 +95,28 @@ pub enum Action {
     Paste,
 }
 
+impl Action {
+    /// The action for a config key name (kebab-case), or `None` if unknown.
+    /// This is the vocabulary the `keys` section of `settings.json` speaks.
+    #[must_use]
+    pub fn from_config_name(name: &str) -> Option<Action> {
+        Some(match name {
+            "open-new-session" => Action::OpenNewSession,
+            "close-focused" => Action::CloseFocused,
+            "split-horizontal" => Action::SplitHorizontal,
+            "split-vertical" => Action::SplitVertical,
+            "focus-next" => Action::FocusNext,
+            "focus-prev" => Action::FocusPrev,
+            "next-tab" => Action::NextTab,
+            "prev-tab" => Action::PrevTab,
+            "focus-search" => Action::FocusSearch,
+            "copy" => Action::Copy,
+            "paste" => Action::Paste,
+            _ => return None,
+        })
+    }
+}
+
 /// Resolves a [`KeyChord`] to its [`Action`]. Built from platform-aware
 /// defaults, then overridden per the user's config.
 #[derive(Debug, Clone)]
@@ -134,7 +156,10 @@ impl Keymap {
             map.set(Action::FocusSearch, [KeyChord::new("f", MOD_CTRL)]);
         }
         map.set(Action::NextTab, [KeyChord::new("tab", MOD_CTRL)]);
-        map.set(Action::PrevTab, [KeyChord::new("tab", MOD_CTRL | MOD_SHIFT)]);
+        map.set(
+            Action::PrevTab,
+            [KeyChord::new("tab", MOD_CTRL | MOD_SHIFT)],
+        );
         map
     }
 
@@ -169,7 +194,10 @@ mod tests {
             KeyChord::parse("C+SHIFT+CTRL"),
             Ok(KeyChord::new("c", MOD_CTRL | MOD_SHIFT))
         );
-        assert_eq!(KeyChord::parse("cmd+tab"), Ok(KeyChord::new("tab", MOD_CMD)));
+        assert_eq!(
+            KeyChord::parse("cmd+tab"),
+            Ok(KeyChord::new("tab", MOD_CMD))
+        );
     }
 
     #[test]
@@ -184,7 +212,10 @@ mod tests {
         let map = Keymap::defaults();
         if cfg!(target_os = "macos") {
             assert_eq!(map.lookup(&KeyChord::new("c", MOD_CMD)), Some(Action::Copy));
-            assert_eq!(map.lookup(&KeyChord::new("v", MOD_CMD)), Some(Action::Paste));
+            assert_eq!(
+                map.lookup(&KeyChord::new("v", MOD_CMD)),
+                Some(Action::Paste)
+            );
         } else {
             assert_eq!(
                 map.lookup(&KeyChord::new("c", MOD_CTRL | MOD_SHIFT)),
@@ -205,11 +236,25 @@ mod tests {
     }
 
     #[test]
+    fn config_names_round_trip_to_actions() {
+        assert_eq!(Action::from_config_name("copy"), Some(Action::Copy));
+        assert_eq!(Action::from_config_name("next-tab"), Some(Action::NextTab));
+        assert_eq!(
+            Action::from_config_name("close-focused"),
+            Some(Action::CloseFocused)
+        );
+        assert_eq!(Action::from_config_name("nope"), None);
+    }
+
+    #[test]
     fn set_replaces_every_chord_previously_bound_to_an_action() {
         let mut map = Keymap::defaults();
         // Rebind paste to a single new chord; the old paste chords stop working.
         map.set(Action::Paste, [KeyChord::new("v", MOD_CMD)]);
-        assert_eq!(map.lookup(&KeyChord::new("v", MOD_CMD)), Some(Action::Paste));
+        assert_eq!(
+            map.lookup(&KeyChord::new("v", MOD_CMD)),
+            Some(Action::Paste)
+        );
         assert_eq!(map.lookup(&KeyChord::new("v", MOD_CTRL)), None);
     }
 }
