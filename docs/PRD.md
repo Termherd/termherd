@@ -103,13 +103,13 @@ Feature IDs carry over; three **net-new** features (not in v0.0.30) get new IDs.
 | `F-session-tabs` ⭐ | tabbed open sessions | M | **net-new** |
 | `F-keyboard-shortcuts` ⭐ | configurable keymap → actions | M | **net-new** |
 | `F-session-metadata` | star / rename / archive / titles | S | rev. 6: Claude-session link is core |
-| `F-fork-detection` | fork / plan-accept detection | M | rev. 6: moved from Should |
 | `F-plans-memory` | plan + CLAUDE.md browse/edit | S | rev. 6: moved from Should |
 
 ### Should
 
 | F-ID | Feature | Size |
 | ---- | ------- | ---- |
+| `F-fork-detection` | fork / plan-accept detection (rev. 7: **blocked** — 23 real sessions show no `forkedFrom`, no cross-session uuid reuse, no sub-120s transitions; resume appends in-place. Revisit if Claude reintroduces fork files) | M |
 | `F-terminal-split` ⭐ | split panes (h/v), focus, resize (rev. 5: moved from Must; pure pane-tree core already landed) | L |
 | `F-jsonl-viewer` | rich transcript viewer | M |
 | `F-auto-update` | background update from GitHub | S |

@@ -54,13 +54,18 @@ short, scannable view; commits land features here when they ship.
   the browser pins starred sessions, hides archived behind a toggle, and shows
   custom titles. Star / archive / inline rename (✎ → edit field) are all
   sidebar controls
-- [ ] `F-fork-detection` — fork / plan-accept detection (moved to Must,
-  PRD rev. 6)
 - [ ] `F-plans-memory` — browse/edit plans + `CLAUDE.md` (moved to Must,
   PRD rev. 6)
 
 ### Should (post v0)
 
+- [ ] `F-fork-detection` — fork / plan-accept detection (**blocked**, PRD
+  rev. 7): an investigation of 23 real `~/.claude` sessions found none of the
+  signals the original feature relied on — `forkedFrom` is never populated,
+  no message `uuid` is shared across sessions, and there are no sub-120s
+  session transitions. Current Claude Code appends a resume to the same file
+  (stable `sessionId`), so separate fork files don't occur. Revisit only if
+  Claude reintroduces forked session files
 - [ ] `F-terminal-split` — split panes (h/v), focus, resize (moved from Must,
   PRD rev. 5): the pure pane-tree core already landed — `Workspace::split` /
   `close_focused` / `focus_next`/`prev` and the `App` events
