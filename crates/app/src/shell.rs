@@ -154,6 +154,10 @@ enum Message {
     TermScroll(i32),
     /// Copy the given text (a terminal selection) to the clipboard (FR4).
     CopySelection(String),
+    /// Bring the tab at this index to the front (FR5).
+    ActivateTab(usize),
+    /// Close the tab at this index, killing its session(s) (FR5).
+    CloseTab(usize),
 }
 
 impl Shell {
@@ -319,6 +323,28 @@ impl Shell {
                 } else {
                     iced::clipboard::write(text)
                 }
+            }
+            Message::ActivateTab(index) => {
+                let _ = self.core.apply(termherd_core::Event::ActivateTab(index));
+                self.focus = Focus::Terminal;
+                self.resize_focused()
+            }
+            Message::CloseTab(index) => {
+                // Capture the sessions about to die so their cached screens
+                // don't outlive them in the shell.
+                let dying = self
+                    .core
+                    .workspace
+                    .tabs
+                    .get(index)
+                    .map(|tab| tab.sessions())
+                    .unwrap_or_default();
+                let effects = self.core.apply(termherd_core::Event::CloseTab(index));
+                for id in dying {
+                    self.screens.remove(&id);
+                }
+                let kill = self.perform(effects);
+                Task::batch([kill, self.resize_focused()])
             }
         }
     }
@@ -511,10 +537,46 @@ impl Shell {
         };
 
         let mut pane = column![].spacing(8).padding(8);
+        if let Some(bar) = self.tab_bar() {
+            pane = pane.push(bar);
+        }
         if let Some(status) = focused.and_then(|id| self.core.sessions.get(&id)) {
             pane = pane.push(status_badge(status.status));
         }
         container(pane.push(body)).width(Fill).height(Fill).into()
+    }
+
+    /// The tab strip (FR5): one chip per open session, the active one
+    /// highlighted, each carrying its activity dot (FR8) and a close button.
+    /// `None` when nothing is open, so the welcome view keeps the full pane.
+    fn tab_bar(&self) -> Option<Element<'_, Message>> {
+        let tabs = &self.core.workspace.tabs;
+        if tabs.is_empty() {
+            return None;
+        }
+        let mut bar = row![].spacing(4).align_y(iced::Center);
+        for (index, tab) in tabs.iter().enumerate() {
+            let active = index == self.core.workspace.active;
+            let mut label = row![].spacing(6).align_y(iced::Center);
+            if let Some(status) = self.core.tab_status(index) {
+                label = label.push(text("●").size(9).color(status_style(status).1));
+            }
+            label = label.push(text(clip(&tab.title, 24)).size(12));
+            let title = button(label)
+                .on_press(Message::ActivateTab(index))
+                .padding(6);
+            let title = if active {
+                title.style(button::primary)
+            } else {
+                title.style(button::text)
+            };
+            let close = button(text("×").size(14))
+                .on_press(Message::CloseTab(index))
+                .style(button::text)
+                .padding(4);
+            bar = bar.push(row![title, close].align_y(iced::Center));
+        }
+        Some(bar.into())
     }
 }
 
@@ -734,8 +796,8 @@ fn status_style(status: SessionStatus) -> (&'static str, Color) {
 }
 
 /// A small per-session activity badge (FR8): a coloured dot + label for the
-/// focused terminal. The same dot annotates live rows in the sidebar; tab
-/// badges follow with tabs in M3.
+/// focused terminal. The same dot annotates live rows in the sidebar and each
+/// tab in the tab strip.
 fn status_badge(status: SessionStatus) -> Element<'static, Message> {
     let (label, color) = status_style(status);
     row![text("●").size(13).color(color), text(label).size(13)]

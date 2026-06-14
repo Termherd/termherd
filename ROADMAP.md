@@ -26,12 +26,17 @@ short, scannable view; commits land features here when they ship.
   the `pty` reader decodes the raw byte stream with `termherd_claude::osc`;
   busy/idle titles plus an OSC 9 notification → a distinct `Attention` status
   (sticky over idle, cleared by work). Surfaced as a badge on the focused
-  terminal and a per-session dot in the sidebar. Tab badges arrive with tabs
-  (M3); the bell is decoded but not treated as activity
+  terminal, a per-session dot in the sidebar, and a dot on each tab (with
+  `F-session-tabs`); the bell is decoded but not treated as activity
 - [ ] `F-settings` (thin) — shell select, theme, window prefs
 - [ ] `F-packaging-ci` — signed mac/win/linux builds + CI gate (3-OS matrix)
   — *pipeline + CI gate in place; "signed" pending certificates (OQ5)*
-- [ ] `F-session-tabs` — tabbed open sessions
+- [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is
+  a tab; a tab strip switches between them, each chip carrying its activity
+  dot (the FR8 tab badge) and a close button that kills the session's PTY —
+  the first UI-driven `Effect::Kill`. Tab tree edits (`activate`/`close_tab`,
+  most-urgent `tab_status`) are pure in `core`. Drag-reorder (FR5) and
+  keyboard switching (deferred to `F-keyboard-shortcuts`) still to come
 - [ ] `F-terminal-split` — split panes (h/v), focus, resize
 - [ ] `F-keyboard-shortcuts` — configurable keymap → actions
 

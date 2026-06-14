@@ -9,6 +9,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `F-session-tabs` (M3): open sessions are now navigable tabs, not just the
+  last-launched terminal. A tab strip above the terminal switches between
+  sessions; each chip carries its activity dot (the FR8 tab badge, folded to
+  the most urgent status of the sessions it hosts) and a close button. Closing
+  a tab kills its session's PTY — the first UI-driven `Effect::Kill` — and
+  drops the session from the live registry and its cached screen. The tab tree
+  edits are pure in `core` (`Workspace::activate`/`close_tab`, `Tab::sessions`,
+  `App::tab_status`) behind `Event::ActivateTab`/`CloseTab`, exhaustively unit
+  tested; the shell only renders the strip and forwards clicks. Drag-reorder
+  (FR5) and keyboard tab-switching (`F-keyboard-shortcuts`) are not yet wired.
 - `F-builtin-terminal` (M2): the embedded terminal is now a real terminal.
   The `pty` reader builds a `Screen` snapshot — the visible grid with per-cell
   RGB (resolved from the xterm-256 palette), the cursor and a scrolled flag —
