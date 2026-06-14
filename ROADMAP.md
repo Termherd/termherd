@@ -54,8 +54,12 @@ short, scannable view; commits land features here when they ship.
   the browser pins starred sessions, hides archived behind a toggle, and shows
   custom titles. Star / archive / inline rename (✎ → edit field) are all
   sidebar controls
-- [ ] `F-plans-memory` — browse/edit plans + `CLAUDE.md` (moved to Must,
-  PRD rev. 6)
+- [ ] `F-plans-memory` — browse/edit plans + `CLAUDE.md` (M3, moved to Must in
+  PRD rev. 6): **read-only browse/view shipped** — a sidebar "Plans & mémoire"
+  section lists `~/.claude/plans/*.md`, the global `CLAUDE.md` and each
+  project's `CLAUDE.md`, opening one read-only in the main pane (off-thread
+  read via the new `docs` adapter). Editing + the `~/.claude` write-scope
+  relaxation are the remaining slice
 
 ### Should (post v0)
 

@@ -30,6 +30,7 @@ use termherd_core::{
 };
 use termherd_pty::{PtyEvent, Screen};
 
+use crate::docs::DocEntry;
 use crate::settings::ThemeChoice;
 use crate::window_config::WindowConfig;
 
@@ -147,6 +148,10 @@ struct Shell {
     keymap: Keymap,
     /// In-progress inline rename: `(session id, edit buffer)` (F-session-metadata).
     renaming: Option<(String, String)>,
+    /// Browsable plan / memory docs (F-plans-memory), refreshed on scan.
+    docs: Vec<DocEntry>,
+    /// The doc currently shown read-only in the main pane: `(label, content)`.
+    viewing: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +211,18 @@ enum Message {
     RenameInput(String),
     /// Commit the inline rename (Enter or the ✓ button).
     CommitRename,
+    /// Open a plan / memory doc read-only in the main pane (F-plans-memory).
+    OpenDoc {
+        label: String,
+        path: PathBuf,
+    },
+    /// A doc's contents finished loading.
+    DocLoaded {
+        label: String,
+        content: String,
+    },
+    /// Close the doc viewer, returning to the terminal.
+    CloseDoc,
 }
 
 impl Shell {
@@ -233,6 +250,8 @@ impl Shell {
             theme: startup.theme.to_iced(),
             keymap: startup.keymap,
             renaming: None,
+            docs: crate::docs::discover(&[]),
+            viewing: None,
         }
     }
 
@@ -327,6 +346,11 @@ impl Shell {
                     .core
                     .apply(termherd_core::Event::ScanCompleted(records));
                 debug_assert!(effects.is_empty());
+                // Refresh plan/memory docs now that the project paths are known
+                // (a project's CLAUDE.md sits in its real directory).
+                let paths: Vec<String> =
+                    self.core.projects.iter().map(|g| g.path.clone()).collect();
+                self.docs = crate::docs::discover(&paths);
                 Task::none()
             }
             Message::ScanCompleted(Err(error)) => {
@@ -448,6 +472,24 @@ impl Shell {
                 }
                 None => Task::none(),
             },
+            Message::OpenDoc { label, path } => Task::perform(
+                async move {
+                    crate::docs::read(&path)
+                        .unwrap_or_else(|e| format!("(lecture impossible : {e})"))
+                },
+                move |content| Message::DocLoaded {
+                    label: label.clone(),
+                    content,
+                },
+            ),
+            Message::DocLoaded { label, content } => {
+                self.viewing = Some((label, content));
+                Task::none()
+            }
+            Message::CloseDoc => {
+                self.viewing = None;
+                Task::none()
+            }
         }
     }
 
@@ -640,6 +682,22 @@ impl Shell {
             };
             list = list.push(text(label).size(12));
         }
+        // Plans & memory docs (F-plans-memory), above the project list.
+        if !self.docs.is_empty() {
+            let mut docs_col = column![text("Plans & mémoire").size(12)].spacing(4);
+            for doc in &self.docs {
+                docs_col = docs_col.push(
+                    button(text(clip(&doc.label, 34)).size(11))
+                        .on_press(Message::OpenDoc {
+                            label: doc.label.clone(),
+                            path: doc.path.clone(),
+                        })
+                        .style(button::text)
+                        .padding(0),
+                );
+            }
+            list = list.push(docs_col);
+        }
         for group in &visible {
             let open = button(text(project_label(&group.path).to_owned()).size(14))
                 .on_press(Message::LaunchProject(group.path.clone()))
@@ -745,6 +803,25 @@ impl Shell {
     /// The focused terminal: a status badge, then its grid drawn on a canvas.
     /// With no session open, a short summary of what the browser found.
     fn main_pane(&self) -> Element<'_, Message> {
+        // A plan / memory doc, when one is open, takes over the main pane
+        // read-only (F-plans-memory).
+        if let Some((label, content)) = &self.viewing {
+            let header = row![
+                text(label).size(13),
+                button(text("✕ fermer").size(12))
+                    .on_press(Message::CloseDoc)
+                    .style(button::text)
+                    .padding(0),
+            ]
+            .spacing(12)
+            .align_y(iced::Center);
+            let body = scrollable(text(content).size(12).font(Font::MONOSPACE)).height(Fill);
+            return container(column![header, body].spacing(8).padding(8))
+                .width(Fill)
+                .height(Fill)
+                .into();
+        }
+
         let focused = self.core.workspace.focused_session();
         let screen = focused.and_then(|id| self.screens.get(&id));
 

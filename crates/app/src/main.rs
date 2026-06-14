@@ -4,6 +4,7 @@
 //! require-time singletons): tracing, single-instance, the filesystem
 //! scanner, then the iced shell.
 
+mod docs;
 mod metadata_store;
 mod settings;
 mod shell;

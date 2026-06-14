@@ -9,6 +9,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `F-plans-memory` (M3, read-only first slice): browse and view Claude's plans
+  (`~/.claude/plans/*.md`) and memory files — the global `~/.claude/CLAUDE.md`
+  and each project's `CLAUDE.md` — from a "Plans & mémoire" section in the
+  sidebar. Clicking one loads it off-thread and shows it read-only in the main
+  pane (✕ returns to the terminal); the doc list refreshes on each scan so
+  project memories appear once their paths are known. A new `docs` file adapter
+  lists and reads. Editing — and the `~/.claude` write-scope change it needs —
+  is a deliberate follow-up.
 - `F-session-metadata` (M3): a star / archive / custom-title overlay on the
   read-only Claude sessions, persisted to `~/.termherd/metadata.json` (we never
   write under `~/.claude`). The browser pins starred sessions to the top of
