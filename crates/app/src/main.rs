@@ -4,6 +4,7 @@
 //! require-time singletons): tracing, single-instance, the filesystem
 //! scanner, then the iced shell.
 
+mod metadata_store;
 mod settings;
 mod shell;
 mod window_config;
@@ -61,6 +62,7 @@ fn main() -> iced::Result {
         args: s.args.clone(),
     });
     let keymap = settings.keymap();
+    let metadata = metadata_store::load();
 
     // PTY output flows from the reader threads through this channel into the
     // iced subscription (M2). The manager is built here and injected as a
@@ -71,7 +73,12 @@ fn main() -> iced::Result {
     });
     let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink, shell));
 
-    let result = shell::run(scanner, watch_root, pty, pty_rx, settings.theme, keymap);
+    let startup = shell::Startup {
+        theme: settings.theme,
+        keymap,
+        metadata,
+    };
+    let result = shell::run(scanner, watch_root, pty, pty_rx, startup);
     // Hold the lock for the whole GUI lifetime.
     drop(instance);
     result

@@ -26,7 +26,7 @@ use iced::{
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Action, Effect, KeyChord, Keymap, LaunchSpec, SessionRecord, SessionStatus, keymap,
+    Action, Effect, KeyChord, Keymap, LaunchSpec, SessionMeta, SessionRecord, SessionStatus, keymap,
 };
 use termherd_pty::{PtyEvent, Screen};
 
@@ -56,13 +56,21 @@ fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
 }
 
+/// Resolved user configuration handed to the shell at startup: the theme,
+/// keymap and metadata overlay built from `settings.json` / `metadata.json`.
+/// Bundled so the composition root passes one value, not a long argument list.
+pub struct Startup {
+    pub theme: ThemeChoice,
+    pub keymap: Keymap,
+    pub metadata: HashMap<String, SessionMeta>,
+}
+
 pub fn run(
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
     pty: Arc<dyn PtyHost>,
     pty_rx: UnboundedReceiver<PtyEvent>,
-    theme: ThemeChoice,
-    keymap: Keymap,
+    startup: Startup,
 ) -> iced::Result {
     let config = WindowConfig::load();
     let position = match (config.x, config.y) {
@@ -78,8 +86,11 @@ pub fn run(
                 watch_root.clone(),
                 pty.clone(),
                 pty_output.clone(),
-                theme.to_iced(),
-                keymap.clone(),
+                Startup {
+                    theme: startup.theme,
+                    keymap: startup.keymap.clone(),
+                    metadata: startup.metadata.clone(),
+                },
             );
             let initial_scan = shell.rescan();
             (shell, initial_scan)
@@ -174,6 +185,12 @@ enum Message {
     ActivateTab(usize),
     /// Close the tab at this index, killing its session(s) (FR5).
     CloseTab(usize),
+    /// Toggle a browsed session's star (F-session-metadata).
+    ToggleStar(String),
+    /// Toggle a browsed session's archived flag (F-session-metadata).
+    ToggleArchive(String),
+    /// Show or hide archived sessions in the browser (F-session-metadata).
+    ShowArchived(bool),
 }
 
 impl Shell {
@@ -183,11 +200,12 @@ impl Shell {
         watch_root: Option<PathBuf>,
         pty: Arc<dyn PtyHost>,
         pty_output: PtyOutput,
-        theme: Theme,
-        keymap: Keymap,
+        startup: Startup,
     ) -> Self {
+        let mut core = termherd_core::App::new();
+        core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
         Self {
-            core: termherd_core::App::new(),
+            core,
             bounds,
             scanner,
             watch_root,
@@ -197,8 +215,8 @@ impl Shell {
             screens: HashMap::new(),
             focus: Focus::Search,
             selection: None,
-            theme,
-            keymap,
+            theme: startup.theme.to_iced(),
+            keymap: startup.keymap,
         }
     }
 
@@ -231,6 +249,11 @@ impl Shell {
                 } => self.pty.resize(session, cols, rows),
                 Effect::Scroll { session, delta } => self.pty.scroll(session, delta),
                 Effect::Kill(session) => self.pty.kill(session),
+                // Metadata persistence is a file write, not a PTY call.
+                Effect::SaveMetadata(metadata) => {
+                    crate::metadata_store::save(&metadata);
+                    Ok(())
+                }
             };
             if let Err(error) = outcome {
                 tracing::warn!(%error, "pty effect failed");
@@ -374,6 +397,22 @@ impl Shell {
                 self.perform(effects)
             }
             Message::CloseTab(index) => self.close_tab(index),
+            Message::ToggleStar(session) => {
+                let effects = self.core.apply(termherd_core::Event::ToggleStar(session));
+                self.perform(effects)
+            }
+            Message::ToggleArchive(session) => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::ToggleArchive(session));
+                self.perform(effects)
+            }
+            Message::ShowArchived(show) => {
+                let _ = self
+                    .core
+                    .apply(termherd_core::Event::ShowArchivedToggled(show));
+                Task::none()
+            }
         }
     }
 
@@ -528,6 +567,11 @@ impl Shell {
             .on_toggle(Message::SearchTitlesOnly)
             .text_size(11)
             .size(14);
+        let show_archived = checkbox(self.core.show_archived)
+            .label("Afficher les archivées")
+            .on_toggle(Message::ShowArchived)
+            .text_size(11)
+            .size(14);
 
         // Live activity, keyed by the Claude session id each terminal resumed,
         // so a browsed row can show its current status (FR8). If the same
@@ -564,35 +608,58 @@ impl Shell {
                 .padding(0);
             let mut g = column![open].spacing(4);
             for s in &group.sessions {
+                let id = s.session_id.as_str();
+                let starred = self.core.is_starred(id);
+                let archived = self.core.is_archived(id);
+
+                // Star toggles the pin; archive hides/shows (F-session-metadata).
+                let star = button(text(if starred { "★" } else { "☆" }).size(12))
+                    .on_press(Message::ToggleStar(s.session_id.clone()))
+                    .style(button::text)
+                    .padding(0);
+
                 let mut content = row![].spacing(6).align_y(iced::Center);
                 // A coloured dot marks a session already open in TermHerd and
                 // carries its live activity (FR8).
-                if let Some(status) = live.get(s.session_id.as_str()) {
+                if let Some(status) = live.get(id) {
                     content = content.push(text("●").size(9).color(status_style(*status).1));
                 }
+                let title = self.core.session_title(s);
                 content = content.push(
                     text(format!(
                         "{}  ·  {}",
-                        clip(s.digest.display_title(None), 36),
+                        clip(&title, 30),
                         s.digest.message_count
                     ))
                     .size(11),
                 );
-                let row = button(content)
+                let launch = button(content)
                     .on_press(Message::LaunchSession {
                         cwd: group.path.clone(),
                         resume: s.session_id.clone(),
                     })
                     .style(button::text)
+                    .padding(0)
+                    .width(Fill);
+
+                let archive = button(text(if archived { "⊞" } else { "⊟" }).size(12))
+                    .on_press(Message::ToggleArchive(s.session_id.clone()))
+                    .style(button::text)
                     .padding(0);
-                g = g.push(row);
+
+                g = g.push(row![star, launch, archive].spacing(6).align_y(iced::Center));
             }
             list = list.push(g);
         }
         container(
-            column![search, titles_only, scrollable(list).height(Fill)]
-                .spacing(8)
-                .padding(8),
+            column![
+                search,
+                titles_only,
+                show_archived,
+                scrollable(list).height(Fill)
+            ]
+            .spacing(8)
+            .padding(8),
         )
         .width(300)
         .style(container::rounded_box)

@@ -48,9 +48,12 @@ short, scannable view; commits land features here when they ship.
   action. Drives copy/paste, `Ctrl+Tab`/`Ctrl+Shift+Tab` cycling, close-tab
   and focus-search today; `split-*` / `focus-next/prev` bind as those features
   land
-- [ ] `F-session-metadata` — star / rename / archive / custom titles for
-  sessions (moved to Must, PRD rev. 6: the Claude-session link is core to the
-  product)
+- [x] `F-session-metadata` — star / rename / archive / custom titles for
+  sessions (M3, moved to Must in PRD rev. 6): a `SessionMeta` overlay in
+  `core` persisted to `~/.termherd/metadata.json` (never touching `~/.claude`);
+  the browser pins starred sessions, hides archived behind a toggle, and shows
+  custom titles. Star/archive are sidebar buttons; inline rename UI is the one
+  remaining piece (titles settable in the file for now)
 - [ ] `F-fork-detection` — fork / plan-accept detection (moved to Must,
   PRD rev. 6)
 - [ ] `F-plans-memory` — browse/edit plans + `CLAUDE.md` (moved to Must,

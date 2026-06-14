@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 
 use crate::browser::{ProjectGroup, SessionRecord, filter_projects, group_projects};
+use crate::metadata::SessionMeta;
 use crate::workspace::{SessionId, SplitDir, Workspace};
 
 /// Cell size a freshly launched PTY starts at, before the widget reports its
@@ -29,6 +30,11 @@ pub struct App {
     pub search_titles_only: bool,
     /// Live terminal sessions, keyed by their runtime id (FR4/FR7).
     pub sessions: HashMap<SessionId, LiveSession>,
+    /// User overlay (star / archive / title) per Claude session id
+    /// (`F-session-metadata`); persisted to `~/.termherd`.
+    pub metadata: HashMap<String, SessionMeta>,
+    /// Whether archived sessions show in the browser.
+    pub show_archived: bool,
     /// Monotonic source of `SessionId`s; never reused within a run. This is
     /// the structural fix for the `realSessionId` race (Q6) — ids are minted
     /// here, single-threaded, before any PTY exists.
@@ -151,6 +157,19 @@ pub enum Event {
     /// Move focus to the next / previous pane in the active tab (FR6).
     FocusNextPane,
     FocusPrevPane,
+    /// Persisted metadata loaded at startup (`F-session-metadata`).
+    MetadataLoaded(HashMap<String, SessionMeta>),
+    /// Toggle a session's star, by Claude session id.
+    ToggleStar(String),
+    /// Toggle a session's archived flag, by Claude session id.
+    ToggleArchive(String),
+    /// Set (or clear, when empty) a session's custom title.
+    RenameSession {
+        session: String,
+        title: String,
+    },
+    /// Show or hide archived sessions in the browser.
+    ShowArchivedToggled(bool),
 }
 
 /// Side effects the runtime must perform. The iced shell turns these into
@@ -171,6 +190,8 @@ pub enum Effect {
     Scroll { session: SessionId, delta: i32 },
     /// Terminate a session's PTY process.
     Kill(SessionId),
+    /// Persist the session metadata overlay (`F-session-metadata`).
+    SaveMetadata(HashMap<String, SessionMeta>),
 }
 
 impl App {
@@ -260,14 +281,79 @@ impl App {
                 self.workspace.focus_prev();
                 Vec::new()
             }
+            Event::MetadataLoaded(metadata) => {
+                self.metadata = metadata;
+                Vec::new()
+            }
+            Event::ToggleStar(session) => {
+                self.update_meta(session, |meta| meta.starred = !meta.starred)
+            }
+            Event::ToggleArchive(session) => {
+                self.update_meta(session, |meta| meta.archived = !meta.archived)
+            }
+            Event::RenameSession { session, title } => self.update_meta(session, |meta| {
+                let trimmed = title.trim();
+                meta.title = (!trimmed.is_empty()).then(|| trimmed.to_owned());
+            }),
+            Event::ShowArchivedToggled(show) => {
+                self.show_archived = show;
+                Vec::new()
+            }
         }
     }
 
-    /// The sidebar's view of the projects: everything, or the search
-    /// matches when a query is active (FR3).
+    /// The sidebar's view of the projects: search matches (FR3) with the
+    /// metadata overlay applied (`F-session-metadata`) — archived sessions
+    /// hidden unless [`Self::show_archived`], starred sessions pinned to the
+    /// top of their group, and emptied groups dropped.
     #[must_use]
     pub fn visible_projects(&self) -> Vec<ProjectGroup> {
-        filter_projects(&self.projects, &self.search, self.search_titles_only)
+        let mut groups = filter_projects(&self.projects, &self.search, self.search_titles_only);
+        for group in &mut groups {
+            if !self.show_archived {
+                group.sessions.retain(|s| !self.is_archived(&s.session_id));
+            }
+            // Stable sort keeps recency order within each star bucket.
+            group
+                .sessions
+                .sort_by_key(|s| !self.is_starred(&s.session_id));
+        }
+        groups.retain(|group| !group.sessions.is_empty());
+        groups
+    }
+
+    /// The title to show for a session: the user's custom title if set, else
+    /// the one derived from the digest (`F-session-metadata`).
+    #[must_use]
+    pub fn session_title(&self, record: &SessionRecord) -> String {
+        self.metadata
+            .get(&record.session_id)
+            .and_then(|meta| meta.title.clone())
+            .unwrap_or_else(|| record.digest.display_title(None).to_owned())
+    }
+
+    /// Whether a session (by Claude id) is starred / archived.
+    #[must_use]
+    pub fn is_starred(&self, session_id: &str) -> bool {
+        self.metadata.get(session_id).is_some_and(|m| m.starred)
+    }
+
+    #[must_use]
+    pub fn is_archived(&self, session_id: &str) -> bool {
+        self.metadata.get(session_id).is_some_and(|m| m.archived)
+    }
+
+    /// Edit a session's metadata, dropping it when it returns to defaults, and
+    /// emit the persistence effect.
+    fn update_meta(&mut self, session: String, edit: impl FnOnce(&mut SessionMeta)) -> Vec<Effect> {
+        let mut meta = self.metadata.get(&session).cloned().unwrap_or_default();
+        edit(&mut meta);
+        if meta.is_default() {
+            self.metadata.remove(&session);
+        } else {
+            self.metadata.insert(session, meta);
+        }
+        vec![Effect::SaveMetadata(self.metadata.clone())]
     }
 
     /// Register a launched session, open it as a tab, and ask the runtime to
@@ -569,6 +655,78 @@ mod tests {
         // The surviving session stays live and focused.
         assert_eq!(app.workspace.focused_session(), Some(first));
         assert!(app.sessions.contains_key(&first));
+    }
+
+    #[test]
+    fn star_pins_a_session_and_persists_metadata() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![
+            record("a", "/p", "first"),
+            record("b", "/p", "second"),
+        ]));
+        // "b" is most-recent-first by mtime equal → group order; star "a".
+        let effects = app.apply(Event::ToggleStar("a".into()));
+        assert!(matches!(effects.as_slice(), [Effect::SaveMetadata(m)] if m["a"].starred));
+        // Starred session now leads its group.
+        let group = &app.visible_projects()[0];
+        assert_eq!(group.sessions[0].session_id, "a");
+        assert!(app.is_starred("a"));
+    }
+
+    #[test]
+    fn archived_sessions_hide_unless_shown() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![
+            record("a", "/p", "keep"),
+            record("b", "/p", "hideme"),
+        ]));
+        app.apply(Event::ToggleArchive("b".into()));
+        // Hidden by default…
+        let visible = app.visible_projects();
+        assert_eq!(visible[0].sessions.len(), 1);
+        assert_eq!(visible[0].sessions[0].session_id, "a");
+        // …shown when the toggle is on.
+        app.apply(Event::ShowArchivedToggled(true));
+        assert_eq!(app.visible_projects()[0].sessions.len(), 2);
+    }
+
+    #[test]
+    fn archiving_the_only_session_drops_the_empty_group() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record("a", "/solo", "only")]));
+        app.apply(Event::ToggleArchive("a".into()));
+        assert!(app.visible_projects().is_empty());
+    }
+
+    #[test]
+    fn rename_overrides_the_title_and_clearing_restores_it() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record(
+            "a",
+            "/p",
+            "derived summary",
+        )]));
+        let derived = app.session_title(&app.projects[0].sessions[0].clone());
+
+        app.apply(Event::RenameSession {
+            session: "a".into(),
+            title: "  My Title  ".into(),
+        });
+        assert_eq!(
+            app.session_title(&app.projects[0].sessions[0].clone()),
+            "My Title"
+        );
+
+        // Clearing (empty title) drops the entry back to the derived title.
+        let effects = app.apply(Event::RenameSession {
+            session: "a".into(),
+            title: "   ".into(),
+        });
+        assert!(matches!(effects.as_slice(), [Effect::SaveMetadata(m)] if !m.contains_key("a")));
+        assert_eq!(
+            app.session_title(&app.projects[0].sessions[0].clone()),
+            derived
+        );
     }
 
     #[test]

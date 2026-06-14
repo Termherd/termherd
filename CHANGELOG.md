@@ -9,6 +9,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `F-session-metadata` (M3): a star / archive / custom-title overlay on the
+  read-only Claude sessions, persisted to `~/.termherd/metadata.json` (we never
+  write under `~/.claude`). The browser pins starred sessions to the top of
+  their group, hides archived ones behind an "Afficher les archivées" toggle,
+  and shows custom titles. Star (★/☆) and archive (⊟/⊞) are per-row sidebar
+  buttons. The overlay is pure in `core` — `SessionMeta`, applied in
+  `visible_projects`, behind `ToggleStar` / `ToggleArchive` / `RenameSession` /
+  `ShowArchivedToggled` events that emit a `SaveMetadata` effect (default
+  entries are pruned, so a toggle-back leaves no noise). Custom titles can be
+  set in the file today; an inline rename UI is the remaining piece.
 - `F-keyboard-shortcuts` (M3): a configurable keymap (FR9). Every shortcut is
   now a `KeyChord -> Action` binding in `core::keymap` (pure, testable):
   human chords (`"ctrl+shift+c"`, order/case-insensitive) parse to a chord,
