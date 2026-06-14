@@ -148,6 +148,95 @@ impl Workspace {
             Pane::Split { .. } => None,
         }
     }
+
+    /// Close the focused pane in the active tab (FR6), returning its session so
+    /// the caller can kill the PTY. Its parent split collapses — the sibling
+    /// subtree takes the split's place and gains focus. If the focused pane is
+    /// the whole tab, the tab is closed (like [`Workspace::close_tab`]).
+    pub fn close_focused(&mut self) -> Option<SessionId> {
+        let active = self.active;
+        // Read what we need first, releasing the borrow before any `self.*`.
+        let (removed, is_root) = {
+            let tab = self.tabs.get(active)?;
+            let removed = match navigate(&tab.root, &tab.focus)? {
+                Pane::Leaf(session) => *session,
+                Pane::Split { .. } => return None,
+            };
+            (removed, tab.focus.is_empty())
+        };
+        if is_root {
+            self.close_tab(active);
+            return Some(removed);
+        }
+        let tab = self.tabs.get_mut(active)?;
+        let branch = tab.focus.pop()?;
+        let parent = navigate_mut(&mut tab.root, &tab.focus)?;
+        // Replace the parent split with the sibling subtree (the other branch).
+        let taken = std::mem::replace(parent, Pane::Leaf(removed));
+        if let Pane::Split { a, b, .. } = taken {
+            *parent = match branch {
+                Branch::A => *b,
+                Branch::B => *a,
+            };
+        }
+        // Focus now points at the sibling subtree; descend to its first leaf.
+        focus_first_leaf(&tab.root, &mut tab.focus);
+        Some(removed)
+    }
+
+    /// Move focus to the next pane in the active tab (FR6), left to right and
+    /// wrapping. No-op without an active tab.
+    pub fn focus_next(&mut self) -> Option<()> {
+        self.cycle_focus(1)
+    }
+
+    /// Move focus to the previous pane in the active tab (FR6), wrapping.
+    pub fn focus_prev(&mut self) -> Option<()> {
+        self.cycle_focus(-1)
+    }
+
+    fn cycle_focus(&mut self, delta: i32) -> Option<()> {
+        let tab = self.tabs.get_mut(self.active)?;
+        let paths = leaf_paths(&tab.root);
+        if paths.is_empty() {
+            return None;
+        }
+        let current = paths.iter().position(|p| *p == tab.focus).unwrap_or(0);
+        let len = paths.len() as i32;
+        let next = (current as i32 + delta).rem_euclid(len) as usize;
+        tab.focus = paths[next].clone();
+        Some(())
+    }
+}
+
+/// Extend `focus` from the node it points at down to that subtree's first
+/// (leftmost) leaf, so the focus path always ends on a leaf.
+fn focus_first_leaf(root: &Pane, focus: &mut Vec<Branch>) {
+    while let Some(Pane::Split { .. }) = navigate(root, focus) {
+        focus.push(Branch::A);
+    }
+}
+
+/// Every leaf's path from the root, left to right.
+fn leaf_paths(root: &Pane) -> Vec<Vec<Branch>> {
+    let mut out = Vec::new();
+    let mut path = Vec::new();
+    collect_paths(root, &mut path, &mut out);
+    out
+}
+
+fn collect_paths(pane: &Pane, path: &mut Vec<Branch>, out: &mut Vec<Vec<Branch>>) {
+    match pane {
+        Pane::Leaf(_) => out.push(path.clone()),
+        Pane::Split { a, b, .. } => {
+            path.push(Branch::A);
+            collect_paths(a, path, out);
+            path.pop();
+            path.push(Branch::B);
+            collect_paths(b, path, out);
+            path.pop();
+        }
+    }
 }
 
 fn navigate<'a>(mut pane: &'a Pane, path: &[Branch]) -> Option<&'a Pane> {
@@ -303,5 +392,63 @@ mod tests {
         assert!(ws.close_tab(5).is_empty());
         assert_eq!(ws.tabs.len(), 1);
         assert_eq!(ws.active, 0);
+    }
+
+    #[test]
+    fn close_focused_collapses_the_split_onto_the_sibling() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2)); // focus on B (sid 2)
+        // Closing the focused pane removes sid 2 and leaves just sid 1.
+        assert_eq!(ws.close_focused(), Some(sid(2)));
+        assert_eq!(ws.tabs.len(), 1);
+        assert_eq!(ws.tabs[0].root, Pane::Leaf(sid(1)));
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+    }
+
+    #[test]
+    fn close_focused_on_a_single_pane_tab_closes_the_tab() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.open(sid(2), "b");
+        // Active tab is the single-leaf "b"; closing its pane closes the tab.
+        assert_eq!(ws.close_focused(), Some(sid(2)));
+        assert_eq!(ws.tabs.len(), 1);
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+    }
+
+    #[test]
+    fn close_focused_in_a_nested_split_keeps_a_leaf_focused() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Horizontal, sid(2));
+        ws.split(SplitDir::Vertical, sid(3)); // focus B,B = sid 3
+        assert_eq!(ws.close_focused(), Some(sid(3)));
+        // The sibling (sid 2) takes the inner split's place and is focused.
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+        assert_eq!(ws.tabs[0].sessions(), vec![sid(1), sid(2)]);
+    }
+
+    #[test]
+    fn focus_next_and_prev_cycle_through_panes() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+        ws.split(SplitDir::Vertical, sid(3)); // leaves in order: 1, 2, 3; focus on 3
+        assert_eq!(ws.focused_session(), Some(sid(3)));
+        // Wrap forward to the first leaf, then walk back.
+        assert!(ws.focus_next().is_some());
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+        assert!(ws.focus_prev().is_some());
+        assert_eq!(ws.focused_session(), Some(sid(3)));
+        assert!(ws.focus_prev().is_some());
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+    }
+
+    #[test]
+    fn focus_moves_are_noops_without_an_active_tab() {
+        let mut ws = Workspace::new();
+        assert!(ws.focus_next().is_none());
+        assert!(ws.close_focused().is_none());
     }
 }

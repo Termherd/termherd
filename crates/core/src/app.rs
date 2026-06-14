@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 
 use crate::browser::{ProjectGroup, SessionRecord, filter_projects, group_projects};
-use crate::workspace::{SessionId, Workspace};
+use crate::workspace::{SessionId, SplitDir, Workspace};
 
 /// Cell size a freshly launched PTY starts at, before the widget reports its
 /// real geometry via [`Event::TerminalResized`].
@@ -118,7 +118,10 @@ pub enum Event {
     /// The user asked to open a session in a terminal (FR4).
     LaunchSession(LaunchSpec),
     /// The user typed into a terminal; bytes go to its PTY stdin.
-    TerminalInput { session: SessionId, bytes: Vec<u8> },
+    TerminalInput {
+        session: SessionId,
+        bytes: Vec<u8>,
+    },
     /// A terminal pane changed size (in cells); propagate to the PTY (FR4).
     TerminalResized {
         session: SessionId,
@@ -126,7 +129,10 @@ pub enum Event {
         rows: u16,
     },
     /// The user scrolled a terminal's viewport (FR4 scrollback).
-    TerminalScrolled { session: SessionId, delta: i32 },
+    TerminalScrolled {
+        session: SessionId,
+        delta: i32,
+    },
     /// The OSC decoder reclassified a session's activity (FR8).
     StatusChanged {
         session: SessionId,
@@ -138,6 +144,13 @@ pub enum Event {
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.
     CloseTab(usize),
+    /// Split the focused pane, opening a fresh session beside it (FR6).
+    SplitFocused(SplitDir),
+    /// Close the focused pane (FR6); its PTY is killed and the split collapses.
+    CloseFocusedPane,
+    /// Move focus to the next / previous pane in the active tab (FR6).
+    FocusNextPane,
+    FocusPrevPane,
 }
 
 /// Side effects the runtime must perform. The iced shell turns these into
@@ -231,6 +244,22 @@ impl App {
                 Vec::new()
             }
             Event::CloseTab(index) => self.close_tab(index),
+            Event::SplitFocused(dir) => self.split_focused(dir),
+            Event::CloseFocusedPane => match self.workspace.close_focused() {
+                Some(id) => {
+                    self.sessions.remove(&id);
+                    vec![Effect::Kill(id)]
+                }
+                None => Vec::new(),
+            },
+            Event::FocusNextPane => {
+                self.workspace.focus_next();
+                Vec::new()
+            }
+            Event::FocusPrevPane => {
+                self.workspace.focus_prev();
+                Vec::new()
+            }
         }
     }
 
@@ -262,6 +291,40 @@ impl App {
             session: id,
             cwd: spec.cwd,
             resume: spec.resume,
+            cols: DEFAULT_COLS,
+            rows: DEFAULT_ROWS,
+        })]
+    }
+
+    /// Split the focused pane (FR6): mint a session, inherit the focused pane's
+    /// working directory, wrap the leaf into a split, and spawn the new PTY.
+    /// Yields no effects on id overflow or if the focus is not on a leaf.
+    fn split_focused(&mut self, dir: SplitDir) -> Vec<Effect> {
+        let Some(id) = self.allocate_session() else {
+            return Vec::new();
+        };
+        // Inherit the cwd before the split moves focus to the new pane.
+        let cwd = self
+            .workspace
+            .focused_session()
+            .and_then(|focused| self.sessions.get(&focused))
+            .and_then(|session| session.cwd.clone());
+        if self.workspace.split(dir, id).is_none() {
+            return Vec::new();
+        }
+        self.sessions.insert(
+            id,
+            LiveSession {
+                id,
+                cwd: cwd.clone(),
+                resume: None,
+                status: SessionStatus::Starting,
+            },
+        );
+        vec![Effect::Spawn(SpawnSpec {
+            session: id,
+            cwd,
+            resume: None,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
         })]
@@ -506,6 +569,57 @@ mod tests {
         // The surviving session stays live and focused.
         assert_eq!(app.workspace.focused_session(), Some(first));
         assert!(app.sessions.contains_key(&first));
+    }
+
+    #[test]
+    fn split_focused_spawns_a_sibling_inheriting_the_cwd() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            resume: None,
+            title: "proj".into(),
+        }));
+        let effects = app.apply(Event::SplitFocused(SplitDir::Vertical));
+        // A new session spawns in the same directory and is focused.
+        let new = app.workspace.focused_session().expect("focused pane");
+        assert_eq!(app.sessions.len(), 2);
+        assert_eq!(app.sessions[&new].cwd.as_deref(), Some("/proj"));
+        match effects.as_slice() {
+            [Effect::Spawn(spec)] => {
+                assert_eq!(spec.session, new);
+                assert_eq!(spec.cwd.as_deref(), Some("/proj"));
+            }
+            other => panic!("expected one Spawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn close_focused_pane_kills_only_that_session() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        app.apply(Event::SplitFocused(SplitDir::Horizontal));
+        let split = app.workspace.focused_session().expect("focused pane");
+
+        let effects = app.apply(Event::CloseFocusedPane);
+        assert!(matches!(effects.as_slice(), [Effect::Kill(id)] if *id == split));
+        assert!(!app.sessions.contains_key(&split));
+        // The original session survives and regains focus.
+        assert_eq!(app.workspace.focused_session(), Some(first));
+        assert!(app.sessions.contains_key(&first));
+    }
+
+    #[test]
+    fn focus_pane_events_move_the_focused_session() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        let second = app.workspace.focused_session().expect("focused pane");
+        assert_ne!(first, second);
+
+        app.apply(Event::FocusPrevPane);
+        assert_eq!(app.workspace.focused_session(), Some(first));
+        app.apply(Event::FocusNextPane);
+        assert_eq!(app.workspace.focused_session(), Some(second));
     }
 
     #[test]
