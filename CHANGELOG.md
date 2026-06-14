@@ -9,6 +9,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `F-builtin-terminal` (M2): paste into the terminal (FR4). `Ctrl+V` /
+  `Ctrl+Shift+V` now reads the clipboard and writes it to the focused PTY —
+  previously only copy-on-select existed, so there was no way to paste at all.
+  The chord deliberately shadows the raw `^V` control byte (the Windows
+  Terminal convention). Pasted text is sent verbatim; bracketed-paste wrapping
+  for multi-line pastes into Claude's input is a follow-up.
 - `F-session-tabs` (M3): open sessions are now navigable tabs, not just the
   last-launched terminal. A tab strip above the terminal switches between
   sessions; each chip carries its activity dot (the FR8 tab badge, folded to

@@ -154,6 +154,8 @@ enum Message {
     TermScroll(i32),
     /// Copy the given text (a terminal selection) to the clipboard (FR4).
     CopySelection(String),
+    /// Clipboard contents read back for a paste into the focused terminal (FR4).
+    Paste(Option<String>),
     /// Bring the tab at this index to the front (FR5).
     ActivateTab(usize),
     /// Close the tab at this index, killing its session(s) (FR5).
@@ -329,6 +331,19 @@ impl Shell {
                 self.focus = Focus::Terminal;
                 self.resize_focused()
             }
+            Message::Paste(content) => {
+                let Some(text) = content.filter(|t| !t.is_empty()) else {
+                    return Task::none();
+                };
+                let Some(session) = self.core.workspace.focused_session() else {
+                    return Task::none();
+                };
+                let effects = self.core.apply(termherd_core::Event::TerminalInput {
+                    session,
+                    bytes: text.into_bytes(),
+                });
+                self.perform(effects)
+            }
             Message::CloseTab(index) => {
                 // Capture the sessions about to die so their cached screens
                 // don't outlive them in the shell.
@@ -367,6 +382,15 @@ impl Shell {
         let Some(session) = self.core.workspace.focused_session() else {
             return Task::none();
         };
+        // Paste pulls the clipboard into the PTY (FR4). Ctrl+V / Ctrl+Shift+V,
+        // the Windows-terminal convention; this deliberately shadows the raw
+        // ^V control byte, which a Claude session never needs.
+        if modifiers.control()
+            && let keyboard::Key::Character(c) = &key
+            && c.eq_ignore_ascii_case("v")
+        {
+            return iced::clipboard::read().map(Message::Paste);
+        }
         let Some(bytes) = key_to_bytes(&key, modifiers, text.as_deref()) else {
             return Task::none();
         };
