@@ -102,29 +102,31 @@ Feature IDs carry over; three **net-new** features (not in v0.0.30) get new IDs.
 | `F-packaging-ci` | signed mac/win/linux builds + CI gate | M | `dist`, 3-OS CI matrix |
 | `F-session-tabs` ⭐ | tabbed open sessions | M | **net-new** |
 | `F-keyboard-shortcuts` ⭐ | configurable keymap → actions | M | **net-new** |
+| `F-session-metadata` | star / rename / archive / titles | S | rev. 6: Claude-session link is core |
+| `F-fork-detection` | fork / plan-accept detection | M | rev. 6: moved from Should |
+| `F-plans-memory` | plan + CLAUDE.md browse/edit | S | rev. 6: moved from Should |
 
 ### Should
 
 | F-ID | Feature | Size |
 | ---- | ------- | ---- |
 | `F-terminal-split` ⭐ | split panes (h/v), focus, resize (rev. 5: moved from Must; pure pane-tree core already landed) | L |
-| `F-fork-detection` | fork / plan-accept detection | M |
-| `F-session-metadata` | star / rename / archive / titles | S |
 | `F-jsonl-viewer` | rich transcript viewer | M |
-| `F-plans-memory` | plan + CLAUDE.md browse/edit | S |
 | `F-auto-update` | background update from GitHub | S |
 | `F-store-cache` | SQLite (WAL) digest cache + FTS5 index — instant cold start on large trees; an optimisation over the in-memory scan/search, so it sits at the bottom of Should | M |
 
 ### Could
 
 `F-activity-stats` (M), `F-session-grid` (S — a *layout preset* once the pane
-model exists, so cheap), `F-scheduled-tasks` (M).
+model exists, so cheap), `F-scheduled-tasks` (M), and `F-mcp-ide-bridge` (S
+protocol — rev. 6: moved up from Unsure, decoupled from the diff panel; a live
+MCP/IDE link to Claude as its own adapter).
 
 ### Unsure (deferred, possibly never)
 
-`F-file-diff-panel` (L — the largest native build) and `F-mcp-ide-bridge` (S
-protocol, but only useful *with* the diff panel — treat them as one coupled
-bet). Deferring both removes the hardest widget and an entire adapter from v1.
+`F-file-diff-panel` (L — the largest native build). Deferring it removes the
+hardest widget from v1; `F-mcp-ide-bridge`, once coupled to it, now stands
+alone in Could.
 
 ### Dependency clarification (jsonl)
 

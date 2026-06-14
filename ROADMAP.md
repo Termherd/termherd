@@ -48,6 +48,13 @@ short, scannable view; commits land features here when they ship.
   action. Drives copy/paste, `Ctrl+Tab`/`Ctrl+Shift+Tab` cycling, close-tab
   and focus-search today; `split-*` / `focus-next/prev` bind as those features
   land
+- [ ] `F-session-metadata` — star / rename / archive / custom titles for
+  sessions (moved to Must, PRD rev. 6: the Claude-session link is core to the
+  product)
+- [ ] `F-fork-detection` — fork / plan-accept detection (moved to Must,
+  PRD rev. 6)
+- [ ] `F-plans-memory` — browse/edit plans + `CLAUDE.md` (moved to Must,
+  PRD rev. 6)
 
 ### Should (post v0)
 
@@ -57,10 +64,7 @@ short, scannable view; commits land features here when they ship.
   `SplitFocused`/`CloseFocusedPane`/`FocusNextPane`/`Prev`, all unit-tested,
   plus the `split-*` / `focus-*` keymap actions. What remains is the iced
   recursive pane rendering, click-to-focus, and per-pane PTY geometry
-- [ ] `F-fork-detection`
-- [ ] `F-session-metadata`
 - [ ] `F-jsonl-viewer`
-- [ ] `F-plans-memory`
 - [ ] `F-auto-update`
 - [ ] `F-store-cache` — SQLite (WAL) digest cache + FTS5 index
   (lowest Should priority; an optimisation over the in-memory scan/search)
@@ -70,8 +74,9 @@ short, scannable view; commits land features here when they ship.
 - [ ] `F-activity-stats`
 - [ ] `F-session-grid` — a layout preset over the pane model
 - [ ] `F-scheduled-tasks`
+- [ ] `F-mcp-ide-bridge` — live MCP/IDE bridge to Claude (moved from Unsure,
+  PRD rev. 6); decoupled from the still-Unsure diff panel
 
 ### Unsure (deferred)
 
 - [ ] `F-file-diff-panel`
-- [ ] `F-mcp-ide-bridge`
