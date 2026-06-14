@@ -42,6 +42,26 @@ start. There is no in-app settings panel yet — edit the file and restart.
 
 Window size and position persist separately to `~/.termherd/window.json`.
 
+## Shortcuts
+
+Every shortcut is becoming configurable from the config file
+(`F-keyboard-shortcuts`); the table below lists the current defaults. In the
+focused terminal:
+
+| Action             | Windows / Linux            | macOS    |
+| ------------------ | -------------------------- | -------- |
+| Copy selection     | `Ctrl+Shift+C`             | `Cmd+C`  |
+| Paste              | `Ctrl+V` / `Ctrl+Shift+V`  | `Cmd+V`  |
+| Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C` |
+
+Dragging a selection with the mouse also copies it on release, and the wheel
+scrolls back through history.
+
+Tabs and the browser are mouse-driven for now: click a project or session in
+the sidebar to open it, click a tab to switch, and a tab's `×` closes it
+(ending that session). Keyboard tab switching lands with the configurable
+keymap.
+
 ## Test
 
 ```bash
