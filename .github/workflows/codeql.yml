@@ -17,9 +17,11 @@ on:
     - cron: '0 7 * * 1'
   workflow_dispatch:
 
+# Cancel superseded PR runs only. Pushes to main and the weekly schedule run
+# establish the default-branch security baseline — never cancel those.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

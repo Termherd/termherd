@@ -7,11 +7,11 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Cancel superseded runs on the same ref so a fresh push doesn't queue
-# behind its own stale jobs.
+# Cancel superseded PR runs so a fresh push doesn't queue behind its own stale
+# jobs. Pushes to main are never cancelled: those runs gate the default branch.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: CI only reads the repo. Jobs that need more request it.
 permissions:
