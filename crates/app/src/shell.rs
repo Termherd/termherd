@@ -56,6 +56,10 @@ fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
 }
 
+fn rename_id() -> widget::Id {
+    widget::Id::new("termherd-rename")
+}
+
 /// Resolved user configuration handed to the shell at startup: the theme,
 /// keymap and metadata overlay built from `settings.json` / `metadata.json`.
 /// Bundled so the composition root passes one value, not a long argument list.
@@ -141,6 +145,8 @@ struct Shell {
     theme: Theme,
     /// Configurable shortcut bindings (FR9).
     keymap: Keymap,
+    /// In-progress inline rename: `(session id, edit buffer)` (F-session-metadata).
+    renaming: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +197,15 @@ enum Message {
     ToggleArchive(String),
     /// Show or hide archived sessions in the browser (F-session-metadata).
     ShowArchived(bool),
+    /// Begin renaming a session inline, seeded with its current title.
+    StartRename {
+        session: String,
+        current: String,
+    },
+    /// The inline rename field's text changed.
+    RenameInput(String),
+    /// Commit the inline rename (Enter or the ✓ button).
+    CommitRename,
 }
 
 impl Shell {
@@ -217,6 +232,7 @@ impl Shell {
             selection: None,
             theme: startup.theme.to_iced(),
             keymap: startup.keymap,
+            renaming: None,
         }
     }
 
@@ -413,6 +429,25 @@ impl Shell {
                     .apply(termherd_core::Event::ShowArchivedToggled(show));
                 Task::none()
             }
+            Message::StartRename { session, current } => {
+                self.renaming = Some((session, current));
+                operate(focusable::focus(rename_id()))
+            }
+            Message::RenameInput(value) => {
+                if let Some((_, buffer)) = &mut self.renaming {
+                    *buffer = value;
+                }
+                Task::none()
+            }
+            Message::CommitRename => match self.renaming.take() {
+                Some((session, title)) => {
+                    let effects = self
+                        .core
+                        .apply(termherd_core::Event::RenameSession { session, title });
+                    self.perform(effects)
+                }
+                None => Task::none(),
+            },
         }
     }
 
@@ -481,6 +516,10 @@ impl Shell {
     /// Route a key press to the focused terminal's PTY (FR4). Ignored unless a
     /// terminal holds focus, so the search box keeps its own typing.
     fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
+        // While renaming inline, let the text field own the keyboard.
+        if self.renaming.is_some() {
+            return Task::none();
+        }
         if self.focus != Focus::Terminal {
             return Task::none();
         }
@@ -625,29 +664,66 @@ impl Shell {
                     content = content.push(text("●").size(9).color(status_style(*status).1));
                 }
                 let title = self.core.session_title(s);
-                content = content.push(
-                    text(format!(
-                        "{}  ·  {}",
-                        clip(&title, 30),
-                        s.digest.message_count
-                    ))
-                    .size(11),
-                );
-                let launch = button(content)
-                    .on_press(Message::LaunchSession {
-                        cwd: group.path.clone(),
-                        resume: s.session_id.clone(),
-                    })
-                    .style(button::text)
-                    .padding(0)
-                    .width(Fill);
+                let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);
+
+                // The middle is an edit field while renaming this row, else the
+                // clickable title that resumes the session.
+                let middle: Element<'_, Message> = if renaming_this {
+                    let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
+                    text_input("titre…", buffer)
+                        .id(rename_id())
+                        .on_input(Message::RenameInput)
+                        .on_submit(Message::CommitRename)
+                        .size(11)
+                        .padding(2)
+                        .width(Fill)
+                        .into()
+                } else {
+                    content = content.push(
+                        text(format!(
+                            "{}  ·  {}",
+                            clip(&title, 26),
+                            s.digest.message_count
+                        ))
+                        .size(11),
+                    );
+                    button(content)
+                        .on_press(Message::LaunchSession {
+                            cwd: group.path.clone(),
+                            resume: s.session_id.clone(),
+                        })
+                        .style(button::text)
+                        .padding(0)
+                        .width(Fill)
+                        .into()
+                };
+
+                // ✎ starts the rename; ✓ commits it.
+                let rename = if renaming_this {
+                    button(text("✓").size(12))
+                        .on_press(Message::CommitRename)
+                        .style(button::text)
+                        .padding(0)
+                } else {
+                    button(text("✎").size(12))
+                        .on_press(Message::StartRename {
+                            session: s.session_id.clone(),
+                            current: title.clone(),
+                        })
+                        .style(button::text)
+                        .padding(0)
+                };
 
                 let archive = button(text(if archived { "⊞" } else { "⊟" }).size(12))
                     .on_press(Message::ToggleArchive(s.session_id.clone()))
                     .style(button::text)
                     .padding(0);
 
-                g = g.push(row![star, launch, archive].spacing(6).align_y(iced::Center));
+                g = g.push(
+                    row![star, middle, rename, archive]
+                        .spacing(6)
+                        .align_y(iced::Center),
+                );
             }
             list = list.push(g);
         }

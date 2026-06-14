@@ -53,9 +53,8 @@ start. There is no in-app settings panel yet — edit the file and restart.
 
 Window size and position persist separately to `~/.termherd/window.json`, and
 session stars / archives / custom titles to `~/.termherd/metadata.json` (an
-overlay — TermHerd never writes under `~/.claude`). Star (★) and archive (⊟)
-are buttons on each sidebar row; a custom `title` can be set per session id in
-`metadata.json`.
+overlay — TermHerd never writes under `~/.claude`). Star (★), archive (⊟) and
+rename (✎) are buttons on each sidebar row.
 
 ## Shortcuts
 

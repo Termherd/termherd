@@ -17,8 +17,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   buttons. The overlay is pure in `core` — `SessionMeta`, applied in
   `visible_projects`, behind `ToggleStar` / `ToggleArchive` / `RenameSession` /
   `ShowArchivedToggled` events that emit a `SaveMetadata` effect (default
-  entries are pruned, so a toggle-back leaves no noise). Custom titles can be
-  set in the file today; an inline rename UI is the remaining piece.
+  entries are pruned, so a toggle-back leaves no noise). Renaming is inline: a
+  ✎ button swaps the title for an edit field that commits on Enter (or ✓);
+  while it is open the field owns the keyboard, so terminal routing pauses.
 - `F-keyboard-shortcuts` (M3): a configurable keymap (FR9). Every shortcut is
   now a `KeyChord -> Action` binding in `core::keymap` (pure, testable):
   human chords (`"ctrl+shift+c"`, order/case-insensitive) parse to a chord,

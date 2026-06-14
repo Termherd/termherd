@@ -52,8 +52,8 @@ short, scannable view; commits land features here when they ship.
   sessions (M3, moved to Must in PRD rev. 6): a `SessionMeta` overlay in
   `core` persisted to `~/.termherd/metadata.json` (never touching `~/.claude`);
   the browser pins starred sessions, hides archived behind a toggle, and shows
-  custom titles. Star/archive are sidebar buttons; inline rename UI is the one
-  remaining piece (titles settable in the file for now)
+  custom titles. Star / archive / inline rename (✎ → edit field) are all
+  sidebar controls
 - [ ] `F-fork-detection` — fork / plan-accept detection (moved to Must,
   PRD rev. 6)
 - [ ] `F-plans-memory` — browse/edit plans + `CLAUDE.md` (moved to Must,
