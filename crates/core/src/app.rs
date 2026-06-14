@@ -134,6 +134,10 @@ pub enum Event {
     },
     /// A session's PTY process exited.
     PtyExited(SessionId),
+    /// The user clicked a tab to bring it to the front (FR5).
+    ActivateTab(usize),
+    /// The user closed a tab (FR5); its sessions' PTYs are killed.
+    CloseTab(usize),
 }
 
 /// Side effects the runtime must perform. The iced shell turns these into
@@ -222,6 +226,11 @@ impl App {
                 }
                 Vec::new()
             }
+            Event::ActivateTab(index) => {
+                self.workspace.activate(index);
+                Vec::new()
+            }
+            Event::CloseTab(index) => self.close_tab(index),
         }
     }
 
@@ -256,6 +265,28 @@ impl App {
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
         })]
+    }
+
+    /// Close a tab (FR5): drop its sessions from the live registry and ask the
+    /// runtime to kill each PTY. An out-of-range index yields no effects.
+    fn close_tab(&mut self, index: usize) -> Vec<Effect> {
+        let sessions = self.workspace.close_tab(index);
+        for id in &sessions {
+            self.sessions.remove(id);
+        }
+        sessions.into_iter().map(Effect::Kill).collect()
+    }
+
+    /// The activity status to badge on the tab at `index` (FR8): the most
+    /// urgent status among the sessions it hosts, or `None` for an unknown
+    /// index or a tab whose sessions are no longer live.
+    #[must_use]
+    pub fn tab_status(&self, index: usize) -> Option<SessionStatus> {
+        let tab = self.workspace.tabs.get(index)?;
+        tab.sessions()
+            .into_iter()
+            .filter_map(|id| self.sessions.get(&id).map(|s| s.status))
+            .max_by_key(|status| status.urgency())
     }
 
     /// Mint the next runtime session id. `None` only on u64 overflow.
@@ -434,6 +465,62 @@ mod tests {
             })
             .is_empty()
         );
+    }
+
+    fn launch(app: &mut App, title: &str) -> SessionId {
+        match app
+            .apply(Event::LaunchSession(LaunchSpec {
+                cwd: None,
+                resume: None,
+                title: title.into(),
+            }))
+            .as_slice()
+        {
+            [Effect::Spawn(spec)] => spec.session,
+            other => panic!("expected Spawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn activate_tab_brings_an_earlier_session_to_focus() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        let _second = launch(&mut app, "b");
+        assert_eq!(app.workspace.focused_session(), Some(_second));
+
+        let effects = app.apply(Event::ActivateTab(0));
+        assert!(effects.is_empty());
+        assert_eq!(app.workspace.focused_session(), Some(first));
+    }
+
+    #[test]
+    fn close_tab_kills_its_session_and_drops_it_from_the_registry() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        let second = launch(&mut app, "b");
+
+        let effects = app.apply(Event::CloseTab(1));
+        assert!(matches!(effects.as_slice(), [Effect::Kill(id)] if *id == second));
+        assert_eq!(app.workspace.tabs.len(), 1);
+        assert!(!app.sessions.contains_key(&second));
+        // The surviving session stays live and focused.
+        assert_eq!(app.workspace.focused_session(), Some(first));
+        assert!(app.sessions.contains_key(&first));
+    }
+
+    #[test]
+    fn tab_status_reports_the_most_urgent_session_status() {
+        let mut app = App::new();
+        let id = launch(&mut app, "a");
+        assert_eq!(app.tab_status(0), Some(SessionStatus::Starting));
+
+        app.apply(Event::StatusChanged {
+            session: id,
+            status: SessionStatus::Attention,
+        });
+        assert_eq!(app.tab_status(0), Some(SessionStatus::Attention));
+        // Unknown tab index has no status.
+        assert_eq!(app.tab_status(7), None);
     }
 
     #[test]

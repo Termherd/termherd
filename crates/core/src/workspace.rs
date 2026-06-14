@@ -42,6 +42,27 @@ pub struct Tab {
     pub title: String,
 }
 
+impl Tab {
+    /// Every session hosted by this tab, in left-to-right pane order. A tab
+    /// without splits yields exactly one id; closing the tab kills them all.
+    #[must_use]
+    pub fn sessions(&self) -> Vec<SessionId> {
+        let mut out = Vec::new();
+        collect_leaves(&self.root, &mut out);
+        out
+    }
+}
+
+fn collect_leaves(pane: &Pane, out: &mut Vec<SessionId>) {
+    match pane {
+        Pane::Leaf(session) => out.push(*session),
+        Pane::Split { a, b, .. } => {
+            collect_leaves(a, out);
+            collect_leaves(b, out);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Workspace {
     pub tabs: Vec<Tab>,
@@ -86,6 +107,37 @@ impl Workspace {
         };
         tab.focus.push(Branch::B);
         Some(())
+    }
+
+    /// Make the tab at `index` active (FR5). Returns `None` if the index is
+    /// out of range, leaving the active tab unchanged.
+    pub fn activate(&mut self, index: usize) -> Option<()> {
+        if index < self.tabs.len() {
+            self.active = index;
+            Some(())
+        } else {
+            None
+        }
+    }
+
+    /// Close the tab at `index` (FR5), returning the sessions it hosted so the
+    /// caller can kill their PTYs. The active index is kept pointing at a valid
+    /// tab: tabs after the removed one shift down, and closing the active tab
+    /// focuses the one that slides into its slot (or the new last tab). An
+    /// out-of-range index is a no-op returning an empty list.
+    pub fn close_tab(&mut self, index: usize) -> Vec<SessionId> {
+        if index >= self.tabs.len() {
+            return Vec::new();
+        }
+        let sessions = self.tabs.remove(index).sessions();
+        if self.tabs.is_empty() {
+            self.active = 0;
+        } else if self.active > index {
+            self.active -= 1;
+        } else if self.active == index {
+            self.active = self.active.min(self.tabs.len() - 1);
+        }
+        sessions
     }
 
     /// Session id of the focused pane in the active tab, if any.
@@ -184,5 +236,72 @@ mod tests {
         // No active tab; split must fail cleanly (no panic, no state change).
         assert!(ws.split(SplitDir::Vertical, sid(1)).is_none());
         assert!(ws.tabs.is_empty());
+    }
+
+    #[test]
+    fn activate_switches_the_active_tab_and_rejects_out_of_range() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.open(sid(2), "b");
+        assert_eq!(ws.active, 1);
+        assert!(ws.activate(0).is_some());
+        assert_eq!(ws.active, 0);
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+        // Out of range leaves the active tab untouched.
+        assert!(ws.activate(9).is_none());
+        assert_eq!(ws.active, 0);
+    }
+
+    #[test]
+    fn tab_sessions_lists_every_leaf_in_pane_order() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+        ws.split(SplitDir::Horizontal, sid(3));
+        assert_eq!(ws.tabs[0].sessions(), vec![sid(1), sid(2), sid(3)]);
+    }
+
+    #[test]
+    fn close_tab_returns_its_sessions_and_keeps_active_valid() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.open(sid(2), "b");
+        ws.open(sid(3), "c");
+        // Active is the last tab (c). Closing an earlier tab shifts it down.
+        assert_eq!(ws.active, 2);
+        assert_eq!(ws.close_tab(0), vec![sid(1)]);
+        assert_eq!(ws.tabs.len(), 2);
+        assert_eq!(ws.active, 1);
+        assert_eq!(ws.focused_session(), Some(sid(3)));
+    }
+
+    #[test]
+    fn closing_the_active_last_tab_focuses_the_new_last() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.open(sid(2), "b");
+        assert_eq!(ws.active, 1);
+        assert_eq!(ws.close_tab(1), vec![sid(2)]);
+        assert_eq!(ws.active, 0);
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+    }
+
+    #[test]
+    fn close_tab_kills_all_sessions_in_a_split() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+        assert_eq!(ws.close_tab(0), vec![sid(1), sid(2)]);
+        assert!(ws.tabs.is_empty());
+        assert_eq!(ws.active, 0);
+    }
+
+    #[test]
+    fn close_tab_out_of_range_is_a_noop() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        assert!(ws.close_tab(5).is_empty());
+        assert_eq!(ws.tabs.len(), 1);
+        assert_eq!(ws.active, 0);
     }
 }
