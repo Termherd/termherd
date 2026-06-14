@@ -20,6 +20,7 @@ use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::term::Config;
+use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
@@ -60,6 +61,10 @@ pub struct Screen {
     pub cursor: Option<(u16, u16)>,
     /// True while the viewport is scrolled up into scrollback history.
     pub scrolled: bool,
+    /// True when the application has enabled bracketed paste (DECSET 2004), so
+    /// the shell wraps a paste in `ESC[200~`…`ESC[201~` and a multi-line paste
+    /// lands as one block instead of submitting line by line (FR4).
+    pub bracketed_paste: bool,
 }
 
 /// One rendered grid cell: a character and its resolved colours.
@@ -593,6 +598,7 @@ fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
         lines,
         cursor,
         scrolled: content.display_offset > 0,
+        bracketed_paste: term.mode().contains(TermMode::BRACKETED_PASTE),
     }
 }
 
@@ -686,6 +692,19 @@ mod tests {
         );
         // No signals at all keeps the current status (e.g. a plain shell).
         assert_eq!(fold_status(Starting, &[]), Starting);
+    }
+
+    #[test]
+    fn snapshot_tracks_bracketed_paste_mode() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 5), VoidListener);
+        let mut parser: Processor = Processor::new();
+        assert!(!snapshot(&term).bracketed_paste);
+        // DECSET 2004 turns it on; the matching reset turns it off again.
+        parser.advance(&mut term, b"\x1b[?2004h");
+        assert!(snapshot(&term).bracketed_paste);
+        parser.advance(&mut term, b"\x1b[?2004l");
+        assert!(!snapshot(&term).bracketed_paste);
     }
 
     #[test]
