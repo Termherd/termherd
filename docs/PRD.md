@@ -101,13 +101,13 @@ Feature IDs carry over; three **net-new** features (not in v0.0.30) get new IDs.
 | `F-settings` (thin) | shell select, theme, window prefs | S | full version later |
 | `F-packaging-ci` | signed mac/win/linux builds + CI gate | M | `dist`, 3-OS CI matrix |
 | `F-session-tabs` ⭐ | tabbed open sessions | M | **net-new** |
-| `F-terminal-split` ⭐ | split panes (h/v), focus, resize | L | **net-new** |
 | `F-keyboard-shortcuts` ⭐ | configurable keymap → actions | M | **net-new** |
 
 ### Should
 
 | F-ID | Feature | Size |
 | ---- | ------- | ---- |
+| `F-terminal-split` ⭐ | split panes (h/v), focus, resize (rev. 5: moved from Must; pure pane-tree core already landed) | L |
 | `F-fork-detection` | fork / plan-accept detection | M |
 | `F-session-metadata` | star / rename / archive / titles | S |
 | `F-jsonl-viewer` | rich transcript viewer | M |

@@ -7,7 +7,7 @@ short, scannable view; commits land features here when they ship.
 
 ### Must
 
-- [ ] `F-foundations` — workspace, core, CI, single-instance, tracing
+- [x] `F-foundations` — workspace, core, CI, single-instance, tracing
 - [x] `F-app-shell` — window, lifecycle, bounds (menu: deferred to M3 with
   the keymap — no native menu API in iced; menu items mirror keymap actions)
 - [x] `F-session-browser` — scan + derive + group + list + live fs-watch
@@ -42,7 +42,6 @@ short, scannable view; commits land features here when they ship.
   the first UI-driven `Effect::Kill`. Tab tree edits (`activate`/`close_tab`,
   most-urgent `tab_status`) are pure in `core`. Drag-reorder (FR5) and
   keyboard switching (deferred to `F-keyboard-shortcuts`) still to come
-- [ ] `F-terminal-split` — split panes (h/v), focus, resize
 - [x] `F-keyboard-shortcuts` — configurable keymap → actions (M3): pure
   `KeyChord -> Action` map in `core::keymap` with a chord-string parser and
   platform-aware defaults; the `keys` section of `settings.json` overrides any
@@ -52,6 +51,12 @@ short, scannable view; commits land features here when they ship.
 
 ### Should (post v0)
 
+- [ ] `F-terminal-split` — split panes (h/v), focus, resize (moved from Must,
+  PRD rev. 5): the pure pane-tree core already landed — `Workspace::split` /
+  `close_focused` / `focus_next`/`prev` and the `App` events
+  `SplitFocused`/`CloseFocusedPane`/`FocusNextPane`/`Prev`, all unit-tested,
+  plus the `split-*` / `focus-*` keymap actions. What remains is the iced
+  recursive pane rendering, click-to-focus, and per-pane PTY geometry
 - [ ] `F-fork-detection`
 - [ ] `F-session-metadata`
 - [ ] `F-jsonl-viewer`
