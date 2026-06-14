@@ -413,7 +413,7 @@ impl Shell {
             if let Some(resume) = s.resume.as_deref() {
                 live.entry(resume)
                     .and_modify(|cur| {
-                        if status_rank(s.status) > status_rank(*cur) {
+                        if s.status.urgency() > cur.urgency() {
                             *cur = s.status;
                         }
                     })
@@ -718,18 +718,6 @@ fn selection_text(screen: &Screen, a: (u16, u16), b: (u16, u16)) -> String {
         }
     }
     out
-}
-
-/// Urgency order for collapsing duplicate live sessions in the sidebar: the
-/// status that most wants the user's eyes wins.
-fn status_rank(status: SessionStatus) -> u8 {
-    match status {
-        SessionStatus::Attention => 4,
-        SessionStatus::Busy => 3,
-        SessionStatus::Idle => 2,
-        SessionStatus::Starting => 1,
-        SessionStatus::Exited => 0,
-    }
 }
 
 /// The label and dot colour for an activity status (FR8). Shared by the

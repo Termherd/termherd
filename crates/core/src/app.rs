@@ -67,6 +67,23 @@ pub enum SessionStatus {
     Exited,
 }
 
+impl SessionStatus {
+    /// Urgency rank for collapsing several sessions into one indicator — the
+    /// sidebar dedupe of duplicate live rows and the per-tab badge (FR8). The
+    /// status that most wants the user's eyes wins: `Attention` over `Busy`
+    /// over `Idle` over `Starting` over `Exited`.
+    #[must_use]
+    pub fn urgency(self) -> u8 {
+        match self {
+            SessionStatus::Attention => 4,
+            SessionStatus::Busy => 3,
+            SessionStatus::Idle => 2,
+            SessionStatus::Starting => 1,
+            SessionStatus::Exited => 0,
+        }
+    }
+}
+
 /// What the user asked to open (FR4): a terminal in `cwd`, optionally
 /// resuming an existing Claude session.
 #[derive(Debug, Clone)]
@@ -274,6 +291,18 @@ mod tests {
             },
             modified: None,
         }
+    }
+
+    #[test]
+    fn status_urgency_ranks_attention_highest_and_exited_lowest() {
+        use SessionStatus::*;
+        let mut ordered = [Exited, Starting, Idle, Busy, Attention];
+        ordered.sort_by_key(|s| s.urgency());
+        assert_eq!(ordered, [Exited, Starting, Idle, Busy, Attention]);
+        assert!(Attention.urgency() > Busy.urgency());
+        assert!(Busy.urgency() > Idle.urgency());
+        assert!(Idle.urgency() > Starting.urgency());
+        assert!(Starting.urgency() > Exited.urgency());
     }
 
     #[test]
