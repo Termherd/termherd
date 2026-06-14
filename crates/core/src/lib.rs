@@ -11,4 +11,5 @@ pub mod workspace;
 
 pub use app::{App, Effect, Event, LaunchSpec, LiveSession, SessionStatus, SpawnSpec};
 pub use browser::{ProjectGroup, SessionRecord};
+pub use keymap::{Action, ChordError, KeyChord, Keymap};
 pub use workspace::{Branch, Pane, SessionId, SplitDir, Tab, Workspace};
