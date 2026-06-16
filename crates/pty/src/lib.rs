@@ -482,8 +482,24 @@ impl PtyHost for PtyManager {
         }
         #[cfg(not(windows))]
         {
-            result.map_err(|e| PtyError::Io(e.to_string()))
+            reconcile_kill(result)
         }
+    }
+}
+
+/// Reconcile a Unix `kill(2)` outcome with the intent of [`PtyHost::kill`]:
+/// the process should end. If the child already exited on its own — the
+/// common case when a shell's `exit` races a tab close — the OS reports
+/// `ESRCH` ("no such process"); the goal is already met, so that is success,
+/// not a failure worth logging. Any other error is a genuine fault.
+#[cfg(not(windows))]
+fn reconcile_kill(result: std::io::Result<()>) -> Result<(), PtyError> {
+    // ESRCH is 3 on Linux, macOS and the BSDs.
+    const ESRCH: i32 = 3;
+    match result {
+        Ok(()) => Ok(()),
+        Err(e) if e.raw_os_error() == Some(ESRCH) => Ok(()),
+        Err(e) => Err(PtyError::Io(e.to_string())),
     }
 }
 
@@ -817,6 +833,20 @@ mod tests {
             cols: 80,
             rows: 24,
         }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn reconcile_kill_treats_already_exited_as_success() {
+        use std::io::Error;
+
+        // A child that died on its own (ESRCH) is the goal, not a failure.
+        assert!(reconcile_kill(Ok(())).is_ok());
+        assert!(reconcile_kill(Err(Error::from_raw_os_error(3))).is_ok());
+
+        // Any other OS error is a real fault and must propagate.
+        let permission = reconcile_kill(Err(Error::from_raw_os_error(13)));
+        assert!(matches!(permission, Err(PtyError::Io(_))));
     }
 
     /// Spawn a shell, run a command that prints a unique marker, and assert it
