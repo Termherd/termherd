@@ -1568,3 +1568,132 @@ mod tests {
         assert_eq!(chord_of(&Key::Named(Named::F2), Modifiers::default()), None);
     }
 }
+
+/// Tests for the keyboard routing seam in [`Shell::on_key`]: a configured
+/// shortcut must win over raw terminal input, unbound keys must reach the PTY,
+/// and keys are swallowed unless a terminal holds focus. These exercise the
+/// precedence wiring that the pure `key_to_bytes` tests above cannot.
+#[cfg(test)]
+mod key_routing {
+    use super::*;
+    use iced::keyboard::key::{Named, NativeCode, Physical};
+    use iced::keyboard::{Key, Location, Modifiers};
+    use std::sync::Mutex as StdMutex;
+    use termherd_core::SpawnSpec;
+    use termherd_core::ports::{PtyError, ScanError};
+
+    /// A `PtyHost` double recording every write; all control calls succeed.
+    #[derive(Default)]
+    struct RecordingPty {
+        writes: StdMutex<Vec<Vec<u8>>>,
+    }
+
+    impl RecordingPty {
+        fn writes(&self) -> Vec<Vec<u8>> {
+            self.writes.lock().expect("writes lock").clone()
+        }
+    }
+
+    impl PtyHost for RecordingPty {
+        fn spawn(&self, _spec: SpawnSpec) -> Result<(), PtyError> {
+            Ok(())
+        }
+        fn write(&self, _session: SessionId, bytes: &[u8]) -> Result<(), PtyError> {
+            self.writes
+                .lock()
+                .expect("writes lock")
+                .push(bytes.to_vec());
+            Ok(())
+        }
+        fn resize(&self, _: SessionId, _: u16, _: u16) -> Result<(), PtyError> {
+            Ok(())
+        }
+        fn scroll(&self, _: SessionId, _: i32) -> Result<(), PtyError> {
+            Ok(())
+        }
+        fn kill(&self, _: SessionId) -> Result<(), PtyError> {
+            Ok(())
+        }
+    }
+
+    struct EmptyScanner;
+    impl ProjectScanner for EmptyScanner {
+        fn scan(&self) -> Result<Vec<SessionRecord>, ScanError> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// A `Shell` with one terminal open and focused, plus its recording PTY.
+    fn shell_with_terminal() -> (Shell, Arc<RecordingPty>) {
+        let pty = Arc::new(RecordingPty::default());
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let mut shell = Shell::new(
+            WindowConfig::default(),
+            Arc::new(EmptyScanner),
+            None,
+            pty.clone(),
+            PtyOutput::new(rx),
+            Startup {
+                theme: ThemeChoice::default(),
+                keymap: Keymap::defaults(),
+                metadata: HashMap::new(),
+            },
+        );
+        let _ = shell.launch("/tmp/project".to_string(), None);
+        assert!(
+            shell.core.workspace.focused_session().is_some(),
+            "a launched terminal should be focused"
+        );
+        (shell, pty)
+    }
+
+    fn press(key: Key, modifiers: Modifiers, text: Option<&str>) -> keyboard::Event {
+        keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: Physical::Unidentified(NativeCode::Unidentified),
+            location: Location::Standard,
+            modifiers,
+            text: text.map(Into::into),
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn unbound_keys_reach_the_pty() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.on_key(press(
+            Key::Character("a".into()),
+            Modifiers::default(),
+            Some("a"),
+        ));
+        // A modified key with no binding still falls through to its bytes.
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::SHIFT, None));
+        assert_eq!(pty.writes(), vec![b"a".to_vec(), b"\n".to_vec()]);
+    }
+
+    #[test]
+    fn a_bound_shortcut_is_intercepted_before_the_pty() {
+        let (mut shell, pty) = shell_with_terminal();
+        // Ctrl+Tab is bound to NextTab on every platform; it must run the
+        // action, not send the `\t` that key_to_bytes would otherwise produce.
+        let _ = shell.on_key(press(Key::Named(Named::Tab), Modifiers::CTRL, None));
+        assert!(
+            pty.writes().is_empty(),
+            "a bound shortcut must not write to the PTY, got {:?}",
+            pty.writes()
+        );
+    }
+
+    #[test]
+    fn keys_are_ignored_without_terminal_focus() {
+        let (mut shell, pty) = shell_with_terminal();
+        shell.focus = Focus::Search;
+        let _ = shell.on_key(press(
+            Key::Character("a".into()),
+            Modifiers::default(),
+            Some("a"),
+        ));
+        assert!(pty.writes().is_empty());
+    }
+}
