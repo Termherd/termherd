@@ -181,6 +181,17 @@ fn named_rgb(named: NamedColor) -> [u8; 3] {
     }
 }
 
+/// Darken a colour for the faint/dim attribute (SGR 2): ~60% intensity, so
+/// dim text reads as grey rather than the near-white it had when the flag was
+/// ignored (#10).
+fn dim([r, g, b]: [u8; 3]) -> [u8; 3] {
+    [
+        (r as u16 * 3 / 5) as u8,
+        (g as u16 * 3 / 5) as u8,
+        (b as u16 * 3 / 5) as u8,
+    ]
+}
+
 fn resolve(color: Color) -> [u8; 3] {
     match color {
         Color::Spec(rgb) => [rgb.r, rgb.g, rgb.b],
@@ -751,6 +762,12 @@ fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
         }
         let bold = cell.flags.intersects(Flags::BOLD | Flags::DIM_BOLD);
         let mut fg = resolve(cell.fg);
+        // The faint/dim attribute (SGR 2) darkens the foreground. Without this
+        // dim default-fg text — like Claude's greyed suggestions — rendered at
+        // full intensity, i.e. near-white (#10).
+        if cell.flags.contains(Flags::DIM) {
+            fg = dim(fg);
+        }
         let mut bg = resolve(cell.bg);
         if cell.flags.contains(Flags::INVERSE) {
             std::mem::swap(&mut fg, &mut bg);
@@ -1042,6 +1059,29 @@ mod tests {
         assert!(snapshot(&term).bracketed_paste);
         parser.advance(&mut term, b"\x1b[?2004l");
         assert!(!snapshot(&term).bracketed_paste);
+    }
+
+    #[test]
+    fn dim_scales_colours_to_about_three_fifths() {
+        assert_eq!(dim(DEFAULT_FG), [124, 124, 124]);
+        assert_eq!(dim([0, 0, 0]), [0, 0, 0]);
+        assert_eq!(dim([255, 255, 255]), [153, 153, 153]);
+    }
+
+    #[test]
+    fn snapshot_darkens_dim_foreground() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        // SGR 2 = faint/dim, then a glyph on the default foreground.
+        parser.advance(&mut term, b"\x1b[2mX");
+        let cell = snapshot(&term).lines[0][0];
+        assert_eq!(cell.c, 'X');
+        assert_eq!(cell.fg, dim(DEFAULT_FG));
+        assert!(
+            cell.fg[0] < DEFAULT_FG[0],
+            "dim must darken the default foreground"
+        );
     }
 
     #[test]
