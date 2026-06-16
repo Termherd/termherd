@@ -1189,29 +1189,46 @@ fn key_to_bytes(
     }
 
     match key {
-        Key::Named(named) => {
-            let seq: &[u8] = match named {
-                Named::Enter => b"\r",
-                Named::Backspace => b"\x7f",
-                Named::Tab => b"\t",
-                Named::Escape => b"\x1b",
-                Named::ArrowUp => b"\x1b[A",
-                Named::ArrowDown => b"\x1b[B",
-                Named::ArrowRight => b"\x1b[C",
-                Named::ArrowLeft => b"\x1b[D",
-                Named::Home => b"\x1b[H",
-                Named::End => b"\x1b[F",
-                Named::Delete => b"\x1b[3~",
-                Named::PageUp => b"\x1b[5~",
-                Named::PageDown => b"\x1b[6~",
-                Named::Space => b" ",
-                _ => return None,
-            };
-            Some(seq.to_vec())
-        }
+        Key::Named(Named::Enter) => Some(b"\r".to_vec()),
+        Key::Named(Named::Tab) => Some(b"\t".to_vec()),
+        Key::Named(Named::Backspace) => Some(b"\x7f".to_vec()),
+        Key::Named(Named::Escape) => Some(b"\x1b".to_vec()),
+        Key::Named(Named::Space) => Some(b" ".to_vec()),
+        // Cursor / navigation keys, via the shared sequence builder.
+        Key::Named(Named::ArrowUp) => Some(csi_letter(b'A', 1)),
+        Key::Named(Named::ArrowDown) => Some(csi_letter(b'B', 1)),
+        Key::Named(Named::ArrowRight) => Some(csi_letter(b'C', 1)),
+        Key::Named(Named::ArrowLeft) => Some(csi_letter(b'D', 1)),
+        Key::Named(Named::Home) => Some(csi_letter(b'H', 1)),
+        Key::Named(Named::End) => Some(csi_letter(b'F', 1)),
+        // `~`-terminated editing keys.
+        Key::Named(Named::Delete) => Some(csi_tilde(3, 1)),
+        Key::Named(Named::PageUp) => Some(csi_tilde(5, 1)),
+        Key::Named(Named::PageDown) => Some(csi_tilde(6, 1)),
+        Key::Named(_) => None,
         Key::Character(_) | Key::Unidentified => text
             .filter(|t| !t.is_empty())
             .map(|t| t.as_bytes().to_vec()),
+    }
+}
+
+/// A letter-terminated cursor sequence (`A`=Up, `C`=Right, `H`=Home …):
+/// `ESC[<final>` unmodified, `ESC[1;<mod><final>` when modified.
+fn csi_letter(final_byte: u8, modifier: u8) -> Vec<u8> {
+    if modifier <= 1 {
+        vec![0x1b, b'[', final_byte]
+    } else {
+        format!("\x1b[1;{modifier}{}", final_byte as char).into_bytes()
+    }
+}
+
+/// A `~`-terminated editing key (Delete=3, PageUp=5, PageDown=6):
+/// `ESC[<n>~` unmodified, `ESC[<n>;<mod>~` when modified.
+fn csi_tilde(n: u8, modifier: u8) -> Vec<u8> {
+    if modifier <= 1 {
+        format!("\x1b[{n}~").into_bytes()
+    } else {
+        format!("\x1b[{n};{modifier}~").into_bytes()
     }
 }
 
@@ -1353,6 +1370,38 @@ mod tests {
             key_to_bytes(&Key::Named(Named::Backspace), none, None),
             Some(b"\x7f".to_vec())
         );
+    }
+
+    #[test]
+    fn control_symbols_map_to_their_control_bytes() {
+        // Ctrl+Space is NUL; the bracket family fills 0x1b–0x1d.
+        assert_eq!(
+            key_to_bytes(&Key::Character(" ".into()), ctrl(), Some(" ")),
+            Some(vec![0])
+        );
+        assert_eq!(
+            key_to_bytes(&Key::Character("[".into()), ctrl(), Some("[")),
+            Some(vec![27])
+        );
+        assert_eq!(
+            key_to_bytes(&Key::Character("]".into()), ctrl(), Some("]")),
+            Some(vec![29])
+        );
+    }
+
+    #[test]
+    fn escape_space_and_unknown_named_keys() {
+        let none = Modifiers::default();
+        assert_eq!(
+            key_to_bytes(&Key::Named(Named::Escape), none, None),
+            Some(b"\x1b".to_vec())
+        );
+        assert_eq!(
+            key_to_bytes(&Key::Named(Named::Space), none, None),
+            Some(b" ".to_vec())
+        );
+        // A named key no terminal sequence covers sends nothing.
+        assert_eq!(key_to_bytes(&Key::Named(Named::F2), none, None), None);
     }
 
     #[test]
