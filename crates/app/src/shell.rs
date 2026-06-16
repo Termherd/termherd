@@ -873,11 +873,11 @@ impl Shell {
         }
 
         let focused = self.core.workspace.focused_session();
-        let screen = focused.and_then(|id| self.screens.get(&id));
+        let screen = focused.and_then(|id| self.screens.get(&id).map(|s| (id, s)));
 
         let body: Element<'_, Message> = match screen {
-            Some(screen) => {
-                let canvas = Canvas::new(TerminalView { screen })
+            Some((session, screen)) => {
+                let canvas = Canvas::new(TerminalView { screen, session })
                     .width(Fill)
                     .height(Fill);
                 mouse_area(canvas).on_press(Message::FocusTerminal).into()
@@ -986,14 +986,40 @@ impl Shell {
 /// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
 struct TerminalView<'a> {
     screen: &'a Screen,
+    /// The session this canvas is currently showing. The canvas widget is
+    /// reused across tabs, so the selection state is tagged with its owner to
+    /// keep a selection from bleeding onto another tab (#7).
+    session: SessionId,
 }
 
-/// Per-canvas selection state: the drag in progress and the last range.
+/// Per-canvas selection state: the drag in progress, the last range, and the
+/// session it belongs to. The canvas widget is shared across tabs (iced keys
+/// program state by tree position), so `owner` scopes the selection to one
+/// session (#7).
 #[derive(Default)]
 struct TermState {
     selecting: bool,
     anchor: Option<(u16, u16)>,
     head: Option<(u16, u16)>,
+    owner: Option<SessionId>,
+}
+
+impl TermState {
+    /// Drop any selection, keeping the owning session.
+    fn clear_selection(&mut self) {
+        self.selecting = false;
+        self.anchor = None;
+        self.head = None;
+    }
+
+    /// The current selection range, only when it spans more than one cell — a
+    /// bare click (anchor == head) is not a selection (#6).
+    fn range(&self) -> Option<((u16, u16), (u16, u16))> {
+        match (self.anchor, self.head) {
+            (Some(a), Some(b)) if a != b => Some((a, b)),
+            _ => None,
+        }
+    }
 }
 
 impl canvas::Program<Message> for TerminalView<'_> {
@@ -1009,12 +1035,23 @@ impl canvas::Program<Message> for TerminalView<'_> {
         let canvas::Event::Mouse(event) = event else {
             return None;
         };
+        // The canvas is reused as tabs switch; if it now shows a different
+        // session, the previous tab's selection must not carry over (#7).
+        if state.owner != Some(self.session) {
+            *state = TermState {
+                owner: Some(self.session),
+                ..TermState::default()
+            };
+        }
         match event {
             // Wheel scrolls the viewport into scrollback history (FR4) — but
             // only when the pointer is actually over the terminal. The canvas
             // sees wheel events even while hovering the sidebar, so without
             // this guard scrolling the session list also scrolls the PTY (#5).
             mouse::Event::WheelScrolled { delta } if cursor.position_in(bounds).is_some() => {
+                // The selection is in viewport coordinates, so scrolling would
+                // leave it floating over the wrong text; drop it (#8).
+                state.clear_selection();
                 let lines = match delta {
                     mouse::ScrollDelta::Lines { y, .. } => *y,
                     mouse::ScrollDelta::Pixels { y, .. } => y / CELL_H,
@@ -1040,11 +1077,16 @@ impl canvas::Program<Message> for TerminalView<'_> {
             }
             mouse::Event::ButtonReleased(mouse::Button::Left) if state.selecting => {
                 state.selecting = false;
-                match (state.anchor, state.head) {
-                    (Some(a), Some(b)) => Some(canvas::Action::publish(Message::CopySelection(
+                // Only a real drag is a selection; a bare click clears it so a
+                // single click can't leave an undismissable highlight (#6).
+                match state.range() {
+                    Some((a, b)) => Some(canvas::Action::publish(Message::CopySelection(
                         selection_text(self.screen, a, b),
                     ))),
-                    _ => None,
+                    None => {
+                        state.clear_selection();
+                        Some(canvas::Action::request_redraw())
+                    }
                 }
             }
             _ => None,
@@ -1088,8 +1130,10 @@ impl canvas::Program<Message> for TerminalView<'_> {
             }
         }
 
-        // Translucent overlay over the selected range.
-        if let (Some(a), Some(b)) = (state.anchor, state.head) {
+        // Translucent overlay over the selected range — only the owning
+        // session's real (multi-cell) selection, so it neither bleeds across
+        // tabs (#7) nor paints a bare click (#6).
+        if let (Some((a, b)), true) = (state.range(), state.owner == Some(self.session)) {
             let (start, end) = ordered(a, b);
             for r in start.1..=end.1 {
                 let (c0, c1) = selection_span(start, end, r, self.screen.cols);
@@ -1421,50 +1465,159 @@ mod tests {
         assert_eq!(key_mods(Modifiers::LOGO), KeyMods::default());
     }
 
-    #[test]
-    fn wheel_scroll_only_acts_when_the_pointer_is_over_the_terminal() {
-        use canvas::Program;
+    fn sid(n: u64) -> SessionId {
+        SessionId(std::num::NonZeroU64::new(n).expect("non-zero"))
+    }
+
+    /// A blank 4×2 screen; with 100×100 bounds each cell is 25×50 px, so
+    /// (10,10) lands in cell (0,0) and (60,60) in cell (2,1).
+    fn test_screen() -> Screen {
         use termherd_pty::ScreenCell;
-        let screen = Screen {
+        let cell = ScreenCell {
+            c: ' ',
+            fg: [0, 0, 0],
+            bg: [0, 0, 0],
+            bold: false,
+        };
+        Screen {
             cols: 4,
             rows: 2,
-            lines: vec![
-                vec![
-                    ScreenCell {
-                        c: ' ',
-                        fg: [0, 0, 0],
-                        bg: [0, 0, 0],
-                        bold: false
-                    };
-                    4
-                ];
-                2
-            ],
+            lines: vec![vec![cell; 4]; 2],
             cursor: None,
             scrolled: false,
             bracketed_paste: false,
-        };
-        let view = TerminalView { screen: &screen };
-        let bounds = Rectangle {
+        }
+    }
+
+    fn test_bounds() -> Rectangle {
+        Rectangle {
             x: 0.0,
             y: 0.0,
             width: 100.0,
             height: 100.0,
-        };
-        let wheel = canvas::Event::Mouse(mouse::Event::WheelScrolled {
-            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
-        });
+        }
+    }
 
+    fn at(x: f32, y: f32) -> mouse::Cursor {
+        mouse::Cursor::Available(Point::new(x, y))
+    }
+
+    fn press() -> canvas::Event {
+        canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+    }
+    fn release() -> canvas::Event {
+        canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+    }
+    fn moved() -> canvas::Event {
+        canvas::Event::Mouse(mouse::Event::CursorMoved {
+            position: Point::new(60.0, 60.0),
+        })
+    }
+    fn wheel() -> canvas::Event {
+        canvas::Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        })
+    }
+
+    #[test]
+    fn wheel_scroll_only_acts_when_the_pointer_is_over_the_terminal() {
+        use canvas::Program;
+        let screen = test_screen();
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+        };
         // Pointer over the canvas → the scroll is published.
         let mut state = TermState::default();
-        let over = mouse::Cursor::Available(Point::new(50.0, 50.0));
-        assert!(view.update(&mut state, &wheel, bounds, over).is_some());
-
-        // Pointer outside (e.g. over the sidebar) → ignored, so the sidebar's
-        // own scroll no longer bleeds into the terminal (#5).
+        assert!(
+            view.update(&mut state, &wheel(), test_bounds(), at(50.0, 50.0))
+                .is_some()
+        );
+        // Pointer outside (e.g. over the sidebar) → ignored (#5).
         let mut state = TermState::default();
-        let outside = mouse::Cursor::Available(Point::new(250.0, 50.0));
-        assert!(view.update(&mut state, &wheel, bounds, outside).is_none());
+        assert!(
+            view.update(&mut state, &wheel(), test_bounds(), at(250.0, 50.0))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_bare_click_leaves_no_selection() {
+        // #6: press and release on the same cell, no drag.
+        use canvas::Program;
+        let screen = test_screen();
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+        };
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
+        let _ = view.update(&mut state, &release(), test_bounds(), at(10.0, 10.0));
+        assert!(state.range().is_none(), "a click is not a selection");
+        assert!(state.anchor.is_none() && state.head.is_none());
+    }
+
+    #[test]
+    fn a_drag_makes_a_selection_and_copies() {
+        use canvas::Program;
+        let screen = test_screen();
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+        };
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0)); // (0,0)
+        let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0)); // (2,1)
+        assert!(state.range().is_some());
+        // A real drag publishes a copy on release.
+        assert!(
+            view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0))
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn selection_does_not_bleed_across_sessions() {
+        // #7: a selection on one session must not show for another.
+        use canvas::Program;
+        let screen = test_screen();
+        let mut state = TermState::default();
+        let s1 = TerminalView {
+            screen: &screen,
+            session: sid(1),
+        };
+        let _ = s1.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
+        let _ = s1.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
+        assert_eq!(state.owner, Some(sid(1)));
+        assert!(state.range().is_some());
+        // The canvas now shows session 2; its first event drops the stale one.
+        let s2 = TerminalView {
+            screen: &screen,
+            session: sid(2),
+        };
+        let _ = s2.update(&mut state, &release(), test_bounds(), at(60.0, 60.0));
+        assert_eq!(state.owner, Some(sid(2)));
+        assert!(
+            state.range().is_none(),
+            "selection must not carry to another session"
+        );
+    }
+
+    #[test]
+    fn scrolling_clears_the_selection() {
+        // #8: a viewport-relative selection is dropped on scroll.
+        use canvas::Program;
+        let screen = test_screen();
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+        };
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
+        let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
+        assert!(state.range().is_some());
+        let _ = view.update(&mut state, &wheel(), test_bounds(), at(50.0, 50.0));
+        assert!(state.range().is_none(), "scroll must clear the selection");
     }
 
     #[test]
