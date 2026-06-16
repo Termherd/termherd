@@ -1010,8 +1010,11 @@ impl canvas::Program<Message> for TerminalView<'_> {
             return None;
         };
         match event {
-            // Wheel scrolls the viewport into scrollback history (FR4).
-            mouse::Event::WheelScrolled { delta } => {
+            // Wheel scrolls the viewport into scrollback history (FR4) — but
+            // only when the pointer is actually over the terminal. The canvas
+            // sees wheel events even while hovering the sidebar, so without
+            // this guard scrolling the session list also scrolls the PTY (#5).
+            mouse::Event::WheelScrolled { delta } if cursor.position_in(bounds).is_some() => {
                 let lines = match delta {
                     mouse::ScrollDelta::Lines { y, .. } => *y,
                     mouse::ScrollDelta::Pixels { y, .. } => y / CELL_H,
@@ -1416,6 +1419,52 @@ mod tests {
         );
         // Cmd / Super (logo) never affects terminal bytes.
         assert_eq!(key_mods(Modifiers::LOGO), KeyMods::default());
+    }
+
+    #[test]
+    fn wheel_scroll_only_acts_when_the_pointer_is_over_the_terminal() {
+        use canvas::Program;
+        use termherd_pty::ScreenCell;
+        let screen = Screen {
+            cols: 4,
+            rows: 2,
+            lines: vec![
+                vec![
+                    ScreenCell {
+                        c: ' ',
+                        fg: [0, 0, 0],
+                        bg: [0, 0, 0],
+                        bold: false
+                    };
+                    4
+                ];
+                2
+            ],
+            cursor: None,
+            scrolled: false,
+            bracketed_paste: false,
+        };
+        let view = TerminalView { screen: &screen };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let wheel = canvas::Event::Mouse(mouse::Event::WheelScrolled {
+            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        });
+
+        // Pointer over the canvas → the scroll is published.
+        let mut state = TermState::default();
+        let over = mouse::Cursor::Available(Point::new(50.0, 50.0));
+        assert!(view.update(&mut state, &wheel, bounds, over).is_some());
+
+        // Pointer outside (e.g. over the sidebar) → ignored, so the sidebar's
+        // own scroll no longer bleeds into the terminal (#5).
+        let mut state = TermState::default();
+        let outside = mouse::Cursor::Available(Point::new(250.0, 50.0));
+        assert!(view.update(&mut state, &wheel, bounds, outside).is_none());
     }
 
     #[test]
