@@ -593,6 +593,139 @@ pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     }
 }
 
+/// A keyboard key in terms the terminal byte protocol cares about — a typed
+/// character or one of the named keys that map to an escape sequence. This is
+/// a framework-neutral boundary type: the GUI translates its own key events
+/// into a `TermKey` (+ [`KeyMods`]) so this codec stays free of any GUI crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermKey {
+    /// A character key; the layout-resolved text is passed to [`key_bytes`]
+    /// alongside, so this carries only the base char for Ctrl/Alt handling.
+    Char(char),
+    Enter,
+    Tab,
+    Backspace,
+    Escape,
+    Space,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    Delete,
+    PageUp,
+    PageDown,
+}
+
+/// The modifier keys held during a key press, as far as the byte protocol is
+/// concerned (the platform Cmd/Super key never affects terminal bytes).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KeyMods {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+}
+
+/// Translate a key press into the bytes a terminal expects (FR4): control
+/// combinations, the named keys and (modifier-aware) cursor/editing sequences,
+/// otherwise the layout-resolved `text`. Pure and GUI-free — the input byte
+/// protocol lives here in the terminal adapter, next to [`paste_bytes`].
+#[must_use]
+pub fn key_bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<u8>> {
+    // Ctrl+<char> control bytes (Ctrl-A → 0x01, Ctrl-Space → NUL, …).
+    if mods.ctrl
+        && let TermKey::Char(ch) = key
+    {
+        let lower = ch.to_ascii_lowercase();
+        if lower.is_ascii_alphabetic() {
+            return Some(vec![(lower as u8 - b'a') + 1]);
+        }
+        match ch {
+            ' ' => return Some(vec![0]),
+            '[' => return Some(vec![27]),
+            '\\' => return Some(vec![28]),
+            ']' => return Some(vec![29]),
+            _ => {}
+        }
+    }
+
+    let modifier = modifier_param(mods);
+
+    match key {
+        // Enter carries its modifiers: Alt/Option+Enter emits `ESC CR` and
+        // Shift+Enter a bare line feed, the two sequences Claude reads as
+        // "insert a newline" instead of submitting; plain Enter still submits.
+        TermKey::Enter => Some(if mods.alt {
+            b"\x1b\r".to_vec()
+        } else if mods.shift {
+            b"\n".to_vec()
+        } else {
+            b"\r".to_vec()
+        }),
+        // Shift+Tab is back-tab (`CSI Z`); Claude uses it to cycle modes.
+        TermKey::Tab if mods.shift => Some(b"\x1b[Z".to_vec()),
+        TermKey::Tab => Some(b"\t".to_vec()),
+        // Alt+Backspace is readline's delete-previous-word (`ESC DEL`).
+        TermKey::Backspace => Some(if mods.alt {
+            b"\x1b\x7f".to_vec()
+        } else {
+            b"\x7f".to_vec()
+        }),
+        TermKey::Escape => Some(b"\x1b".to_vec()),
+        TermKey::Space => Some(b" ".to_vec()),
+        // Cursor / navigation keys take a `1;<mod>` parameter when modified —
+        // e.g. Ctrl+Right (`ESC[1;5C`) for word jump, Shift+Up (`ESC[1;2A`).
+        TermKey::Up => Some(csi_letter(b'A', modifier)),
+        TermKey::Down => Some(csi_letter(b'B', modifier)),
+        TermKey::Right => Some(csi_letter(b'C', modifier)),
+        TermKey::Left => Some(csi_letter(b'D', modifier)),
+        TermKey::Home => Some(csi_letter(b'H', modifier)),
+        TermKey::End => Some(csi_letter(b'F', modifier)),
+        // `~`-terminated editing keys gain the same `;<mod>` parameter.
+        TermKey::Delete => Some(csi_tilde(3, modifier)),
+        TermKey::PageUp => Some(csi_tilde(5, modifier)),
+        TermKey::PageDown => Some(csi_tilde(6, modifier)),
+        // Alt+<char> (Meta) prefixes the character with `ESC`, the readline
+        // convention for word-wise editing (Alt+B / Alt+F / Alt+D …). Limited
+        // to ASCII alphanumerics so macOS Option-composed glyphs (e.g. Option+e
+        // → "´") still fall through to the layout-resolved text below.
+        TermKey::Char(ch) if mods.alt && !mods.ctrl && ch.is_ascii_alphanumeric() => {
+            Some(vec![0x1b, ch as u8])
+        }
+        TermKey::Char(_) => text
+            .filter(|t| !t.is_empty())
+            .map(|t| t.as_bytes().to_vec()),
+    }
+}
+
+/// The xterm modifier parameter (`1` = none): `+Shift`, `+Alt×2`, `+Ctrl×4`,
+/// so Shift=2, Alt=3, Ctrl=5, Ctrl+Shift=6, … as terminals expect in
+/// `CSI 1;<mod>` cursor sequences.
+fn modifier_param(m: KeyMods) -> u8 {
+    1 + (m.shift as u8) + (m.alt as u8) * 2 + (m.ctrl as u8) * 4
+}
+
+/// A letter-terminated cursor sequence (`A`=Up, `C`=Right, `H`=Home …):
+/// `ESC[<final>` unmodified, `ESC[1;<mod><final>` when modified.
+fn csi_letter(final_byte: u8, modifier: u8) -> Vec<u8> {
+    if modifier <= 1 {
+        vec![0x1b, b'[', final_byte]
+    } else {
+        format!("\x1b[1;{modifier}{}", final_byte as char).into_bytes()
+    }
+}
+
+/// A `~`-terminated editing key (Delete=3, PageUp=5, PageDown=6):
+/// `ESC[<n>~` unmodified, `ESC[<n>;<mod>~` when modified.
+fn csi_tilde(n: u8, modifier: u8) -> Vec<u8> {
+    if modifier <= 1 {
+        format!("\x1b[{n}~").into_bytes()
+    } else {
+        format!("\x1b[{n};{modifier}~").into_bytes()
+    }
+}
+
 /// Snapshot the visible grid into a [`Screen`] with resolved colours and the
 /// cursor (FR4). Wide-char spacer cells are dropped; the wide glyph keeps its
 /// own column.
@@ -749,6 +882,153 @@ mod tests {
             paste_bytes("a\nb", true),
             b"\x1b[200~a\rb\x1b[201~".to_vec()
         );
+    }
+
+    const NONE: KeyMods = KeyMods {
+        ctrl: false,
+        alt: false,
+        shift: false,
+    };
+    const CTRL: KeyMods = KeyMods {
+        ctrl: true,
+        alt: false,
+        shift: false,
+    };
+    const ALT: KeyMods = KeyMods {
+        ctrl: false,
+        alt: true,
+        shift: false,
+    };
+    const SHIFT: KeyMods = KeyMods {
+        ctrl: false,
+        alt: false,
+        shift: true,
+    };
+
+    #[test]
+    fn ctrl_letters_and_symbols_map_to_control_bytes() {
+        assert_eq!(
+            key_bytes(TermKey::Char('c'), CTRL, Some("c")),
+            Some(vec![3])
+        );
+        assert_eq!(
+            key_bytes(TermKey::Char('a'), CTRL, Some("a")),
+            Some(vec![1])
+        );
+        // Ctrl+Space is NUL; the bracket family fills 0x1b–0x1d.
+        assert_eq!(
+            key_bytes(TermKey::Char(' '), CTRL, Some(" ")),
+            Some(vec![0])
+        );
+        assert_eq!(
+            key_bytes(TermKey::Char('['), CTRL, Some("[")),
+            Some(vec![27])
+        );
+        assert_eq!(
+            key_bytes(TermKey::Char(']'), CTRL, Some("]")),
+            Some(vec![29])
+        );
+    }
+
+    #[test]
+    fn plain_named_keys_map_to_their_sequences() {
+        assert_eq!(key_bytes(TermKey::Enter, NONE, None), Some(b"\r".to_vec()));
+        assert_eq!(key_bytes(TermKey::Tab, NONE, None), Some(b"\t".to_vec()));
+        assert_eq!(
+            key_bytes(TermKey::Backspace, NONE, None),
+            Some(b"\x7f".to_vec())
+        );
+        assert_eq!(
+            key_bytes(TermKey::Escape, NONE, None),
+            Some(b"\x1b".to_vec())
+        );
+        assert_eq!(key_bytes(TermKey::Space, NONE, None), Some(b" ".to_vec()));
+        assert_eq!(key_bytes(TermKey::Up, NONE, None), Some(b"\x1b[A".to_vec()));
+        assert_eq!(
+            key_bytes(TermKey::Delete, NONE, None),
+            Some(b"\x1b[3~".to_vec())
+        );
+    }
+
+    #[test]
+    fn enter_tab_and_backspace_carry_their_modifiers() {
+        // Shift / Alt+Enter insert a newline instead of submitting.
+        assert_eq!(key_bytes(TermKey::Enter, SHIFT, None), Some(b"\n".to_vec()));
+        assert_eq!(
+            key_bytes(TermKey::Enter, ALT, None),
+            Some(b"\x1b\r".to_vec())
+        );
+        // Shift+Tab is back-tab; Alt+Backspace deletes the previous word.
+        assert_eq!(
+            key_bytes(TermKey::Tab, SHIFT, None),
+            Some(b"\x1b[Z".to_vec())
+        );
+        assert_eq!(
+            key_bytes(TermKey::Backspace, ALT, None),
+            Some(b"\x1b\x7f".to_vec())
+        );
+    }
+
+    #[test]
+    fn modifier_param_follows_the_xterm_scheme() {
+        assert_eq!(modifier_param(NONE), 1);
+        assert_eq!(modifier_param(SHIFT), 2);
+        assert_eq!(modifier_param(ALT), 3);
+        assert_eq!(modifier_param(CTRL), 5);
+        assert_eq!(
+            modifier_param(KeyMods {
+                ctrl: true,
+                alt: false,
+                shift: true
+            }),
+            6
+        );
+    }
+
+    #[test]
+    fn modified_cursor_and_tilde_keys_carry_a_csi_parameter() {
+        // Ctrl+Right (word jump), Shift+Up (select), Ctrl+Home.
+        assert_eq!(
+            key_bytes(TermKey::Right, CTRL, None),
+            Some(b"\x1b[1;5C".to_vec())
+        );
+        assert_eq!(
+            key_bytes(TermKey::Up, SHIFT, None),
+            Some(b"\x1b[1;2A".to_vec())
+        );
+        assert_eq!(
+            key_bytes(TermKey::Home, CTRL, None),
+            Some(b"\x1b[1;5H".to_vec())
+        );
+        // `~`-terminated keys gain the same parameter before the `~`.
+        assert_eq!(
+            key_bytes(TermKey::Delete, CTRL, None),
+            Some(b"\x1b[3;5~".to_vec())
+        );
+        assert_eq!(
+            key_bytes(TermKey::PageUp, CTRL, None),
+            Some(b"\x1b[5;5~".to_vec())
+        );
+    }
+
+    #[test]
+    fn alt_letters_are_meta_prefixed_other_chars_send_text() {
+        // Alt+B is readline word-motion: ESC then the letter.
+        assert_eq!(
+            key_bytes(TermKey::Char('b'), ALT, Some("b")),
+            Some(vec![0x1b, b'b'])
+        );
+        // A macOS Option-composed glyph (non-ASCII) falls through to its text.
+        assert_eq!(
+            key_bytes(TermKey::Char('´'), ALT, Some("´")),
+            Some("´".as_bytes().to_vec())
+        );
+        // A plain character sends its layout-resolved text; none -> nothing.
+        assert_eq!(
+            key_bytes(TermKey::Char('é'), NONE, Some("é")),
+            Some("é".as_bytes().to_vec())
+        );
+        assert_eq!(key_bytes(TermKey::Char('x'), NONE, None), None);
     }
 
     #[test]

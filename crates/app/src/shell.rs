@@ -28,7 +28,7 @@ use termherd_core::workspace::SessionId;
 use termherd_core::{
     Action, Effect, KeyChord, Keymap, LaunchSpec, SessionMeta, SessionRecord, SessionStatus, keymap,
 };
-use termherd_pty::{PtyEvent, Screen};
+use termherd_pty::{KeyMods, PtyEvent, Screen, TermKey};
 
 use crate::docs::DocEntry;
 use crate::settings::ThemeChoice;
@@ -585,7 +585,11 @@ impl Shell {
         {
             return self.run_action(action);
         }
-        let Some(bytes) = key_to_bytes(&key, modifiers, text.as_deref()) else {
+        let Some(term_key) = to_term_key(&key) else {
+            return Task::none();
+        };
+        let Some(bytes) = termherd_pty::key_bytes(term_key, key_mods(modifiers), text.as_deref())
+        else {
             return Task::none();
         };
         let effects = self
@@ -1160,117 +1164,38 @@ fn key_name(key: &keyboard::Key) -> Option<String> {
     }
 }
 
-/// Translate a key press into the bytes a terminal expects (FR4): control
-/// combinations, the common named keys and cursor sequences, otherwise the
-/// layout-resolved text.
-fn key_to_bytes(
-    key: &keyboard::Key,
-    modifiers: keyboard::Modifiers,
-    text: Option<&str>,
-) -> Option<Vec<u8>> {
+/// Map an iced key to the framework-neutral [`TermKey`] the PTY codec speaks
+/// (`termherd_pty::key_bytes`). `None` for keys with no terminal sequence, so
+/// they reach no PTY. The byte protocol itself lives in the terminal adapter.
+fn to_term_key(key: &keyboard::Key) -> Option<TermKey> {
     use keyboard::Key;
     use keyboard::key::Named;
-
-    if modifiers.control()
-        && let Key::Character(c) = key
-        && let Some(ch) = c.chars().next()
-    {
-        let lower = ch.to_ascii_lowercase();
-        if lower.is_ascii_alphabetic() {
-            return Some(vec![(lower as u8 - b'a') + 1]);
-        }
-        match ch {
-            ' ' => return Some(vec![0]),
-            '[' => return Some(vec![27]),
-            '\\' => return Some(vec![28]),
-            ']' => return Some(vec![29]),
-            _ => {}
-        }
-    }
-
-    let modifier = modifier_param(modifiers);
-
     match key {
-        // Enter carries its modifiers: Alt/Option+Enter emits `ESC CR` and
-        // Shift+Enter a bare line feed, the two sequences Claude reads as
-        // "insert a newline" instead of submitting; plain Enter still submits.
-        Key::Named(Named::Enter) => Some(if modifiers.alt() {
-            b"\x1b\r".to_vec()
-        } else if modifiers.shift() {
-            b"\n".to_vec()
-        } else {
-            b"\r".to_vec()
-        }),
-        // Shift+Tab is back-tab (`CSI Z`); Claude uses it to cycle modes.
-        Key::Named(Named::Tab) if modifiers.shift() => Some(b"\x1b[Z".to_vec()),
-        Key::Named(Named::Tab) => Some(b"\t".to_vec()),
-        // Alt+Backspace is readline's delete-previous-word (`ESC DEL`).
-        Key::Named(Named::Backspace) => Some(if modifiers.alt() {
-            b"\x1b\x7f".to_vec()
-        } else {
-            b"\x7f".to_vec()
-        }),
-        Key::Named(Named::Escape) => Some(b"\x1b".to_vec()),
-        Key::Named(Named::Space) => Some(b" ".to_vec()),
-        // Cursor / navigation keys take a `1;<mod>` parameter when modified —
-        // e.g. Ctrl+Right (`ESC[1;5C`) for word jump, Shift+Up (`ESC[1;2A`).
-        Key::Named(Named::ArrowUp) => Some(csi_letter(b'A', modifier)),
-        Key::Named(Named::ArrowDown) => Some(csi_letter(b'B', modifier)),
-        Key::Named(Named::ArrowRight) => Some(csi_letter(b'C', modifier)),
-        Key::Named(Named::ArrowLeft) => Some(csi_letter(b'D', modifier)),
-        Key::Named(Named::Home) => Some(csi_letter(b'H', modifier)),
-        Key::Named(Named::End) => Some(csi_letter(b'F', modifier)),
-        // `~`-terminated editing keys gain the same `;<mod>` parameter.
-        Key::Named(Named::Delete) => Some(csi_tilde(3, modifier)),
-        Key::Named(Named::PageUp) => Some(csi_tilde(5, modifier)),
-        Key::Named(Named::PageDown) => Some(csi_tilde(6, modifier)),
-        Key::Named(_) => None,
-        // Alt+<char> (Meta) prefixes the character with `ESC`, the readline
-        // convention for word-wise editing (Alt+B / Alt+F / Alt+D …). Limited
-        // to ASCII alphanumerics so macOS Option-composed glyphs (e.g. Option+e
-        // → "´") still fall through to the layout-resolved text below.
-        Key::Character(c) if modifiers.alt() && !modifiers.control() => {
-            match c.chars().next().filter(char::is_ascii_alphanumeric) {
-                Some(ch) => {
-                    let mut out = vec![0x1b];
-                    out.push(ch as u8);
-                    Some(out)
-                }
-                None => text
-                    .filter(|t| !t.is_empty())
-                    .map(|t| t.as_bytes().to_vec()),
-            }
-        }
-        Key::Character(_) | Key::Unidentified => text
-            .filter(|t| !t.is_empty())
-            .map(|t| t.as_bytes().to_vec()),
+        Key::Character(c) => c.chars().next().map(TermKey::Char),
+        Key::Named(Named::Enter) => Some(TermKey::Enter),
+        Key::Named(Named::Tab) => Some(TermKey::Tab),
+        Key::Named(Named::Backspace) => Some(TermKey::Backspace),
+        Key::Named(Named::Escape) => Some(TermKey::Escape),
+        Key::Named(Named::Space) => Some(TermKey::Space),
+        Key::Named(Named::ArrowUp) => Some(TermKey::Up),
+        Key::Named(Named::ArrowDown) => Some(TermKey::Down),
+        Key::Named(Named::ArrowLeft) => Some(TermKey::Left),
+        Key::Named(Named::ArrowRight) => Some(TermKey::Right),
+        Key::Named(Named::Home) => Some(TermKey::Home),
+        Key::Named(Named::End) => Some(TermKey::End),
+        Key::Named(Named::Delete) => Some(TermKey::Delete),
+        Key::Named(Named::PageUp) => Some(TermKey::PageUp),
+        Key::Named(Named::PageDown) => Some(TermKey::PageDown),
+        _ => None,
     }
 }
 
-/// The xterm modifier parameter (`1` = none): `+Shift`, `+Alt×2`, `+Ctrl×4`,
-/// so Shift=2, Alt=3, Ctrl=5, Ctrl+Shift=6, … as terminals expect in
-/// `CSI 1;<mod>` cursor sequences.
-fn modifier_param(m: keyboard::Modifiers) -> u8 {
-    1 + (m.shift() as u8) + (m.alt() as u8) * 2 + (m.control() as u8) * 4
-}
-
-/// A letter-terminated cursor sequence (`A`=Up, `C`=Right, `H`=Home …):
-/// `ESC[<final>` unmodified, `ESC[1;<mod><final>` when modified.
-fn csi_letter(final_byte: u8, modifier: u8) -> Vec<u8> {
-    if modifier <= 1 {
-        vec![0x1b, b'[', final_byte]
-    } else {
-        format!("\x1b[1;{modifier}{}", final_byte as char).into_bytes()
-    }
-}
-
-/// A `~`-terminated editing key (Delete=3, PageUp=5, PageDown=6):
-/// `ESC[<n>~` unmodified, `ESC[<n>;<mod>~` when modified.
-fn csi_tilde(n: u8, modifier: u8) -> Vec<u8> {
-    if modifier <= 1 {
-        format!("\x1b[{n}~").into_bytes()
-    } else {
-        format!("\x1b[{n};{modifier}~").into_bytes()
+/// The PTY codec's view of the held modifiers (Cmd/Super never affects bytes).
+fn key_mods(m: keyboard::Modifiers) -> KeyMods {
+    KeyMods {
+        ctrl: m.control(),
+        alt: m.alt(),
+        shift: m.shift(),
     }
 }
 
@@ -1380,177 +1305,37 @@ mod tests {
     use iced::keyboard::key::Named;
     use iced::keyboard::{Key, Modifiers};
 
-    fn ctrl() -> Modifiers {
-        Modifiers::CTRL
+    #[test]
+    fn to_term_key_maps_characters_and_named_keys() {
+        // Characters carry their base char; the named keys the codec handles
+        // map to their `TermKey`.
+        assert_eq!(
+            to_term_key(&Key::Character("a".into())),
+            Some(TermKey::Char('a'))
+        );
+        assert_eq!(to_term_key(&Key::Named(Named::Enter)), Some(TermKey::Enter));
+        assert_eq!(to_term_key(&Key::Named(Named::ArrowUp)), Some(TermKey::Up));
+        assert_eq!(
+            to_term_key(&Key::Named(Named::PageDown)),
+            Some(TermKey::PageDown)
+        );
+        // Keys with no terminal sequence reach no PTY.
+        assert_eq!(to_term_key(&Key::Named(Named::F2)), None);
+        assert_eq!(to_term_key(&Key::Unidentified), None);
     }
 
     #[test]
-    fn control_letters_map_to_control_bytes() {
-        // Ctrl-C -> 0x03, Ctrl-A -> 0x01.
+    fn key_mods_drops_the_platform_command_key() {
         assert_eq!(
-            key_to_bytes(&Key::Character("c".into()), ctrl(), Some("c")),
-            Some(vec![3])
+            key_mods(Modifiers::CTRL | Modifiers::SHIFT),
+            KeyMods {
+                ctrl: true,
+                alt: false,
+                shift: true
+            }
         );
-        assert_eq!(
-            key_to_bytes(&Key::Character("a".into()), ctrl(), Some("a")),
-            Some(vec![1])
-        );
-    }
-
-    #[test]
-    fn named_keys_map_to_their_sequences() {
-        let none = Modifiers::default();
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Enter), none, None),
-            Some(b"\r".to_vec())
-        );
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::ArrowUp), none, None),
-            Some(b"\x1b[A".to_vec())
-        );
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Backspace), none, None),
-            Some(b"\x7f".to_vec())
-        );
-    }
-
-    #[test]
-    fn control_symbols_map_to_their_control_bytes() {
-        // Ctrl+Space is NUL; the bracket family fills 0x1b–0x1d.
-        assert_eq!(
-            key_to_bytes(&Key::Character(" ".into()), ctrl(), Some(" ")),
-            Some(vec![0])
-        );
-        assert_eq!(
-            key_to_bytes(&Key::Character("[".into()), ctrl(), Some("[")),
-            Some(vec![27])
-        );
-        assert_eq!(
-            key_to_bytes(&Key::Character("]".into()), ctrl(), Some("]")),
-            Some(vec![29])
-        );
-    }
-
-    #[test]
-    fn escape_space_and_unknown_named_keys() {
-        let none = Modifiers::default();
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Escape), none, None),
-            Some(b"\x1b".to_vec())
-        );
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Space), none, None),
-            Some(b" ".to_vec())
-        );
-        // A named key no terminal sequence covers sends nothing.
-        assert_eq!(key_to_bytes(&Key::Named(Named::F2), none, None), None);
-    }
-
-    #[test]
-    fn enter_and_tab_carry_their_modifiers() {
-        let none = Modifiers::default();
-        // Plain Enter / Tab keep their classic bytes.
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Enter), none, None),
-            Some(b"\r".to_vec())
-        );
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Tab), none, None),
-            Some(b"\t".to_vec())
-        );
-        // Shift / Alt+Enter insert a newline instead of submitting.
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Enter), Modifiers::SHIFT, None),
-            Some(b"\n".to_vec())
-        );
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Enter), Modifiers::ALT, None),
-            Some(b"\x1b\r".to_vec())
-        );
-        // Shift+Tab is back-tab (CSI Z).
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Tab), Modifiers::SHIFT, None),
-            Some(b"\x1b[Z".to_vec())
-        );
-        // Alt+Backspace deletes the previous word.
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Backspace), Modifiers::ALT, None),
-            Some(b"\x1b\x7f".to_vec())
-        );
-    }
-
-    #[test]
-    fn modifier_param_follows_the_xterm_scheme() {
-        assert_eq!(modifier_param(Modifiers::default()), 1);
-        assert_eq!(modifier_param(Modifiers::SHIFT), 2);
-        assert_eq!(modifier_param(Modifiers::ALT), 3);
-        assert_eq!(modifier_param(Modifiers::CTRL), 5);
-        assert_eq!(modifier_param(Modifiers::CTRL | Modifiers::SHIFT), 6);
-    }
-
-    #[test]
-    fn modified_cursor_keys_carry_a_csi_parameter() {
-        // Ctrl+Right (word jump) and Shift+Up (select) gain `1;<mod>`.
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::ArrowRight), Modifiers::CTRL, None),
-            Some(b"\x1b[1;5C".to_vec())
-        );
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::ArrowUp), Modifiers::SHIFT, None),
-            Some(b"\x1b[1;2A".to_vec())
-        );
-        // Home modified the same way; unmodified Home keeps `ESC[H`.
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Home), Modifiers::CTRL, None),
-            Some(b"\x1b[1;5H".to_vec())
-        );
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Home), Modifiers::default(), None),
-            Some(b"\x1b[H".to_vec())
-        );
-    }
-
-    #[test]
-    fn modified_tilde_keys_carry_a_csi_parameter() {
-        // Ctrl+Delete (delete word) and Ctrl+PageUp gain `;<mod>` before `~`.
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Delete), Modifiers::CTRL, None),
-            Some(b"\x1b[3;5~".to_vec())
-        );
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::PageUp), Modifiers::CTRL, None),
-            Some(b"\x1b[5;5~".to_vec())
-        );
-        // Unmodified Delete keeps the bare `ESC[3~`.
-        assert_eq!(
-            key_to_bytes(&Key::Named(Named::Delete), Modifiers::default(), None),
-            Some(b"\x1b[3~".to_vec())
-        );
-    }
-
-    #[test]
-    fn alt_letters_are_meta_prefixed() {
-        // Alt+B / Alt+F are readline word-motion: `ESC` then the letter.
-        assert_eq!(
-            key_to_bytes(&Key::Character("b".into()), Modifiers::ALT, Some("b")),
-            Some(vec![0x1b, b'b'])
-        );
-        // A macOS Option-composed glyph (non-ASCII) falls through to its text.
-        assert_eq!(
-            key_to_bytes(&Key::Character("´".into()), Modifiers::ALT, Some("´")),
-            Some("´".as_bytes().to_vec())
-        );
-    }
-
-    #[test]
-    fn characters_send_their_resolved_text() {
-        let none = Modifiers::default();
-        assert_eq!(
-            key_to_bytes(&Key::Character("é".into()), none, Some("é")),
-            Some("é".as_bytes().to_vec())
-        );
-        // No text and not a known named key -> nothing to send.
-        assert_eq!(key_to_bytes(&Key::Unidentified, none, None), None);
+        // Cmd / Super (logo) never affects terminal bytes.
+        assert_eq!(key_mods(Modifiers::LOGO), KeyMods::default());
     }
 
     #[test]
@@ -1572,7 +1357,7 @@ mod tests {
 /// Tests for the keyboard routing seam in [`Shell::on_key`]: a configured
 /// shortcut must win over raw terminal input, unbound keys must reach the PTY,
 /// and keys are swallowed unless a terminal holds focus. These exercise the
-/// precedence wiring that the pure `key_to_bytes` tests above cannot.
+/// precedence wiring that the pure `termherd_pty::key_bytes` tests cannot.
 #[cfg(test)]
 mod key_routing {
     use super::*;
@@ -1676,7 +1461,7 @@ mod key_routing {
     fn a_bound_shortcut_is_intercepted_before_the_pty() {
         let (mut shell, pty) = shell_with_terminal();
         // Ctrl+Tab is bound to NextTab on every platform; it must run the
-        // action, not send the `\t` that key_to_bytes would otherwise produce.
+        // action, not send the `\t` that key_bytes would otherwise produce.
         let _ = shell.on_key(press(Key::Named(Named::Tab), Modifiers::CTRL, None));
         assert!(
             pty.writes().is_empty(),
