@@ -99,27 +99,55 @@ pub fn watch_changes(
 
 impl ProjectScanner for FsScanner {
     fn scan(&self) -> Result<Vec<SessionRecord>, ScanError> {
-        let folders = fs::read_dir(&self.root)
-            .map_err(|e| ScanError::Unreadable(format!("{}: {e}", self.root.display())))?;
+        let outcome = scan_root(&self.root)?;
 
-        let mut records = Vec::new();
-        for folder in folders.flatten() {
-            let dir = folder.path();
-            if !dir.is_dir() {
-                continue;
-            }
-            match scan_folder(&dir) {
-                Some(mut found) => records.append(&mut found),
-                None => {
-                    // Upstream drops underivable folders silently; we keep
-                    // the behaviour but leave a trace.
-                    warn!(folder = %dir.display(), "no cwd derivable; folder skipped");
-                }
-            }
+        // Q5: underivable folders are dropped like upstream, but never
+        // silently. The detail is per-folder noise (dozens of `.worktrees`
+        // checkouts skip cleanly on a busy machine), so it lives at `debug`;
+        // default verbosity gets a single summary line, not a flood.
+        for folder in &outcome.skipped {
+            debug!(folder = %folder.display(), "no cwd derivable; folder skipped");
         }
-        debug!(sessions = records.len(), root = %self.root.display(), "scan complete");
-        Ok(records)
+        if !outcome.skipped.is_empty() {
+            warn!(
+                skipped = outcome.skipped.len(),
+                "folders skipped (no cwd derivable); \
+                 set RUST_LOG=termherd_scan=debug for the list"
+            );
+        }
+        debug!(sessions = outcome.records.len(), root = %self.root.display(), "scan complete");
+        Ok(outcome.records)
     }
+}
+
+/// Result of walking a projects root: the derived session records, plus the
+/// folders whose project path could not be derived (kept so the caller —
+/// not this pure walk — decides how loudly to report them).
+struct ScanOutcome {
+    records: Vec<SessionRecord>,
+    skipped: Vec<PathBuf>,
+}
+
+/// Walk a projects root, partitioning its folders into derived session
+/// records and the folders that had no derivable cwd. Pure of logging policy
+/// so the skip set is unit-testable.
+fn scan_root(root: &Path) -> Result<ScanOutcome, ScanError> {
+    let folders = fs::read_dir(root)
+        .map_err(|e| ScanError::Unreadable(format!("{}: {e}", root.display())))?;
+
+    let mut records = Vec::new();
+    let mut skipped = Vec::new();
+    for folder in folders.flatten() {
+        let dir = folder.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        match scan_folder(&dir) {
+            Some(mut found) => records.append(&mut found),
+            None => skipped.push(dir),
+        }
+    }
+    Ok(ScanOutcome { records, skipped })
 }
 
 /// One project folder → its session records, or `None` when no project
@@ -257,6 +285,38 @@ mod tests {
 
         let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
         assert!(records.is_empty());
+    }
+
+    #[test]
+    fn underivable_folders_are_reported_in_the_outcome_not_dropped_silently() {
+        // The skip is surfaced to the caller (Q5: not silent) as data, so the
+        // logging policy — one summary line, not one per folder — can be
+        // applied without re-walking. Two underivable folders, one good one.
+        let tmp = tempfile::tempdir().unwrap();
+
+        let good = tmp.path().join("C--proj");
+        fs::create_dir(&good).unwrap();
+        write_session(&good, "abc.jsonl", "/real/proj", "hello");
+
+        for name in ["C--mystery", "C--ghost"] {
+            let folder = tmp.path().join(name);
+            fs::create_dir(&folder).unwrap();
+            fs::write(
+                folder.join("abc.jsonl"),
+                "{\"type\":\"user\",\"message\":\"no cwd\"}\n",
+            )
+            .unwrap();
+        }
+
+        let outcome = scan_root(tmp.path()).unwrap();
+        assert_eq!(outcome.records.len(), 1);
+        assert_eq!(outcome.skipped.len(), 2);
+        assert!(
+            outcome
+                .skipped
+                .iter()
+                .all(|p| p.file_name().is_some_and(|n| n != "C--proj"))
+        );
     }
 
     #[test]
