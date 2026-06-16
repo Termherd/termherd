@@ -152,6 +152,10 @@ struct Shell {
     docs: Vec<DocEntry>,
     /// The doc currently shown read-only in the main pane: `(label, content)`.
     viewing: Option<(String, String)>,
+    /// A close awaiting confirmation: the tab index to kill, or `None` (#9).
+    /// Killing a session is destructive, so the close button arms this and a
+    /// confirmation bar must be accepted before the PTY is actually killed.
+    closing: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -194,8 +198,12 @@ enum Message {
     Paste(Option<String>),
     /// Bring the tab at this index to the front (FR5).
     ActivateTab(usize),
-    /// Close the tab at this index, killing its session(s) (FR5).
+    /// Ask to close the tab at this index — arms the confirmation bar (#9).
+    RequestCloseTab(usize),
+    /// Confirm the pending close, killing the tab's session(s) (FR5, #9).
     CloseTab(usize),
+    /// Dismiss the close confirmation without killing anything (#9).
+    CancelClose,
     /// Toggle a browsed session's star (F-session-metadata).
     ToggleStar(String),
     /// Toggle a browsed session's archived flag (F-session-metadata).
@@ -252,6 +260,7 @@ impl Shell {
             renaming: None,
             docs: crate::docs::discover(&[]),
             viewing: None,
+            closing: None,
         }
     }
 
@@ -310,6 +319,8 @@ impl Shell {
             }));
         let spawn = self.perform(effects);
         self.focus = Focus::Terminal;
+        // Opening another session drops any pending close confirmation (#9).
+        self.closing = None;
         Task::batch([spawn, self.resize_focused()])
     }
 
@@ -417,6 +428,8 @@ impl Shell {
             Message::ActivateTab(index) => {
                 let _ = self.core.apply(termherd_core::Event::ActivateTab(index));
                 self.focus = Focus::Terminal;
+                // Switching tabs drops any pending close confirmation (#9).
+                self.closing = None;
                 self.resize_focused()
             }
             Message::Paste(content) => {
@@ -436,7 +449,12 @@ impl Shell {
                 });
                 self.perform(effects)
             }
+            Message::RequestCloseTab(index) => self.request_close(index),
             Message::CloseTab(index) => self.close_tab(index),
+            Message::CancelClose => {
+                self.closing = None;
+                Task::none()
+            }
             Message::ToggleStar(session) => {
                 let effects = self.core.apply(termherd_core::Event::ToggleStar(session));
                 self.perform(effects)
@@ -493,9 +511,20 @@ impl Shell {
         }
     }
 
-    /// Close the tab at `index`, killing its session(s) (FR5). Shared by the
-    /// tab strip's close button and the `CloseFocused` keymap action.
+    /// Arm the confirmation bar for the tab at `index` (#9). No-op for an
+    /// out-of-range index, so a stale request can never close the wrong tab.
+    fn request_close(&mut self, index: usize) -> Task<Message> {
+        if index < self.core.workspace.tabs.len() {
+            self.closing = Some(index);
+        }
+        Task::none()
+    }
+
+    /// Close the tab at `index`, killing its session(s) (FR5). Reached only
+    /// after the confirmation is accepted (#9): the close button and the
+    /// `CloseFocused` keymap action both arm `closing` first.
     fn close_tab(&mut self, index: usize) -> Task<Message> {
+        self.closing = None;
         // Capture the sessions about to die so their cached screens don't
         // outlive them in the shell.
         let dying = self
@@ -542,7 +571,7 @@ impl Shell {
             Action::Paste => iced::clipboard::read().map(Message::Paste),
             Action::NextTab => self.cycle_tab(1),
             Action::PrevTab => self.cycle_tab(-1),
-            Action::CloseFocused => self.close_tab(self.core.workspace.active),
+            Action::CloseFocused => self.request_close(self.core.workspace.active),
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -560,6 +589,23 @@ impl Shell {
     fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
         // While renaming inline, let the text field own the keyboard.
         if self.renaming.is_some() {
+            return Task::none();
+        }
+        // A pending close confirmation captures the keyboard (#9): Enter
+        // confirms, Escape cancels, and every other key is swallowed so a
+        // keystroke can't slip past to the terminal while the prompt is up.
+        if let Some(index) = self.closing {
+            if let keyboard::Event::KeyPressed { key, .. } = &event {
+                match key {
+                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                        return self.close_tab(index);
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                        self.closing = None;
+                    }
+                    _ => {}
+                }
+            }
             return Task::none();
         }
         if self.focus != Focus::Terminal {
@@ -862,10 +908,44 @@ impl Shell {
         if let Some(bar) = self.tab_bar() {
             pane = pane.push(bar);
         }
+        if let Some(confirm) = self.close_confirmation() {
+            pane = pane.push(confirm);
+        }
         if let Some(status) = focused.and_then(|id| self.core.sessions.get(&id)) {
             pane = pane.push(status_badge(status.status));
         }
         container(pane.push(body)).width(Fill).height(Fill).into()
+    }
+
+    /// The close-confirmation bar (#9), shown when a close is armed: it names
+    /// the session about to die and offers Fermer (confirm) / Annuler. `None`
+    /// when nothing is pending or the armed index has since gone away.
+    fn close_confirmation(&self) -> Option<Element<'_, Message>> {
+        let index = self.closing?;
+        let tab = self.core.workspace.tabs.get(index)?;
+        let prompt = text(format!(
+            "Fermer « {} » ? La session sera terminée.",
+            clip(&tab.title, 24)
+        ))
+        .size(12);
+        let confirm = button(text("Fermer").size(12))
+            .on_press(Message::CloseTab(index))
+            .style(button::danger)
+            .padding(6);
+        let cancel = button(text("Annuler").size(12))
+            .on_press(Message::CancelClose)
+            .style(button::text)
+            .padding(6);
+        Some(
+            container(
+                row![prompt, confirm, cancel]
+                    .spacing(12)
+                    .align_y(iced::Center),
+            )
+            .padding(6)
+            .style(container::rounded_box)
+            .into(),
+        )
     }
 
     /// The tab strip (FR5): one chip per open session, the active one
@@ -893,7 +973,7 @@ impl Shell {
                 title.style(button::text)
             };
             let close = button(text("×").size(14))
-                .on_press(Message::CloseTab(index))
+                .on_press(Message::RequestCloseTab(index))
                 .style(button::text)
                 .padding(4);
             bar = bar.push(row![title, close].align_y(iced::Center));
@@ -1367,15 +1447,19 @@ mod key_routing {
     use termherd_core::SpawnSpec;
     use termherd_core::ports::{PtyError, ScanError};
 
-    /// A `PtyHost` double recording every write; all control calls succeed.
+    /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]
     struct RecordingPty {
         writes: StdMutex<Vec<Vec<u8>>>,
+        kills: StdMutex<usize>,
     }
 
     impl RecordingPty {
         fn writes(&self) -> Vec<Vec<u8>> {
             self.writes.lock().expect("writes lock").clone()
+        }
+        fn kill_count(&self) -> usize {
+            *self.kills.lock().expect("kills lock")
         }
     }
 
@@ -1397,6 +1481,7 @@ mod key_routing {
             Ok(())
         }
         fn kill(&self, _: SessionId) -> Result<(), PtyError> {
+            *self.kills.lock().expect("kills lock") += 1;
             Ok(())
         }
     }
@@ -1480,5 +1565,59 @@ mod key_routing {
             Some("a"),
         ));
         assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn requesting_a_close_only_arms_it_confirming_kills() {
+        let (mut shell, pty) = shell_with_terminal();
+        // Clicking the tab's × arms the confirmation but kills nothing.
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert_eq!(shell.closing, Some(0));
+        assert_eq!(pty.kill_count(), 0, "arming must not kill the session");
+        // Accepting the confirmation kills it and clears the pending state.
+        let _ = shell.update(Message::CloseTab(0));
+        assert_eq!(pty.kill_count(), 1);
+        assert_eq!(shell.closing, None);
+    }
+
+    #[test]
+    fn cancelling_a_close_leaves_the_session_alive() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::RequestCloseTab(0));
+        let _ = shell.update(Message::CancelClose);
+        assert_eq!(shell.closing, None);
+        assert_eq!(pty.kill_count(), 0);
+    }
+
+    #[test]
+    fn the_confirmation_owns_the_keyboard() {
+        // Escape dismisses the prompt without killing.
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::RequestCloseTab(0));
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+        assert_eq!(shell.closing, None);
+        assert_eq!(pty.kill_count(), 0);
+
+        // Enter confirms; meanwhile a plain key is swallowed, not sent.
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::RequestCloseTab(0));
+        let _ = shell.on_key(press(
+            Key::Character("a".into()),
+            Modifiers::default(),
+            Some("a"),
+        ));
+        assert!(
+            pty.writes().is_empty(),
+            "keys must not reach the PTY mid-confirm"
+        );
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::default(), None));
+        assert_eq!(pty.kill_count(), 1);
+    }
+
+    #[test]
+    fn an_out_of_range_close_request_is_ignored() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.update(Message::RequestCloseTab(7));
+        assert_eq!(shell.closing, None, "a stale index must not arm a close");
     }
 }
