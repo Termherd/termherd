@@ -3,7 +3,7 @@
 # This complements the dist-generated `release.yml`: dist ships the bare
 # binary plus the curl|sh / PowerShell installers (CLI-style installs); this
 # workflow builds the *GUI* desktop installers — macOS .app/.dmg, Windows
-# .msi/.exe, Linux .deb/.AppImage — with the app icon and OS integration,
+# .exe (NSIS), Linux .deb/.AppImage — with the app icon and OS integration,
 # and attaches them to the same GitHub Release dist creates.
 #
 # Config lives in `[package.metadata.packager]` in crates/app/Cargo.toml.
@@ -37,7 +37,10 @@ jobs:
             formats: deb,appimage
           - target: x86_64-pc-windows-msvc
             runner: windows-2022
-            formats: nsis,wix
+            # NSIS only: MSI/WiX rejects a non-numeric version suffix
+            # ("ProductVersion must be numeric x.y.z"), so `-prerelease.N`
+            # breaks it. Add `wix` back once releases drop the suffix.
+            formats: nsis
     runs-on: ${{ matrix.runner }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

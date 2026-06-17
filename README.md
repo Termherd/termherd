@@ -26,7 +26,7 @@ one for your platform:
   pending, see the roadmap), so on first launch right-click the app and choose
   **Open**, or clear the quarantine flag:
   `xattr -dr com.apple.quarantine /Applications/TermHerd.app`.
-- **Windows** — run the `.msi` (or the `*-setup.exe`). Because it is unsigned
+- **Windows** — run the `*-setup.exe` (NSIS installer). Because it is unsigned
   for now, SmartScreen may warn — choose **More info → Run anyway**.
 - **Linux** — install the `.deb`
   (`sudo apt install ./termherd_<version>_amd64.deb`), or download the
