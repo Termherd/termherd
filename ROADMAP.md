@@ -35,7 +35,13 @@ short, scannable view; commits land features here when they ship.
   iced chrome. Window bounds keep their own `window.json` (FR12). File-based
   for now; an in-app settings panel is the full version later
 - [ ] `F-packaging-ci` — signed mac/win/linux builds + CI gate (3-OS matrix)
-  — *pipeline + CI gate in place; "signed" pending certificates (OQ5)*
+  — *bare-binary pipeline (cargo-dist: curl|sh / PowerShell installers) plus
+  the CI gate are in place; desktop installers now build too — a
+  `cargo-packager` config (`[package.metadata.packager]` + an app icon set) and
+  a `package.yml` workflow produce macOS `.app`/`.dmg`, Windows `.msi`/`.exe`
+  and Linux `.deb`/`.AppImage`, attached to the release. macOS `.app`/`.dmg`
+  verified locally. Only "signed" remains — bundles are unsigned pending
+  certificates (OQ5)*
 - [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is
   a tab; a tab strip switches between them, each chip carrying its activity
   dot (the FR8 tab badge) and a close button that kills the session's PTY —
