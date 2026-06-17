@@ -7,6 +7,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-prerelease.3] - 2026-06-17
+
+### Fixed
+
+- `F-packaging-ci` (Windows + Intel macOS): the desktop-installer workflow now
+  ships **NSIS only** on Windows — WiX/MSI rejects a non-numeric version, so the
+  `-prerelease.N` suffix broke MSI packaging and failed the whole Windows job
+  (the NSIS `*-setup.exe` itself built fine). Intel macOS (`x86_64-apple-darwin`)
+  is now cross-compiled on an Apple-Silicon runner instead of the scarce
+  `macos-13` Intel runners, which were queueing for hours.
+
 ## [0.1.0-prerelease.2] - 2026-06-17
 
 ### Added
