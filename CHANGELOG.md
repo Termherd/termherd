@@ -9,7 +9,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.0-prerelease.4] - 2026-06-17
 
-### Fixed
+### Fixed (app launch)
 
 - The packaged app (`.app`/`.dmg`, and the bare binary when started from a
   read-only directory) launched nothing with no error message. The
