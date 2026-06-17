@@ -17,6 +17,41 @@ path = "src/main.rs"
 [package.metadata.dist]
 dist = true
 
+# Desktop installer bundles (cargo-packager). `dist` (above) ships the bare
+# binary + curl|sh / powershell installers for CLI-style installs; this
+# produces the *GUI* desktop installers — macOS .app/.dmg, Windows .msi/.exe,
+# Linux .deb/.AppImage — with the app icon and OS integration. Built in CI by
+# `.github/workflows/package.yml`. Signing/notarization is deferred (no certs,
+# OQ5); unsigned bundles still install with the usual first-launch prompt.
+[package.metadata.packager]
+product-name = "TermHerd"
+identifier = "dev.gallay.termherd"
+category = "DeveloperTool"
+description = "Terminal workspace for Claude Code sessions"
+long-description = """
+TermHerd is a native, keyboard-driven terminal workspace for managing Claude \
+Code sessions — browse, launch, arrange in tabs and splits, monitor status, \
+and search, on macOS, Windows and Linux."""
+homepage = "https://github.com/bastien-gallay/termherd"
+authors = ["Bastien Gallay <bastien@gallay.org>"]
+license-file = "../../LICENSE"
+icons = [
+    "icons/icon.icns",
+    "icons/icon.ico",
+    "icons/32x32.png",
+    "icons/128x128.png",
+    "icons/128x128@2x.png",
+    "icons/256x256.png",
+    "icons/512x512.png",
+]
+
+[package.metadata.packager.macos]
+minimum-system-version = "10.15"
+
+# Runtime libraries iced/winit needs on a minimal Debian/Ubuntu install.
+[package.metadata.packager.deb]
+depends = ["libc6", "libxkbcommon0"]
+
 [dependencies]
 termherd-core = { path = "../core" }
 termherd-claude = { path = "../claude" }

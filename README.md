@@ -15,7 +15,38 @@ This is an early scaffold. Status, scope, and design live in:
 - [`ROADMAP.md`](ROADMAP.md) — feature buckets (MoSCoW)
 - [`CHANGELOG.md`](CHANGELOG.md)
 
-## Run
+## Install
+
+Each tagged release publishes desktop installers on the
+[Releases](https://github.com/bastien-gallay/termherd/releases) page. Pick the
+one for your platform:
+
+- **macOS** — download `TermHerd_<version>_<arch>.dmg`, open it, and drag
+  **TermHerd** into Applications. The build is not yet notarized (signing is
+  pending, see the roadmap), so on first launch right-click the app and choose
+  **Open**, or clear the quarantine flag:
+  `xattr -dr com.apple.quarantine /Applications/TermHerd.app`.
+- **Windows** — run the `.msi` (or the `*-setup.exe`). Because it is unsigned
+  for now, SmartScreen may warn — choose **More info → Run anyway**.
+- **Linux** — install the `.deb`
+  (`sudo apt install ./termherd_<version>_amd64.deb`), or download the
+  `.AppImage`, `chmod +x` it, and run it directly.
+
+Prefer a bare command-line binary? The same releases carry one-line installers
+that drop `termherd` into your Cargo bin directory:
+
+```bash
+# macOS / Linux
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/bastien-gallay/termherd/releases/latest/download/termherd-installer.sh | sh
+```
+
+```powershell
+# Windows
+powershell -c "irm https://github.com/bastien-gallay/termherd/releases/latest/download/termherd-installer.ps1 | iex"
+```
+
+## Run from source
 
 ```bash
 cargo run -p termherd-app

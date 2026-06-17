@@ -1,0 +1,127 @@
+# Desktop installer bundles (cargo-packager).
+#
+# This complements the dist-generated `release.yml`: dist ships the bare
+# binary plus the curl|sh / PowerShell installers (CLI-style installs); this
+# workflow builds the *GUI* desktop installers — macOS .app/.dmg, Windows
+# .msi/.exe, Linux .deb/.AppImage — with the app icon and OS integration,
+# and attaches them to the same GitHub Release dist creates.
+#
+# Config lives in `[package.metadata.packager]` in crates/app/Cargo.toml.
+# Bundles are unsigned for now (signing/notarization pending certs, OQ5).
+name: Package
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - '**[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch: {}
+
+jobs:
+  package:
+    name: package (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            formats: app,dmg
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            formats: app,dmg
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+            formats: deb,appimage
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2022
+            formats: nsis,wix
+    runs-on: ${{ matrix.runner }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the channel (1.95.0); just add the target.
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      # Build/runtime libraries iced + winit + AppImage tooling need on Linux.
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev libwayland-dev libxkbcommon-x11-dev \
+            libgl1-mesa-dev libfuse2 file
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
+      - name: Install cargo-packager
+        # binstall pulls a prebuilt binary when one exists, else compiles it.
+        run: cargo binstall -y cargo-packager@0.11.8
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} -p termherd-app
+
+      - name: Package installers
+        # Absolute out-dir: cargo-packager resolves a relative one against the
+        # package manifest, not the workspace root — pin it so the upload globs
+        # below are reliable across formats.
+        run: >
+          cargo packager -p termherd-app --release
+          --target ${{ matrix.target }}
+          --formats ${{ matrix.formats }}
+          --out-dir "${{ github.workspace }}/dist"
+        env:
+          # AppImage tooling can't use FUSE on GitHub runners; extract instead.
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+
+      # Always keep the bundles as workflow artifacts (also covers manual runs).
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.target }}
+          path: |
+            dist/*.dmg
+            dist/*.app/**
+            dist/*.deb
+            dist/*.AppImage
+            dist/*.msi
+            dist/*.exe
+          if-no-files-found: warn
+
+      # On a release tag, attach the bundles to the Release that release.yml
+      # creates. Wait for that Release to exist, then upload (no second
+      # `gh release create`, so the two workflows never race to create it).
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+
+          # Collect the installer files (skip the raw .app dir — only archives).
+          shopt -s nullglob
+          files=(dist/*.dmg dist/*.deb dist/*.AppImage dist/*.msi dist/*.exe)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No installer artifacts to upload for ${{ matrix.target }}" >&2
+            exit 1
+          fi
+
+          # Poll for the Release (release.yml builds before it publishes).
+          for i in $(seq 1 40); do
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "Release $tag found."
+              gh release upload "$tag" "${files[@]}" --clobber
+              exit 0
+            fi
+            echo "Release $tag not ready yet (attempt $i/40); sleeping 30s…"
+            sleep 30
+          done
+
+          echo "Release $tag never appeared; bundles remain as workflow artifacts." >&2
+          exit 1

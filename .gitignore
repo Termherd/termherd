@@ -2,6 +2,10 @@
 **/*.rs.bk
 .DS_Store
 
+# cargo-packager installer output (bundles are built in CI, never committed)
+/dist/
+**/target/
+
 # editor
 /.idea
 /.vscode

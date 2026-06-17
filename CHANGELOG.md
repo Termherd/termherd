@@ -9,6 +9,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `F-packaging-ci` (desktop installers): GUI installer bundles to complement
+  the existing cargo-dist bare-binary pipeline. A `cargo-packager` config
+  (`[package.metadata.packager]` in `crates/app/Cargo.toml`) plus a generated
+  app icon set (`crates/app/icons/`, all derived from `icon.svg` via
+  `generate.sh`) and a new `.github/workflows/package.yml` build macOS
+  `.app`/`.dmg`, Windows `.msi`/`.exe` (NSIS) and Linux `.deb`/`.AppImage` on a
+  per-target matrix and attach them to the GitHub Release that `release.yml`
+  creates (poll-then-upload, so the two workflows never race to create the
+  release). The macOS `.app` and `.dmg` paths are verified locally; bundles are
+  unsigned for now (signing/notarization pending certificates, OQ5). The README
+  gains an **Install** section.
 - `F-plans-memory` (M3, read-only first slice): browse and view Claude's plans
   (`~/.claude/plans/*.md`) and memory files — the global `~/.claude/CLAUDE.md`
   and each project's `CLAUDE.md` — from a "Plans & mémoire" section in the
