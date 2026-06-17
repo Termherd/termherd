@@ -3,6 +3,27 @@
 Source of truth: [`docs/PRD.md`](docs/PRD.md) §5 (MoSCoW). This file is the
 short, scannable view; commits land features here when they ship.
 
+## Working order (next up)
+
+Execution priority across the open Musts and the feedback issues (#18–#29,
+gist [`d1d02e5`](https://gist.github.com/bastien-gallay/d1d02e5db376112d9b2893e0f2f81886)).
+The MoSCoW buckets below stay tied to PRD §5; this block is just the order to
+pick work in. GH `P0`/`P1`/`P2` labels mirror it.
+
+1. **Finish the Musts** — `F-packaging-ci` signing (OQ5) and the
+   `F-plans-memory` editing slice gate a real v0.1.0 more than any new feature.
+2. **P0 — bugs in shipped features:** #19 (Tab key not forwarded — core
+   terminal path), #18 (tab status stuck — misleading status badge).
+3. **P1 — cheap, on-thesis wins:** #21 (hide pane / Ctrl+B), #26 (Ctrl+Number
+   tabs), #23 (quick-launch button), #20 (archive confirm).
+4. **P2 — polish:** #22 fold repos, #25 drag-reorder tabs (FR5), #27 cursor +
+   double-click, #24 tab titles, #28 link click, #29 OS notifications.
+5. **Design-first backlog** — see below; don't code until scoped.
+
+`F-terminal-split` (Should) isn't in the feedback but its core already landed —
+the cheapest large/visible feature left on the board if a release needs a
+headline.
+
 ## v0 — M0–M3 (daily-driver)
 
 ### Must
@@ -94,6 +115,34 @@ short, scannable view; commits land features here when they ship.
 - [ ] `F-scheduled-tasks`
 - [ ] `F-mcp-ide-bridge` — live MCP/IDE bridge to Claude (moved from Unsure,
   PRD rev. 6); decoupled from the still-Unsure diff panel
+
+### Backlog — needs definition (from feedback gist, 2026-06-17)
+
+Routed here (not to GH issues) because each needs design before it can be
+scoped. Source: feedback gist
+[`d1d02e5`](https://gist.github.com/bastien-gallay/d1d02e5db376112d9b2893e0f2f81886).
+The well-defined items from the same gist are tracked as issues #18–#29.
+
+- [ ] `F-favorites` — favorites in the sidebar. The gist asks for a dedicated
+  "favorites" section **and** repository-level favoriting. `F-session-metadata`
+  already stars *sessions*; this needs a design for repo-level favoriting, where
+  the favorites section sits relative to the existing starred-session pinning,
+  and persistence (metadata overlay, never `~/.claude`)
+- [ ] `F-search-ux` — search activation + scope. Focus-search is already a
+  keymap action (`F-keyboard-shortcuts`); the gist wants Ctrl/Cmd+F to *open*
+  search (not click-only) and results to list **all matching repo sessions**.
+  Needs a definition of result grouping/ranking before it's an issue
+- [ ] `F-keymap-advanced` — keymap concerns from the gist that need design,
+  layered on the shipped `F-keyboard-shortcuts`:
+  - localized number-row handling (AZERTY: `&`→1, `é`→2, …) so Ctrl/Cmd+Number
+    (issue #26) works on non-QWERTY layouts
+  - per-command keymap configuration (different bindings per running command)
+  - a configurable "bypass" key so a modifier passes through to the terminal
+    instead of the app (cf. Ghostty `macos-option-as-alt`)
+- [ ] `F-i18n` — internationalization. Cross-cutting (string externalization,
+  locale selection, layout/width implications); needs an approach decision
+  before any slice can ship. Heaviest and least urgent for an early-adopter
+  audience — keep last
 
 ### Unsure (deferred)
 
