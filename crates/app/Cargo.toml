@@ -19,7 +19,7 @@ dist = true
 
 # Desktop installer bundles (cargo-packager). `dist` (above) ships the bare
 # binary + curl|sh / powershell installers for CLI-style installs; this
-# produces the *GUI* desktop installers — macOS .app/.dmg, Windows .msi/.exe,
+# produces the *GUI* desktop installers — macOS .app/.dmg, Windows .exe (NSIS),
 # Linux .deb/.AppImage — with the app icon and OS integration. Built in CI by
 # `.github/workflows/package.yml`. Signing/notarization is deferred (no certs,
 # OQ5); unsigned bundles still install with the usual first-launch prompt.
