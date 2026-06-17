@@ -7,6 +7,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-prerelease.4] - 2026-06-17
+
+### Fixed
+
+- The packaged app (`.app`/`.dmg`, and the bare binary when started from a
+  read-only directory) launched nothing with no error message. The
+  single-instance lock file was created relative to the working directory,
+  which is `/` when launched from Finder — unwritable, so startup aborted. The
+  lock now lives at an absolute path under the temp dir, and a lock-creation
+  failure no longer prevents the app from starting.
+
 ## [0.1.0-prerelease.3] - 2026-06-17
 
 ### Fixed
