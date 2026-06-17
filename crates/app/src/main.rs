@@ -19,23 +19,16 @@ use termherd_scan::FsScanner;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-const INSTANCE_ID: &str = "dev.gallay.termherd";
+/// Base name of the single-instance lock file. [`lock_path`] anchors it under
+/// the system temp dir so the path is absolute and writable from any working
+/// directory.
+const INSTANCE_LOCK: &str = "dev.gallay.termherd.lock";
 
 fn main() -> iced::Result {
     init_tracing();
 
-    let instance = match SingleInstance::new(INSTANCE_ID) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!(error = %e, "could not acquire single-instance lock");
-            std::process::exit(1);
-        }
-    };
-    if !instance.is_single() {
-        warn!("another termherd instance is already running; exiting");
-        // Non-zero so a launcher can tell the difference from a clean shutdown.
-        std::process::exit(2);
-    }
+    // Hold the single-instance guard for the whole GUI lifetime.
+    let instance = acquire_single_instance();
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -80,9 +73,48 @@ fn main() -> iced::Result {
         metadata,
     };
     let result = shell::run(scanner, watch_root, pty, pty_rx, startup);
-    // Hold the lock for the whole GUI lifetime.
+    // Keep the single-instance guard alive until the GUI exits.
     drop(instance);
     result
+}
+
+/// Absolute, writable path for the single-instance lock file.
+///
+/// `single-instance` creates the lock relative to the current directory. When
+/// TermHerd is launched from its `.app` bundle the working directory is `/`
+/// (read-only), so a bare name fails to create — and the app would silently
+/// refuse to start. Anchoring the lock under the temp dir keeps it
+/// CWD-independent and writable from Finder, a terminal, or anywhere else.
+fn lock_path() -> std::path::PathBuf {
+    std::env::temp_dir().join(INSTANCE_LOCK)
+}
+
+/// Acquire the single-instance guard, returning it to hold for the process
+/// lifetime — or `None` when the lock subsystem is unavailable.
+///
+/// Exits the process only when another instance already holds the lock. A
+/// failure to *create* the lock must not stop the app from launching: that was
+/// the "double-click does nothing, no error" bug on the `.app` bundle.
+fn acquire_single_instance() -> Option<SingleInstance> {
+    let path = lock_path();
+    let name = path.to_string_lossy();
+    match SingleInstance::new(&name) {
+        Ok(instance) => {
+            if !instance.is_single() {
+                warn!("another termherd instance is already running; exiting");
+                // Non-zero so a launcher can tell this from a clean shutdown.
+                std::process::exit(2);
+            }
+            Some(instance)
+        }
+        Err(e) => {
+            warn!(
+                error = %e, path = %path.display(),
+                "single-instance lock unavailable; launching without it"
+            );
+            None
+        }
+    }
 }
 
 /// Fallback scanner when no home directory exists — an empty browser is
@@ -113,6 +145,16 @@ fn init_tracing() {
 mod tests {
     use super::DEFAULT_FILTER;
     use tracing_subscriber::EnvFilter;
+
+    #[test]
+    fn lock_path_is_absolute() {
+        // A CWD-relative lock path is the Finder/.app launch bug: from `/`
+        // (read-only) it can't be created and the app refuses to start.
+        assert!(
+            super::lock_path().is_absolute(),
+            "single-instance lock path must be CWD-independent"
+        );
+    }
 
     #[test]
     fn default_filter_parses_cleanly() {
