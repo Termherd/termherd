@@ -7,6 +7,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-prerelease.2] - 2026-06-17
+
 ### Added
 
 - `F-packaging-ci` (desktop installers): GUI installer bundles to complement
