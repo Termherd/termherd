@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (terminal links)
+
+- Terminal links are now clickable (#28). URLs in terminal output
+  (`http`/`https`/`file`/`ftp`) are detected per row; holding Ctrl/Cmd
+  underlines the link under the pointer and shows a hand cursor, and
+  Ctrl/Cmd+click opens it in the OS default handler. Detection is a pure
+  `core::links` scan (trailing punctuation and unbalanced brackets trimmed);
+  the open is a new `Effect::OpenUrl` performed by the shell.
+
 ## [0.1.0-prerelease.4] - 2026-06-17
 
 ### Fixed (app launch)

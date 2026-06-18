@@ -170,6 +170,8 @@ pub enum Event {
     },
     /// Show or hide archived sessions in the browser.
     ShowArchivedToggled(bool),
+    /// The user Ctrl/Cmd+clicked a detected link in a terminal (#28).
+    OpenUrl(String),
 }
 
 /// Side effects the runtime must perform. The iced shell turns these into
@@ -192,6 +194,8 @@ pub enum Effect {
     Kill(SessionId),
     /// Persist the session metadata overlay (`F-session-metadata`).
     SaveMetadata(HashMap<String, SessionMeta>),
+    /// Open a URL in the OS default handler (#28); the shell performs it.
+    OpenUrl(String),
 }
 
 impl App {
@@ -298,6 +302,16 @@ impl App {
             Event::ShowArchivedToggled(show) => {
                 self.show_archived = show;
                 Vec::new()
+            }
+            Event::OpenUrl(url) => {
+                let url = url.trim();
+                // Only well-formed schemes reach the OS handler; a blank or
+                // schemeless string is dropped rather than shelling out on it.
+                if url.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Effect::OpenUrl(url.to_owned())]
+                }
             }
         }
     }
@@ -655,6 +669,22 @@ mod tests {
         // The surviving session stays live and focused.
         assert_eq!(app.workspace.focused_session(), Some(first));
         assert!(app.sessions.contains_key(&first));
+    }
+
+    #[test]
+    fn open_url_emits_a_trimmed_open_effect() {
+        let mut app = App::new();
+        let effects = app.apply(Event::OpenUrl("  https://example.com  ".into()));
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::OpenUrl(u)] if u == "https://example.com"
+        ));
+    }
+
+    #[test]
+    fn open_url_ignores_a_blank_string() {
+        let mut app = App::new();
+        assert!(app.apply(Event::OpenUrl("   ".into())).is_empty());
     }
 
     #[test]

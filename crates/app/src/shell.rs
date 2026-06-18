@@ -1,57 +1,50 @@
 //! The iced shell — intentionally thin (ARCHITECTURE §8): translate GUI
 //! messages into `core` events, perform the returned `core` effects against
-//! the adapters, and render `core` state. M1 gave the session browser; M2
-//! adds the embedded terminal: a colour grid drawn on a `canvas`, raw
-//! keyboard routed to the focused PTY, resize propagation and OSC status.
-//! Scrollback and selection are the remaining FR4 items.
+//! the adapters, and render `core` state.
+//!
+//! This module is the state-transition half — the `Shell` struct, the
+//! `Message` enum, `update`/`subscription` and the command methods. The rest
+//! is split by concern into submodules:
+//!
+//! - [`view`] — how state is rendered (sidebar, main pane, tabs).
+//! - [`terminal`] — the embedded terminal `canvas::Program` + link opener.
+//! - [`input`] — keyboard translation (chords / `TermKey` / modifiers).
+//! - [`streams`] — the PTY-output and fs-watch subscription sources.
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::Arc;
 
-use iced::advanced::text::Shaping;
 use iced::advanced::widget::{self, operate, operation::focusable};
 use iced::futures::channel::mpsc::UnboundedReceiver;
-use iced::futures::{SinkExt, Stream, StreamExt};
-use iced::widget::canvas::{self, Canvas, Frame, Geometry, Text};
-use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input,
-};
-use iced::{
-    Color, Element, Fill, Font, Pixels, Point, Rectangle, Renderer, Size, Subscription, Task,
-    Theme, keyboard, mouse, window,
-};
+use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Action, Effect, KeyChord, Keymap, LaunchSpec, SessionMeta, SessionRecord, SessionStatus, keymap,
+    Action, Effect, Keymap, LaunchSpec, SessionMeta, SessionRecord, SessionStatus,
 };
-use termherd_pty::{KeyMods, PtyEvent, Screen, TermKey};
+use termherd_pty::{PtyEvent, Screen};
 
 use crate::docs::DocEntry;
 use crate::settings::ThemeChoice;
 use crate::window_config::WindowConfig;
 
-/// Quiet period before a burst of fs events triggers one rescan.
-const WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
+mod input;
+mod streams;
+mod terminal;
+mod view;
 
-/// Terminal cell metrics for the monospace grid. Used both to draw and to
-/// translate the pane's pixel size into a PTY cell geometry (FR4 resize).
-const FONT_SIZE: f32 = 14.0;
-const CELL_W: f32 = 8.4;
-const CELL_H: f32 = 18.0;
+use input::{chord_of, event_modifiers, key_mods, to_term_key};
+use streams::{PtyOutput, pty_stream, watch_stream};
+use terminal::{CELL_H, CELL_W, open_url};
+use view::project_label;
+
 /// Sidebar width and the chrome reserved around the terminal, in logical px.
+/// Combined with the cell metrics ([`terminal::CELL_W`]/[`CELL_H`]) to size the
+/// PTY grid to the window (FR4 resize).
 const SIDEBAR_W: f32 = 300.0;
 const H_CHROME: f32 = 40.0;
 const V_CHROME: f32 = 84.0;
-/// The terminal's default background (matches `termherd_pty`'s default).
-const BG: Color = Color::from_rgb(
-    0x11 as f32 / 255.0,
-    0x13 as f32 / 255.0,
-    0x18 as f32 / 255.0,
-);
 
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
@@ -156,6 +149,10 @@ struct Shell {
     /// Killing a session is destructive, so the close button arms this and a
     /// confirmation bar must be accepted before the PTY is actually killed.
     closing: Option<usize>,
+    /// Whether Ctrl (or Cmd) is currently held — the link-open modifier (#28).
+    /// Tracked from keyboard events and handed to the terminal canvas so it can
+    /// highlight a hovered link and open it on click.
+    link_modifier: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +228,8 @@ enum Message {
     },
     /// Close the doc viewer, returning to the terminal.
     CloseDoc,
+    /// Open a Ctrl/Cmd+clicked terminal link in the OS default handler (#28).
+    OpenUrl(String),
 }
 
 impl Shell {
@@ -261,6 +260,7 @@ impl Shell {
             docs: crate::docs::discover(&[]),
             viewing: None,
             closing: None,
+            link_modifier: false,
         }
     }
 
@@ -298,6 +298,8 @@ impl Shell {
                     crate::metadata_store::save(&metadata);
                     Ok(())
                 }
+                // Opening a link is an OS handoff, not a PTY call (#28).
+                Effect::OpenUrl(url) => open_url(&url),
             };
             if let Err(error) = outcome {
                 tracing::warn!(%error, "pty effect failed");
@@ -399,7 +401,14 @@ impl Shell {
                 let _ = self.core.apply(termherd_core::Event::PtyExited(session));
                 Task::none()
             }
-            Message::Key(event) => self.on_key(event),
+            Message::Key(event) => {
+                // Keep the link-open modifier state current regardless of focus,
+                // so a Ctrl/Cmd+hover highlights links even before the first key
+                // reaches the terminal (#28).
+                let modifiers = event_modifiers(&event);
+                self.link_modifier = modifiers.control() || modifiers.logo();
+                self.on_key(event)
+            }
             Message::FocusTerminal => {
                 self.focus = Focus::Terminal;
                 Task::none()
@@ -507,6 +516,10 @@ impl Shell {
             Message::CloseDoc => {
                 self.viewing = None;
                 Task::none()
+            }
+            Message::OpenUrl(url) => {
+                let effects = self.core.apply(termherd_core::Event::OpenUrl(url));
+                self.perform(effects)
             }
         }
     }
@@ -675,964 +688,6 @@ impl Shell {
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
         Subscription::batch(subs)
-    }
-
-    fn view(&self) -> Element<'_, Message> {
-        row![self.sidebar(), self.main_pane()].into()
-    }
-
-    /// The session browser (FR1 + FR3): search box, then projects by recency.
-    /// Clicking a project opens a fresh shell; clicking a session resumes it.
-    fn sidebar(&self) -> Element<'_, Message> {
-        let mut search = text_input("Rechercher…", &self.core.search)
-            .id(search_id())
-            .size(12)
-            .padding(6);
-        if self.focus == Focus::Search {
-            search = search.on_input(Message::SearchChanged);
-        }
-        // Clicking the box hands keyboard focus to it (disabling terminal keys).
-        let search = mouse_area(search).on_press(Message::FocusSearch);
-        let titles_only = checkbox(self.core.search_titles_only)
-            .label("Titres uniquement")
-            .on_toggle(Message::SearchTitlesOnly)
-            .text_size(11)
-            .size(14);
-        let show_archived = checkbox(self.core.show_archived)
-            .label("Afficher les archivées")
-            .on_toggle(Message::ShowArchived)
-            .text_size(11)
-            .size(14);
-
-        // Live activity, keyed by the Claude session id each terminal resumed,
-        // so a browsed row can show its current status (FR8). If the same
-        // session is open twice, the most urgent status wins.
-        let mut live: HashMap<&str, SessionStatus> = HashMap::new();
-        for s in self.core.sessions.values() {
-            if let Some(resume) = s.resume.as_deref() {
-                live.entry(resume)
-                    .and_modify(|cur| {
-                        if s.status.urgency() > cur.urgency() {
-                            *cur = s.status;
-                        }
-                    })
-                    .or_insert(s.status);
-            }
-        }
-
-        let visible = self.core.visible_projects();
-        let mut list = column![].spacing(16).padding(12);
-        if let Some(error) = &self.scan_error {
-            list = list.push(text(format!("Scan impossible : {error}")).size(12));
-        } else if visible.is_empty() {
-            let label = if self.core.search.trim().is_empty() {
-                "Aucune session trouvée."
-            } else {
-                "Aucun résultat."
-            };
-            list = list.push(text(label).size(12));
-        }
-        // Plans & memory docs (F-plans-memory), above the project list.
-        if !self.docs.is_empty() {
-            let mut docs_col = column![text("Plans & mémoire").size(12)].spacing(4);
-            for doc in &self.docs {
-                docs_col = docs_col.push(
-                    button(text(clip(&doc.label, 34)).size(11))
-                        .on_press(Message::OpenDoc {
-                            label: doc.label.clone(),
-                            path: doc.path.clone(),
-                        })
-                        .style(button::text)
-                        .padding(0),
-                );
-            }
-            list = list.push(docs_col);
-        }
-        for group in &visible {
-            let open = button(text(project_label(&group.path).to_owned()).size(14))
-                .on_press(Message::LaunchProject(group.path.clone()))
-                .style(button::text)
-                .padding(0);
-            let mut g = column![open].spacing(4);
-            for s in &group.sessions {
-                let id = s.session_id.as_str();
-                let starred = self.core.is_starred(id);
-                let archived = self.core.is_archived(id);
-
-                // Star toggles the pin; archive hides/shows (F-session-metadata).
-                let star = button(text(if starred { "★" } else { "☆" }).size(12))
-                    .on_press(Message::ToggleStar(s.session_id.clone()))
-                    .style(button::text)
-                    .padding(0);
-
-                let mut content = row![].spacing(6).align_y(iced::Center);
-                // A coloured dot marks a session already open in TermHerd and
-                // carries its live activity (FR8).
-                if let Some(status) = live.get(id) {
-                    content = content.push(text("●").size(9).color(status_style(*status).1));
-                }
-                let title = self.core.session_title(s);
-                let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);
-
-                // The middle is an edit field while renaming this row, else the
-                // clickable title that resumes the session.
-                let middle: Element<'_, Message> = if renaming_this {
-                    let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
-                    text_input("titre…", buffer)
-                        .id(rename_id())
-                        .on_input(Message::RenameInput)
-                        .on_submit(Message::CommitRename)
-                        .size(11)
-                        .padding(2)
-                        .width(Fill)
-                        .into()
-                } else {
-                    content = content.push(
-                        text(format!(
-                            "{}  ·  {}",
-                            clip(&title, 26),
-                            s.digest.message_count
-                        ))
-                        .size(11),
-                    );
-                    button(content)
-                        .on_press(Message::LaunchSession {
-                            cwd: group.path.clone(),
-                            resume: s.session_id.clone(),
-                        })
-                        .style(button::text)
-                        .padding(0)
-                        .width(Fill)
-                        .into()
-                };
-
-                // ✎ starts the rename; ✓ commits it.
-                let rename = if renaming_this {
-                    button(text("✓").size(12))
-                        .on_press(Message::CommitRename)
-                        .style(button::text)
-                        .padding(0)
-                } else {
-                    button(text("✎").size(12))
-                        .on_press(Message::StartRename {
-                            session: s.session_id.clone(),
-                            current: title.clone(),
-                        })
-                        .style(button::text)
-                        .padding(0)
-                };
-
-                let archive = button(text(if archived { "⊞" } else { "⊟" }).size(12))
-                    .on_press(Message::ToggleArchive(s.session_id.clone()))
-                    .style(button::text)
-                    .padding(0);
-
-                g = g.push(
-                    row![star, middle, rename, archive]
-                        .spacing(6)
-                        .align_y(iced::Center),
-                );
-            }
-            list = list.push(g);
-        }
-        container(
-            column![
-                search,
-                titles_only,
-                show_archived,
-                scrollable(list).height(Fill)
-            ]
-            .spacing(8)
-            .padding(8),
-        )
-        .width(300)
-        .style(container::rounded_box)
-        .into()
-    }
-
-    /// The focused terminal: a status badge, then its grid drawn on a canvas.
-    /// With no session open, a short summary of what the browser found.
-    fn main_pane(&self) -> Element<'_, Message> {
-        // A plan / memory doc, when one is open, takes over the main pane
-        // read-only (F-plans-memory).
-        if let Some((label, content)) = &self.viewing {
-            let header = row![
-                text(label).size(13),
-                button(text("✕ fermer").size(12))
-                    .on_press(Message::CloseDoc)
-                    .style(button::text)
-                    .padding(0),
-            ]
-            .spacing(12)
-            .align_y(iced::Center);
-            let body = scrollable(text(content).size(12).font(Font::MONOSPACE)).height(Fill);
-            return container(column![header, body].spacing(8).padding(8))
-                .width(Fill)
-                .height(Fill)
-                .into();
-        }
-
-        let focused = self.core.workspace.focused_session();
-        let screen = focused.and_then(|id| self.screens.get(&id).map(|s| (id, s)));
-
-        let body: Element<'_, Message> = match screen {
-            Some((session, screen)) => {
-                let canvas = Canvas::new(TerminalView { screen, session })
-                    .width(Fill)
-                    .height(Fill);
-                mouse_area(canvas).on_press(Message::FocusTerminal).into()
-            }
-            None => {
-                let total: usize = self.core.projects.iter().map(|g| g.sessions.len()).sum();
-                iced::widget::center(
-                    column![
-                        text("TermHerd").size(40),
-                        text(format!(
-                            "{} session(s) dans {} projet(s)",
-                            total,
-                            self.core.projects.len()
-                        ))
-                        .size(14),
-                        text("Cliquez un projet pour ouvrir un terminal,").size(13),
-                        text("ou une session pour la reprendre.").size(13),
-                    ]
-                    .spacing(8)
-                    .align_x(iced::Center),
-                )
-                .height(Fill)
-                .into()
-            }
-        };
-
-        let mut pane = column![].spacing(8).padding(8);
-        if let Some(bar) = self.tab_bar() {
-            pane = pane.push(bar);
-        }
-        if let Some(confirm) = self.close_confirmation() {
-            pane = pane.push(confirm);
-        }
-        if let Some(status) = focused.and_then(|id| self.core.sessions.get(&id)) {
-            pane = pane.push(status_badge(status.status));
-        }
-        container(pane.push(body)).width(Fill).height(Fill).into()
-    }
-
-    /// The close-confirmation bar (#9), shown when a close is armed: it names
-    /// the session about to die and offers Fermer (confirm) / Annuler. `None`
-    /// when nothing is pending or the armed index has since gone away.
-    fn close_confirmation(&self) -> Option<Element<'_, Message>> {
-        let index = self.closing?;
-        let tab = self.core.workspace.tabs.get(index)?;
-        let prompt = text(format!(
-            "Fermer « {} » ? La session sera terminée.",
-            clip(&tab.title, 24)
-        ))
-        .size(12);
-        let confirm = button(text("Fermer").size(12))
-            .on_press(Message::CloseTab(index))
-            .style(button::danger)
-            .padding(6);
-        let cancel = button(text("Annuler").size(12))
-            .on_press(Message::CancelClose)
-            .style(button::text)
-            .padding(6);
-        Some(
-            container(
-                row![prompt, confirm, cancel]
-                    .spacing(12)
-                    .align_y(iced::Center),
-            )
-            .padding(6)
-            .style(container::rounded_box)
-            .into(),
-        )
-    }
-
-    /// The tab strip (FR5): one chip per open session, the active one
-    /// highlighted, each carrying its activity dot (FR8) and a close button.
-    /// `None` when nothing is open, so the welcome view keeps the full pane.
-    fn tab_bar(&self) -> Option<Element<'_, Message>> {
-        let tabs = &self.core.workspace.tabs;
-        if tabs.is_empty() {
-            return None;
-        }
-        let mut bar = row![].spacing(4).align_y(iced::Center);
-        for (index, tab) in tabs.iter().enumerate() {
-            let active = index == self.core.workspace.active;
-            let mut label = row![].spacing(6).align_y(iced::Center);
-            if let Some(status) = self.core.tab_status(index) {
-                label = label.push(text("●").size(9).color(status_style(status).1));
-            }
-            label = label.push(text(clip(&tab.title, 24)).size(12));
-            let title = button(label)
-                .on_press(Message::ActivateTab(index))
-                .padding(6);
-            let title = if active {
-                title.style(button::primary)
-            } else {
-                title.style(button::text)
-            };
-            let close = button(text("×").size(14))
-                .on_press(Message::RequestCloseTab(index))
-                .style(button::text)
-                .padding(4);
-            bar = bar.push(row![title, close].align_y(iced::Center));
-        }
-        Some(bar.into())
-    }
-}
-
-/// A canvas program that draws the visible terminal grid with per-cell colour
-/// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
-struct TerminalView<'a> {
-    screen: &'a Screen,
-    /// The session this canvas is currently showing. The canvas widget is
-    /// reused across tabs, so the selection state is tagged with its owner to
-    /// keep a selection from bleeding onto another tab (#7).
-    session: SessionId,
-}
-
-/// Per-canvas selection state: the drag in progress, the last range, and the
-/// session it belongs to. The canvas widget is shared across tabs (iced keys
-/// program state by tree position), so `owner` scopes the selection to one
-/// session (#7).
-#[derive(Default)]
-struct TermState {
-    selecting: bool,
-    anchor: Option<(u16, u16)>,
-    head: Option<(u16, u16)>,
-    owner: Option<SessionId>,
-}
-
-impl TermState {
-    /// Drop any selection, keeping the owning session.
-    fn clear_selection(&mut self) {
-        self.selecting = false;
-        self.anchor = None;
-        self.head = None;
-    }
-
-    /// The current selection range, only when it spans more than one cell — a
-    /// bare click (anchor == head) is not a selection (#6).
-    fn range(&self) -> Option<((u16, u16), (u16, u16))> {
-        match (self.anchor, self.head) {
-            (Some(a), Some(b)) if a != b => Some((a, b)),
-            _ => None,
-        }
-    }
-}
-
-impl canvas::Program<Message> for TerminalView<'_> {
-    type State = TermState;
-
-    fn update(
-        &self,
-        state: &mut TermState,
-        event: &canvas::Event,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> Option<canvas::Action<Message>> {
-        let canvas::Event::Mouse(event) = event else {
-            return None;
-        };
-        // The canvas is reused as tabs switch; if it now shows a different
-        // session, the previous tab's selection must not carry over (#7).
-        if state.owner != Some(self.session) {
-            *state = TermState {
-                owner: Some(self.session),
-                ..TermState::default()
-            };
-        }
-        match event {
-            // Wheel scrolls the viewport into scrollback history (FR4) — but
-            // only when the pointer is actually over the terminal. The canvas
-            // sees wheel events even while hovering the sidebar, so without
-            // this guard scrolling the session list also scrolls the PTY (#5).
-            mouse::Event::WheelScrolled { delta } if cursor.position_in(bounds).is_some() => {
-                // The selection is in viewport coordinates, so scrolling would
-                // leave it floating over the wrong text; drop it (#8).
-                state.clear_selection();
-                let lines = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => *y,
-                    mouse::ScrollDelta::Pixels { y, .. } => y / CELL_H,
-                };
-                let delta = lines.round() as i32;
-                (delta != 0).then(|| canvas::Action::publish(Message::TermScroll(delta)))
-            }
-            // Drag to select; the press is not captured so the wrapping
-            // `mouse_area` still hands keyboard focus to the terminal.
-            mouse::Event::ButtonPressed(mouse::Button::Left) => {
-                cell_at(cursor, bounds, self.screen).map(|cell| {
-                    state.selecting = true;
-                    state.anchor = Some(cell);
-                    state.head = Some(cell);
-                    canvas::Action::request_redraw()
-                })
-            }
-            mouse::Event::CursorMoved { .. } if state.selecting => {
-                cell_at(cursor, bounds, self.screen).map(|cell| {
-                    state.head = Some(cell);
-                    canvas::Action::request_redraw()
-                })
-            }
-            mouse::Event::ButtonReleased(mouse::Button::Left) if state.selecting => {
-                state.selecting = false;
-                // Only a real drag is a selection; a bare click clears it so a
-                // single click can't leave an undismissable highlight (#6).
-                match state.range() {
-                    Some((a, b)) => Some(canvas::Action::publish(Message::CopySelection(
-                        selection_text(self.screen, a, b),
-                    ))),
-                    None => {
-                        state.clear_selection();
-                        Some(canvas::Action::request_redraw())
-                    }
-                }
-            }
-            _ => None,
-        }
-    }
-
-    fn draw(
-        &self,
-        state: &TermState,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        _cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
-        let cols = self.screen.cols.max(1) as f32;
-        let rows = self.screen.rows.max(1) as f32;
-        let cell_w = bounds.width / cols;
-        let cell_h = bounds.height / rows;
-
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), BG);
-
-        for (r, line) in self.screen.lines.iter().enumerate() {
-            let y = r as f32 * cell_h;
-            for (c, cell) in line.iter().enumerate() {
-                let x = c as f32 * cell_w;
-                if cell.bg != [0x11, 0x13, 0x18] {
-                    frame.fill_rectangle(Point::new(x, y), Size::new(cell_w, cell_h), rgb(cell.bg));
-                }
-                if cell.c != ' ' && cell.c != '\0' {
-                    frame.fill_text(Text {
-                        content: cell.c.to_string(),
-                        position: Point::new(x, y),
-                        color: rgb(cell.fg),
-                        size: Pixels(FONT_SIZE),
-                        font: Font::MONOSPACE,
-                        shaping: Shaping::Advanced,
-                        ..Text::default()
-                    });
-                }
-            }
-        }
-
-        // Translucent overlay over the selected range — only the owning
-        // session's real (multi-cell) selection, so it neither bleeds across
-        // tabs (#7) nor paints a bare click (#6).
-        if let (Some((a, b)), true) = (state.range(), state.owner == Some(self.session)) {
-            let (start, end) = ordered(a, b);
-            for r in start.1..=end.1 {
-                let (c0, c1) = selection_span(start, end, r, self.screen.cols);
-                let x = c0 as f32 * cell_w;
-                let w = (c1.saturating_sub(c0) + 1) as f32 * cell_w;
-                frame.fill_rectangle(
-                    Point::new(x, r as f32 * cell_h),
-                    Size::new(w, cell_h),
-                    Color {
-                        a: 0.3,
-                        ..rgb([0x55, 0x88, 0xff])
-                    },
-                );
-            }
-        }
-
-        if let Some((cc, cr)) = self.screen.cursor {
-            let x = cc as f32 * cell_w;
-            let y = cr as f32 * cell_h;
-            frame.fill_rectangle(
-                Point::new(x, y),
-                Size::new(cell_w, cell_h),
-                Color {
-                    a: 0.6,
-                    ..rgb([0xd0, 0xd0, 0xd0])
-                },
-            );
-        }
-
-        vec![frame.into_geometry()]
-    }
-}
-
-fn rgb([r, g, b]: [u8; 3]) -> Color {
-    Color::from_rgb8(r, g, b)
-}
-
-/// The grid cell under the cursor, if any.
-fn cell_at(cursor: mouse::Cursor, bounds: Rectangle, screen: &Screen) -> Option<(u16, u16)> {
-    let p = cursor.position_in(bounds)?;
-    let cols = screen.cols.max(1);
-    let rows = screen.rows.max(1);
-    let cw = bounds.width / cols as f32;
-    let ch = bounds.height / rows as f32;
-    if cw <= 0.0 || ch <= 0.0 {
-        return None;
-    }
-    let c = (p.x / cw).floor().clamp(0.0, (cols - 1) as f32) as u16;
-    let r = (p.y / ch).floor().clamp(0.0, (rows - 1) as f32) as u16;
-    Some((c, r))
-}
-
-/// Order two cells in reading order (row, then column).
-fn ordered(a: (u16, u16), b: (u16, u16)) -> ((u16, u16), (u16, u16)) {
-    if (a.1, a.0) <= (b.1, b.0) {
-        (a, b)
-    } else {
-        (b, a)
-    }
-}
-
-/// The selected column span `[c0, c1]` on row `r` of an ordered selection.
-fn selection_span(start: (u16, u16), end: (u16, u16), r: u16, cols: u16) -> (u16, u16) {
-    let last = cols.saturating_sub(1);
-    if start.1 == end.1 {
-        (start.0.min(end.0), start.0.max(end.0))
-    } else if r == start.1 {
-        (start.0, last)
-    } else if r == end.1 {
-        (0, end.0)
-    } else {
-        (0, last)
-    }
-}
-
-/// Extract the selected text from the visible grid, trimming trailing blanks.
-fn selection_text(screen: &Screen, a: (u16, u16), b: (u16, u16)) -> String {
-    let (start, end) = ordered(a, b);
-    let mut out = String::new();
-    for r in start.1..=end.1 {
-        let Some(line) = screen.lines.get(r as usize) else {
-            continue;
-        };
-        let (c0, c1) = selection_span(start, end, r, screen.cols);
-        let c0 = c0 as usize;
-        let c1 = (c1 as usize).min(line.len().saturating_sub(1));
-        if c0 <= c1 {
-            let row: String = line[c0..=c1].iter().map(|cell| cell.c).collect();
-            out.push_str(row.trim_end());
-        }
-        if r != end.1 {
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// The label and dot colour for an activity status (FR8). Shared by the
-/// focused-terminal badge and the sidebar's per-session dot so both stay in
-/// sync.
-fn status_style(status: SessionStatus) -> (&'static str, Color) {
-    match status {
-        SessionStatus::Starting => ("démarrage", Color::from_rgb(0.55, 0.55, 0.6)),
-        SessionStatus::Busy => ("occupé", Color::from_rgb(0.95, 0.7, 0.2)),
-        SessionStatus::Idle => ("prêt", Color::from_rgb(0.3, 0.8, 0.4)),
-        SessionStatus::Attention => ("attention", Color::from_rgb(0.95, 0.35, 0.35)),
-        SessionStatus::Exited => ("terminé", Color::from_rgb(0.5, 0.5, 0.5)),
-    }
-}
-
-/// A small per-session activity badge (FR8): a coloured dot + label for the
-/// focused terminal. The same dot annotates live rows in the sidebar and each
-/// tab in the tab strip.
-fn status_badge(status: SessionStatus) -> Element<'static, Message> {
-    let (label, color) = status_style(status);
-    row![text("●").size(13).color(color), text(label).size(13)]
-        .spacing(6)
-        .align_y(iced::Center)
-        .into()
-}
-
-/// The keymap chord for a key press (FR9): the key's normalised name plus the
-/// modifier bits. `None` for keys we do not bind (so they reach the terminal).
-fn chord_of(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<KeyChord> {
-    let name = key_name(key)?;
-    let mut mods = 0u8;
-    if modifiers.control() {
-        mods |= keymap::MOD_CTRL;
-    }
-    if modifiers.alt() {
-        mods |= keymap::MOD_ALT;
-    }
-    if modifiers.shift() {
-        mods |= keymap::MOD_SHIFT;
-    }
-    if modifiers.logo() {
-        mods |= keymap::MOD_CMD;
-    }
-    Some(KeyChord::new(name, mods))
-}
-
-/// The keymap name of an iced key: a lowercased character, or a handful of
-/// named keys that bindings use. `None` for keys no shortcut can target.
-fn key_name(key: &keyboard::Key) -> Option<String> {
-    use keyboard::key::Named;
-    match key {
-        keyboard::Key::Character(c) => c
-            .chars()
-            .next()
-            .map(|ch| ch.to_ascii_lowercase().to_string()),
-        keyboard::Key::Named(Named::Tab) => Some("tab".to_string()),
-        keyboard::Key::Named(Named::Enter) => Some("enter".to_string()),
-        keyboard::Key::Named(Named::Escape) => Some("escape".to_string()),
-        _ => None,
-    }
-}
-
-/// Map an iced key to the framework-neutral [`TermKey`] the PTY codec speaks
-/// (`termherd_pty::key_bytes`). `None` for keys with no terminal sequence, so
-/// they reach no PTY. The byte protocol itself lives in the terminal adapter.
-fn to_term_key(key: &keyboard::Key) -> Option<TermKey> {
-    use keyboard::Key;
-    use keyboard::key::Named;
-    match key {
-        Key::Character(c) => c.chars().next().map(TermKey::Char),
-        Key::Named(Named::Enter) => Some(TermKey::Enter),
-        Key::Named(Named::Tab) => Some(TermKey::Tab),
-        Key::Named(Named::Backspace) => Some(TermKey::Backspace),
-        Key::Named(Named::Escape) => Some(TermKey::Escape),
-        Key::Named(Named::Space) => Some(TermKey::Space),
-        Key::Named(Named::ArrowUp) => Some(TermKey::Up),
-        Key::Named(Named::ArrowDown) => Some(TermKey::Down),
-        Key::Named(Named::ArrowLeft) => Some(TermKey::Left),
-        Key::Named(Named::ArrowRight) => Some(TermKey::Right),
-        Key::Named(Named::Home) => Some(TermKey::Home),
-        Key::Named(Named::End) => Some(TermKey::End),
-        Key::Named(Named::Delete) => Some(TermKey::Delete),
-        Key::Named(Named::PageUp) => Some(TermKey::PageUp),
-        Key::Named(Named::PageDown) => Some(TermKey::PageDown),
-        _ => None,
-    }
-}
-
-/// The PTY codec's view of the held modifiers (Cmd/Super never affects bytes).
-fn key_mods(m: keyboard::Modifiers) -> KeyMods {
-    KeyMods {
-        ctrl: m.control(),
-        alt: m.alt(),
-        shift: m.shift(),
-    }
-}
-
-/// Streams PTY output/exit into the subscription. Wraps the channel receiver
-/// so it can be moved into the stream once; the `Arc` identity makes the
-/// subscription stable across `view`/`update` cycles (it hashes by pointer).
-#[derive(Clone)]
-struct PtyOutput(Arc<Mutex<Option<UnboundedReceiver<PtyEvent>>>>);
-
-impl PtyOutput {
-    fn new(rx: UnboundedReceiver<PtyEvent>) -> Self {
-        Self(Arc::new(Mutex::new(Some(rx))))
-    }
-}
-
-impl Hash for PtyOutput {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (Arc::as_ptr(&self.0) as usize).hash(state);
-    }
-}
-
-/// One PTY-output stream: drains the receiver into [`Message`]s. The receiver
-/// is taken on first run; a duplicated subscription (there is only ever one)
-/// would idle forever rather than steal events.
-fn pty_stream(output: &PtyOutput) -> impl Stream<Item = Message> + use<> {
-    let taken = output.0.lock().ok().and_then(|mut slot| slot.take());
-    iced::stream::channel(
-        64,
-        |mut out: iced::futures::channel::mpsc::Sender<Message>| async move {
-            match taken {
-                Some(mut rx) => {
-                    while let Some(event) = rx.next().await {
-                        let message = match event {
-                            PtyEvent::Output { session, screen } => {
-                                Message::PtyOutput { session, screen }
-                            }
-                            PtyEvent::Status { session, status } => {
-                                Message::PtyStatus { session, status }
-                            }
-                            PtyEvent::Exited { session } => Message::PtyExited(session),
-                        };
-                        if out.send(message).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-                None => iced::futures::future::pending::<()>().await,
-            }
-        },
-    )
-}
-
-/// One fs-watch stream per projects root: forwards each debounced change
-/// burst as a [`Message::ProjectsChanged`]. The watcher lives as long as
-/// the stream; if it cannot start, the sidebar simply stops live-updating
-/// (logged, not fatal).
-// `&PathBuf` is imposed by `Subscription::run_with`, which passes `&D` to a
-// plain fn pointer — `&Path` would not match `for<'a> fn(&'a D)`.
-#[allow(clippy::ptr_arg)]
-fn watch_stream(root: &PathBuf) -> impl Stream<Item = Message> + use<> {
-    let root = root.clone();
-    iced::stream::channel(
-        4,
-        |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-            let (tx, mut rx) = iced::futures::channel::mpsc::unbounded::<()>();
-            match termherd_scan::watch_changes(root, WATCH_DEBOUNCE, move || {
-                let _ = tx.unbounded_send(());
-            }) {
-                Ok(handle) => {
-                    while rx.next().await.is_some() {
-                        if output.send(Message::ProjectsChanged).await.is_err() {
-                            break;
-                        }
-                    }
-                    drop(handle);
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "fs watch unavailable; sidebar will not live-update");
-                    iced::futures::future::pending::<()>().await;
-                }
-            }
-        },
-    )
-}
-
-/// Last path component — what the sidebar shows as the project name.
-fn project_label(path: &str) -> &str {
-    path.rsplit(['/', '\\'])
-        .find(|part| !part.is_empty())
-        .unwrap_or(path)
-}
-
-fn clip(s: &str, max: usize) -> String {
-    let cleaned: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
-    if cleaned.chars().count() <= max {
-        cleaned
-    } else {
-        let mut out: String = cleaned.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use iced::keyboard::key::Named;
-    use iced::keyboard::{Key, Modifiers};
-
-    #[test]
-    fn to_term_key_maps_characters_and_named_keys() {
-        // Characters carry their base char; the named keys the codec handles
-        // map to their `TermKey`.
-        assert_eq!(
-            to_term_key(&Key::Character("a".into())),
-            Some(TermKey::Char('a'))
-        );
-        assert_eq!(to_term_key(&Key::Named(Named::Enter)), Some(TermKey::Enter));
-        assert_eq!(to_term_key(&Key::Named(Named::ArrowUp)), Some(TermKey::Up));
-        assert_eq!(
-            to_term_key(&Key::Named(Named::PageDown)),
-            Some(TermKey::PageDown)
-        );
-        // Keys with no terminal sequence reach no PTY.
-        assert_eq!(to_term_key(&Key::Named(Named::F2)), None);
-        assert_eq!(to_term_key(&Key::Unidentified), None);
-    }
-
-    #[test]
-    fn key_mods_drops_the_platform_command_key() {
-        assert_eq!(
-            key_mods(Modifiers::CTRL | Modifiers::SHIFT),
-            KeyMods {
-                ctrl: true,
-                alt: false,
-                shift: true
-            }
-        );
-        // Cmd / Super (logo) never affects terminal bytes.
-        assert_eq!(key_mods(Modifiers::LOGO), KeyMods::default());
-    }
-
-    fn sid(n: u64) -> SessionId {
-        SessionId(std::num::NonZeroU64::new(n).expect("non-zero"))
-    }
-
-    /// A blank 4×2 screen; with 100×100 bounds each cell is 25×50 px, so
-    /// (10,10) lands in cell (0,0) and (60,60) in cell (2,1).
-    fn test_screen() -> Screen {
-        use termherd_pty::ScreenCell;
-        let cell = ScreenCell {
-            c: ' ',
-            fg: [0, 0, 0],
-            bg: [0, 0, 0],
-            bold: false,
-        };
-        Screen {
-            cols: 4,
-            rows: 2,
-            lines: vec![vec![cell; 4]; 2],
-            cursor: None,
-            scrolled: false,
-            bracketed_paste: false,
-        }
-    }
-
-    fn test_bounds() -> Rectangle {
-        Rectangle {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
-        }
-    }
-
-    fn at(x: f32, y: f32) -> mouse::Cursor {
-        mouse::Cursor::Available(Point::new(x, y))
-    }
-
-    fn press() -> canvas::Event {
-        canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-    }
-    fn release() -> canvas::Event {
-        canvas::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-    }
-    fn moved() -> canvas::Event {
-        canvas::Event::Mouse(mouse::Event::CursorMoved {
-            position: Point::new(60.0, 60.0),
-        })
-    }
-    fn wheel() -> canvas::Event {
-        canvas::Event::Mouse(mouse::Event::WheelScrolled {
-            delta: mouse::ScrollDelta::Lines { x: 0.0, y: 1.0 },
-        })
-    }
-
-    #[test]
-    fn wheel_scroll_only_acts_when_the_pointer_is_over_the_terminal() {
-        use canvas::Program;
-        let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-        };
-        // Pointer over the canvas → the scroll is published.
-        let mut state = TermState::default();
-        assert!(
-            view.update(&mut state, &wheel(), test_bounds(), at(50.0, 50.0))
-                .is_some()
-        );
-        // Pointer outside (e.g. over the sidebar) → ignored (#5).
-        let mut state = TermState::default();
-        assert!(
-            view.update(&mut state, &wheel(), test_bounds(), at(250.0, 50.0))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn a_bare_click_leaves_no_selection() {
-        // #6: press and release on the same cell, no drag.
-        use canvas::Program;
-        let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-        };
-        let mut state = TermState::default();
-        let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
-        let _ = view.update(&mut state, &release(), test_bounds(), at(10.0, 10.0));
-        assert!(state.range().is_none(), "a click is not a selection");
-        assert!(state.anchor.is_none() && state.head.is_none());
-    }
-
-    #[test]
-    fn a_drag_makes_a_selection_and_copies() {
-        use canvas::Program;
-        let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-        };
-        let mut state = TermState::default();
-        let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0)); // (0,0)
-        let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0)); // (2,1)
-        assert!(state.range().is_some());
-        // A real drag publishes a copy on release.
-        assert!(
-            view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0))
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn selection_does_not_bleed_across_sessions() {
-        // #7: a selection on one session must not show for another.
-        use canvas::Program;
-        let screen = test_screen();
-        let mut state = TermState::default();
-        let s1 = TerminalView {
-            screen: &screen,
-            session: sid(1),
-        };
-        let _ = s1.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
-        let _ = s1.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
-        assert_eq!(state.owner, Some(sid(1)));
-        assert!(state.range().is_some());
-        // The canvas now shows session 2; its first event drops the stale one.
-        let s2 = TerminalView {
-            screen: &screen,
-            session: sid(2),
-        };
-        let _ = s2.update(&mut state, &release(), test_bounds(), at(60.0, 60.0));
-        assert_eq!(state.owner, Some(sid(2)));
-        assert!(
-            state.range().is_none(),
-            "selection must not carry to another session"
-        );
-    }
-
-    #[test]
-    fn scrolling_clears_the_selection() {
-        // #8: a viewport-relative selection is dropped on scroll.
-        use canvas::Program;
-        let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-        };
-        let mut state = TermState::default();
-        let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
-        let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
-        assert!(state.range().is_some());
-        let _ = view.update(&mut state, &wheel(), test_bounds(), at(50.0, 50.0));
-        assert!(state.range().is_none(), "scroll must clear the selection");
-    }
-
-    #[test]
-    fn chord_of_builds_keymap_chords_from_key_events() {
-        let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
-        assert_eq!(
-            chord_of(&Key::Character("C".into()), ctrl_shift),
-            Some(KeyChord::new("c", keymap::MOD_CTRL | keymap::MOD_SHIFT))
-        );
-        assert_eq!(
-            chord_of(&Key::Named(Named::Tab), Modifiers::CTRL),
-            Some(KeyChord::new("tab", keymap::MOD_CTRL))
-        );
-        // Keys no shortcut targets carry no chord.
-        assert_eq!(chord_of(&Key::Named(Named::F2), Modifiers::default()), None);
     }
 }
 
