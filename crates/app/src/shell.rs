@@ -156,6 +156,10 @@ struct Shell {
     /// Killing a session is destructive, so the close button arms this and a
     /// confirmation bar must be accepted before the PTY is actually killed.
     closing: Option<usize>,
+    /// Whether Ctrl (or Cmd) is currently held — the link-open modifier (#28).
+    /// Tracked from keyboard events and handed to the terminal canvas so it can
+    /// highlight a hovered link and open it on click.
+    link_modifier: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -231,6 +235,8 @@ enum Message {
     },
     /// Close the doc viewer, returning to the terminal.
     CloseDoc,
+    /// Open a Ctrl/Cmd+clicked terminal link in the OS default handler (#28).
+    OpenUrl(String),
 }
 
 impl Shell {
@@ -261,6 +267,7 @@ impl Shell {
             docs: crate::docs::discover(&[]),
             viewing: None,
             closing: None,
+            link_modifier: false,
         }
     }
 
@@ -298,6 +305,8 @@ impl Shell {
                     crate::metadata_store::save(&metadata);
                     Ok(())
                 }
+                // Opening a link is an OS handoff, not a PTY call (#28).
+                Effect::OpenUrl(url) => open_url(&url),
             };
             if let Err(error) = outcome {
                 tracing::warn!(%error, "pty effect failed");
@@ -399,7 +408,14 @@ impl Shell {
                 let _ = self.core.apply(termherd_core::Event::PtyExited(session));
                 Task::none()
             }
-            Message::Key(event) => self.on_key(event),
+            Message::Key(event) => {
+                // Keep the link-open modifier state current regardless of focus,
+                // so a Ctrl/Cmd+hover highlights links even before the first key
+                // reaches the terminal (#28).
+                let modifiers = event_modifiers(&event);
+                self.link_modifier = modifiers.control() || modifiers.logo();
+                self.on_key(event)
+            }
             Message::FocusTerminal => {
                 self.focus = Focus::Terminal;
                 Task::none()
@@ -507,6 +523,10 @@ impl Shell {
             Message::CloseDoc => {
                 self.viewing = None;
                 Task::none()
+            }
+            Message::OpenUrl(url) => {
+                let effects = self.core.apply(termherd_core::Event::OpenUrl(url));
+                self.perform(effects)
             }
         }
     }
@@ -877,9 +897,13 @@ impl Shell {
 
         let body: Element<'_, Message> = match screen {
             Some((session, screen)) => {
-                let canvas = Canvas::new(TerminalView { screen, session })
-                    .width(Fill)
-                    .height(Fill);
+                let canvas = Canvas::new(TerminalView {
+                    screen,
+                    session,
+                    link_modifier: self.link_modifier,
+                })
+                .width(Fill)
+                .height(Fill);
                 mouse_area(canvas).on_press(Message::FocusTerminal).into()
             }
             None => {
@@ -990,6 +1014,9 @@ struct TerminalView<'a> {
     /// reused across tabs, so the selection state is tagged with its owner to
     /// keep a selection from bleeding onto another tab (#7).
     session: SessionId,
+    /// Whether the link-open modifier (Ctrl/Cmd) is held, so a hovered link
+    /// highlights and a click opens it instead of selecting text (#28).
+    link_modifier: bool,
 }
 
 /// Per-canvas selection state: the drag in progress, the last range, and the
@@ -1002,6 +1029,19 @@ struct TermState {
     anchor: Option<(u16, u16)>,
     head: Option<(u16, u16)>,
     owner: Option<SessionId>,
+    /// The link currently under the pointer while the modifier is held (#28):
+    /// its row, column span `[start, end)`, and the URL to open on click.
+    hover: Option<HoverLink>,
+}
+
+/// A link the pointer is hovering with Ctrl/Cmd held — what to highlight and,
+/// on click, what to open (#28).
+#[derive(Clone, PartialEq, Eq)]
+struct HoverLink {
+    row: u16,
+    start: u16,
+    end: u16,
+    url: String,
 }
 
 impl TermState {
@@ -1062,16 +1102,34 @@ impl canvas::Program<Message> for TerminalView<'_> {
             // Drag to select; the press is not captured so the wrapping
             // `mouse_area` still hands keyboard focus to the terminal.
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
-                cell_at(cursor, bounds, self.screen).map(|cell| {
-                    state.selecting = true;
-                    state.anchor = Some(cell);
-                    state.head = Some(cell);
-                    canvas::Action::request_redraw()
-                })
+                let (col, row) = cell_at(cursor, bounds, self.screen)?;
+                // Ctrl/Cmd+click on a link opens it rather than selecting (#28).
+                if self.link_modifier
+                    && let Some(link) = link_at(self.screen, col, row)
+                {
+                    return Some(canvas::Action::publish(Message::OpenUrl(link.url)));
+                }
+                state.selecting = true;
+                state.anchor = Some((col, row));
+                state.head = Some((col, row));
+                Some(canvas::Action::request_redraw())
             }
             mouse::Event::CursorMoved { .. } if state.selecting => {
                 cell_at(cursor, bounds, self.screen).map(|cell| {
                     state.head = Some(cell);
+                    canvas::Action::request_redraw()
+                })
+            }
+            // Track the link under the pointer while the modifier is held so the
+            // draw pass can highlight it and the pointer turns into a hand (#28).
+            mouse::Event::CursorMoved { .. } => {
+                let next = self
+                    .link_modifier
+                    .then(|| cell_at(cursor, bounds, self.screen))
+                    .flatten()
+                    .and_then(|(col, row)| link_at(self.screen, col, row));
+                (next != state.hover).then(|| {
+                    state.hover = next;
                     canvas::Action::request_redraw()
                 })
             }
@@ -1150,6 +1208,19 @@ impl canvas::Program<Message> for TerminalView<'_> {
             }
         }
 
+        // Underline the hovered link while the modifier is held, the classic
+        // clickable-link affordance (#28). Gated on the live modifier flag so
+        // releasing Ctrl/Cmd clears the highlight even without a mouse move.
+        if self.link_modifier
+            && state.owner == Some(self.session)
+            && let Some(link) = &state.hover
+        {
+            let x = link.start as f32 * cell_w;
+            let w = (link.end.saturating_sub(link.start)) as f32 * cell_w;
+            let y = (link.row as f32 + 1.0) * cell_h - 1.5;
+            frame.fill_rectangle(Point::new(x, y), Size::new(w, 1.5), rgb([0x55, 0x88, 0xff]));
+        }
+
         if let Some((cc, cr)) = self.screen.cursor {
             let x = cc as f32 * cell_w;
             let y = cr as f32 * cell_h;
@@ -1164,6 +1235,21 @@ impl canvas::Program<Message> for TerminalView<'_> {
         }
 
         vec![frame.into_geometry()]
+    }
+
+    /// A hand pointer over a hovered link with the modifier held (#28), so the
+    /// link is visibly clickable; the normal pointer otherwise.
+    fn mouse_interaction(
+        &self,
+        state: &TermState,
+        _bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> mouse::Interaction {
+        if self.link_modifier && state.owner == Some(self.session) && state.hover.is_some() {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
+        }
     }
 }
 
@@ -1184,6 +1270,24 @@ fn cell_at(cursor: mouse::Cursor, bounds: Rectangle, screen: &Screen) -> Option<
     let c = (p.x / cw).floor().clamp(0.0, (cols - 1) as f32) as u16;
     let r = (p.y / ch).floor().clamp(0.0, (rows - 1) as f32) as u16;
     Some((c, r))
+}
+
+/// The link under grid cell `(col, row)`, if any (#28). Builds the row's text
+/// from its cells — one char per cell, so a `core::links` char-index span maps
+/// straight onto columns — and returns the span containing `col`.
+fn link_at(screen: &Screen, col: u16, row: u16) -> Option<HoverLink> {
+    let line = screen.lines.get(row as usize)?;
+    let text: String = line.iter().map(|cell| cell.c).collect();
+    let span = termherd_core::links::detect(&text)
+        .into_iter()
+        .find(|span| span.contains(&(col as usize)))?;
+    let url: String = line[span.clone()].iter().map(|cell| cell.c).collect();
+    Some(HoverLink {
+        row,
+        start: span.start as u16,
+        end: span.end as u16,
+        url,
+    })
 }
 
 /// Order two cells in reading order (row, then column).
@@ -1323,6 +1427,49 @@ fn key_mods(m: keyboard::Modifiers) -> KeyMods {
         ctrl: m.control(),
         alt: m.alt(),
         shift: m.shift(),
+    }
+}
+
+/// The modifier state carried by a keyboard event, if it carries one. Used to
+/// keep the link-open modifier tracked across press / release / change (#28).
+fn event_modifiers(event: &keyboard::Event) -> keyboard::Modifiers {
+    match event {
+        keyboard::Event::KeyPressed { modifiers, .. }
+        | keyboard::Event::KeyReleased { modifiers, .. }
+        | keyboard::Event::ModifiersChanged(modifiers) => *modifiers,
+    }
+}
+
+/// Hand a detected link to the OS default handler (#28). Fire-and-forget: the
+/// child opener is spawned, not waited on. `url` has already been validated by
+/// `core` (a recognised scheme, trimmed), and is always passed as a single
+/// argument — never through a shell — so it can't be reinterpreted.
+fn open_url(url: &str) -> Result<(), termherd_core::ports::PtyError> {
+    use std::process::Command;
+    let spawn = |mut cmd: Command| {
+        cmd.spawn()
+            .map(|_| ())
+            .map_err(|e| termherd_core::ports::PtyError::Io(e.to_string()))
+    };
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = Command::new("open");
+        cmd.arg(url);
+        spawn(cmd)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // `start` treats the first quoted argument as the window title, so the
+        // empty "" keeps the URL from being swallowed as one.
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "start", "", url]);
+        spawn(cmd)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let mut cmd = Command::new("xdg-open");
+        cmd.arg(url);
+        spawn(cmd)
     }
 }
 
@@ -1526,6 +1673,7 @@ mod tests {
         let view = TerminalView {
             screen: &screen,
             session: sid(1),
+            link_modifier: false,
         };
         // Pointer over the canvas → the scroll is published.
         let mut state = TermState::default();
@@ -1549,6 +1697,7 @@ mod tests {
         let view = TerminalView {
             screen: &screen,
             session: sid(1),
+            link_modifier: false,
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
@@ -1564,6 +1713,7 @@ mod tests {
         let view = TerminalView {
             screen: &screen,
             session: sid(1),
+            link_modifier: false,
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0)); // (0,0)
@@ -1585,6 +1735,7 @@ mod tests {
         let s1 = TerminalView {
             screen: &screen,
             session: sid(1),
+            link_modifier: false,
         };
         let _ = s1.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         let _ = s1.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
@@ -1594,6 +1745,7 @@ mod tests {
         let s2 = TerminalView {
             screen: &screen,
             session: sid(2),
+            link_modifier: false,
         };
         let _ = s2.update(&mut state, &release(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(2)));
@@ -1611,6 +1763,7 @@ mod tests {
         let view = TerminalView {
             screen: &screen,
             session: sid(1),
+            link_modifier: false,
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
@@ -1633,6 +1786,107 @@ mod tests {
         );
         // Keys no shortcut targets carry no chord.
         assert_eq!(chord_of(&Key::Named(Named::F2), Modifiers::default()), None);
+    }
+
+    /// A single-row screen holding `line`, one char per cell (#28 link tests).
+    fn screen_from(line: &str) -> Screen {
+        use termherd_pty::ScreenCell;
+        let cells: Vec<ScreenCell> = line
+            .chars()
+            .map(|c| ScreenCell {
+                c,
+                fg: [0, 0, 0],
+                bg: [0, 0, 0],
+                bold: false,
+            })
+            .collect();
+        Screen {
+            cols: cells.len() as u16,
+            rows: 1,
+            lines: vec![cells],
+            cursor: None,
+            scrolled: false,
+            bracketed_paste: false,
+        }
+    }
+
+    /// A cursor over the centre of column `col` on the single row, given a line
+    /// of `len` chars filling the 100px-wide test bounds.
+    fn at_col(len: usize, col: usize) -> mouse::Cursor {
+        let cw = 100.0 / len as f32;
+        at((col as f32 + 0.5) * cw, 50.0)
+    }
+
+    #[test]
+    fn link_at_finds_the_url_under_a_column() {
+        // #28: the column maps onto the detected span and yields its URL.
+        let screen = screen_from("see https://ex.io now");
+        let link = link_at(&screen, 6, 0).expect("column 6 is inside the URL");
+        assert_eq!(link.url, "https://ex.io");
+        assert_eq!((link.start, link.end), (4, 17));
+        // A column off the URL has no link.
+        assert!(link_at(&screen, 0, 0).is_none());
+    }
+
+    #[test]
+    fn modifier_click_on_a_link_opens_instead_of_selecting() {
+        // #28: Ctrl/Cmd+click publishes an open and starts no selection.
+        use canvas::Program;
+        let screen = screen_from("https://ex.io");
+        let len = "https://ex.io".len();
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: true,
+        };
+        let mut state = TermState::default();
+        let action = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
+        assert!(action.is_some(), "a link click yields an action");
+        assert!(!state.selecting && state.anchor.is_none());
+    }
+
+    #[test]
+    fn modifier_click_off_a_link_still_selects() {
+        // #28: holding the modifier away from any link falls back to selection.
+        use canvas::Program;
+        let screen = screen_from("plain text only");
+        let len = "plain text only".len();
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: true,
+        };
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
+        assert!(state.selecting && state.anchor.is_some());
+    }
+
+    #[test]
+    fn hover_highlights_a_link_only_with_the_modifier_held() {
+        use canvas::Program;
+        let screen = screen_from("https://ex.io");
+        let len = "https://ex.io".len();
+        // Modifier held → moving over the link records it for highlighting.
+        let held = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: true,
+        };
+        let mut state = TermState::default();
+        let _ = held.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
+        assert_eq!(
+            state.hover.as_ref().map(|h| h.url.as_str()),
+            Some("https://ex.io")
+        );
+        // No modifier → no hovered link is tracked.
+        let bare = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: false,
+        };
+        let mut state = TermState::default();
+        let _ = bare.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
+        assert!(state.hover.is_none());
     }
 }
 

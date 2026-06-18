@@ -6,6 +6,7 @@
 pub mod app;
 pub mod browser;
 pub mod keymap;
+pub mod links;
 pub mod metadata;
 pub mod ports;
 pub mod workspace;
