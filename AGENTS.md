@@ -106,3 +106,21 @@ exists). Do not relax them locally.
 - Commit messages: no "Claude" signature (per global user instruction).
 - Status of every feature is tracked in `ROADMAP.md` (MoSCoW from PRD §5).
   Check the ticked/unticked state there before assuming something is built.
+
+## How we track work
+
+Three layers, each owning one thing — no item lives fully in two places:
+
+- **`ROADMAP.md` (+ `docs/PRD.md`)** — the *what* and *why*: features, MoSCoW
+  bucket, shipped history with rationale, and design-first epics not yet scoped
+  enough to act on (e.g. `F-i18n`, `F-favorites`). Source of truth for whether
+  a feature exists.
+- **GitHub issues** — the *unit of work*: actionable, scoped tickets. Labelled
+  `bug`/`enhancement` and a priority `P0`/`P1`/`P2`.
+- **GitHub Project board** — the *what's in flight*: a view over the issues
+  (status columns seeded from the `P` labels). It holds no truth of its own.
+
+The one rule that keeps it sane: an epic **graduates from `ROADMAP.md` to an
+issue only when it's scoped enough to do.** A design-first item lives only in
+the roadmap until then; once filed as an issue it appears on the board. Mark
+the roadmap entry done when its issues close.
