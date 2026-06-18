@@ -1,9 +1,15 @@
 //! The iced shell — intentionally thin (ARCHITECTURE §8): translate GUI
 //! messages into `core` events, perform the returned `core` effects against
-//! the adapters, and render `core` state. M1 gave the session browser; M2
-//! adds the embedded terminal: a colour grid drawn on a `canvas`, raw
-//! keyboard routed to the focused PTY, resize propagation and OSC status.
-//! Scrollback and selection are the remaining FR4 items.
+//! the adapters, and render `core` state.
+//!
+//! This module is the state-transition half — the `Shell` struct, the
+//! `Message` enum, `update`/`subscription` and the command methods. The rest
+//! is split by concern into submodules:
+//!
+//! - [`view`] — how state is rendered (sidebar, main pane, tabs).
+//! - [`terminal`] — the embedded terminal `canvas::Program` + link opener.
+//! - [`input`] — keyboard translation (chords / `TermKey` / modifiers).
+//! - [`streams`] — the PTY-output and fs-watch subscription sources.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
