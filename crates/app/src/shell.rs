@@ -662,12 +662,21 @@ impl Shell {
         self.perform(effects)
     }
 
+    /// Whether raw keyboard / IME input should reach the focused terminal: it
+    /// holds focus and no overlay (inline rename, close confirmation) is up.
+    /// Focus stays `Terminal` while those overlays are open, so they have to be
+    /// excluded explicitly — this is the predicate [`Shell::on_key`] enforces
+    /// step by step, shared so the IME path can't drift from it (#34).
+    fn accepts_terminal_input(&self) -> bool {
+        self.focus == Focus::Terminal && self.renaming.is_none() && self.closing.is_none()
+    }
+
     /// Route IME-composed text (dead/accent keys, CJK) to the focused terminal
-    /// as typed bytes (#34). Only the terminal requests an input method, so a
-    /// commit only arrives while it is focused, but guard for it anyway — the
-    /// composing overlay (search / rename) keeps its own typing.
+    /// as typed bytes (#34). A commit only fires while the terminal accepts
+    /// input (see [`Shell::accepts_terminal_input`]), but guard anyway so a
+    /// composing overlay (rename / close confirmation) keeps its own typing.
     fn on_ime_commit(&mut self, text: String) -> Task<Message> {
-        if self.focus != Focus::Terminal || text.is_empty() {
+        if !self.accepts_terminal_input() || text.is_empty() {
             return Task::none();
         }
         let Some(session) = self.core.workspace.focused_session() else {
@@ -850,6 +859,26 @@ mod key_routing {
         // commit must not leak into the terminal when it is not focused (#34).
         let (mut shell, pty) = shell_with_terminal();
         shell.focus = Focus::Search;
+        let _ = shell.update(Message::ImeCommit("ê".to_string()));
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn ime_commit_does_not_leak_into_an_inline_rename() {
+        // Focus stays on the terminal while renaming inline, so a dead-key
+        // composition must not reach the PTY — the rename field owns it (#34).
+        let (mut shell, pty) = shell_with_terminal();
+        shell.renaming = Some(("sid".to_string(), "café".to_string()));
+        let _ = shell.update(Message::ImeCommit("é".to_string()));
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn ime_commit_is_swallowed_by_a_pending_close_confirmation() {
+        // A close confirmation captures input (#9); an IME commit must not slip
+        // past it to the terminal even though focus is still on it (#34).
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::RequestCloseTab(0));
         let _ = shell.update(Message::ImeCommit("ê".to_string()));
         assert!(pty.writes().is_empty());
     }

@@ -226,10 +226,14 @@ impl Shell {
                 .width(Fill)
                 .height(Fill);
                 // Wrap the grid so the platform IME is on while the terminal is
-                // focused — without it dead/accent keys never compose (#34).
+                // focused — without it dead/accent keys never compose (#34). Off
+                // while an overlay (inline rename / close confirmation) is up, so
+                // its own field owns composition and a dead key can't leak to the
+                // PTY; focus stays `Terminal` underneath those, so they must be
+                // excluded explicitly — the same guard `on_key` applies.
                 let composed = ime_area(
                     canvas,
-                    self.focus == Focus::Terminal,
+                    self.accepts_terminal_input(),
                     screen.cursor,
                     Size::new(CELL_W, CELL_H),
                     Message::ImeCommit,
