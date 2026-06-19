@@ -349,7 +349,7 @@ impl PtyHost for PtyManager {
         if let Some(cwd) = &spec.cwd {
             cmd.cwd(cwd);
         }
-        cmd.env("TERM", "xterm-256color");
+        apply_terminal_env(&mut cmd);
 
         let child = pair
             .slave
@@ -501,6 +501,26 @@ fn reconcile_kill(result: std::io::Result<()>) -> Result<(), PtyError> {
         Err(e) if e.raw_os_error() == Some(ESRCH) => Ok(()),
         Err(e) => Err(PtyError::Io(e.to_string())),
     }
+}
+
+/// What [`apply_terminal_env`] advertises as the host terminal. Claude CLI only
+/// emits its status / notification OSC sequences (the busy / idle / attention
+/// signals [`crate::osc`] decodes, FR8) when it believes it is running under
+/// iTerm2 — it sniffs `TERM_PROGRAM`. Without this the status stays on whatever
+/// it was at launch (`Starting`), which is the "tab status stuck" bug (#18).
+const TERM_PROGRAM: &str = "iTerm.app";
+/// A recent iTerm2 version, so any minimum-version gating on the CLI side also
+/// passes. The exact value only has to read as "new enough".
+const TERM_PROGRAM_VERSION: &str = "3.5.0";
+
+/// Set the environment a Claude session expects: a colour-capable `TERM`, and
+/// the iTerm2 identity that unlocks its OSC status stream (#18). Kept separate
+/// from [`PtyManager::spawn`] so the env contract is unit-testable without a
+/// real PTY.
+fn apply_terminal_env(cmd: &mut CommandBuilder) {
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("TERM_PROGRAM", TERM_PROGRAM);
+    cmd.env("TERM_PROGRAM_VERSION", TERM_PROGRAM_VERSION);
 }
 
 /// The PTY reader thread: blocking-reads bytes and forwards them to the
@@ -833,6 +853,27 @@ mod tests {
             cols: 80,
             rows: 24,
         }
+    }
+
+    #[test]
+    fn terminal_env_advertises_iterm2_for_status_osc() {
+        // #18: Claude only emits its status OSC stream under iTerm2, so the
+        // spawned command must claim that identity — otherwise every activity
+        // indicator stays frozen on the launch status.
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        apply_terminal_env(&mut cmd);
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM"),
+            Some(std::ffi::OsStr::new("iTerm.app"))
+        );
+        assert!(
+            cmd.get_env("TERM_PROGRAM_VERSION").is_some(),
+            "a version must accompany TERM_PROGRAM for any version gating"
+        );
+        assert_eq!(
+            cmd.get_env("TERM"),
+            Some(std::ffi::OsStr::new("xterm-256color"))
+        );
     }
 
     #[cfg(not(windows))]
