@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (tab status)
+
+- Tab activity dots (and the focused-terminal badge) stayed frozen on the
+  status a session had when it opened (#18). Claude CLI only emits its
+  busy/idle/attention OSC status stream when it detects iTerm2 as the host, so
+  the PTY adapter now advertises `TERM_PROGRAM=iTerm.app` (with a version) on
+  every spawned session. The headless status plumbing was already correct; it
+  simply never received any signals to react to.
+
 ### Added (terminal links)
 
 - Terminal links are now clickable (#28). URLs in terminal output
