@@ -10,10 +10,11 @@ use iced::widget::canvas::Canvas;
 use iced::widget::{
     button, checkbox, column, container, mouse_area, row, scrollable, text, text_input,
 };
-use iced::{Color, Element, Fill, Font};
+use iced::{Color, Element, Fill, Font, Size};
 use termherd_core::SessionStatus;
 
-use super::terminal::TerminalView;
+use super::ime::ime_area;
+use super::terminal::{CELL_H, CELL_W, TerminalView};
 use super::{Focus, Message, Shell, rename_id, search_id};
 
 impl Shell {
@@ -247,7 +248,20 @@ impl Shell {
                 })
                 .width(Fill)
                 .height(Fill);
-                mouse_area(canvas).on_press(Message::FocusTerminal).into()
+                // Wrap the grid so the platform IME is on while the terminal is
+                // focused — without it dead/accent keys never compose (#34). Off
+                // while an overlay (inline rename / close confirmation) is up, so
+                // its own field owns composition and a dead key can't leak to the
+                // PTY; focus stays `Terminal` underneath those, so they must be
+                // excluded explicitly — the same guard `on_key` applies.
+                let composed = ime_area(
+                    canvas,
+                    self.accepts_terminal_input(),
+                    screen.cursor,
+                    Size::new(CELL_W, CELL_H),
+                    Message::ImeCommit,
+                );
+                mouse_area(composed).on_press(Message::FocusTerminal).into()
             }
             None => {
                 let total: usize = self.core.projects.iter().map(|g| g.sessions.len()).sum();
