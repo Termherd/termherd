@@ -149,6 +149,11 @@ struct Shell {
     /// Killing a session is destructive, so the close button arms this and a
     /// confirmation bar must be accepted before the PTY is actually killed.
     closing: Option<usize>,
+    /// An archive awaiting confirmation: the session id to archive, or `None`
+    /// (#20). Archiving is easy to trigger by accident, so the archive button
+    /// arms this and a confirmation bar must be accepted first. Un-archiving is
+    /// harmless and stays a one-click action.
+    archiving: Option<String>,
     /// Whether Ctrl (or Cmd) is currently held — the link-open modifier (#28).
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
@@ -203,8 +208,16 @@ enum Message {
     CancelClose,
     /// Toggle a browsed session's star (F-session-metadata).
     ToggleStar(String),
-    /// Toggle a browsed session's archived flag (F-session-metadata).
+    /// Toggle a browsed session's archived flag (F-session-metadata). Used
+    /// directly only to un-archive (a harmless one-click restore); archiving
+    /// goes through the confirmation flow below (#20).
     ToggleArchive(String),
+    /// Ask to archive a session — arms the confirmation bar (#20).
+    RequestArchive(String),
+    /// Confirm the pending archive, hiding the session (#20).
+    ConfirmArchive,
+    /// Dismiss the archive confirmation without archiving (#20).
+    CancelArchive,
     /// Show or hide archived sessions in the browser (F-session-metadata).
     ShowArchived(bool),
     /// Begin renaming a session inline, seeded with its current title.
@@ -260,6 +273,7 @@ impl Shell {
             docs: crate::docs::discover(&[]),
             viewing: None,
             closing: None,
+            archiving: None,
             link_modifier: false,
         }
     }
@@ -321,8 +335,11 @@ impl Shell {
             }));
         let spawn = self.perform(effects);
         self.focus = Focus::Terminal;
-        // Opening another session drops any pending close confirmation (#9).
+        // Opening another session drops any pending confirmation (#9, #20): a
+        // stray Enter in the terminal must not confirm a sidebar prompt that's
+        // no longer in view.
         self.closing = None;
+        self.archiving = None;
         Task::batch([spawn, self.resize_focused()])
     }
 
@@ -437,8 +454,9 @@ impl Shell {
             Message::ActivateTab(index) => {
                 let _ = self.core.apply(termherd_core::Event::ActivateTab(index));
                 self.focus = Focus::Terminal;
-                // Switching tabs drops any pending close confirmation (#9).
+                // Switching tabs drops any pending confirmation (#9, #20).
                 self.closing = None;
+                self.archiving = None;
                 self.resize_focused()
             }
             Message::Paste(content) => {
@@ -473,6 +491,26 @@ impl Shell {
                     .core
                     .apply(termherd_core::Event::ToggleArchive(session));
                 self.perform(effects)
+            }
+            Message::RequestArchive(session) => {
+                self.archiving = Some(session);
+                Task::none()
+            }
+            Message::ConfirmArchive => match self.archiving.take() {
+                // Only archive a session still on the scanned list: a rescan
+                // could have dropped it while the prompt was up, and toggling a
+                // vanished id would persist phantom metadata for it (#20).
+                Some(session) if self.is_browsable(&session) => {
+                    let effects = self
+                        .core
+                        .apply(termherd_core::Event::ToggleArchive(session));
+                    self.perform(effects)
+                }
+                _ => Task::none(),
+            },
+            Message::CancelArchive => {
+                self.archiving = None;
+                Task::none()
             }
             Message::ShowArchived(show) => {
                 let _ = self
@@ -522,6 +560,16 @@ impl Shell {
                 self.perform(effects)
             }
         }
+    }
+
+    /// Whether a session id is still on the scanned project list — used to
+    /// guard the archive confirmation against a session a rescan removed while
+    /// the prompt was up (#20).
+    fn is_browsable(&self, session: &str) -> bool {
+        self.core
+            .projects
+            .iter()
+            .any(|group| group.sessions.iter().any(|s| s.session_id == session))
     }
 
     /// Arm the confirmation bar for the tab at `index` (#9). No-op for an
@@ -615,6 +663,22 @@ impl Shell {
                     }
                     keyboard::Key::Named(keyboard::key::Named::Escape) => {
                         self.closing = None;
+                    }
+                    _ => {}
+                }
+            }
+            return Task::none();
+        }
+        // A pending archive confirmation likewise owns the keyboard (#20):
+        // Enter archives, Escape cancels, other keys are swallowed.
+        if self.archiving.is_some() {
+            if let keyboard::Event::KeyPressed { key, .. } = &event {
+                match key {
+                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                        return self.update(Message::ConfirmArchive);
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                        self.archiving = None;
                     }
                     _ => {}
                 }
@@ -876,5 +940,126 @@ mod key_routing {
         let (mut shell, _pty) = shell_with_terminal();
         let _ = shell.update(Message::RequestCloseTab(7));
         assert_eq!(shell.closing, None, "a stale index must not arm a close");
+    }
+
+    /// Feed one browsable session into the shell's core so the archive flow
+    /// has something to act on.
+    fn browse_one(shell: &mut Shell, id: &str) {
+        let record = SessionRecord {
+            session_id: id.to_string(),
+            project_path: "/tmp/project".to_string(),
+            digest: termherd_claude::digest::SessionDigest {
+                summary: "a session".to_string(),
+                message_count: 1,
+                text_content: String::new(),
+                slug: None,
+                custom_title: None,
+                ai_title: None,
+            },
+            modified: None,
+        };
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(vec![record]));
+    }
+
+    #[test]
+    fn requesting_an_archive_only_arms_it_confirming_archives() {
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_one(&mut shell, "sess");
+        // Clicking the archive control arms the confirmation but archives nothing.
+        let _ = shell.update(Message::RequestArchive("sess".into()));
+        assert_eq!(shell.archiving.as_deref(), Some("sess"));
+        assert!(
+            !shell.core.is_archived("sess"),
+            "arming must not archive the session"
+        );
+        // Accepting the confirmation archives it and clears the pending state.
+        let _ = shell.update(Message::ConfirmArchive);
+        assert!(shell.core.is_archived("sess"));
+        assert_eq!(shell.archiving, None);
+    }
+
+    #[test]
+    fn cancelling_an_archive_leaves_the_session_unarchived() {
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_one(&mut shell, "sess");
+        let _ = shell.update(Message::RequestArchive("sess".into()));
+        let _ = shell.update(Message::CancelArchive);
+        assert_eq!(shell.archiving, None);
+        assert!(!shell.core.is_archived("sess"));
+    }
+
+    #[test]
+    fn un_archiving_stays_one_click() {
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_one(&mut shell, "sess");
+        // Archive directly via the core to set up an archived session.
+        let _ = shell.update(Message::RequestArchive("sess".into()));
+        let _ = shell.update(Message::ConfirmArchive);
+        assert!(shell.core.is_archived("sess"));
+        // The un-archive path is a plain toggle with no confirmation.
+        let _ = shell.update(Message::ToggleArchive("sess".into()));
+        assert!(!shell.core.is_archived("sess"));
+        assert_eq!(shell.archiving, None);
+    }
+
+    #[test]
+    fn the_archive_confirmation_owns_the_keyboard() {
+        // Escape dismisses the prompt without archiving.
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_one(&mut shell, "sess");
+        let _ = shell.update(Message::RequestArchive("sess".into()));
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+        assert_eq!(shell.archiving, None);
+        assert!(!shell.core.is_archived("sess"));
+
+        // Enter confirms; meanwhile a plain key is swallowed, not sent.
+        let (mut shell, pty) = shell_with_terminal();
+        browse_one(&mut shell, "sess");
+        let _ = shell.update(Message::RequestArchive("sess".into()));
+        let _ = shell.on_key(press(
+            Key::Character("a".into()),
+            Modifiers::default(),
+            Some("a"),
+        ));
+        assert!(
+            pty.writes().is_empty(),
+            "keys must not reach the PTY mid-confirm"
+        );
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::default(), None));
+        assert!(shell.core.is_archived("sess"));
+        assert_eq!(shell.archiving, None);
+    }
+
+    #[test]
+    fn launching_a_session_drops_a_pending_archive() {
+        // Arming an archive then opening a terminal must clear the prompt, so a
+        // later Enter goes to the PTY instead of confirming the stale archive.
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_one(&mut shell, "sess");
+        let _ = shell.update(Message::RequestArchive("sess".into()));
+        let _ = shell.launch("/tmp/project".to_string(), None);
+        assert_eq!(shell.archiving, None);
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::default(), None));
+        assert!(
+            !shell.core.is_archived("sess"),
+            "a terminal Enter must not confirm a dropped archive prompt"
+        );
+    }
+
+    #[test]
+    fn confirming_a_vanished_session_archives_nothing() {
+        // A rescan can drop the armed session while the prompt is up; confirming
+        // then must not persist phantom archived metadata for it.
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_one(&mut shell, "sess");
+        let _ = shell.update(Message::RequestArchive("sess".into()));
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(Vec::new()));
+        let _ = shell.update(Message::ConfirmArchive);
+        assert!(!shell.core.is_archived("sess"));
+        assert_eq!(shell.archiving, None);
     }
 }

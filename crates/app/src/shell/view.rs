@@ -162,8 +162,15 @@ impl Shell {
                         .padding(0)
                 };
 
+                // Archiving is deliberate (#20): arm the confirmation bar.
+                // Un-archiving is a harmless restore, so it stays one-click.
+                let archive_msg = if archived {
+                    Message::ToggleArchive(s.session_id.clone())
+                } else {
+                    Message::RequestArchive(s.session_id.clone())
+                };
                 let archive = button(text(if archived { "⊞" } else { "⊟" }).size(12))
-                    .on_press(Message::ToggleArchive(s.session_id.clone()))
+                    .on_press(archive_msg)
                     .style(button::text)
                     .padding(0);
 
@@ -175,19 +182,35 @@ impl Shell {
             }
             list = list.push(g);
         }
-        container(
-            column![
-                search,
-                titles_only,
-                show_archived,
-                scrollable(list).height(Fill)
-            ]
-            .spacing(8)
-            .padding(8),
-        )
-        .width(300)
-        .style(container::rounded_box)
-        .into()
+        let mut chrome = column![search, titles_only, show_archived].spacing(8);
+        if let Some(confirm) = self.archive_confirmation() {
+            chrome = chrome.push(confirm);
+        }
+        container(chrome.push(scrollable(list).height(Fill)).padding(8))
+            .width(300)
+            .style(container::rounded_box)
+            .into()
+    }
+
+    /// The archive-confirmation bar (#20), shown in the sidebar when an archive
+    /// is armed: it names the session about to be hidden and offers Archiver
+    /// (confirm) / Annuler. `None` when nothing is pending.
+    fn archive_confirmation(&self) -> Option<Element<'_, Message>> {
+        let session = self.archiving.as_deref()?;
+        let title = self
+            .core
+            .projects
+            .iter()
+            .flat_map(|group| &group.sessions)
+            .find(|s| s.session_id == session)
+            .map_or_else(|| session.to_owned(), |s| self.core.session_title(s));
+        Some(Self::confirmation_bar(
+            format!("Archiver « {} » ?", clip(&title, 24)),
+            "Archiver",
+            button::primary,
+            Message::ConfirmArchive,
+            Message::CancelArchive,
+        ))
     }
 
     /// The focused terminal: a status badge, then its grid drawn on a canvas.
@@ -267,29 +290,46 @@ impl Shell {
     fn close_confirmation(&self) -> Option<Element<'_, Message>> {
         let index = self.closing?;
         let tab = self.core.workspace.tabs.get(index)?;
-        let prompt = text(format!(
-            "Fermer « {} » ? La session sera terminée.",
-            clip(&tab.title, 24)
+        Some(Self::confirmation_bar(
+            format!(
+                "Fermer « {} » ? La session sera terminée.",
+                clip(&tab.title, 24)
+            ),
+            "Fermer",
+            button::danger,
+            Message::CloseTab(index),
+            Message::CancelClose,
         ))
-        .size(12);
-        let confirm = button(text("Fermer").size(12))
-            .on_press(Message::CloseTab(index))
-            .style(button::danger)
+    }
+
+    /// A confirmation bar shared by the close (#9) and archive (#20) prompts:
+    /// the question, a styled confirm button, and an Annuler cancel, in the
+    /// rounded container both use. Keeping one builder stops the two bars
+    /// drifting apart.
+    fn confirmation_bar<'a>(
+        prompt: String,
+        confirm_label: &'a str,
+        confirm_style: impl Fn(&iced::Theme, button::Status) -> button::Style + 'a,
+        on_confirm: Message,
+        on_cancel: Message,
+    ) -> Element<'a, Message> {
+        let prompt = text(prompt).size(12);
+        let confirm = button(text(confirm_label).size(12))
+            .on_press(on_confirm)
+            .style(confirm_style)
             .padding(6);
         let cancel = button(text("Annuler").size(12))
-            .on_press(Message::CancelClose)
+            .on_press(on_cancel)
             .style(button::text)
             .padding(6);
-        Some(
-            container(
-                row![prompt, confirm, cancel]
-                    .spacing(12)
-                    .align_y(iced::Center),
-            )
-            .padding(6)
-            .style(container::rounded_box)
-            .into(),
+        container(
+            row![prompt, confirm, cancel]
+                .spacing(12)
+                .align_y(iced::Center),
         )
+        .padding(6)
+        .style(container::rounded_box)
+        .into()
     }
 
     /// The tab strip (FR5): one chip per open session, the active one
