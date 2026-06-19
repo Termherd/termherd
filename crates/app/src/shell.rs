@@ -335,8 +335,11 @@ impl Shell {
             }));
         let spawn = self.perform(effects);
         self.focus = Focus::Terminal;
-        // Opening another session drops any pending close confirmation (#9).
+        // Opening another session drops any pending confirmation (#9, #20): a
+        // stray Enter in the terminal must not confirm a sidebar prompt that's
+        // no longer in view.
         self.closing = None;
+        self.archiving = None;
         Task::batch([spawn, self.resize_focused()])
     }
 
@@ -451,8 +454,9 @@ impl Shell {
             Message::ActivateTab(index) => {
                 let _ = self.core.apply(termherd_core::Event::ActivateTab(index));
                 self.focus = Focus::Terminal;
-                // Switching tabs drops any pending close confirmation (#9).
+                // Switching tabs drops any pending confirmation (#9, #20).
                 self.closing = None;
+                self.archiving = None;
                 self.resize_focused()
             }
             Message::Paste(content) => {
@@ -493,13 +497,16 @@ impl Shell {
                 Task::none()
             }
             Message::ConfirmArchive => match self.archiving.take() {
-                Some(session) => {
+                // Only archive a session still on the scanned list: a rescan
+                // could have dropped it while the prompt was up, and toggling a
+                // vanished id would persist phantom metadata for it (#20).
+                Some(session) if self.is_browsable(&session) => {
                     let effects = self
                         .core
                         .apply(termherd_core::Event::ToggleArchive(session));
                     self.perform(effects)
                 }
-                None => Task::none(),
+                _ => Task::none(),
             },
             Message::CancelArchive => {
                 self.archiving = None;
@@ -553,6 +560,16 @@ impl Shell {
                 self.perform(effects)
             }
         }
+    }
+
+    /// Whether a session id is still on the scanned project list — used to
+    /// guard the archive confirmation against a session a rescan removed while
+    /// the prompt was up (#20).
+    fn is_browsable(&self, session: &str) -> bool {
+        self.core
+            .projects
+            .iter()
+            .any(|group| group.sessions.iter().any(|s| s.session_id == session))
     }
 
     /// Arm the confirmation bar for the tab at `index` (#9). No-op for an
@@ -1012,6 +1029,37 @@ mod key_routing {
         );
         let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::default(), None));
         assert!(shell.core.is_archived("sess"));
+        assert_eq!(shell.archiving, None);
+    }
+
+    #[test]
+    fn launching_a_session_drops_a_pending_archive() {
+        // Arming an archive then opening a terminal must clear the prompt, so a
+        // later Enter goes to the PTY instead of confirming the stale archive.
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_one(&mut shell, "sess");
+        let _ = shell.update(Message::RequestArchive("sess".into()));
+        let _ = shell.launch("/tmp/project".to_string(), None);
+        assert_eq!(shell.archiving, None);
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::default(), None));
+        assert!(
+            !shell.core.is_archived("sess"),
+            "a terminal Enter must not confirm a dropped archive prompt"
+        );
+    }
+
+    #[test]
+    fn confirming_a_vanished_session_archives_nothing() {
+        // A rescan can drop the armed session while the prompt is up; confirming
+        // then must not persist phantom archived metadata for it.
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_one(&mut shell, "sess");
+        let _ = shell.update(Message::RequestArchive("sess".into()));
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(Vec::new()));
+        let _ = shell.update(Message::ConfirmArchive);
+        assert!(!shell.core.is_archived("sess"));
         assert_eq!(shell.archiving, None);
     }
 }
