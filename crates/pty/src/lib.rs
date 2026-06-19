@@ -594,6 +594,12 @@ fn spawn_term(
                         let next =
                             fold_status(status, &decode_chunk(&String::from_utf8_lossy(&bytes)));
                         if next != status {
+                            tracing::debug!(
+                                session = session.0.get(),
+                                from = ?status,
+                                to = ?next,
+                                "session status changed"
+                            );
                             status = next;
                             term_sink(PtyEvent::Status { session, status });
                         }
