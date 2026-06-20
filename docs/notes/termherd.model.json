@@ -1,0 +1,86 @@
+{
+  "title": "termherd — current version (shipped state, 2026-06-20)",
+  "lanes": ["actor", "command", "aggregate", "event", "policy", "readmodel", "external", "hotspot"],
+  "phases": [
+    { "label": "discover", "fromCol": 0, "toCol": 3 },
+    { "label": "launch", "fromCol": 4, "toCol": 6 },
+    { "label": "interact", "fromCol": 7, "toCol": 11 },
+    { "label": "organize", "fromCol": 12, "toCol": 15 },
+    { "label": "search & memory", "fromCol": 16, "toCol": 17 }
+  ],
+  "elements": [
+    { "id": "X1", "type": "actor", "label": "Operator", "col": 0 },
+    { "id": "C0", "type": "command", "label": "load settings (settings.json)", "col": 0 },
+    { "id": "EXT-FS", "type": "external", "label": "~/.claude/projects (filesystem)", "col": 0 },
+
+    { "id": "C1", "type": "command", "label": "launch app", "col": 1 },
+    { "id": "E0", "type": "event", "label": "ShellProfile + Theme applied", "col": 1 },
+
+    { "id": "A-SCAN", "type": "aggregate", "label": "ProjectScanner (scan adapter)", "col": 2 },
+    { "id": "E1", "type": "event", "label": "ProjectsDiscovered (scan + derive + group)", "col": 2 },
+
+    { "id": "P-WATCH", "type": "policy", "label": "when fs changes, debounce → re-scan (notify, FR2)", "col": 3 },
+    { "id": "E2", "type": "event", "label": "SessionListUpdated (live fs-watch)", "col": 3 },
+    { "id": "R-SIDEBAR", "type": "readmodel", "label": "Sidebar: projects + sessions (foldable, #22)", "col": 3 },
+
+    { "id": "C2", "type": "command", "label": "click session → resume", "col": 4 },
+    { "id": "A-WS", "type": "aggregate", "label": "Workspace (pane tree + tabs, pure core)", "col": 4 },
+
+    { "id": "A-PTY", "type": "aggregate", "label": "Session actor (PTY + terminal grid)", "col": 5 },
+    { "id": "E3", "type": "event", "label": "SessionLaunched (claude --resume in PTY)", "col": 5 },
+    { "id": "EXT-CLI", "type": "external", "label": "Claude CLI (PTY child)", "col": 5 },
+
+    { "id": "E4", "type": "event", "label": "TabOpened", "col": 6 },
+    { "id": "R-TERM", "type": "readmodel", "label": "Terminal canvas (colour grid + cursor)", "col": 6 },
+
+    { "id": "C3", "type": "command", "label": "type keys / scroll / select", "col": 7 },
+    { "id": "E5", "type": "event", "label": "KeysForwarded to focused PTY", "col": 7 },
+    { "id": "E6", "type": "event", "label": "ScrollbackShown / SelectionCopied", "col": 8 },
+    { "id": "E7", "type": "event", "label": "TitleReported (OSC 0)", "col": 9 },
+    { "id": "E8", "type": "event", "label": "StatusEmitted (OSC: busy / waiting / OSC 9)", "col": 10 },
+    { "id": "P-ATTN", "type": "policy", "label": "when OSC 9, set sticky Attention (cleared by work)", "col": 11 },
+    { "id": "E9", "type": "event", "label": "AttentionRaised", "col": 11 },
+    { "id": "R-STATUS", "type": "readmodel", "label": "Status badge + sidebar dot + tab dot (FR8)", "col": 11 },
+
+    { "id": "C4", "type": "command", "label": "switch tab (Ctrl+1-9 / Ctrl+Tab)", "col": 12 },
+    { "id": "E10", "type": "event", "label": "TabActivated", "col": 12 },
+    { "id": "C5", "type": "command", "label": "close tab", "col": 13 },
+    { "id": "E11", "type": "event", "label": "TabClosed (Effect::Kill PTY)", "col": 13 },
+    { "id": "R-TABS", "type": "readmodel", "label": "Tab strip (label follows OSC title, #24)", "col": 13 },
+    { "id": "C6", "type": "command", "label": "toggle sidebar (Ctrl+Cmd+B, #21)", "col": 14 },
+    { "id": "C7", "type": "command", "label": "star / rename / archive session", "col": 15 },
+    { "id": "A-META", "type": "aggregate", "label": "SessionMeta overlay (metadata.json)", "col": 15 },
+    { "id": "E12", "type": "event", "label": "SessionStarred / Renamed / Archived", "col": 15 },
+
+    { "id": "C8", "type": "command", "label": "focus search + type query (FR3)", "col": 16 },
+    { "id": "E13", "type": "event", "label": "ResultsFiltered (in-memory digests, titles toggle)", "col": 16 },
+    { "id": "C9", "type": "command", "label": "open plan / CLAUDE.md", "col": 17 },
+    { "id": "A-DOCS", "type": "aggregate", "label": "docs adapter (off-thread read)", "col": 17 },
+    { "id": "E14", "type": "event", "label": "DocOpened (read-only)", "col": 17 },
+    { "id": "R-SEARCH", "type": "readmodel", "label": "Search results + read-only doc pane", "col": 17 },
+
+    { "id": "H6", "type": "hotspot", "label": "Unsigned bundles — certs pending (OQ5, F-packaging-ci)", "col": 0 },
+    { "id": "H4", "type": "hotspot", "label": "Split panes: pure core only, no iced render (F-terminal-split)", "col": 6 },
+    { "id": "H1", "type": "hotspot", "label": "Tab key not forwarded to PTY (#19, P0)", "col": 7 },
+    { "id": "H2", "type": "hotspot", "label": "Tab status stuck — misleading badge (#18, P0)", "col": 10 },
+    { "id": "H3", "type": "hotspot", "label": "Drag-reorder tabs not built (#25, FR5)", "col": 13 },
+    { "id": "H5", "type": "hotspot", "label": "Plans/memory editing missing — view-only (F-plans-memory)", "col": 17 },
+    { "id": "H7", "type": "hotspot", "label": "Fork detection blocked — signals absent in real sessions", "col": 4, "resolved": true, "resolution": "investigation closed; revisit only if Claude reintroduces fork files" }
+  ],
+  "edges": [
+    ["X1", "C1"], ["C1", "A-SCAN"], ["A-SCAN", "E1"], ["EXT-FS", "A-SCAN"],
+    ["E1", "P-WATCH"], ["P-WATCH", "E2"], ["E2", "R-SIDEBAR"], ["E1", "R-SIDEBAR"],
+    ["C0", "E0"], ["E0", "A-PTY"],
+    ["X1", "C2"], ["C2", "A-WS"], ["A-WS", "A-PTY"], ["A-PTY", "E3"], ["A-WS", "E4"],
+    ["E3", "R-TERM"], ["EXT-CLI", "A-PTY"],
+    ["X1", "C3"], ["C3", "E5"], ["C3", "E6"], ["E5", "EXT-CLI"],
+    ["EXT-CLI", "E7"], ["EXT-CLI", "E8"], ["E7", "R-TABS"],
+    ["E8", "P-ATTN"], ["P-ATTN", "E9"], ["E8", "R-STATUS"], ["E9", "R-STATUS"],
+    ["X1", "C4"], ["X1", "C5"], ["X1", "C6"], ["X1", "C7"],
+    ["C4", "E10"], ["C5", "E11"], ["C7", "A-META"], ["A-META", "E12"],
+    ["E10", "R-TABS"], ["E11", "R-TABS"], ["E12", "R-SIDEBAR"],
+    ["X1", "C8"], ["C8", "E13"], ["E13", "R-SEARCH"],
+    ["X1", "C9"], ["C9", "A-DOCS"], ["A-DOCS", "E14"], ["E14", "R-SEARCH"],
+    ["H1", "E5"], ["H2", "E8"], ["H3", "R-TABS"], ["H4", "A-PTY"], ["H5", "E14"], ["H6", "C1"]
+  ]
+}
