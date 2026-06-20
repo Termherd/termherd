@@ -11,6 +11,10 @@ publish.workspace = true
 termherd-claude = { path = "../claude" }
 thiserror = "2"
 
+[dev-dependencies]
+# Property-based tests for the number-row tab bindings (issue #26).
+proptest = "1"
+
 # Core is the quality keystone — strict lints (Q5).
 [lints.rust]
 unsafe_code = "deny"

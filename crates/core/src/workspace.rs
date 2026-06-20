@@ -378,6 +378,48 @@ mod tests {
         assert_eq!(ws.active, 0);
     }
 
+    /// A workspace holding `count` single-session tabs, active on the last one.
+    fn workspace_with_tabs(count: usize) -> Workspace {
+        let mut ws = Workspace::new();
+        for n in 0..count {
+            ws.open(sid(n as u64 + 1), format!("t{n}"));
+        }
+        ws
+    }
+
+    proptest::proptest! {
+        /// Regression guard for the method the number-row jump leans on
+        /// (issue #26): `activate` selects an in-range index, rejects anything
+        /// beyond the last tab without moving, and never panics.
+        #[test]
+        fn activate_selects_within_range_and_rejects_beyond(
+            count in 1usize..12,
+            index in 0usize..32,
+        ) {
+            let mut ws = workspace_with_tabs(count);
+            let before = ws.active;
+            let result = ws.activate(index);
+            if index < count {
+                proptest::prop_assert_eq!(result, Some(()));
+                proptest::prop_assert_eq!(ws.active, index);
+            } else {
+                proptest::prop_assert_eq!(result, None);
+                proptest::prop_assert_eq!(ws.active, before);
+            }
+        }
+
+        /// Activating the same tab twice is idempotent.
+        #[test]
+        fn activate_is_idempotent(count in 1usize..12, index in 0usize..12) {
+            let mut ws = workspace_with_tabs(count);
+            let first = ws.activate(index);
+            let active_after_first = ws.active;
+            let second = ws.activate(index);
+            proptest::prop_assert_eq!(first, second);
+            proptest::prop_assert_eq!(ws.active, active_after_first);
+        }
+    }
+
     #[test]
     fn tab_sessions_lists_every_leaf_in_pane_order() {
         let mut ws = Workspace::new();

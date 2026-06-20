@@ -9,8 +9,18 @@ use termherd_pty::{KeyMods, TermKey};
 
 /// The keymap chord for a key press (FR9): the key's normalised name plus the
 /// modifier bits. `None` for keys we do not bind (so they reach the terminal).
-pub(super) fn chord_of(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> Option<KeyChord> {
-    let name = key_name(key)?;
+///
+/// The number row is matched by **physical position**, so ⌘1…⌘9 (issue #26)
+/// land on the same keys on every layout — on AZERTY the top-left key reports
+/// the character `&` yet the physical code `Digit1`, so it still binds tab 1.
+/// Every other key stays character-based (⌘C follows the letter C, not its
+/// position), matching how browsers and terminals treat these chords.
+pub(super) fn chord_of(
+    key: &keyboard::Key,
+    physical: &keyboard::key::Physical,
+    modifiers: keyboard::Modifiers,
+) -> Option<KeyChord> {
+    let name = physical_digit_name(physical).or_else(|| key_name(key))?;
     let mut mods = 0u8;
     if modifiers.control() {
         mods |= keymap::MOD_CTRL;
@@ -25,6 +35,27 @@ pub(super) fn chord_of(key: &keyboard::Key, modifiers: keyboard::Modifiers) -> O
         mods |= keymap::MOD_CMD;
     }
     Some(KeyChord::new(name, mods))
+}
+
+/// The digit `"1"`…`"9"` for a number-row key by physical position, or `None`
+/// for any other key. Layout-independent: the same physical keys carry these
+/// names on QWERTY, AZERTY, QWERTZ, … so number-row shortcuts are universal
+/// (issue #26). `Digit0` is deliberately excluded — only 1–9 map to tabs.
+fn physical_digit_name(physical: &keyboard::key::Physical) -> Option<String> {
+    use keyboard::key::{Code, Physical};
+    let digit = match physical {
+        Physical::Code(Code::Digit1) => '1',
+        Physical::Code(Code::Digit2) => '2',
+        Physical::Code(Code::Digit3) => '3',
+        Physical::Code(Code::Digit4) => '4',
+        Physical::Code(Code::Digit5) => '5',
+        Physical::Code(Code::Digit6) => '6',
+        Physical::Code(Code::Digit7) => '7',
+        Physical::Code(Code::Digit8) => '8',
+        Physical::Code(Code::Digit9) => '9',
+        _ => return None,
+    };
+    Some(digit.to_string())
 }
 
 /// The keymap name of an iced key: a lowercased character, or a handful of
@@ -91,8 +122,12 @@ pub(super) fn event_modifiers(event: &keyboard::Event) -> keyboard::Modifiers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iced::keyboard::key::Named;
+    use iced::keyboard::key::{Code, Named, NativeCode, Physical};
     use iced::keyboard::{Key, Modifiers};
+
+    /// A physical key that is not on the number row — letters and named keys
+    /// fall back to their character/name, so tests pass this for non-digits.
+    const NON_DIGIT: Physical = Physical::Unidentified(NativeCode::Unidentified);
 
     #[test]
     fn to_term_key_maps_characters_and_named_keys() {
@@ -131,14 +166,69 @@ mod tests {
     fn chord_of_builds_keymap_chords_from_key_events() {
         let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
         assert_eq!(
-            chord_of(&Key::Character("C".into()), ctrl_shift),
+            chord_of(&Key::Character("C".into()), &NON_DIGIT, ctrl_shift),
             Some(KeyChord::new("c", keymap::MOD_CTRL | keymap::MOD_SHIFT))
         );
         assert_eq!(
-            chord_of(&Key::Named(Named::Tab), Modifiers::CTRL),
+            chord_of(&Key::Named(Named::Tab), &NON_DIGIT, Modifiers::CTRL),
             Some(KeyChord::new("tab", keymap::MOD_CTRL))
         );
         // Keys no shortcut targets carry no chord.
-        assert_eq!(chord_of(&Key::Named(Named::F2), Modifiers::default()), None);
+        assert_eq!(
+            chord_of(&Key::Named(Named::F2), &NON_DIGIT, Modifiers::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn number_row_chords_follow_the_physical_key_across_layouts() {
+        // AZERTY: the top-left key reports the character `&` but the physical
+        // code `Digit1`. ⌘+& must still bind tab 1 (issue #26), so the physical
+        // position — not the character — decides the digit.
+        assert_eq!(
+            chord_of(
+                &Key::Character("&".into()),
+                &Physical::Code(Code::Digit1),
+                Modifiers::LOGO,
+            ),
+            Some(KeyChord::new("1", keymap::MOD_CMD))
+        );
+        // QWERTY: character and position agree — same chord, no regression.
+        assert_eq!(
+            chord_of(
+                &Key::Character("1".into()),
+                &Physical::Code(Code::Digit1),
+                Modifiers::LOGO,
+            ),
+            Some(KeyChord::new("1", keymap::MOD_CMD))
+        );
+    }
+
+    #[test]
+    fn physical_digit_names_cover_one_through_nine_only() {
+        for (code, expected) in [
+            (Code::Digit1, Some("1".to_string())),
+            (Code::Digit9, Some("9".to_string())),
+            // The number row binds 1–9; zero is not a tab shortcut.
+            (Code::Digit0, None),
+            // A non-digit physical key falls through to the character path.
+            (Code::KeyA, None),
+        ] {
+            assert_eq!(physical_digit_name(&Physical::Code(code)), expected);
+        }
+    }
+
+    #[test]
+    fn letters_stay_character_based_not_positional() {
+        // ⌘C is the letter C wherever it sits — a non-digit physical key must
+        // not hijack the character path.
+        assert_eq!(
+            chord_of(
+                &Key::Character("c".into()),
+                &Physical::Code(Code::KeyC),
+                Modifiers::LOGO,
+            ),
+            Some(KeyChord::new("c", keymap::MOD_CMD))
+        );
     }
 }

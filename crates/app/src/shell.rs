@@ -498,14 +498,7 @@ impl Shell {
                     iced::clipboard::write(text)
                 }
             }
-            Message::ActivateTab(index) => {
-                let _ = self.core.apply(termherd_core::Event::ActivateTab(index));
-                self.focus = Focus::Terminal;
-                // Switching tabs drops any pending confirmation (#9, #20).
-                self.closing = None;
-                self.archiving = None;
-                self.resize_focused()
-            }
+            Message::ActivateTab(index) => self.activate_tab(index),
             Message::Paste(content) => {
                 let Some(text) = content.filter(|t| !t.is_empty()) else {
                     return Task::none();
@@ -666,6 +659,18 @@ impl Shell {
         }
     }
 
+    /// Switch to the tab at `index` and return focus to the terminal. Switching
+    /// drops any pending confirmation (#9, #20). An out-of-range index is a
+    /// silent no-op in `core`, so a number key with no matching tab does
+    /// nothing (issue #26).
+    fn activate_tab(&mut self, index: usize) -> Task<Message> {
+        let _ = self.core.apply(termherd_core::Event::ActivateTab(index));
+        self.focus = Focus::Terminal;
+        self.closing = None;
+        self.archiving = None;
+        self.resize_focused()
+    }
+
     /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
     /// `PrevTab`). No-op when nothing is open.
     fn cycle_tab(&mut self, delta: i32) -> Task<Message> {
@@ -674,9 +679,7 @@ impl Shell {
             return Task::none();
         }
         let next = (self.core.workspace.active as i32 + delta).rem_euclid(count as i32) as usize;
-        let _ = self.core.apply(termherd_core::Event::ActivateTab(next));
-        self.focus = Focus::Terminal;
-        self.resize_focused()
+        self.activate_tab(next)
     }
 
     /// Run a keymap [`Action`] (FR9). Clipboard actions become iced tasks; tab
@@ -696,6 +699,9 @@ impl Shell {
                 let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
                 Task::none()
             }
+            // Number-row jump straight to a tab (issue #26). An index past the
+            // open tabs is absorbed by `core` as a no-op.
+            Action::ActivateTab(index) => self.activate_tab(index),
             Action::OpenNewSession
             | Action::SplitHorizontal
             | Action::SplitVertical
@@ -749,6 +755,7 @@ impl Shell {
         }
         let keyboard::Event::KeyPressed {
             key,
+            physical_key,
             modifiers,
             text,
             ..
@@ -762,7 +769,7 @@ impl Shell {
         // A configured shortcut wins over raw terminal input: build the chord
         // and run its action if the keymap binds one (FR9). Unbound keys fall
         // through to the terminal, so plain Ctrl+C stays the interrupt signal.
-        if let Some(chord) = chord_of(&key, modifiers)
+        if let Some(chord) = chord_of(&key, &physical_key, modifiers)
             && let Some(action) = self.keymap.lookup(&chord)
         {
             return self.run_action(action);

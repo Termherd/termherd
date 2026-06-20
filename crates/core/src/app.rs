@@ -703,6 +703,22 @@ mod tests {
     }
 
     #[test]
+    fn activate_tab_out_of_range_leaves_the_active_tab_untouched() {
+        // Regression guard for the number-row jump (issue #26): pressing ⌘5
+        // with only two tabs open resolves to an out-of-range index, which
+        // must be a silent no-op rather than a panic or a focus change.
+        let mut app = App::new();
+        let _first = launch(&mut app, "a");
+        let second = launch(&mut app, "b");
+        assert_eq!(app.workspace.active, 1);
+
+        let effects = app.apply(Event::ActivateTab(4));
+        assert!(effects.is_empty());
+        assert_eq!(app.workspace.active, 1);
+        assert_eq!(app.workspace.focused_session(), Some(second));
+    }
+
+    #[test]
     fn close_tab_kills_its_session_and_drops_it_from_the_registry() {
         let mut app = App::new();
         let first = launch(&mut app, "a");

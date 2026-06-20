@@ -66,7 +66,8 @@ start. There is no in-app settings panel yet — edit the file and restart.
   "keys": {
     "copy": "ctrl+c",
     "paste": ["ctrl+v", "ctrl+shift+v"],
-    "next-tab": "ctrl+tab"
+    "next-tab": "ctrl+tab",
+    "activate-tab-1": "ctrl+1"
   }
 }
 ```
@@ -81,7 +82,8 @@ start. There is no in-app settings panel yet — edit the file and restart.
   actions keep their per-platform defaults. Unknown actions and bad chords are
   ignored. Actions: `copy`, `paste`, `next-tab`, `prev-tab`, `close-focused`,
   `focus-search`, `toggle-sidebar` (hide / restore the session browser,
-  Ctrl/Cmd+B).
+  Ctrl/Cmd+B), and `activate-tab-1` … `activate-tab-9` (jump straight to the
+  Nth open tab).
 
 Window size and position persist separately to `~/.termherd/window.json`, and
 session stars / archives / custom titles to `~/.termherd/metadata.json` (an
@@ -98,9 +100,14 @@ All shortcuts are configurable via the `keys` section of the config file
 | Copy selection     | `Ctrl+Shift+C`             | `Cmd+C`       |
 | Paste              | `Ctrl+V` / `Ctrl+Shift+V`  | `Cmd+V`       |
 | Next / prev tab    | `Ctrl+Tab` / `Ctrl+Shift+Tab` | (same)     |
+| Jump to tab 1–9    | `Ctrl+1` … `Ctrl+9`        | `Cmd+1` … `Cmd+9` |
 | Close tab          | `Ctrl+W`                   | `Cmd+W`       |
 | Focus search       | `Ctrl+F`                   | `Cmd+F`       |
 | Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C`      |
+
+Jump-to-tab (`Ctrl`/`Cmd`+`1`–`9`) is matched by physical key position, so it
+lands on the same number-row keys on every layout — including AZERTY and QWERTZ,
+where those keys produce `&`, `é`, … without Shift.
 
 Dragging a selection with the mouse also copies it on release, and the wheel
 scrolls back through history. In the sidebar, click a project or session to

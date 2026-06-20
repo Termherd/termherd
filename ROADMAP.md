@@ -139,8 +139,10 @@ The well-defined items from the same gist are tracked as issues #18–#29.
   Needs a definition of result grouping/ranking before it's an issue
 - [ ] `F-keymap-advanced` — keymap concerns from the gist that need design,
   layered on the shipped `F-keyboard-shortcuts`:
-  - localized number-row handling (AZERTY: `&`→1, `é`→2, …) so Ctrl/Cmd+Number
-    (issue #26) works on non-QWERTY layouts
+  - ~~localized number-row handling (AZERTY: `&`→1, `é`→2, …) so Ctrl/Cmd+Number
+    (issue #26) works on non-QWERTY layouts~~ — **done** with #26: the number
+    row is matched by physical key position, so Ctrl/Cmd+1…9 land on the same
+    keys on every layout (QWERTY/AZERTY/QWERTZ/…)
   - per-command keymap configuration (different bindings per running command)
   - a configurable "bypass" key so a modifier passes through to the terminal
     instead of the app (cf. Ghostty `macos-option-as-alt`)
