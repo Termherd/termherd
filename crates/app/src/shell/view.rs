@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use iced::widget::canvas::Canvas;
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input,
+    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input, tooltip,
 };
 use iced::{Color, Element, Fill, Font, Size};
 use termherd_core::SessionStatus;
@@ -169,15 +169,24 @@ impl Shell {
                         ))
                         .size(11),
                     );
-                    button(content)
+                    let launch = button(content)
                         .on_press(Message::LaunchSession {
                             cwd: group.path.clone(),
                             resume: s.session_id.clone(),
                         })
                         .style(button::text)
                         .padding(0)
-                        .width(Fill)
-                        .into()
+                        .width(Fill);
+                    // The row clips the title to fit the narrow sidebar; hover
+                    // reveals the full name so a long title stays readable.
+                    tooltip(
+                        launch,
+                        container(text(title.clone()).size(11))
+                            .padding(6)
+                            .style(container::rounded_box),
+                        tooltip::Position::Right,
+                    )
+                    .into()
                 };
 
                 // ✎ starts the rename; ✓ commits it.

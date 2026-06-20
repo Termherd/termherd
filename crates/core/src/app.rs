@@ -410,6 +410,17 @@ impl App {
         self.metadata.get(session_id).is_some_and(|m| m.archived)
     }
 
+    /// The live session currently resuming the Claude session `claude_id`, if
+    /// one is open. Lets the shell re-focus an existing terminal when its
+    /// sidebar row is clicked again, rather than spawning a duplicate (FR4).
+    #[must_use]
+    pub fn open_session_for(&self, claude_id: &str) -> Option<SessionId> {
+        self.sessions
+            .values()
+            .find(|s| s.resume.as_deref() == Some(claude_id))
+            .map(|s| s.id)
+    }
+
     /// Whether a project's session list is folded shut in the sidebar (#22).
     #[must_use]
     pub fn is_collapsed(&self, path: &str) -> bool {
@@ -659,6 +670,19 @@ mod tests {
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         assert_eq!(app.sessions[&id].resume.as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn open_session_for_finds_a_live_resume_and_ignores_unknowns() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            resume: Some("abc-123".into()),
+            title: "proj".into(),
+        }));
+        let id = app.workspace.focused_session().expect("a focused session");
+        assert_eq!(app.open_session_for("abc-123"), Some(id));
+        assert_eq!(app.open_session_for("not-open"), None);
     }
 
     #[test]

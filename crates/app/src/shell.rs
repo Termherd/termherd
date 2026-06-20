@@ -284,6 +284,39 @@ enum Message {
     OpenUrl(String),
 }
 
+impl Message {
+    /// Whether this message is a deliberate user interaction *elsewhere* in the
+    /// UI that should cancel an in-progress inline rename. This is an explicit
+    /// allowlist, not a blocklist: anything unlisted (PTY output, scans, window
+    /// and key events, and the rename's own `StartRename`/`RenameInput`/
+    /// `CommitRename`) leaves the edit untouched. Defaulting to "don't dismiss"
+    /// is the safe side — a missed button is a minor gap, whereas a stray
+    /// background message dismissing the edit would make renaming impossible.
+    fn dismisses_rename(&self) -> bool {
+        matches!(
+            self,
+            Self::SearchChanged(_)
+                | Self::SearchTitlesOnly(_)
+                | Self::LaunchProject(_)
+                | Self::LaunchSession { .. }
+                | Self::FocusTerminal
+                | Self::FocusSearch
+                | Self::TermScroll(_)
+                | Self::Paste(_)
+                | Self::ActivateTab(_)
+                | Self::RequestCloseTab(_)
+                | Self::CloseTab(_)
+                | Self::ToggleStar(_)
+                | Self::ToggleArchive(_)
+                | Self::RequestArchive(_)
+                | Self::ToggleCollapsed(_)
+                | Self::ToggleSidebar
+                | Self::OpenDoc { .. }
+                | Self::CloseDoc
+        )
+    }
+}
+
 impl Shell {
     fn new(
         bounds: WindowConfig,
@@ -414,6 +447,14 @@ impl Shell {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        // Clicking (or typing) anywhere else in TermHerd while an inline rename
+        // is open discards it — the blur-cancels-edit convention. Only genuine
+        // user interactions dismiss it; background traffic (PTY output,
+        // rescans, window events) and the rename's own messages must not, or a
+        // chatty terminal would cancel the edit before it could be typed.
+        if self.renaming.is_some() && message.dismisses_rename() {
+            self.renaming = None;
+        }
         match message {
             Message::Window(id, event) => self.on_window_event(id, event),
             Message::ScanCompleted(Ok(records)) => {
@@ -450,7 +491,17 @@ impl Shell {
                 Task::none()
             }
             Message::LaunchProject(cwd) => self.launch(cwd, None),
-            Message::LaunchSession { cwd, resume } => self.launch(cwd, Some(resume)),
+            Message::LaunchSession { cwd, resume } => {
+                // Re-clicking a session already open in TermHerd re-focuses its
+                // tab instead of spawning a second terminal for the same Claude
+                // session (FR4).
+                if let Some(session) = self.core.open_session_for(&resume)
+                    && let Some(index) = self.core.workspace.tab_of(session)
+                {
+                    return self.activate_tab(index);
+                }
+                self.launch(cwd, Some(resume))
+            }
             Message::PtyOutput { session, screen } => {
                 self.screens.insert(session, screen);
                 Task::none()
@@ -881,6 +932,7 @@ mod key_routing {
     struct RecordingPty {
         writes: StdMutex<Vec<Vec<u8>>>,
         kills: StdMutex<usize>,
+        spawns: StdMutex<usize>,
     }
 
     impl RecordingPty {
@@ -890,10 +942,14 @@ mod key_routing {
         fn kill_count(&self) -> usize {
             *self.kills.lock().expect("kills lock")
         }
+        fn spawn_count(&self) -> usize {
+            *self.spawns.lock().expect("spawns lock")
+        }
     }
 
     impl PtyHost for RecordingPty {
         fn spawn(&self, _spec: SpawnSpec) -> Result<(), PtyError> {
+            *self.spawns.lock().expect("spawns lock") += 1;
             Ok(())
         }
         fn write(&self, _session: SessionId, bytes: &[u8]) -> Result<(), PtyError> {
@@ -1023,6 +1079,39 @@ mod key_routing {
         shell.renaming = Some(("sid".to_string(), "café".to_string()));
         let _ = shell.update(Message::ImeCommit("é".to_string()));
         assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn clicking_elsewhere_cancels_an_inline_rename() {
+        // Clicking another part of the UI while renaming (here: focusing the
+        // search box) discards the in-progress edit — blur cancels.
+        let (mut shell, _pty) = shell_with_terminal();
+        shell.renaming = Some(("sid".to_string(), "half-typed".to_string()));
+        let _ = shell.update(Message::FocusSearch);
+        assert!(
+            shell.renaming.is_none(),
+            "a click elsewhere should cancel the rename"
+        );
+    }
+
+    #[test]
+    fn background_traffic_never_cancels_an_inline_rename() {
+        // PTY output, key events, and the rename's own input all arrive while an
+        // edit is open; none of them may discard it, or a chatty terminal would
+        // make renaming impossible.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.renaming = Some(("sid".to_string(), "typing".to_string()));
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        let _ = shell.update(Message::RenameInput("typing more".to_string()));
+        assert_eq!(
+            shell.renaming.as_ref().map(|(_, b)| b.as_str()),
+            Some("typing more"),
+            "background and rename-internal messages must leave the edit intact"
+        );
     }
 
     #[test]
@@ -1205,6 +1294,38 @@ mod key_routing {
             !shell.core.is_archived("sess"),
             "a terminal Enter must not confirm a dropped archive prompt"
         );
+    }
+
+    #[test]
+    fn reclicking_an_open_session_refocuses_its_tab_without_respawning() {
+        // Open session "sess" in its own tab, then open a second tab so it is no
+        // longer active. Re-clicking "sess" in the sidebar must bring its
+        // existing tab forward, not spawn a third terminal.
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.launch("/tmp/project".to_string(), Some("sess".to_string()));
+        let sess_tab = shell.core.workspace.active;
+        let _ = shell.launch("/tmp/other".to_string(), Some("other".to_string()));
+        assert_ne!(
+            shell.core.workspace.active, sess_tab,
+            "second tab is active"
+        );
+        let spawns_before = pty.spawn_count();
+        let tabs_before = shell.core.workspace.tabs.len();
+
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "sess".to_string(),
+        });
+        assert_eq!(
+            shell.core.workspace.active, sess_tab,
+            "re-click should re-focus the existing tab"
+        );
+        assert_eq!(
+            pty.spawn_count(),
+            spawns_before,
+            "no new terminal must be spawned"
+        );
+        assert_eq!(shell.core.workspace.tabs.len(), tabs_before, "no new tab");
     }
 
     #[test]
