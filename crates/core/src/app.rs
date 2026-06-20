@@ -19,6 +19,14 @@ use crate::workspace::{SessionId, SplitDir, Workspace};
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
+/// Shown as the desktop notification body when Claude fires a bare OSC 9 with
+/// no text of its own (#29).
+const DEFAULT_NOTIFICATION_BODY: &str = "Claude needs your attention";
+
+/// Notification title fallback when a session somehow has no hosting tab (#29);
+/// a broken invariant in practice, never the normal path.
+const APP_NAME: &str = "TermHerd";
+
 #[derive(Debug, Default)]
 pub struct App {
     pub workspace: Workspace,
@@ -189,6 +197,14 @@ pub enum Event {
     ToggleCollapsed(String),
     /// The user Ctrl/Cmd+clicked a detected link in a terminal (#28).
     OpenUrl(String),
+    /// A session emitted an OSC 9 notification — Claude wants the user (#29).
+    /// `body` is the raw payload Claude sent ("needs your attention", a
+    /// permission prompt, …). Routed to the OS notification centre on top of
+    /// the in-app `Attention` status.
+    SessionNotified {
+        session: SessionId,
+        body: String,
+    },
 }
 
 /// Side effects the runtime must perform. The iced shell turns these into
@@ -215,6 +231,10 @@ pub enum Effect {
     SaveCollapsed(HashSet<String>),
     /// Open a URL in the OS default handler (#28); the shell performs it.
     OpenUrl(String),
+    /// Post a desktop notification to the OS notification centre (#29). The
+    /// shell performs it; `title` names the session/project that wants the
+    /// user, `body` is Claude's message.
+    Notify { title: String, body: String },
 }
 
 impl App {
@@ -345,6 +365,7 @@ impl App {
                     vec![Effect::OpenUrl(url.to_owned())]
                 }
             }
+            Event::SessionNotified { session, body } => self.notify_session(session, body),
         }
     }
 
@@ -496,6 +517,30 @@ impl App {
             .into_iter()
             .filter_map(|id| self.sessions.get(&id).map(|s| s.status))
             .max_by_key(|status| status.urgency())
+    }
+
+    /// Decide whether an OSC 9 notification (#29) reaches the OS notification
+    /// centre, and with what title/body. Only live sessions are worth alerting
+    /// on — an unknown or exited session has nothing to return to, so it is
+    /// dropped. The title is the session's tab label (what the user sees, and
+    /// tracks OSC-24 renames); a blank body falls back to a default message.
+    fn notify_session(&self, session: SessionId, body: String) -> Vec<Effect> {
+        if !self.is_live(session) {
+            return Vec::new();
+        }
+        // A live session is always hosted by a tab, so `session_title` returns
+        // `Some`; the app-name fallback only guards a broken invariant.
+        let title = self
+            .workspace
+            .session_title(session)
+            .unwrap_or(APP_NAME)
+            .to_owned();
+        let body = if body.trim().is_empty() {
+            DEFAULT_NOTIFICATION_BODY.to_owned()
+        } else {
+            body
+        };
+        vec![Effect::Notify { title, body }]
     }
 
     /// Mint the next runtime session id. `None` only on u64 overflow.
@@ -962,5 +1007,142 @@ mod tests {
             status: SessionStatus::Idle,
         });
         assert_eq!(app.sessions[&id].status, SessionStatus::Exited);
+    }
+
+    // ---- #29: OSC 9 notifications forwarded to the OS notification centre ----
+
+    /// The single `Effect::Notify` a `SessionNotified` event should produce, or
+    /// `None` if the policy dropped it. Panics on any other effect shape so a
+    /// regression that emits the wrong effect fails loudly.
+    fn notify_effect(effects: &[Effect]) -> Option<(&str, &str)> {
+        match effects {
+            [] => None,
+            [Effect::Notify { title, body }] => Some((title, body)),
+            other => panic!("expected at most one Notify, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn osc9_notification_posts_a_desktop_notification_titled_with_its_session() {
+        let mut app = App::new();
+        let id = launch(&mut app, "myproj");
+
+        let effects = app.apply(Event::SessionNotified {
+            session: id,
+            body: "Claude needs your attention".into(),
+        });
+
+        // The body is Claude's own message; the title names which session wants
+        // the user, taken from the tab the user sees (#29).
+        assert_eq!(
+            notify_effect(&effects),
+            Some(("myproj", "Claude needs your attention"))
+        );
+    }
+
+    #[test]
+    fn a_blank_notification_body_falls_back_to_a_default_message() {
+        let mut app = App::new();
+        let id = launch(&mut app, "myproj");
+
+        // Claude sometimes fires a bare OSC 9 with no text; the OS notification
+        // still has to say something actionable.
+        let effects = app.apply(Event::SessionNotified {
+            session: id,
+            body: "   ".into(),
+        });
+
+        assert_eq!(
+            notify_effect(&effects),
+            Some(("myproj", DEFAULT_NOTIFICATION_BODY))
+        );
+    }
+
+    #[test]
+    fn a_notification_for_an_unknown_session_is_dropped() {
+        let mut app = App::new();
+        let _present = launch(&mut app, "myproj");
+
+        let effects = app.apply(Event::SessionNotified {
+            session: SessionId(NonZeroU64::new(9_999).expect("non-zero")),
+            body: "ghost".into(),
+        });
+
+        assert_eq!(notify_effect(&effects), None);
+    }
+
+    #[test]
+    fn a_notification_for_an_exited_session_is_dropped() {
+        let mut app = App::new();
+        let id = launch(&mut app, "myproj");
+        app.apply(Event::PtyExited(id));
+
+        // Nothing to return to — a dead session must not raise a desktop alert.
+        let effects = app.apply(Event::SessionNotified {
+            session: id,
+            body: "too late".into(),
+        });
+
+        assert_eq!(notify_effect(&effects), None);
+    }
+
+    #[test]
+    fn a_notification_follows_the_sessions_latest_tab_title() {
+        let mut app = App::new();
+        let id = launch(&mut app, "old name");
+        // Claude relabels the tab over OSC (#24); the notification title must
+        // track that, not the launch label.
+        app.apply(Event::SessionTitleChanged {
+            session: id,
+            title: "renamed".into(),
+        });
+
+        let effects = app.apply(Event::SessionNotified {
+            session: id,
+            body: "ping".into(),
+        });
+
+        assert_eq!(notify_effect(&effects), Some(("renamed", "ping")));
+    }
+
+    proptest::proptest! {
+        /// For any live session and any body, exactly one notification is
+        /// posted, its title is the tab title and its body is preserved
+        /// verbatim when non-blank — and `apply` never panics (Q5).
+        #[test]
+        fn live_session_notifications_preserve_body_and_title(
+            title in "[^\u{0}]{0,40}",
+            body in "\\PC{1,80}",
+        ) {
+            let mut app = App::new();
+            let id = launch(&mut app, title.as_str());
+
+            let effects = app.apply(Event::SessionNotified { session: id, body: body.clone() });
+
+            let expected_body = if body.trim().is_empty() {
+                DEFAULT_NOTIFICATION_BODY.to_owned()
+            } else {
+                body
+            };
+            proptest::prop_assert_eq!(
+                notify_effect(&effects),
+                Some((title.as_str(), expected_body.as_str()))
+            );
+        }
+
+        /// A notification for a session that was never launched is always
+        /// dropped, whatever the body — no panic, no effect.
+        #[test]
+        fn unknown_session_notifications_are_always_dropped(
+            raw_id in 1u64..1_000_000,
+            body in "\\PC{0,80}",
+        ) {
+            let mut app = App::new();
+            let id = SessionId(NonZeroU64::new(raw_id).expect("non-zero"));
+
+            let effects = app.apply(Event::SessionNotified { session: id, body });
+
+            proptest::prop_assert_eq!(notify_effect(&effects), None);
+        }
     }
 }

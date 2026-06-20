@@ -38,7 +38,7 @@ mod view;
 
 use input::{chord_of, event_modifiers, key_mods, to_term_key};
 use streams::{PtyOutput, pty_stream, watch_stream};
-use terminal::{CELL_H, CELL_W, open_url};
+use terminal::{CELL_H, CELL_W, notify, open_url};
 use view::project_label;
 
 /// Sidebar width and the chrome reserved around the terminal, in logical px.
@@ -213,6 +213,11 @@ enum Message {
         session: SessionId,
         title: String,
     },
+    /// A session fired an OSC 9 notification (#29); forward it to the OS.
+    PtyNotify {
+        session: SessionId,
+        body: String,
+    },
     /// A session's process exited.
     PtyExited(SessionId),
     /// A raw key press; routed to the focused terminal when it has focus.
@@ -354,6 +359,8 @@ impl Shell {
                 }
                 // Opening a link is an OS handoff, not a PTY call (#28).
                 Effect::OpenUrl(url) => open_url(&url),
+                // A desktop notification is an OS handoff too (#29).
+                Effect::Notify { title, body } => notify(&title, &body),
             };
             if let Err(error) = outcome {
                 tracing::warn!(%error, "pty effect failed");
@@ -459,6 +466,14 @@ impl Shell {
                     .core
                     .apply(termherd_core::Event::SessionTitleChanged { session, title });
                 Task::none()
+            }
+            Message::PtyNotify { session, body } => {
+                // Unlike status/title, this yields an `Effect::Notify` that the
+                // shell must perform — hand it to the OS notification centre.
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::SessionNotified { session, body });
+                self.perform(effects)
             }
             Message::PtyExited(session) => {
                 let _ = self.core.apply(termherd_core::Event::PtyExited(session));

@@ -66,6 +66,9 @@ serde_json = "1"
 # Decode the bundled PNG into the RGBA the iced window icon wants — iced 0.14
 # only exposes `from_rgba`, no file decoder.
 png = "0.17"
+# Desktop notifications to the OS notification centre (#29). Cross-platform:
+# mac-notification-sys on macOS, zbus on Linux, WinRT toasts on Windows.
+notify-rust = "4"
 
 # Embed `icons/icon.ico` into termherd.exe so the executable and its shortcuts
 # carry the app icon on Windows. Host-gated: only pulled in (and only run) when

@@ -55,6 +55,9 @@ pub(super) fn pty_stream(output: &PtyOutput) -> impl Stream<Item = Message> + us
                             PtyEvent::Title { session, title } => {
                                 Message::PtyTitle { session, title }
                             }
+                            PtyEvent::Notification { session, body } => {
+                                Message::PtyNotify { session, body }
+                            }
                             PtyEvent::Exited { session } => Message::PtyExited(session),
                         };
                         if out.send(message).await.is_err() {

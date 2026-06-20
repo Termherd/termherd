@@ -227,6 +227,30 @@ mod tests {
     }
 
     #[test]
+    fn osc9_notification_keeps_semicolons_in_its_payload() {
+        // Permission prompts carry `;` inside the human text (#29). Only a
+        // leading `4;` is the progress marker — inner semicolons must not split
+        // the notification body.
+        let chunk = "\u{1b}]9;allow Bash(rm -rf); proceed?\u{07}";
+        assert_eq!(
+            decode_chunk(chunk),
+            vec![OscSignal::Notification(
+                "allow Bash(rm -rf); proceed?".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn osc9_with_an_empty_payload_is_still_a_notification() {
+        // A bare OSC 9 (no text) is a real attention ping (#29); the empty body
+        // is the core's to default, not the decoder's to drop.
+        assert_eq!(
+            decode_chunk("\u{1b}]9;\u{07}"),
+            vec![OscSignal::Notification(String::new())]
+        );
+    }
+
+    #[test]
     fn bare_bel_is_a_bell_but_osc_bel_is_not() {
         assert_eq!(decode_chunk("ding\u{07}"), vec![OscSignal::Bell]);
         // The BEL terminating an OSC sequence does not double as a bell.

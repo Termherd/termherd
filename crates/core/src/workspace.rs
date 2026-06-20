@@ -125,6 +125,17 @@ impl Workspace {
         Some(())
     }
 
+    /// Title of the tab hosting `session` (#29) — what the user sees for that
+    /// session, used to name its desktop notification. `None` if no tab hosts
+    /// it.
+    #[must_use]
+    pub fn session_title(&self, session: SessionId) -> Option<&str> {
+        self.tabs
+            .iter()
+            .find(|tab| tab.sessions().contains(&session))
+            .map(|tab| tab.title.as_str())
+    }
+
     /// Make the tab at `index` active (FR5). Returns `None` if the index is
     /// out of range, leaving the active tab unchanged.
     pub fn activate(&mut self, index: usize) -> Option<()> {
