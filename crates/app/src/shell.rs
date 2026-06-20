@@ -679,9 +679,7 @@ impl Shell {
             return Task::none();
         }
         let next = (self.core.workspace.active as i32 + delta).rem_euclid(count as i32) as usize;
-        let _ = self.core.apply(termherd_core::Event::ActivateTab(next));
-        self.focus = Focus::Terminal;
-        self.resize_focused()
+        self.activate_tab(next)
     }
 
     /// Run a keymap [`Action`] (FR9). Clipboard actions become iced tasks; tab
