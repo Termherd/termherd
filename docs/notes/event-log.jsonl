@@ -1,0 +1,114 @@
+{"event":"BoardTitled","title":"termherd — current version (shipped state, 2026-06-20)"}
+{"event":"PhaseAdded","label":"discover","fromCol":0,"toCol":3}
+{"event":"PhaseAdded","label":"launch","fromCol":4,"toCol":6}
+{"event":"PhaseAdded","label":"interact","fromCol":7,"toCol":11}
+{"event":"PhaseAdded","label":"organize","fromCol":12,"toCol":15}
+{"event":"PhaseAdded","label":"search & memory","fromCol":16,"toCol":17}
+{"event":"ElementAdded","id":"X1","type":"actor","label":"Operator","col":0}
+{"event":"ElementAdded","id":"C0","type":"command","label":"load settings (settings.json)","col":0}
+{"event":"ElementAdded","id":"EXT-FS","type":"external","label":"~/.claude/projects (filesystem)","col":0}
+{"event":"ElementAdded","id":"C1","type":"command","label":"launch app","col":1}
+{"event":"ElementAdded","id":"E0","type":"event","label":"ShellProfile + Theme applied","col":1}
+{"event":"ElementAdded","id":"A-SCAN","type":"aggregate","label":"ProjectScanner (scan adapter)","col":2}
+{"event":"ElementAdded","id":"E1","type":"event","label":"ProjectsDiscovered (scan + derive + group)","col":2}
+{"event":"ElementAdded","id":"P-WATCH","type":"policy","label":"when fs changes, debounce → re-scan (notify, FR2)","col":3}
+{"event":"ElementAdded","id":"E2","type":"event","label":"SessionListUpdated (live fs-watch)","col":3}
+{"event":"ElementAdded","id":"R-SIDEBAR","type":"readmodel","label":"Sidebar: projects + sessions (foldable, #22)","col":3}
+{"event":"ElementAdded","id":"C2","type":"command","label":"click session → resume","col":4}
+{"event":"ElementAdded","id":"A-WS","type":"aggregate","label":"Workspace (pane tree + tabs, pure core)","col":4}
+{"event":"ElementAdded","id":"A-PTY","type":"aggregate","label":"Session actor (PTY + terminal grid)","col":5}
+{"event":"ElementAdded","id":"E3","type":"event","label":"SessionLaunched (claude --resume in PTY)","col":5}
+{"event":"ElementAdded","id":"EXT-CLI","type":"external","label":"Claude CLI (PTY child)","col":5}
+{"event":"ElementAdded","id":"E4","type":"event","label":"TabOpened","col":6}
+{"event":"ElementAdded","id":"R-TERM","type":"readmodel","label":"Terminal canvas (colour grid + cursor)","col":6}
+{"event":"ElementAdded","id":"C3","type":"command","label":"type keys / scroll / select","col":7}
+{"event":"ElementAdded","id":"E5","type":"event","label":"KeysForwarded to focused PTY","col":7}
+{"event":"ElementAdded","id":"E6","type":"event","label":"ScrollbackShown / SelectionCopied","col":8}
+{"event":"ElementAdded","id":"E7","type":"event","label":"TitleReported (OSC 0)","col":9}
+{"event":"ElementAdded","id":"E8","type":"event","label":"StatusEmitted (OSC: busy / waiting / OSC 9)","col":10}
+{"event":"ElementAdded","id":"P-ATTN","type":"policy","label":"when OSC 9, set sticky Attention (cleared by work)","col":11}
+{"event":"ElementAdded","id":"E9","type":"event","label":"AttentionRaised","col":11}
+{"event":"ElementAdded","id":"R-STATUS","type":"readmodel","label":"Status badge + sidebar dot + tab dot (FR8)","col":11}
+{"event":"ElementAdded","id":"C4","type":"command","label":"switch tab (Ctrl+1-9 / Ctrl+Tab)","col":12}
+{"event":"ElementAdded","id":"E10","type":"event","label":"TabActivated","col":12}
+{"event":"ElementAdded","id":"C5","type":"command","label":"close tab","col":13}
+{"event":"ElementAdded","id":"E11","type":"event","label":"TabClosed (Effect::Kill PTY)","col":13}
+{"event":"ElementAdded","id":"R-TABS","type":"readmodel","label":"Tab strip (label follows OSC title, #24)","col":13}
+{"event":"ElementAdded","id":"C6","type":"command","label":"toggle sidebar (Ctrl+Cmd+B, #21)","col":14}
+{"event":"ElementAdded","id":"C7","type":"command","label":"star / rename / archive session","col":15}
+{"event":"ElementAdded","id":"A-META","type":"aggregate","label":"SessionMeta overlay (metadata.json)","col":15}
+{"event":"ElementAdded","id":"E12","type":"event","label":"SessionStarred / Renamed / Archived","col":15}
+{"event":"ElementAdded","id":"C8","type":"command","label":"focus search + type query (FR3)","col":16}
+{"event":"ElementAdded","id":"E13","type":"event","label":"ResultsFiltered (in-memory digests, titles toggle)","col":16}
+{"event":"ElementAdded","id":"C9","type":"command","label":"open plan / CLAUDE.md","col":17}
+{"event":"ElementAdded","id":"A-DOCS","type":"aggregate","label":"docs adapter (off-thread read)","col":17}
+{"event":"ElementAdded","id":"E14","type":"event","label":"DocOpened (read-only)","col":17}
+{"event":"ElementAdded","id":"R-SEARCH","type":"readmodel","label":"Search results + read-only doc pane","col":17}
+{"event":"ElementAdded","id":"H6","type":"hotspot","label":"Unsigned bundles — certs pending (OQ5, F-packaging-ci)","col":0}
+{"event":"ElementAdded","id":"H4","type":"hotspot","label":"Split panes: pure core only, no iced render (F-terminal-split)","col":6}
+{"event":"ElementAdded","id":"H1","type":"hotspot","label":"Tab key not forwarded to PTY (#19, P0)","col":7}
+{"event":"ElementAdded","id":"H2","type":"hotspot","label":"Tab status stuck — misleading badge (#18, P0)","col":10}
+{"event":"ElementAdded","id":"H3","type":"hotspot","label":"Drag-reorder tabs not built (#25, FR5)","col":13}
+{"event":"ElementAdded","id":"H5","type":"hotspot","label":"Plans/memory editing missing — view-only (F-plans-memory)","col":17}
+{"event":"ElementAdded","id":"H7","type":"hotspot","label":"Fork detection blocked — signals absent in real sessions","col":4}
+{"event":"HotspotResolved","id":"H7","resolution":""}
+{"event":"EdgeAdded","src":"X1","dst":"C1"}
+{"event":"EdgeAdded","src":"C1","dst":"A-SCAN"}
+{"event":"EdgeAdded","src":"A-SCAN","dst":"E1"}
+{"event":"EdgeAdded","src":"EXT-FS","dst":"A-SCAN"}
+{"event":"EdgeAdded","src":"E1","dst":"P-WATCH"}
+{"event":"EdgeAdded","src":"P-WATCH","dst":"E2"}
+{"event":"EdgeAdded","src":"E2","dst":"R-SIDEBAR"}
+{"event":"EdgeAdded","src":"E1","dst":"R-SIDEBAR"}
+{"event":"EdgeAdded","src":"C0","dst":"E0"}
+{"event":"EdgeAdded","src":"E0","dst":"A-PTY"}
+{"event":"EdgeAdded","src":"X1","dst":"C2"}
+{"event":"EdgeAdded","src":"C2","dst":"A-WS"}
+{"event":"EdgeAdded","src":"A-WS","dst":"A-PTY"}
+{"event":"EdgeAdded","src":"A-PTY","dst":"E3"}
+{"event":"EdgeAdded","src":"A-WS","dst":"E4"}
+{"event":"EdgeAdded","src":"E3","dst":"R-TERM"}
+{"event":"EdgeAdded","src":"EXT-CLI","dst":"A-PTY"}
+{"event":"EdgeAdded","src":"X1","dst":"C3"}
+{"event":"EdgeAdded","src":"C3","dst":"E5"}
+{"event":"EdgeAdded","src":"C3","dst":"E6"}
+{"event":"EdgeAdded","src":"E5","dst":"EXT-CLI"}
+{"event":"EdgeAdded","src":"EXT-CLI","dst":"E7"}
+{"event":"EdgeAdded","src":"EXT-CLI","dst":"E8"}
+{"event":"EdgeAdded","src":"E7","dst":"R-TABS"}
+{"event":"EdgeAdded","src":"E8","dst":"P-ATTN"}
+{"event":"EdgeAdded","src":"P-ATTN","dst":"E9"}
+{"event":"EdgeAdded","src":"E8","dst":"R-STATUS"}
+{"event":"EdgeAdded","src":"E9","dst":"R-STATUS"}
+{"event":"EdgeAdded","src":"X1","dst":"C4"}
+{"event":"EdgeAdded","src":"X1","dst":"C5"}
+{"event":"EdgeAdded","src":"X1","dst":"C6"}
+{"event":"EdgeAdded","src":"X1","dst":"C7"}
+{"event":"EdgeAdded","src":"C4","dst":"E10"}
+{"event":"EdgeAdded","src":"C5","dst":"E11"}
+{"event":"EdgeAdded","src":"C7","dst":"A-META"}
+{"event":"EdgeAdded","src":"A-META","dst":"E12"}
+{"event":"EdgeAdded","src":"E10","dst":"R-TABS"}
+{"event":"EdgeAdded","src":"E11","dst":"R-TABS"}
+{"event":"EdgeAdded","src":"E12","dst":"R-SIDEBAR"}
+{"event":"EdgeAdded","src":"X1","dst":"C8"}
+{"event":"EdgeAdded","src":"C8","dst":"E13"}
+{"event":"EdgeAdded","src":"E13","dst":"R-SEARCH"}
+{"event":"EdgeAdded","src":"X1","dst":"C9"}
+{"event":"EdgeAdded","src":"C9","dst":"A-DOCS"}
+{"event":"EdgeAdded","src":"A-DOCS","dst":"E14"}
+{"event":"EdgeAdded","src":"E14","dst":"R-SEARCH"}
+{"event":"EdgeAdded","src":"H1","dst":"E5"}
+{"event":"EdgeAdded","src":"H2","dst":"E8"}
+{"event":"EdgeAdded","src":"H3","dst":"R-TABS"}
+{"event":"EdgeAdded","src":"H4","dst":"A-PTY"}
+{"event":"EdgeAdded","src":"H5","dst":"E14"}
+{"event":"EdgeAdded","src":"H6","dst":"C1"}
+{"event":"ElementMoved","id":"X1","col":1}
+{"event":"ElementMoved","id":"X1","col":2}
+{"event":"ElementMoved","id":"X1","col":3}
+{"event":"ElementMoved","id":"X1","col":4}
+{"event":"ElementMoved","id":"X1","col":5}
+{"event":"ElementMoved","id":"X1","col":6}
+{"event":"ElementMoved","id":"X1","col":7}
+{"event":"ElementMoved","id":"X1","col":8}
