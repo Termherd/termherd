@@ -152,6 +152,11 @@ pub enum Event {
     },
     /// A session's PTY process exited.
     PtyExited(SessionId),
+    /// The session reported a new title over OSC (#24); relabel its tab.
+    SessionTitleChanged {
+        session: SessionId,
+        title: String,
+    },
     /// The user clicked a tab to bring it to the front (FR5).
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.
@@ -276,6 +281,10 @@ impl App {
                 if let Some(s) = self.sessions.get_mut(&session) {
                     s.status = SessionStatus::Exited;
                 }
+                Vec::new()
+            }
+            Event::SessionTitleChanged { session, title } => {
+                self.workspace.set_session_title(session, title);
                 Vec::new()
             }
             Event::ActivateTab(index) => {
@@ -706,6 +715,18 @@ mod tests {
         // The surviving session stays live and focused.
         assert_eq!(app.workspace.focused_session(), Some(first));
         assert!(app.sessions.contains_key(&first));
+    }
+
+    #[test]
+    fn session_title_changed_relabels_the_tab() {
+        let mut app = App::new();
+        let id = launch(&mut app, "old");
+        let effects = app.apply(Event::SessionTitleChanged {
+            session: id,
+            title: "Claude's title".into(),
+        });
+        assert!(effects.is_empty());
+        assert_eq!(app.workspace.tabs[0].title, "Claude's title");
     }
 
     #[test]

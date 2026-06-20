@@ -109,6 +109,22 @@ impl Workspace {
         Some(())
     }
 
+    /// Set the title of the tab hosting `session`, to follow the title Claude
+    /// reports over OSC (#24). Returns `None` if no tab hosts the session,
+    /// leaving every title unchanged.
+    pub fn set_session_title(
+        &mut self,
+        session: SessionId,
+        title: impl Into<String>,
+    ) -> Option<()> {
+        let tab = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.sessions().contains(&session))?;
+        tab.title = title.into();
+        Some(())
+    }
+
     /// Make the tab at `index` active (FR5). Returns `None` if the index is
     /// out of range, leaving the active tab unchanged.
     pub fn activate(&mut self, index: usize) -> Option<()> {
@@ -277,6 +293,27 @@ mod tests {
         assert_eq!(ws.active, 0);
         assert_eq!(ws.focused_session(), Some(sid(1)));
         assert!(ws.tabs[0].focus.is_empty());
+    }
+
+    #[test]
+    fn set_session_title_relabels_the_hosting_tab_only() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "first");
+        ws.open(sid(2), "second");
+        // A split: tab 1 now hosts sid(2) and sid(3).
+        ws.split(SplitDir::Vertical, sid(3));
+
+        assert_eq!(ws.set_session_title(sid(1), "renamed"), Some(()));
+        assert_eq!(ws.tabs[0].title, "renamed");
+        // Any session in a split tab relabels that tab.
+        assert_eq!(ws.set_session_title(sid(3), "split title"), Some(()));
+        assert_eq!(ws.tabs[1].title, "split title");
+        // The untouched tab keeps its title.
+        assert_eq!(ws.tabs[0].title, "renamed");
+        // An unknown session changes nothing.
+        assert_eq!(ws.set_session_title(sid(99), "ghost"), None);
+        assert_eq!(ws.tabs[0].title, "renamed");
+        assert_eq!(ws.tabs[1].title, "split title");
     }
 
     #[test]

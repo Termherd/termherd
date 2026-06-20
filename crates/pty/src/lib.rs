@@ -45,6 +45,8 @@ pub enum PtyEvent {
         session: SessionId,
         status: SessionStatus,
     },
+    /// The session's reported title changed (#24); drives the tab label.
+    Title { session: SessionId, title: String },
     /// The session's PTY process exited.
     Exited { session: SessionId },
 }
@@ -216,7 +218,8 @@ fn fold_status(current: SessionStatus, signals: &[OscSignal]) -> SessionStatus {
             OscSignal::Idle if status == SessionStatus::Attention => SessionStatus::Attention,
             OscSignal::Idle => SessionStatus::Idle,
             OscSignal::Notification(_) => SessionStatus::Attention,
-            OscSignal::AltScreen(_) | OscSignal::Bell => status,
+            // The title text drives the tab label (#24), not the status.
+            OscSignal::Title(_) | OscSignal::AltScreen(_) | OscSignal::Bell => status,
         };
     }
     status
@@ -586,13 +589,14 @@ fn spawn_term(
             );
             let mut parser: Processor = Processor::new();
             let mut status = SessionStatus::Starting;
+            let mut title: Option<String> = None;
             while let Ok(cmd) = ctrl_rx.recv() {
                 match cmd {
                     TermCmd::Bytes(bytes) => {
                         // OSC status comes from the raw bytes — alacritty
                         // consumes the sequences, so decode before parsing.
-                        let next =
-                            fold_status(status, &decode_chunk(&String::from_utf8_lossy(&bytes)));
+                        let signals = decode_chunk(&String::from_utf8_lossy(&bytes));
+                        let next = fold_status(status, &signals);
                         if next != status {
                             tracing::debug!(
                                 session = session.0.get(),
@@ -602,6 +606,19 @@ fn spawn_term(
                             );
                             status = next;
                             term_sink(PtyEvent::Status { session, status });
+                        }
+                        // Follow Claude's reported title (#24); the last title in
+                        // the chunk wins, and only a change is forwarded.
+                        if let Some(next) = signals.iter().rev().find_map(|s| match s {
+                            OscSignal::Title(t) => Some(t),
+                            _ => None,
+                        }) && title.as_deref() != Some(next.as_str())
+                        {
+                            title = Some(next.clone());
+                            term_sink(PtyEvent::Title {
+                                session,
+                                title: next.clone(),
+                            });
                         }
                         parser.advance(&mut term, &bytes);
                     }
@@ -927,7 +944,7 @@ mod tests {
                         break;
                     }
                 }
-                Ok(PtyEvent::Status { .. }) => continue,
+                Ok(PtyEvent::Status { .. } | PtyEvent::Title { .. }) => continue,
                 Ok(PtyEvent::Exited { .. }) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(_) => break,
