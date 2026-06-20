@@ -73,28 +73,48 @@ impl Shell {
             };
             list = list.push(text(label).size(12));
         }
-        // Plans & memory docs (F-plans-memory), above the project list.
+        // Plans & memory docs (F-plans-memory), above the project list. Its
+        // header folds shut too (#22), keyed like a project group.
         if !self.docs.is_empty() {
-            let mut docs_col = column![text("Plans & mémoire").size(12)].spacing(4);
-            for doc in &self.docs {
-                docs_col = docs_col.push(
-                    button(text(clip(&doc.label, 34)).size(11))
-                        .on_press(Message::OpenDoc {
-                            label: doc.label.clone(),
-                            path: doc.path.clone(),
-                        })
-                        .style(button::text)
-                        .padding(0),
-                );
+            let collapsed = self.core.is_collapsed(PLANS_SECTION_KEY);
+            let header = row![
+                fold_toggle(PLANS_SECTION_KEY, collapsed),
+                text("Plans & mémoire").size(12)
+            ]
+            .spacing(6)
+            .align_y(iced::Center);
+            let mut docs_col = column![header].spacing(4);
+            if !collapsed {
+                for doc in &self.docs {
+                    docs_col = docs_col.push(
+                        button(text(clip(&doc.label, 34)).size(11))
+                            .on_press(Message::OpenDoc {
+                                label: doc.label.clone(),
+                                path: doc.path.clone(),
+                            })
+                            .style(button::text)
+                            .padding(0),
+                    );
+                }
             }
             list = list.push(docs_col);
         }
         for group in &visible {
+            let collapsed = self.core.is_collapsed(&group.path);
+            // A disclosure triangle folds the session list (#22); the project
+            // name keeps its launch-a-terminal click beside it.
+            let fold = fold_toggle(&group.path, collapsed);
             let open = button(text(project_label(&group.path).to_owned()).size(14))
                 .on_press(Message::LaunchProject(group.path.clone()))
                 .style(button::text)
                 .padding(0);
-            let mut g = column![open].spacing(4);
+            let header = row![fold, open].spacing(6).align_y(iced::Center);
+            let mut g = column![header].spacing(4);
+            // A folded project shows only its header, hiding the session list.
+            if collapsed {
+                list = list.push(g);
+                continue;
+            }
             for s in &group.sessions {
                 let id = s.session_id.as_str();
                 let starred = self.core.is_starred(id);
@@ -401,6 +421,22 @@ fn status_badge(status: SessionStatus) -> Element<'static, Message> {
     row![text("●").size(13).color(color), text(label).size(13)]
         .spacing(6)
         .align_y(iced::Center)
+        .into()
+}
+
+/// Fold key for the Plans & mémoire section (#22). Project groups key their
+/// fold by real (always absolute) path; this reserved, non-path key shares the
+/// same persisted set without ever colliding with a project.
+const PLANS_SECTION_KEY: &str = "plans-memory";
+
+/// The disclosure triangle that folds a sidebar section (#22): ▾ when open, ▸
+/// when folded, toggling the fold for `key`. Shared by the project headers and
+/// the Plans & mémoire section so the two can't drift apart.
+fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
+    button(text(if collapsed { "▸" } else { "▾" }).size(12))
+        .on_press(Message::ToggleCollapsed(key.to_owned()))
+        .style(button::text)
+        .padding(0)
         .into()
 }
 

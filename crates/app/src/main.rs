@@ -4,6 +4,7 @@
 //! require-time singletons): tracing, single-instance, the filesystem
 //! scanner, then the iced shell.
 
+mod collapsed_store;
 mod docs;
 mod metadata_store;
 mod settings;
@@ -57,6 +58,7 @@ fn main() -> iced::Result {
     });
     let keymap = settings.keymap();
     let metadata = metadata_store::load();
+    let collapsed = collapsed_store::load();
 
     // PTY output flows from the reader threads through this channel into the
     // iced subscription (M2). The manager is built here and injected as a
@@ -71,6 +73,7 @@ fn main() -> iced::Result {
         theme: settings.theme,
         keymap,
         metadata,
+        collapsed,
     };
     let result = shell::run(scanner, watch_root, pty, pty_rx, startup);
     // Keep the single-instance guard alive until the GUI exits.

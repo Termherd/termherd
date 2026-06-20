@@ -12,7 +12,7 @@
 //! - [`input`] — keyboard translation (chords / `TermKey` / modifiers).
 //! - [`streams`] — the PTY-output and fs-watch subscription sources.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -63,6 +63,8 @@ pub struct Startup {
     pub theme: ThemeChoice,
     pub keymap: Keymap,
     pub metadata: HashMap<String, SessionMeta>,
+    /// Folded project paths restored from disk (#22).
+    pub collapsed: HashSet<String>,
 }
 
 pub fn run(
@@ -90,6 +92,7 @@ pub fn run(
                     theme: startup.theme,
                     keymap: startup.keymap.clone(),
                     metadata: startup.metadata.clone(),
+                    collapsed: startup.collapsed.clone(),
                 },
             );
             let initial_scan = shell.rescan();
@@ -224,6 +227,8 @@ enum Message {
     CancelArchive,
     /// Show or hide archived sessions in the browser (F-session-metadata).
     ShowArchived(bool),
+    /// Fold or unfold a project's session list in the sidebar, by path (#22).
+    ToggleCollapsed(String),
     /// Begin renaming a session inline, seeded with its current title.
     StartRename {
         session: String,
@@ -260,6 +265,7 @@ impl Shell {
     ) -> Self {
         let mut core = termherd_core::App::new();
         core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
+        core.apply(termherd_core::Event::CollapsedLoaded(startup.collapsed));
         Self {
             core,
             bounds,
@@ -314,6 +320,11 @@ impl Shell {
                 // Metadata persistence is a file write, not a PTY call.
                 Effect::SaveMetadata(metadata) => {
                     crate::metadata_store::save(&metadata);
+                    Ok(())
+                }
+                // Fold state is a file write too (#22).
+                Effect::SaveCollapsed(collapsed) => {
+                    crate::collapsed_store::save(&collapsed);
                     Ok(())
                 }
                 // Opening a link is an OS handoff, not a PTY call (#28).
@@ -522,6 +533,10 @@ impl Shell {
                     .core
                     .apply(termherd_core::Event::ShowArchivedToggled(show));
                 Task::none()
+            }
+            Message::ToggleCollapsed(path) => {
+                let effects = self.core.apply(termherd_core::Event::ToggleCollapsed(path));
+                self.perform(effects)
             }
             Message::StartRename { session, current } => {
                 self.renaming = Some((session, current));
@@ -860,6 +875,7 @@ mod key_routing {
                 theme: ThemeChoice::default(),
                 keymap: Keymap::defaults(),
                 metadata: HashMap::new(),
+                collapsed: HashSet::new(),
             },
         );
         let _ = shell.launch("/tmp/project".to_string(), None);
@@ -1117,6 +1133,19 @@ mod key_routing {
             !shell.core.is_archived("sess"),
             "a terminal Enter must not confirm a dropped archive prompt"
         );
+    }
+
+    #[test]
+    fn toggling_collapse_folds_and_unfolds_a_project() {
+        // The sidebar's disclosure triangle routes through this message; one
+        // click folds the project, a second unfolds it (#22).
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_one(&mut shell, "sess");
+        assert!(!shell.core.is_collapsed("/tmp/project"));
+        let _ = shell.update(Message::ToggleCollapsed("/tmp/project".into()));
+        assert!(shell.core.is_collapsed("/tmp/project"));
+        let _ = shell.update(Message::ToggleCollapsed("/tmp/project".into()));
+        assert!(!shell.core.is_collapsed("/tmp/project"));
     }
 
     #[test]

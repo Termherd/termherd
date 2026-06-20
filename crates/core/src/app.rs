@@ -7,7 +7,7 @@
 //! events. The grid itself lives in the adapter's per-session task — `core`
 //! holds only the lifecycle and the derived activity status (FR8).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU64;
 
 use crate::browser::{ProjectGroup, SessionRecord, filter_projects, group_projects};
@@ -35,6 +35,9 @@ pub struct App {
     pub metadata: HashMap<String, SessionMeta>,
     /// Whether archived sessions show in the browser.
     pub show_archived: bool,
+    /// Project paths whose session list is folded shut in the sidebar (#22);
+    /// persisted to `~/.termherd` so the fold survives a restart.
+    pub collapsed: HashSet<String>,
     /// Monotonic source of `SessionId`s; never reused within a run. This is
     /// the structural fix for the `realSessionId` race (Q6) — ids are minted
     /// here, single-threaded, before any PTY exists.
@@ -170,6 +173,10 @@ pub enum Event {
     },
     /// Show or hide archived sessions in the browser.
     ShowArchivedToggled(bool),
+    /// Persisted fold state loaded at startup (#22): the folded project paths.
+    CollapsedLoaded(HashSet<String>),
+    /// Fold or unfold a project's session list in the sidebar, by path (#22).
+    ToggleCollapsed(String),
     /// The user Ctrl/Cmd+clicked a detected link in a terminal (#28).
     OpenUrl(String),
 }
@@ -194,6 +201,8 @@ pub enum Effect {
     Kill(SessionId),
     /// Persist the session metadata overlay (`F-session-metadata`).
     SaveMetadata(HashMap<String, SessionMeta>),
+    /// Persist the folded-project set (#22).
+    SaveCollapsed(HashSet<String>),
     /// Open a URL in the OS default handler (#28); the shell performs it.
     OpenUrl(String),
 }
@@ -303,6 +312,11 @@ impl App {
                 self.show_archived = show;
                 Vec::new()
             }
+            Event::CollapsedLoaded(paths) => {
+                self.collapsed = paths;
+                Vec::new()
+            }
+            Event::ToggleCollapsed(path) => self.toggle_collapsed(path),
             Event::OpenUrl(url) => {
                 let url = url.trim();
                 // Only well-formed schemes reach the OS handler; a blank or
@@ -355,6 +369,20 @@ impl App {
     #[must_use]
     pub fn is_archived(&self, session_id: &str) -> bool {
         self.metadata.get(session_id).is_some_and(|m| m.archived)
+    }
+
+    /// Whether a project's session list is folded shut in the sidebar (#22).
+    #[must_use]
+    pub fn is_collapsed(&self, path: &str) -> bool {
+        self.collapsed.contains(path)
+    }
+
+    /// Flip a project's fold state and emit the persistence effect (#22).
+    fn toggle_collapsed(&mut self, path: String) -> Vec<Effect> {
+        if !self.collapsed.remove(&path) {
+            self.collapsed.insert(path);
+        }
+        vec![Effect::SaveCollapsed(self.collapsed.clone())]
     }
 
     /// Edit a session's metadata, dropping it when it returns to defaults, and
@@ -757,6 +785,34 @@ mod tests {
             app.session_title(&app.projects[0].sessions[0].clone()),
             derived
         );
+    }
+
+    #[test]
+    fn toggling_collapse_folds_then_unfolds_and_persists() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record("a", "/p", "only")]));
+        assert!(!app.is_collapsed("/p"));
+
+        // First toggle folds the project and persists the set containing it.
+        let effects = app.apply(Event::ToggleCollapsed("/p".into()));
+        assert!(app.is_collapsed("/p"));
+        assert!(matches!(effects.as_slice(), [Effect::SaveCollapsed(c)] if c.contains("/p")));
+
+        // A second toggle unfolds it and persists the now-empty set.
+        let effects = app.apply(Event::ToggleCollapsed("/p".into()));
+        assert!(!app.is_collapsed("/p"));
+        assert!(matches!(effects.as_slice(), [Effect::SaveCollapsed(c)] if !c.contains("/p")));
+    }
+
+    #[test]
+    fn collapsed_state_loads_and_survives_a_rescan() {
+        let mut app = App::new();
+        app.apply(Event::CollapsedLoaded(HashSet::from(["/p".to_owned()])));
+        assert!(app.is_collapsed("/p"));
+        // A fold is a sidebar preference, not a property of the scan: a later
+        // scan of the same project must keep it folded.
+        app.apply(Event::ScanCompleted(vec![record("a", "/p", "only")]));
+        assert!(app.is_collapsed("/p"));
     }
 
     #[test]
