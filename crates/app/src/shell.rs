@@ -107,12 +107,30 @@ pub fn run(
         size: Size::new(config.width, config.height),
         position,
         min_size: Some(Size::new(480.0, 320.0)),
+        icon: window_icon(),
         ..window::Settings::default()
     })
     // Close requests are intercepted so bounds can be saved first.
     .exit_on_close_request(false)
     .subscription(Shell::subscription)
     .run()
+}
+
+/// The window icon (taskbar + title bar) decoded from the bundled PNG. iced
+/// 0.14 only takes raw RGBA, so we decode the 256×256 icon here. `None` if it
+/// can't be decoded — a missing icon must never block startup.
+fn window_icon() -> Option<window::Icon> {
+    let png = include_bytes!("../icons/256x256.png");
+    let mut reader = png::Decoder::new(png.as_slice()).read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    // The bundled icon is 8-bit RGBA; bail rather than ship a garbled image if
+    // that ever changes underfoot.
+    if info.color_type != png::ColorType::Rgba || info.bit_depth != png::BitDepth::Eight {
+        return None;
+    }
+    buf.truncate(info.buffer_size());
+    window::icon::from_rgba(buf, info.width, info.height).ok()
 }
 
 /// Where keyboard input goes. The terminal is the default target once one is
@@ -896,6 +914,17 @@ mod key_routing {
             text: text.map(Into::into),
             repeat: false,
         }
+    }
+
+    #[test]
+    fn the_bundled_window_icon_decodes() {
+        // Guards the icon wiring: if the bundled PNG is ever swapped for a
+        // format `window_icon` can't decode, the window would silently lose its
+        // icon. Fail the build instead.
+        assert!(
+            window_icon().is_some(),
+            "the bundled 256x256.png must decode to an RGBA window icon"
+        );
     }
 
     #[test]
