@@ -85,6 +85,16 @@ impl Workspace {
         self.active = self.tabs.len() - 1;
     }
 
+    /// Index of the tab hosting `session`, if any. A session lives in exactly
+    /// one tab (possibly inside a split), so this lets the shell re-focus an
+    /// already-open session instead of launching a duplicate.
+    #[must_use]
+    pub fn tab_of(&self, session: SessionId) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.sessions().contains(&session))
+    }
+
     /// Split the focused leaf in the active tab, opening `new` on side B.
     /// Focus moves to the new pane. Returns `None` if there is no active tab
     /// or the focus path does not resolve to a leaf.
@@ -473,6 +483,18 @@ mod tests {
         assert_eq!(ws.close_tab(0), vec![sid(1), sid(2)]);
         assert!(ws.tabs.is_empty());
         assert_eq!(ws.active, 0);
+    }
+
+    #[test]
+    fn tab_of_locates_the_hosting_tab_including_inside_a_split() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.open(sid(2), "b");
+        ws.split(SplitDir::Vertical, sid(3)); // sid 3 joins tab "b" as a split
+        assert_eq!(ws.tab_of(sid(1)), Some(0));
+        assert_eq!(ws.tab_of(sid(2)), Some(1));
+        assert_eq!(ws.tab_of(sid(3)), Some(1), "a split member maps to its tab");
+        assert_eq!(ws.tab_of(sid(9)), None, "an unopened session has no tab");
     }
 
     #[test]
