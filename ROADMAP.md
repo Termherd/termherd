@@ -17,8 +17,8 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 3. **P1 — cheap, on-thesis wins:** #26 (Ctrl+Number tabs), #23 (quick-launch
    button). (#21 hide pane / Ctrl+B and #20 archive confirm — shipped.)
 4. **P2 — polish:** #25 drag-reorder tabs (FR5), #27 cursor +
-   double-click, #28 link click, #29 OS notifications. (#24 tab titles —
-   shipped.)
+   double-click. (#24 tab titles, #28 link click, #29 OS
+   notifications — shipped.)
 5. **Design-first backlog** — see below; don't code until scoped.
 
 `F-terminal-split` (Should) isn't in the feedback but its core already landed —
