@@ -63,6 +63,15 @@ single-instance = "0.3"
 iced = { version = "0.14", features = ["canvas", "advanced"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Decode the bundled PNG into the RGBA the iced window icon wants — iced 0.14
+# only exposes `from_rgba`, no file decoder.
+png = "0.17"
+
+# Embed `icons/icon.ico` into termherd.exe so the executable and its shortcuts
+# carry the app icon on Windows. Host-gated: only pulled in (and only run) when
+# building on Windows, matching the `#[cfg(windows)]` guard in build.rs.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [lints]
 workspace = true
