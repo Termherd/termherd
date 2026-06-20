@@ -16,7 +16,7 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
    terminal path), #18 (tab status stuck — misleading status badge).
 3. **P1 — cheap, on-thesis wins:** #21 (hide pane / Ctrl+B), #26 (Ctrl+Number
    tabs), #23 (quick-launch button), #20 (archive confirm).
-4. **P2 — polish:** #22 fold repos, #25 drag-reorder tabs (FR5), #27 cursor +
+4. **P2 — polish:** #25 drag-reorder tabs (FR5), #27 cursor +
    double-click, #24 tab titles, #28 link click, #29 OS notifications.
 5. **Design-first backlog** — see below; don't code until scoped.
 
@@ -32,7 +32,8 @@ headline.
 - [x] `F-app-shell` — window, lifecycle, bounds (menu: deferred to M3 with
   the keymap — no native menu API in iced; menu items mirror keymap actions)
 - [x] `F-session-browser` — scan + derive + group + list + live fs-watch
-  updates (debounced `notify`, FR2)
+  updates (debounced `notify`, FR2); a per-project disclosure triangle folds
+  its session list, persisted to `~/.termherd/collapsed.json` (#22)
 - [x] `F-builtin-terminal` — PTY + native terminal widget (M2):
   `termherd-pty` adapter (`portable-pty` + `alacritty_terminal`,
   reader + terminal thread per session, cursor-report reply for ConPTY);

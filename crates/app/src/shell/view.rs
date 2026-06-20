@@ -90,11 +90,24 @@ impl Shell {
             list = list.push(docs_col);
         }
         for group in &visible {
+            let collapsed = self.core.is_collapsed(&group.path);
+            // A disclosure triangle folds the session list (#22); the project
+            // name keeps its launch-a-terminal click beside it.
+            let fold = button(text(if collapsed { "▸" } else { "▾" }).size(12))
+                .on_press(Message::ToggleCollapsed(group.path.clone()))
+                .style(button::text)
+                .padding(0);
             let open = button(text(project_label(&group.path).to_owned()).size(14))
                 .on_press(Message::LaunchProject(group.path.clone()))
                 .style(button::text)
                 .padding(0);
-            let mut g = column![open].spacing(4);
+            let header = row![fold, open].spacing(6).align_y(iced::Center);
+            let mut g = column![header].spacing(4);
+            // A folded project shows only its header, hiding the session list.
+            if collapsed {
+                list = list.push(g);
+                continue;
+            }
             for s in &group.sessions {
                 let id = s.session_id.as_str();
                 let starred = self.core.is_starred(id);
