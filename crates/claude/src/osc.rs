@@ -27,6 +27,12 @@ pub enum OscSignal {
     Busy,
     /// Claude is idle and waiting for input (`✳` title).
     Idle,
+    /// The session title Claude reports in its OSC 0 sequence (#24), with the
+    /// leading busy/idle status glyph stripped. Empty titles are not reported.
+    /// Only glyph-prefixed titles qualify — that filter is load-bearing: the
+    /// shell emits junk titles first (`C:\…\cmd.exe …`, then `claude`) before
+    /// Claude's real `✳ <name>`, and those must not reach the tab label.
+    Title(String),
     /// OSC 9 notification payload (attention / permission requests).
     Notification(String),
     /// Alternate screen entered (`true`) or left (`false`).
@@ -45,15 +51,22 @@ pub fn decode_chunk(chunk: &str) -> Vec<OscSignal> {
 
     if chunk.contains("\u{1b}]") {
         let sequences = osc_sequences(chunk);
-        // Pass 1 — OSC 0 titles (busy spinner / idle marker), in order.
+        // Pass 1 — OSC 0 titles (busy spinner / idle marker), in order. Each
+        // status glyph also carries the human title text after it (#24).
         for (code, payload) in &sequences {
             if *code != 0 {
                 continue;
             }
-            match payload.chars().next() {
-                Some(c) if ('\u{2800}'..='\u{28FF}').contains(&c) => signals.push(OscSignal::Busy),
-                Some('\u{2733}') => signals.push(OscSignal::Idle),
-                _ => {}
+            let status = match payload.chars().next() {
+                Some(c) if ('\u{2800}'..='\u{28FF}').contains(&c) => Some(OscSignal::Busy),
+                Some('\u{2733}') => Some(OscSignal::Idle),
+                _ => None,
+            };
+            if let Some(status) = status {
+                signals.push(status);
+                if let Some(title) = title_after_glyph(payload) {
+                    signals.push(OscSignal::Title(title.to_owned()));
+                }
             }
         }
         // Pass 2 — OSC 9 progress and notifications, in order.
@@ -85,6 +98,16 @@ pub fn decode_chunk(chunk: &str) -> Vec<OscSignal> {
     }
 
     signals
+}
+
+/// The human title carried by an OSC 0 payload whose first char is a status
+/// glyph (Braille spinner or `✳`): the text after that glyph, trimmed (#24).
+/// `None` when nothing meaningful remains — Claude's bare-glyph titles.
+fn title_after_glyph(payload: &str) -> Option<&str> {
+    let mut chars = payload.chars();
+    chars.next()?; // drop the leading status glyph
+    let rest = chars.as_str().trim();
+    (!rest.is_empty()).then_some(rest)
 }
 
 /// All `ESC ] <digits> ; <payload>` sequences terminated by BEL or ST
@@ -139,16 +162,35 @@ mod tests {
     use proptest::prelude::*;
 
     #[test]
-    fn braille_spinner_title_means_busy() {
-        // ⠋ U+280B — a spinner frame.
+    fn braille_spinner_title_means_busy_and_carries_its_text() {
+        // ⠋ U+280B — a spinner frame; the text after it is the live title (#24).
         let chunk = "\u{1b}]0;\u{280B} Thinking…\u{07}";
-        assert_eq!(decode_chunk(chunk), vec![OscSignal::Busy]);
+        assert_eq!(
+            decode_chunk(chunk),
+            vec![OscSignal::Busy, OscSignal::Title("Thinking…".into())]
+        );
     }
 
     #[test]
-    fn asterisk_title_means_idle() {
+    fn asterisk_title_means_idle_and_carries_its_text() {
         let chunk = "\u{1b}]0;\u{2733} claude\u{07}";
-        assert_eq!(decode_chunk(chunk), vec![OscSignal::Idle]);
+        assert_eq!(
+            decode_chunk(chunk),
+            vec![OscSignal::Idle, OscSignal::Title("claude".into())]
+        );
+    }
+
+    #[test]
+    fn a_bare_status_glyph_carries_no_title() {
+        // The spinner alone (no text after it) is a status with no title (#24).
+        assert_eq!(
+            decode_chunk("\u{1b}]0;\u{280B}\u{07}"),
+            vec![OscSignal::Busy]
+        );
+        assert_eq!(
+            decode_chunk("\u{1b}]0;\u{2733}  \u{07}"),
+            vec![OscSignal::Idle]
+        );
     }
 
     #[test]
@@ -160,7 +202,10 @@ mod tests {
     #[test]
     fn st_terminator_is_accepted() {
         let chunk = "\u{1b}]0;\u{2733} claude\u{1b}\\";
-        assert_eq!(decode_chunk(chunk), vec![OscSignal::Idle]);
+        assert_eq!(
+            decode_chunk(chunk),
+            vec![OscSignal::Idle, OscSignal::Title("claude".into())]
+        );
     }
 
     #[test]
@@ -212,7 +257,10 @@ mod tests {
         assert_eq!(decode_chunk("\u{1b}]0;x\u{1b}[2J"), vec![]);
         // …but a later complete sequence is still found.
         let chunk = "\u{1b}]0;torn\u{1b}]0;\u{2733} ok\u{07}";
-        assert_eq!(decode_chunk(chunk), vec![OscSignal::Idle]);
+        assert_eq!(
+            decode_chunk(chunk),
+            vec![OscSignal::Idle, OscSignal::Title("ok".into())]
+        );
     }
 
     #[test]

@@ -17,7 +17,8 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 3. **P1 — cheap, on-thesis wins:** #26 (Ctrl+Number tabs), #23 (quick-launch
    button). (#21 hide pane / Ctrl+B and #20 archive confirm — shipped.)
 4. **P2 — polish:** #25 drag-reorder tabs (FR5), #27 cursor +
-   double-click, #24 tab titles, #28 link click, #29 OS notifications.
+   double-click, #28 link click, #29 OS notifications. (#24 tab titles —
+   shipped.)
 5. **Design-first backlog** — see below; don't code until scoped.
 
 `F-terminal-split` (Should) isn't in the feedback but its core already landed —
@@ -68,7 +69,10 @@ headline.
   a tab; a tab strip switches between them, each chip carrying its activity
   dot (the FR8 tab badge) and a close button that kills the session's PTY —
   the first UI-driven `Effect::Kill`. Tab tree edits (`activate`/`close_tab`,
-  most-urgent `tab_status`) are pure in `core`. Drag-reorder (FR5) and
+  most-urgent `tab_status`) are pure in `core`. Tab labels follow the title
+  Claude reports over OSC 0 (#24): the `osc` decoder now carries the title
+  text, the `pty` reader forwards a change as `PtyEvent::Title`, and
+  `Workspace::set_session_title` relabels the hosting tab. Drag-reorder (FR5) and
   keyboard switching (deferred to `F-keyboard-shortcuts`) still to come
 - [x] `F-keyboard-shortcuts` — configurable keymap → actions (M3): pure
   `KeyChord -> Action` map in `core::keymap` with a chord-string parser and

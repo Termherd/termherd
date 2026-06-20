@@ -208,6 +208,11 @@ enum Message {
         session: SessionId,
         status: SessionStatus,
     },
+    /// A session reported a new title over OSC (#24); relabel its tab.
+    PtyTitle {
+        session: SessionId,
+        title: String,
+    },
     /// A session's process exited.
     PtyExited(SessionId),
     /// A raw key press; routed to the focused terminal when it has focus.
@@ -447,6 +452,12 @@ impl Shell {
                 let _ = self
                     .core
                     .apply(termherd_core::Event::StatusChanged { session, status });
+                Task::none()
+            }
+            Message::PtyTitle { session, title } => {
+                let _ = self
+                    .core
+                    .apply(termherd_core::Event::SessionTitleChanged { session, title });
                 Task::none()
             }
             Message::PtyExited(session) => {
