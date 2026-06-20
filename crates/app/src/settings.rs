@@ -176,6 +176,19 @@ mod tests {
     }
 
     #[test]
+    fn keys_can_bind_a_number_row_tab_jump() {
+        // A user remaps the third-tab jump to a non-default chord (issue #26).
+        use termherd_core::{Action, KeyChord};
+        let s: Settings = serde_json::from_str(r#"{ "keys": { "activate-tab-3": "alt+3" } }"#)
+            .expect("valid json");
+        let map = s.keymap();
+        assert_eq!(
+            map.lookup(&KeyChord::parse("alt+3").expect("valid chord")),
+            Some(Action::ActivateTab(2))
+        );
+    }
+
+    #[test]
     fn a_list_binds_several_chords_and_bad_entries_are_skipped() {
         use termherd_core::{Action, KeyChord, keymap::MOD_CTRL};
         let s: Settings =

@@ -3403,6 +3403,7 @@ dependencies = [
 name = "termherd-core"
 version = "0.0.0"
 dependencies = [
+ "proptest",
  "termherd-claude",
  "thiserror 2.0.18",
 ]

@@ -17,6 +17,21 @@ pub const MOD_SHIFT: u8 = 4;
 /// Modifier bit for the Cmd / Super / logo key.
 pub const MOD_CMD: u8 = 8;
 
+/// Tabs reachable from the number row: ⌘1…⌘9 / Ctrl+1…Ctrl+9 (issue #26). The
+/// digit is 1-based for the user; the tab index it carries is 0-based.
+pub const NUMBER_ROW_TABS: usize = 9;
+
+/// The platform's primary command modifier — ⌘ on macOS, Ctrl elsewhere. This
+/// is the modifier the number-row tab jumps bind to by default.
+#[must_use]
+pub const fn primary_mod() -> u8 {
+    if cfg!(target_os = "macos") {
+        MOD_CMD
+    } else {
+        MOD_CTRL
+    }
+}
+
 /// A key plus its modifiers — the left-hand side of a binding. `key` is a
 /// normalised lowercase name (`"c"`, `"tab"`, `"enter"`); `mods` is the OR of
 /// the `MOD_*` bits.
@@ -94,6 +109,10 @@ pub enum Action {
     ToggleSidebar,
     Copy,
     Paste,
+    /// Jump straight to the tab at this zero-based index (issue #26). Bound to
+    /// the platform's primary modifier and the number row — ⌘1…⌘9 on macOS,
+    /// Ctrl+1…Ctrl+9 elsewhere — where the user-facing digit is 1-based.
+    ActivateTab(usize),
 }
 
 impl Action {
@@ -114,9 +133,21 @@ impl Action {
             "toggle-sidebar" => Action::ToggleSidebar,
             "copy" => Action::Copy,
             "paste" => Action::Paste,
-            _ => return None,
+            _ => return activate_tab_from_config_name(name),
         })
     }
+}
+
+/// Parse an `activate-tab-N` config name (N in `1..=NUMBER_ROW_TABS`) into the
+/// matching zero-based [`Action::ActivateTab`], or `None` for anything else.
+fn activate_tab_from_config_name(name: &str) -> Option<Action> {
+    let digit = name.strip_prefix("activate-tab-")?;
+    let n: usize = digit.parse().ok()?;
+    // Lazy `then` (not `then_some`): `n - 1` must not be evaluated for n = 0,
+    // where it would underflow `usize` before the range check rejects it.
+    (1..=NUMBER_ROW_TABS)
+        .contains(&n)
+        .then(|| Action::ActivateTab(n - 1))
 }
 
 /// Resolves a [`KeyChord`] to its [`Action`]. Built from platform-aware
@@ -164,6 +195,14 @@ impl Keymap {
             Action::PrevTab,
             [KeyChord::new("tab", MOD_CTRL | MOD_SHIFT)],
         );
+        // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9 (issue #26). The
+        // digit is 1-based for the user; the action carries the 0-based index.
+        for n in 1..=NUMBER_ROW_TABS {
+            map.set(
+                Action::ActivateTab(n - 1),
+                [KeyChord::new(n.to_string(), primary_mod())],
+            );
+        }
         map
     }
 
@@ -266,6 +305,98 @@ mod tests {
             Some(Action::CloseFocused)
         );
         assert_eq!(Action::from_config_name("nope"), None);
+    }
+
+    #[test]
+    fn primary_mod_is_the_platform_command_modifier() {
+        // Pinned to the concrete constant (not derived from `primary_mod`) so a
+        // regression that swaps ⌘ for Ctrl on macOS is actually caught.
+        if cfg!(target_os = "macos") {
+            assert_eq!(primary_mod(), MOD_CMD);
+        } else {
+            assert_eq!(primary_mod(), MOD_CTRL);
+        }
+    }
+
+    #[test]
+    fn every_config_action_name_maps_to_an_action() {
+        // The full `keys` vocabulary the README documents must stay resolvable.
+        for name in [
+            "open-new-session",
+            "close-focused",
+            "split-horizontal",
+            "split-vertical",
+            "focus-next",
+            "focus-prev",
+            "next-tab",
+            "prev-tab",
+            "focus-search",
+            "toggle-sidebar",
+            "copy",
+            "paste",
+        ] {
+            assert!(
+                Action::from_config_name(name).is_some(),
+                "config action `{name}` should map to an Action",
+            );
+        }
+    }
+
+    #[test]
+    fn defaults_bind_the_number_row_to_tab_jumps() {
+        let map = Keymap::defaults();
+        // 1-based digit, 0-based tab index.
+        assert_eq!(
+            map.lookup(&KeyChord::new("1", primary_mod())),
+            Some(Action::ActivateTab(0))
+        );
+        assert_eq!(
+            map.lookup(&KeyChord::new("9", primary_mod())),
+            Some(Action::ActivateTab(8))
+        );
+        // The row stops at nine: there is no zero or tenth binding.
+        assert_eq!(map.lookup(&KeyChord::new("0", primary_mod())), None);
+        // A bare digit without the modifier is left for the terminal.
+        assert_eq!(map.lookup(&KeyChord::new("1", 0)), None);
+    }
+
+    #[test]
+    fn activate_tab_config_names_reject_out_of_range_and_garbage() {
+        assert_eq!(Action::from_config_name("activate-tab-0"), None);
+        assert_eq!(Action::from_config_name("activate-tab-10"), None);
+        assert_eq!(Action::from_config_name("activate-tab-"), None);
+        assert_eq!(Action::from_config_name("activate-tab-x"), None);
+        assert_eq!(Action::from_config_name("activate-tab"), None);
+    }
+
+    proptest::proptest! {
+        /// Every digit on the number row resolves to its zero-based tab jump.
+        #[test]
+        fn every_number_row_digit_binds_to_its_zero_based_tab(n in 1usize..=9) {
+            let map = Keymap::defaults();
+            proptest::prop_assert_eq!(
+                map.lookup(&KeyChord::new(n.to_string(), primary_mod())),
+                Some(Action::ActivateTab(n - 1))
+            );
+        }
+
+        /// `activate-tab-N` config names round-trip to the matching jump.
+        #[test]
+        fn activate_tab_config_names_round_trip(n in 1usize..=9) {
+            proptest::prop_assert_eq!(
+                Action::from_config_name(&format!("activate-tab-{n}")),
+                Some(Action::ActivateTab(n - 1))
+            );
+        }
+
+        /// A digit past the number row is not a known config action.
+        #[test]
+        fn activate_tab_names_past_nine_are_unknown(n in 10usize..10_000) {
+            proptest::prop_assert_eq!(
+                Action::from_config_name(&format!("activate-tab-{n}")),
+                None
+            );
+        }
     }
 
     #[test]
