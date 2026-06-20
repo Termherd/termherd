@@ -105,6 +105,10 @@ All shortcuts are configurable via the `keys` section of the config file
 | Focus search       | `Ctrl+F`                   | `Cmd+F`       |
 | Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C`      |
 
+Jump-to-tab (`Ctrl`/`Cmd`+`1`–`9`) is matched by physical key position, so it
+lands on the same number-row keys on every layout — including AZERTY and QWERTZ,
+where those keys produce `&`, `é`, … without Shift.
+
 Dragging a selection with the mouse also copies it on release, and the wheel
 scrolls back through history. In the sidebar, click a project or session to
 open it; a tab's `×` also closes it.

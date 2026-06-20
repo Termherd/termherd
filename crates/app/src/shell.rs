@@ -757,6 +757,7 @@ impl Shell {
         }
         let keyboard::Event::KeyPressed {
             key,
+            physical_key,
             modifiers,
             text,
             ..
@@ -770,7 +771,7 @@ impl Shell {
         // A configured shortcut wins over raw terminal input: build the chord
         // and run its action if the keymap binds one (FR9). Unbound keys fall
         // through to the terminal, so plain Ctrl+C stays the interrupt signal.
-        if let Some(chord) = chord_of(&key, modifiers)
+        if let Some(chord) = chord_of(&key, &physical_key, modifiers)
             && let Some(action) = self.keymap.lookup(&chord)
         {
             return self.run_action(action);
