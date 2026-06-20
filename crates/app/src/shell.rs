@@ -247,6 +247,8 @@ enum Message {
     ShowArchived(bool),
     /// Fold or unfold a project's session list in the sidebar, by path (#22).
     ToggleCollapsed(String),
+    /// Collapse or restore the whole session-browser sidebar (#21).
+    ToggleSidebar,
     /// Begin renaming a session inline, seeded with its current title.
     StartRename {
         session: String,
@@ -556,6 +558,10 @@ impl Shell {
                 let effects = self.core.apply(termherd_core::Event::ToggleCollapsed(path));
                 self.perform(effects)
             }
+            Message::ToggleSidebar => {
+                let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
+                Task::none()
+            }
             Message::StartRename { session, current } => {
                 self.renaming = Some((session, current));
                 operate(focusable::focus(rename_id()))
@@ -674,6 +680,10 @@ impl Shell {
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
+            }
+            Action::ToggleSidebar => {
+                let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
+                Task::none()
             }
             Action::OpenNewSession
             | Action::SplitHorizontal

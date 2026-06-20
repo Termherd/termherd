@@ -80,7 +80,8 @@ start. There is no in-app settings panel yet — edit the file and restart.
   `shift`, `alt`, `cmd`). An entry replaces that action's default; unspecified
   actions keep their per-platform defaults. Unknown actions and bad chords are
   ignored. Actions: `copy`, `paste`, `next-tab`, `prev-tab`, `close-focused`,
-  `focus-search`.
+  `focus-search`, `toggle-sidebar` (hide / restore the session browser,
+  Ctrl/Cmd+B).
 
 Window size and position persist separately to `~/.termherd/window.json`, and
 session stars / archives / custom titles to `~/.termherd/metadata.json` (an

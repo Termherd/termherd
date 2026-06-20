@@ -35,6 +35,9 @@ pub struct App {
     pub metadata: HashMap<String, SessionMeta>,
     /// Whether archived sessions show in the browser.
     pub show_archived: bool,
+    /// Whether the session-browser sidebar is collapsed to give the terminal
+    /// the full width (#21). Ephemeral — resets to visible each launch.
+    pub sidebar_hidden: bool,
     /// Project paths whose session list is folded shut in the sidebar (#22);
     /// persisted to `~/.termherd` so the fold survives a restart.
     pub collapsed: HashSet<String>,
@@ -173,6 +176,8 @@ pub enum Event {
     },
     /// Show or hide archived sessions in the browser.
     ShowArchivedToggled(bool),
+    /// Collapse or restore the session-browser sidebar (#21).
+    ToggleSidebar,
     /// Persisted fold state loaded at startup (#22): the folded project paths.
     CollapsedLoaded(HashSet<String>),
     /// Fold or unfold a project's session list in the sidebar, by path (#22).
@@ -310,6 +315,10 @@ impl App {
             }),
             Event::ShowArchivedToggled(show) => {
                 self.show_archived = show;
+                Vec::new()
+            }
+            Event::ToggleSidebar => {
+                self.sidebar_hidden = !self.sidebar_hidden;
                 Vec::new()
             }
             Event::CollapsedLoaded(paths) => {
@@ -746,6 +755,16 @@ mod tests {
         // …shown when the toggle is on.
         app.apply(Event::ShowArchivedToggled(true));
         assert_eq!(app.visible_projects()[0].sessions.len(), 2);
+    }
+
+    #[test]
+    fn toggle_sidebar_flips_and_starts_visible() {
+        let mut app = App::new();
+        assert!(!app.sidebar_hidden, "sidebar is visible on launch");
+        assert!(app.apply(Event::ToggleSidebar).is_empty());
+        assert!(app.sidebar_hidden);
+        app.apply(Event::ToggleSidebar);
+        assert!(!app.sidebar_hidden, "a second toggle restores it");
     }
 
     #[test]
