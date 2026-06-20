@@ -19,7 +19,20 @@ use super::{Focus, Message, Shell, rename_id, search_id};
 
 impl Shell {
     pub(super) fn view(&self) -> Element<'_, Message> {
-        row![self.sidebar(), self.main_pane()].into()
+        // Hiding the sidebar (#21) hands its width to the terminal; a slim
+        // always-present handle brings it back without needing the shortcut.
+        if self.core.sidebar_hidden {
+            let handle = container(
+                button(text("▶").size(12))
+                    .on_press(Message::ToggleSidebar)
+                    .style(button::text)
+                    .padding(4),
+            )
+            .padding(4);
+            row![handle, self.main_pane()].into()
+        } else {
+            row![self.sidebar(), self.main_pane()].into()
+        }
     }
 
     /// The session browser (FR1 + FR3): search box, then projects by recency.
@@ -203,7 +216,13 @@ impl Shell {
             }
             list = list.push(g);
         }
-        let mut chrome = column![search, titles_only, show_archived].spacing(8);
+        // A handle to collapse the sidebar (#21), mirroring the one that
+        // restores it from the main pane.
+        let hide = button(text("◀ Masquer le panneau").size(11))
+            .on_press(Message::ToggleSidebar)
+            .style(button::text)
+            .padding(0);
+        let mut chrome = column![hide, search, titles_only, show_archived].spacing(8);
         if let Some(confirm) = self.archive_confirmation() {
             chrome = chrome.push(confirm);
         }

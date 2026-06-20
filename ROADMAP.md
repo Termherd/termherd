@@ -14,8 +14,8 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
    `F-plans-memory` editing slice gate a real v0.1.0 more than any new feature.
 2. **P0 — bugs in shipped features:** #19 (Tab key not forwarded — core
    terminal path), #18 (tab status stuck — misleading status badge).
-3. **P1 — cheap, on-thesis wins:** #21 (hide pane / Ctrl+B), #26 (Ctrl+Number
-   tabs), #23 (quick-launch button), #20 (archive confirm).
+3. **P1 — cheap, on-thesis wins:** #26 (Ctrl+Number tabs), #23 (quick-launch
+   button). (#21 hide pane / Ctrl+B and #20 archive confirm — shipped.)
 4. **P2 — polish:** #25 drag-reorder tabs (FR5), #27 cursor +
    double-click, #24 tab titles, #28 link click, #29 OS notifications.
 5. **Design-first backlog** — see below; don't code until scoped.
@@ -73,9 +73,9 @@ headline.
 - [x] `F-keyboard-shortcuts` — configurable keymap → actions (M3): pure
   `KeyChord -> Action` map in `core::keymap` with a chord-string parser and
   platform-aware defaults; the `keys` section of `settings.json` overrides any
-  action. Drives copy/paste, `Ctrl+Tab`/`Ctrl+Shift+Tab` cycling, close-tab
-  and focus-search today; `split-*` / `focus-next/prev` bind as those features
-  land
+  action. Drives copy/paste, `Ctrl+Tab`/`Ctrl+Shift+Tab` cycling, close-tab,
+  focus-search and `toggle-sidebar` (hide pane / Ctrl+Cmd+B, #21) today;
+  `split-*` / `focus-next/prev` bind as those features land
 - [x] `F-session-metadata` — star / rename / archive / custom titles for
   sessions (M3, moved to Must in PRD rev. 6): a `SessionMeta` overlay in
   `core` persisted to `~/.termherd/metadata.json` (never touching `~/.claude`);

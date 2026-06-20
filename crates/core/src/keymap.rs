@@ -91,6 +91,7 @@ pub enum Action {
     NextTab,
     PrevTab,
     FocusSearch,
+    ToggleSidebar,
     Copy,
     Paste,
 }
@@ -110,6 +111,7 @@ impl Action {
             "next-tab" => Action::NextTab,
             "prev-tab" => Action::PrevTab,
             "focus-search" => Action::FocusSearch,
+            "toggle-sidebar" => Action::ToggleSidebar,
             "copy" => Action::Copy,
             "paste" => Action::Paste,
             _ => return None,
@@ -143,6 +145,7 @@ impl Keymap {
             map.set(Action::Paste, [KeyChord::new("v", MOD_CMD)]);
             map.set(Action::CloseFocused, [KeyChord::new("w", MOD_CMD)]);
             map.set(Action::FocusSearch, [KeyChord::new("f", MOD_CMD)]);
+            map.set(Action::ToggleSidebar, [KeyChord::new("b", MOD_CMD)]);
         } else {
             map.set(Action::Copy, [KeyChord::new("c", MOD_CTRL | MOD_SHIFT)]);
             map.set(
@@ -154,6 +157,7 @@ impl Keymap {
             );
             map.set(Action::CloseFocused, [KeyChord::new("w", MOD_CTRL)]);
             map.set(Action::FocusSearch, [KeyChord::new("f", MOD_CTRL)]);
+            map.set(Action::ToggleSidebar, [KeyChord::new("b", MOD_CTRL)]);
         }
         map.set(Action::NextTab, [KeyChord::new("tab", MOD_CTRL)]);
         map.set(
@@ -233,6 +237,24 @@ mod tests {
         );
         // An unbound chord resolves to nothing.
         assert_eq!(map.lookup(&KeyChord::new("q", MOD_CTRL)), None);
+    }
+
+    #[test]
+    fn toggle_sidebar_binds_to_the_platform_b_chord() {
+        let map = Keymap::defaults();
+        let mods = if cfg!(target_os = "macos") {
+            MOD_CMD
+        } else {
+            MOD_CTRL
+        };
+        assert_eq!(
+            map.lookup(&KeyChord::new("b", mods)),
+            Some(Action::ToggleSidebar)
+        );
+        assert_eq!(
+            Action::from_config_name("toggle-sidebar"),
+            Some(Action::ToggleSidebar)
+        );
     }
 
     #[test]
