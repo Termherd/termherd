@@ -386,6 +386,52 @@ pub(super) fn open_url(url: &str) -> Result<(), termherd_core::ports::PtyError> 
     }
 }
 
+/// macOS bundle identifier (matches `Cargo.toml`'s packager `identifier`).
+/// Used to attribute desktop notifications to TermHerd; see [`notify`].
+#[cfg(target_os = "macos")]
+const MACOS_BUNDLE_ID: &str = "dev.gallay.termherd";
+
+/// Post a desktop notification to the OS notification centre (#29). Like
+/// `open_url`, this is an OS handoff, not a PTY call, and fire-and-forget: the
+/// send runs on a detached thread and the result is logged there, never fatal —
+/// a notification backend that's unavailable must not take a session down.
+/// `title`/`body` come pre-derived from `core` (which session, what message).
+///
+/// **Why a thread, not a direct call:** on macOS the backend (`NSUserNotification`
+/// via `mac-notification-sys`) drives an `NSRunLoop` to await delivery *when
+/// invoked on the main thread*. iced calls `perform` from inside winit's event
+/// handler, so pumping the run loop there re-enters it and aborts the process.
+/// Off the main thread the backend takes a Condvar wait instead, so this is
+/// both crash-safe and non-blocking for the UI.
+pub(super) fn notify(title: &str, body: &str) -> Result<(), termherd_core::ports::PtyError> {
+    // Attribute notifications to our bundle once, before the first send, so the
+    // macOS backend doesn't AppleScript-probe for a placeholder app and pop a
+    // "Where is …?" chooser. No-op (and harmless) when run unbundled.
+    #[cfg(target_os = "macos")]
+    {
+        use std::sync::Once;
+        static SET_APP: Once = Once::new();
+        SET_APP.call_once(|| {
+            let _ = notify_rust::set_application(MACOS_BUNDLE_ID);
+        });
+    }
+
+    let (title, body) = (title.to_owned(), body.to_owned());
+    std::thread::Builder::new()
+        .name("os-notify".to_owned())
+        .spawn(move || {
+            if let Err(error) = notify_rust::Notification::new()
+                .summary(&title)
+                .body(&body)
+                .show()
+            {
+                tracing::warn!(%error, "desktop notification failed");
+            }
+        })
+        .map(|_| ())
+        .map_err(|e| termherd_core::ports::PtyError::Io(e.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

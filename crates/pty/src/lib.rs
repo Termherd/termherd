@@ -47,6 +47,10 @@ pub enum PtyEvent {
     },
     /// The session's reported title changed (#24); drives the tab label.
     Title { session: SessionId, title: String },
+    /// An OSC 9 notification fired (#29): Claude wants the user. Carries the
+    /// raw payload text, forwarded to the OS notification centre on top of the
+    /// in-app `Attention` status (which `Status` already conveys).
+    Notification { session: SessionId, body: String },
     /// The session's PTY process exited.
     Exited { session: SessionId },
 }
@@ -607,6 +611,18 @@ fn spawn_term(
                             status = next;
                             term_sink(PtyEvent::Status { session, status });
                         }
+                        // Forward each OSC 9 notification's text to the OS (#29),
+                        // independent of the status fold above — the in-app
+                        // `Attention` badge and the desktop alert are two
+                        // surfaces of the same ping.
+                        for signal in &signals {
+                            if let OscSignal::Notification(body) = signal {
+                                term_sink(PtyEvent::Notification {
+                                    session,
+                                    body: body.clone(),
+                                });
+                            }
+                        }
                         // Follow Claude's reported title (#24); the last title in
                         // the chunk wins, and only a change is forwarded.
                         if let Some(next) = signals.iter().rev().find_map(|s| match s {
@@ -944,7 +960,11 @@ mod tests {
                         break;
                     }
                 }
-                Ok(PtyEvent::Status { .. } | PtyEvent::Title { .. }) => continue,
+                Ok(
+                    PtyEvent::Status { .. }
+                    | PtyEvent::Title { .. }
+                    | PtyEvent::Notification { .. },
+                ) => continue,
                 Ok(PtyEvent::Exited { .. }) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(_) => break,
@@ -982,6 +1002,25 @@ mod tests {
         );
         // No signals at all keeps the current status (e.g. a plain shell).
         assert_eq!(fold_status(Starting, &[]), Starting);
+    }
+
+    #[test]
+    fn notification_still_means_attention_alongside_the_osc9_body_forwarding() {
+        use SessionStatus::*;
+        // #29 forwards the notification *text* to the OS on a separate channel;
+        // the status fold must be untouched — an OSC 9 among other signals
+        // still resolves to Attention, and its body never leaks into the title.
+        let signals = [
+            OscSignal::Busy,
+            OscSignal::Notification("permission: allow Bash?".into()),
+            OscSignal::Title("ignored".into()),
+        ];
+        assert_eq!(fold_status(Starting, &signals), Attention);
+        // An empty-bodied notification is just as much an attention request.
+        assert_eq!(
+            fold_status(Idle, &[OscSignal::Notification(String::new())]),
+            Attention
+        );
     }
 
     #[test]

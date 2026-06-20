@@ -15,8 +15,13 @@
 # personal notes (not part of the project)
 /.personal/
 
-# generated review decks — keep the Typst source, not the rendered PDF
+# generated review decks / working notes — keep the Typst source, not the PDF
 /docs/reviews/*.pdf
+/docs/notes/*.pdf
+
+# cargo-mutants scratch output (mutation testing runs locally / in CI)
+/mutants.out/
+/mutants.out.old/
 
 # Claude Code local (per-machine) settings — never shared. The shared
 # .claude/settings.json may be tracked; the *.local.json overlay is not.
