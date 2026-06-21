@@ -399,6 +399,29 @@ impl App {
             .unwrap_or_else(|| record.digest.display_title(None).to_owned())
     }
 
+    /// Session ids in `group` whose resolved [`Self::session_title`] is shared
+    /// by another session in the same group — the rows that need a
+    /// disambiguator in the sidebar (#42). Collision is checked on the *final*
+    /// title (rename/metadata included), so two rows renamed alike still count.
+    /// The common, unique case returns an empty set, so callers leave it clean.
+    #[must_use]
+    pub fn colliding_titles(&self, group: &ProjectGroup) -> HashSet<String> {
+        let titled: Vec<(&str, String)> = group
+            .sessions
+            .iter()
+            .map(|s| (s.session_id.as_str(), self.session_title(s)))
+            .collect();
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for (_, title) in &titled {
+            *counts.entry(title.as_str()).or_default() += 1;
+        }
+        titled
+            .iter()
+            .filter(|(_, title)| counts.get(title.as_str()).copied().unwrap_or(0) > 1)
+            .map(|(id, _)| (*id).to_owned())
+            .collect()
+    }
+
     /// Whether a session (by Claude id) is starred / archived.
     #[must_use]
     pub fn is_starred(&self, session_id: &str) -> bool {
@@ -584,6 +607,7 @@ mod tests {
                 slug: None,
                 custom_title: None,
                 ai_title: None,
+                tail: Vec::new(),
             },
             modified: None,
         }
@@ -910,6 +934,31 @@ mod tests {
             app.session_title(&app.projects[0].sessions[0].clone()),
             derived
         );
+    }
+
+    #[test]
+    fn colliding_titles_flags_only_shared_titles_and_a_rename_resolves_it() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![
+            record("dup1", "/p", "vm tombée"),
+            record("dup2", "/p", "vm tombée"),
+            record("uniq", "/p", "something else"),
+        ]));
+        let group = app.projects[0].clone();
+
+        let collisions = app.colliding_titles(&group);
+        assert_eq!(
+            collisions,
+            HashSet::from(["dup1".to_owned(), "dup2".to_owned()])
+        );
+
+        // Renaming one of the pair to a unique title clears the collision for
+        // both — the set is checked on the resolved title.
+        app.apply(Event::RenameSession {
+            session: "dup1".into(),
+            title: "the original".into(),
+        });
+        assert!(app.colliding_titles(&group).is_empty());
     }
 
     #[test]

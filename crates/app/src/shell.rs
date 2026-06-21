@@ -1203,6 +1203,7 @@ mod key_routing {
                 slug: None,
                 custom_title: None,
                 ai_title: None,
+                tail: Vec::new(),
             },
             modified: None,
         };

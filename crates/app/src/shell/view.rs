@@ -5,13 +5,16 @@
 //! here — those are in the parent module.
 
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use iced::widget::canvas::Canvas;
 use iced::widget::{
     button, checkbox, column, container, mouse_area, row, scrollable, text, text_input, tooltip,
 };
 use iced::{Color, Element, Fill, Font, Size};
+use termherd_core::SessionRecord;
 use termherd_core::SessionStatus;
+use termherd_core::browser::relative_age;
 
 use super::ime::ime_area;
 use super::terminal::{CELL_H, CELL_W, TerminalView};
@@ -75,6 +78,10 @@ impl Shell {
         }
 
         let visible = self.core.visible_projects();
+        // One wall-clock read per render drives every relative "last activity"
+        // age in the sidebar (row disambiguator + tooltip). The app layer owns
+        // the clock; core stays pure.
+        let now = std::time::SystemTime::now();
         let mut list = column![].spacing(16).padding(12);
         if let Some(error) = &self.scan_error {
             list = list.push(text(format!("Scan impossible : {error}")).size(12));
@@ -128,6 +135,10 @@ impl Shell {
                 list = list.push(g);
                 continue;
             }
+            // Rows whose title repeats within this project get a relative
+            // last-activity age appended, so duplicates stay distinguishable
+            // (#42). The unique case keeps the clean `{title} · {count}` line.
+            let collisions = self.core.colliding_titles(group);
             for s in &group.sessions {
                 let id = s.session_id.as_str();
                 let starred = self.core.is_starred(id);
@@ -161,14 +172,16 @@ impl Shell {
                         .width(Fill)
                         .into()
                 } else {
-                    content = content.push(
-                        text(format!(
-                            "{}  ·  {}",
-                            clip(&title, 26),
-                            s.digest.message_count
-                        ))
-                        .size(11),
-                    );
+                    // Colliding rows carry a relative last-activity age so the
+                    // duplicate titles stay distinguishable (#42).
+                    let mut label = format!("{}  ·  {}", clip(&title, 26), s.digest.message_count);
+                    if collisions.contains(id)
+                        && let Some(age) = s.modified.and_then(|m| now.duration_since(m).ok())
+                    {
+                        label.push_str("  ·  ");
+                        label.push_str(&relative_age(age));
+                    }
+                    content = content.push(text(label).size(11));
                     let launch = button(content)
                         .on_press(Message::LaunchSession {
                             cwd: group.path.clone(),
@@ -177,13 +190,13 @@ impl Shell {
                         .style(button::text)
                         .padding(0)
                         .width(Fill);
-                    // The row clips the title to fit the narrow sidebar; hover
-                    // reveals the full name so a long title stays readable.
+                    // The narrow row clips the title; hover reveals a richer
+                    // card — full title, last activity + message count, and the
+                    // last few transcript lines so the session is recognisable
+                    // without opening it.
                     tooltip(
                         launch,
-                        container(text(title.clone()).size(11))
-                            .padding(6)
-                            .style(container::rounded_box),
+                        session_card(title.clone(), s, now),
                         tooltip::Position::Right,
                     )
                     .into()
@@ -465,6 +478,38 @@ fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
         .on_press(Message::ToggleCollapsed(key.to_owned()))
         .style(button::text)
         .padding(0)
+        .into()
+}
+
+/// The hover card for a session row: full title, a muted line with relative
+/// last activity and message count, then the last few transcript lines so a
+/// duplicate-looking session is recognisable without opening it.
+fn session_card(
+    title: String,
+    session: &SessionRecord,
+    now: SystemTime,
+) -> Element<'static, Message> {
+    let muted = Color::from_rgb8(0x9a, 0x9a, 0x9a);
+    let count = session.digest.message_count;
+
+    let age = session
+        .modified
+        .and_then(|m| now.duration_since(m).ok())
+        .map(relative_age);
+    let meta = match age.as_deref() {
+        Some("now") => format!("À l'instant  ·  {count} messages"),
+        Some(age) => format!("Il y a {age}  ·  {count} messages"),
+        None => format!("{count} messages"),
+    };
+
+    let mut card = column![text(title).size(12), text(meta).size(10).color(muted)].spacing(4);
+    for line in &session.digest.tail {
+        card = card.push(text(format!("› {line}")).size(10).color(muted));
+    }
+    container(card)
+        .padding(8)
+        .max_width(360.0)
+        .style(container::rounded_box)
         .into()
 }
 
