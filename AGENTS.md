@@ -124,3 +124,16 @@ The one rule that keeps it sane: an epic **graduates from `ROADMAP.md` to an
 issue only when it's scoped enough to do.** A design-first item lives only in
 the roadmap until then; once filed as an issue it appears on the board. Mark
 the roadmap entry done when its issues close.
+
+Two corollaries that keep the layers in sync (both contributors work from
+issues, so a scoped roadmap item with no issue is invisible):
+
+- **When an epic graduates, link it both ways.** Open the issue *and* add its
+  `#number` to the ROADMAP entry. Shipped entries already cite their issues; do
+  the same for open ones.
+- **Design a backlog epic before filing it.** Run `/feature-torture` on a
+  design-first item to reach a verdict (ship / reshape / park / split / kill);
+  file issues only for the slices that come out scoped. The report lands in
+  `.personal/feature-torture/reports/<F-id>.md`; cite it in the ROADMAP entry.
+  Items that stay design-first (e.g. `F-keymap-per-command`) live only in the
+  roadmap until their blocking design is resolved.
