@@ -10,8 +10,14 @@ gist `d1d02e5`).
 The MoSCoW buckets below stay tied to PRD §5; this block is just the order to
 pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 
-1. **Finish the Musts** — `F-packaging-ci` signing (OQ5) and the
-   `F-plans-memory` editing slice gate a real v0.1.0 more than any new feature.
+1. **Finish the Musts** (`v0.1.0` milestone) — release packaging is now: macOS
+   via **Homebrew** (#61, a cask installs the unsigned bundle without a
+   Gatekeeper block), **Linux** signed checksums (#52), and the
+   `F-plans-memory` editing slice (#53). Deferred to P2, post-release: real
+   macOS Developer ID signing (#51 — no free OSS path, $99/yr) and **Windows**
+   Authenticode via the free **SignPath Foundation** (#62 — viable, not parked;
+   gated only on a policy page + MFA + their approval wait). See feature-torture
+   `F-packaging-ci.md`.
 2. **P0 — bugs in shipped features:** #19 (Tab key not forwarded — core
    terminal path), #18 (tab status stuck — misleading status badge).
 3. **P1 — cheap, on-thesis wins:** #26 (Ctrl+Number tabs), #23 (quick-launch
@@ -23,7 +29,14 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 
 `F-terminal-split` (Should) isn't in the feedback but its core already landed —
 the cheapest large/visible feature left on the board if a release needs a
-headline.
+headline. The UI slice is now scoped as #54 (fixed-ratio split + focus +
+per-pane geometry) with drag-resize split out to #55 (feature-torture
+`F-terminal-split.md`).
+
+> **Feature-torture pass (2026-06-20).** The seven open/backlog features were
+> each pressure-tested; reports live in `.personal/feature-torture/reports/`.
+> Verdicts graduated nine slices into issues #51–#60 and the `v0.1.0`
+> milestone; the residual design-first items are marked below.
 
 ## v0 — M0–M3 (daily-driver)
 
@@ -64,7 +77,10 @@ headline.
   a `package.yml` workflow produce macOS `.app`/`.dmg`, Windows `.msi`/`.exe`
   and Linux `.deb`/`.AppImage`, attached to the release. macOS `.app`/`.dmg`
   verified locally. Only "signed" remains — bundles are unsigned pending
-  certificates (OQ5)*
+  certificates (OQ5). **Split by platform** (feature-torture 🧬): for v0.1.0,
+  macOS ships via **Homebrew** (#61) and Linux via **signed checksums** (#52).
+  Deferred P2: real macOS Developer ID signing (#51 — no free OSS path) and
+  **Windows** Authenticode via free **SignPath Foundation** (#62)*
 - [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is
   a tab; a tab strip switches between them, each chip carrying its activity
   dot (the FR8 tab badge) and a close button that kills the session's PTY —
@@ -111,7 +127,10 @@ headline.
   `close_focused` / `focus_next`/`prev` and the `App` events
   `SplitFocused`/`CloseFocusedPane`/`FocusNextPane`/`Prev`, all unit-tested,
   plus the `split-*` / `focus-*` keymap actions. What remains is the iced
-  recursive pane rendering, click-to-focus, and per-pane PTY geometry
+  recursive pane rendering, click-to-focus, and per-pane PTY geometry — #54
+  (MVP: fixed-ratio split; `core::Workspace` stays the single source of truth)
+  with drag-resize as fast-follow #55. Note: the keymap actions are currently
+  dropped at `shell.rs:721` (`=> Task::none()`) — wiring them is step one
 - [ ] `F-jsonl-viewer`
 - [ ] `F-auto-update`
 - [ ] `F-store-cache` — SQLite (WAL) digest cache + FTS5 index
@@ -131,15 +150,17 @@ Routed here (not to GH issues) because each needs design before it can be
 scoped. Source: feedback gist `d1d02e5`.
 The well-defined items from the same gist are tracked as issues #18–#29.
 
-- [ ] `F-favorites` — favorites in the sidebar. The gist asks for a dedicated
-  "favorites" section **and** repository-level favoriting. `F-session-metadata`
-  already stars *sessions*; this needs a design for repo-level favoriting, where
-  the favorites section sits relative to the existing starred-session pinning,
-  and persistence (metadata overlay, never `~/.claude`)
-- [ ] `F-search-ux` — search activation + scope. Focus-search is already a
-  keymap action (`F-keyboard-shortcuts`); the gist wants Ctrl/Cmd+F to *open*
-  search (not click-only) and results to list **all matching repo sessions**.
-  Needs a definition of result grouping/ranking before it's an issue
+- [ ] `F-favorites` — favorites in the sidebar. **Designed (🧬 split,
+  feature-torture `F-favorites.md`)**: "star" == "favorite" is one concept.
+  Graduated to #56 (cross-project Favorites section, reusing the shipped
+  session star) and #57 (repo-level favoriting, a `project_path`-keyed overlay
+  in `~/.termherd/metadata.json`, never `~/.claude`)
+- [ ] `F-search-ux` — search activation + scope. **Designed (✂️ reshape,
+  feature-torture `F-search-ux.md`)**: most of it already shipped — `Cmd+F`
+  focuses search and `filter_projects` already searches content + titles across
+  every project. The one real gap, a **match snippet**, graduated to #58. A
+  flat relevance-ranked results view is explicitly *not* pursued (the grouped
+  in-context filter is better UX)
 - [ ] `F-keymap-advanced` — keymap concerns from the gist that need design,
   layered on the shipped `F-keyboard-shortcuts`:
   - ~~localized number-row handling (AZERTY: `&`→1, `é`→2, …) so Ctrl/Cmd+Number
@@ -147,14 +168,19 @@ The well-defined items from the same gist are tracked as issues #18–#29.
     row is matched by physical key position, so Ctrl/Cmd+1…9 land on the same
     keys on every layout (QWERTY/AZERTY/QWERTZ/…)
   - per-command keymap configuration (different bindings per running command)
+    — **stays design-first** (feature-torture 🧬 `F-keymap-advanced.md`):
+    blocked on foreground-process detection (macOS `tcgetpgrp` vs Windows
+    ConPTY gap); file only once that's designed
   - a configurable "bypass" key so a modifier passes through to the terminal
-    instead of the app (cf. Ghostty `macos-option-as-alt`)
-- [ ] `F-i18n` — internationalization. Cross-cutting (string externalization,
-  locale selection, layout/width implications); needs an approach decision
-  before any slice can ship. Heaviest and least urgent for an early-adopter
-  audience — keep last. Precursor shipped (#60): the UI is English-first with
-  every user-facing string centralised in `crates/app/src/strings.rs`, so the
-  remaining work is "add a catalogue", not "find every literal"
+    instead of the app (cf. Ghostty `macos-option-as-alt`) — **graduated to
+    #59** (the cheap, high-value slice)
+- [ ] `F-i18n` — internationalization. **Parked** (feature-torture ⏸
+  `F-i18n.md`): heaviest, least urgent. The pressure test surfaced a *present*
+  issue though — the UI was hardcoded **French** in an English-README repo, with
+  no string externalization. Canonical UI language settled as **English-first**;
+  the externalization precursor shipped (#60), centralising every user-facing
+  string in `crates/app/src/strings.rs`. Locale machinery (catalogues,
+  selection, width/RTL) stays parked until a non-English user base appears
 
 ### Unsure (deferred)
 
