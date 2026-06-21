@@ -481,6 +481,45 @@ fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
         .into()
 }
 
+/// Background for the session hover card — a step away from the surrounding
+/// surface (the `strong` palette tier rather than the default `weak`) so the
+/// card reads as a distinct floating layer, with a thin border to seal it.
+/// Everything is pulled from the theme palette, so it tracks the theme system
+/// once that lands rather than baking in a colour.
+fn card_style(theme: &iced::Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(palette.background.strong.color.into()),
+        text_color: Some(palette.background.strong.text),
+        border: iced::Border {
+            color: palette.background.weak.color,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
+/// Dimmed text for the card's secondary lines (meta + transcript tail): the
+/// card's text colour mixed toward its background, so it stays legible and
+/// theme-derived on both light and dark palettes.
+fn card_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
+    let pair = theme.extended_palette().background.strong;
+    iced::widget::text::Style {
+        color: Some(mix(pair.text, pair.color, 0.35)),
+    }
+}
+
+/// Linear blend from `a` to `b` by `t` in `[0, 1]`.
+fn mix(a: Color, b: Color, t: f32) -> Color {
+    Color::from_rgba(
+        a.r + (b.r - a.r) * t,
+        a.g + (b.g - a.g) * t,
+        a.b + (b.b - a.b) * t,
+        a.a + (b.a - a.a) * t,
+    )
+}
+
 /// The hover card for a session row: full title, a muted line with relative
 /// last activity and message count, then the last few transcript lines so a
 /// duplicate-looking session is recognisable without opening it.
@@ -489,7 +528,6 @@ fn session_card(
     session: &SessionRecord,
     now: SystemTime,
 ) -> Element<'static, Message> {
-    let muted = Color::from_rgb8(0x9a, 0x9a, 0x9a);
     let count = session.digest.message_count;
 
     let age = session
@@ -502,14 +540,24 @@ fn session_card(
         None => format!("{count} messages"),
     };
 
-    let mut card = column![text(title).size(12), text(meta).size(10).color(muted)].spacing(4);
+    // Title inherits the card's text colour; secondary lines are dimmed. Both
+    // colours come from the theme palette (see `card_style`), never hardcoded.
+    let mut card = column![
+        text(title).size(12),
+        text(meta).size(10).style(card_secondary_text)
+    ]
+    .spacing(4);
     for line in &session.digest.tail {
-        card = card.push(text(format!("› {line}")).size(10).color(muted));
+        card = card.push(
+            text(format!("› {line}"))
+                .size(10)
+                .style(card_secondary_text),
+        );
     }
     container(card)
         .padding(8)
         .max_width(360.0)
-        .style(container::rounded_box)
+        .style(card_style)
         .into()
 }
 
