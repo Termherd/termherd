@@ -79,10 +79,15 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   a `package.yml` workflow produce macOS `.app`/`.dmg`, Windows `.msi`/`.exe`
   and Linux `.deb`/`.AppImage`, attached to the release. macOS `.app`/`.dmg`
   verified locally. Only "signed" remains — bundles are unsigned pending
-  certificates (OQ5). **Split by platform** (feature-torture 🧬): for v0.1.0,
-  macOS ships via **Homebrew** (#61) and Linux via **signed checksums** (#52).
-  Deferred P2: real macOS Developer ID signing (#51 — no free OSS path) and
-  **Windows** Authenticode via free **SignPath Foundation** (#62)*
+  certificates (OQ5). **Split by platform** (feature-torture 🧬). macOS: the
+  Homebrew path (#61) is **parked P2** — Homebrew 5.1 removed
+  `--no-quarantine` (all taps), so an unsigned cask can't bypass Gatekeeper
+  and casks failing it are unsupported after 2026-09-01; v0.1.0 therefore
+  ships macOS **unsigned** (`.dmg` + manual `xattr`), and Developer ID
+  notarization (#51, no free OSS path) is now the sole fluent macOS path,
+  deferred to GitHub traction / a sponsor ($99/yr). Linux ships **signed
+  checksums** (#52). **Windows** Authenticode via free **SignPath
+  Foundation** (#62, P2)*
 - [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is
   a tab; a tab strip switches between them, each chip carrying its activity
   dot (the FR8 tab badge) and a close button that kills the session's PTY —
