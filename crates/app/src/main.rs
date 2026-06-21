@@ -20,10 +20,10 @@ use termherd_scan::FsScanner;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-/// Base name of the single-instance lock file. [`lock_path`] anchors it under
-/// the system temp dir so the path is absolute and writable from any working
-/// directory.
-const INSTANCE_LOCK: &str = "dev.gallay.termherd.lock";
+/// Base name of the single-instance lock. Its *form* is adjusted per OS by
+/// [`lock_name`], because `single-instance` gives this string a different
+/// meaning on each platform.
+const INSTANCE_LOCK: &str = "dev.termherd.lock";
 
 fn main() -> iced::Result {
     init_tracing();
@@ -33,6 +33,7 @@ fn main() -> iced::Result {
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
+        built = env!("TERMHERD_BUILD_DATE"),
         "termherd starting (M1 browser)"
     );
 
@@ -81,15 +82,33 @@ fn main() -> iced::Result {
     result
 }
 
-/// Absolute, writable path for the single-instance lock file.
+/// The single-instance lock identifier, in the form each OS requires. The
+/// `single-instance` crate gives this one string three different meanings, and
+/// a value valid on one platform is broken on another:
 ///
-/// `single-instance` creates the lock relative to the current directory. When
-/// TermHerd is launched from its `.app` bundle the working directory is `/`
-/// (read-only), so a bare name fails to create — and the app would silently
-/// refuse to start. Anchoring the lock under the temp dir keeps it
-/// CWD-independent and writable from Finder, a terminal, or anywhere else.
-fn lock_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(INSTANCE_LOCK)
+/// - **macOS** treats it as a *file path* and `flock`s it, so it must be an
+///   absolute, writable path. A bare name is created relative to the CWD —
+///   which is `/` (read-only) when launched from the `.app` bundle, so the app
+///   would silently refuse to start (the "double-click does nothing" bug).
+/// - **Windows** passes it to `CreateMutexW` as a *mutex name*, which must not
+///   contain `\` (those are reserved namespace separators). A full path there
+///   yields `ERROR_PATH_NOT_FOUND` (3) and the lock silently disables itself.
+///   A bare name lands in the per-login-session namespace — the scope we want.
+/// - **Linux** binds it as an *abstract socket name* — any opaque string works.
+fn lock_name() -> std::borrow::Cow<'static, str> {
+    #[cfg(target_os = "macos")]
+    {
+        std::borrow::Cow::Owned(
+            std::env::temp_dir()
+                .join(INSTANCE_LOCK)
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        std::borrow::Cow::Borrowed(INSTANCE_LOCK)
+    }
 }
 
 /// Acquire the single-instance guard, returning it to hold for the process
@@ -99,8 +118,7 @@ fn lock_path() -> std::path::PathBuf {
 /// failure to *create* the lock must not stop the app from launching: that was
 /// the "double-click does nothing, no error" bug on the `.app` bundle.
 fn acquire_single_instance() -> Option<SingleInstance> {
-    let path = lock_path();
-    let name = path.to_string_lossy();
+    let name = lock_name();
     match SingleInstance::new(&name) {
         Ok(instance) => {
             if !instance.is_single() {
@@ -112,7 +130,7 @@ fn acquire_single_instance() -> Option<SingleInstance> {
         }
         Err(e) => {
             warn!(
-                error = %e, path = %path.display(),
+                error = %e, lock = %name,
                 "single-instance lock unavailable; launching without it"
             );
             None
@@ -149,13 +167,25 @@ mod tests {
     use super::DEFAULT_FILTER;
     use tracing_subscriber::EnvFilter;
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn lock_path_is_absolute() {
+    fn lock_name_is_absolute_on_macos() {
         // A CWD-relative lock path is the Finder/.app launch bug: from `/`
         // (read-only) it can't be created and the app refuses to start.
         assert!(
-            super::lock_path().is_absolute(),
-            "single-instance lock path must be CWD-independent"
+            std::path::Path::new(super::lock_name().as_ref()).is_absolute(),
+            "macOS single-instance lock path must be CWD-independent"
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn lock_name_has_no_backslash_on_windows() {
+        // A Windows mutex name treats `\` as a namespace separator: a path
+        // yields ERROR_PATH_NOT_FOUND (3) and silently disables the lock.
+        assert!(
+            !super::lock_name().contains('\\'),
+            "Windows single-instance mutex name must not contain backslashes"
         );
     }
 
