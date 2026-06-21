@@ -177,6 +177,11 @@ struct Shell {
     /// arms this and a confirmation bar must be accepted first. Un-archiving is
     /// harmless and stays a one-click action.
     archiving: Option<String>,
+    /// A window close awaiting confirmation: the window id to close once the
+    /// user accepts, or `None`. Quitting hard-kills every live session's Claude
+    /// process (TerminateProcess / SIGKILL, no graceful shutdown), so a quit
+    /// with sessions still running arms this modal first.
+    closing_window: Option<window::Id>,
     /// Whether Ctrl (or Cmd) is currently held — the link-open modifier (#28).
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
@@ -241,6 +246,11 @@ enum Message {
     CloseTab(usize),
     /// Dismiss the close confirmation without killing anything (#9).
     CancelClose,
+    /// Confirm quitting TermHerd, closing the window (and hard-killing every
+    /// live session). Reached only after the quit modal is accepted.
+    ConfirmCloseWindow,
+    /// Dismiss the quit confirmation, keeping the app and its sessions running.
+    CancelCloseWindow,
     /// Toggle a browsed session's star (F-session-metadata).
     ToggleStar(String),
     /// Toggle a browsed session's archived flag (F-session-metadata). Used
@@ -347,6 +357,7 @@ impl Shell {
             viewing: None,
             closing: None,
             archiving: None,
+            closing_window: None,
             link_modifier: false,
         }
     }
@@ -588,6 +599,14 @@ impl Shell {
                 self.closing = None;
                 Task::none()
             }
+            Message::ConfirmCloseWindow => match self.closing_window.take() {
+                Some(id) => window::close(id),
+                None => Task::none(),
+            },
+            Message::CancelCloseWindow => {
+                self.closing_window = None;
+                Task::none()
+            }
             Message::ToggleStar(session) => {
                 let effects = self.core.apply(termherd_core::Event::ToggleStar(session));
                 self.perform(effects)
@@ -783,6 +802,23 @@ impl Shell {
         if self.renaming.is_some() {
             return Task::none();
         }
+        // The quit modal owns the keyboard while it is up: Enter quits, Escape
+        // cancels, every other key is swallowed. Checked first so it wins over
+        // the tab/archive prompts beneath it.
+        if self.quit_pending() {
+            if let keyboard::Event::KeyPressed { key, .. } = &event {
+                match key {
+                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                        return self.update(Message::ConfirmCloseWindow);
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                        self.closing_window = None;
+                    }
+                    _ => {}
+                }
+            }
+            return Task::none();
+        }
         // A pending close confirmation captures the keyboard (#9): Enter
         // confirms, Escape cancels, and every other key is swallowed so a
         // keystroke can't slip past to the terminal while the prompt is up.
@@ -859,7 +895,10 @@ impl Shell {
     /// excluded explicitly — this is the predicate [`Shell::on_key`] enforces
     /// step by step, shared so the IME path can't drift from it (#34).
     fn accepts_terminal_input(&self) -> bool {
-        self.focus == Focus::Terminal && self.renaming.is_none() && self.closing.is_none()
+        self.focus == Focus::Terminal
+            && self.renaming.is_none()
+            && self.closing.is_none()
+            && !self.quit_pending()
     }
 
     /// Route IME-composed text (dead/accent keys, CJK) to the focused terminal
@@ -894,11 +933,34 @@ impl Shell {
             }
             window::Event::CloseRequested => {
                 self.bounds.save();
-                tracing::info!("window bounds saved; closing");
-                window::close(id)
+                // Closing the window hard-kills every live session's Claude
+                // process. With sessions running, confirm first; otherwise quit
+                // straight away. Bounds are already saved either way.
+                if self.live_session_count() == 0 {
+                    tracing::info!("no live sessions; closing");
+                    window::close(id)
+                } else {
+                    self.closing_window = Some(id);
+                    Task::none()
+                }
             }
             _ => Task::none(),
         }
+    }
+
+    /// Whether a quit is awaiting confirmation (the modal is up).
+    fn quit_pending(&self) -> bool {
+        self.closing_window.is_some()
+    }
+
+    /// Count of sessions whose PTY is still running — the ones a quit would
+    /// hard-kill. Exited sessions linger in the map but cost nothing to drop.
+    fn live_session_count(&self) -> usize {
+        self.core
+            .sessions
+            .values()
+            .filter(|s| s.status != SessionStatus::Exited)
+            .count()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -1188,6 +1250,56 @@ mod key_routing {
         let (mut shell, _pty) = shell_with_terminal();
         let _ = shell.update(Message::RequestCloseTab(7));
         assert_eq!(shell.closing, None, "a stale index must not arm a close");
+    }
+
+    #[test]
+    fn live_session_count_excludes_exited_sessions() {
+        let (mut shell, _pty) = shell_with_terminal();
+        assert_eq!(shell.live_session_count(), 1, "a launched session is live");
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited(session));
+        assert_eq!(
+            shell.live_session_count(),
+            0,
+            "an exited session no longer counts as live to kill"
+        );
+    }
+
+    #[test]
+    fn the_quit_modal_owns_the_keyboard() {
+        // While the quit modal is up, a plain key is swallowed (not sent to the
+        // terminal) and Escape dismisses it without quitting.
+        let (mut shell, pty) = shell_with_terminal();
+        shell.closing_window = Some(window::Id::unique());
+        let _ = shell.on_key(press(
+            Key::Character("a".into()),
+            Modifiers::default(),
+            Some("a"),
+        ));
+        assert!(
+            pty.writes().is_empty(),
+            "keys must not reach the PTY while the quit modal is up"
+        );
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+        assert!(!shell.quit_pending(), "Escape must dismiss the quit modal");
+    }
+
+    #[test]
+    fn cancelling_the_quit_keeps_the_app_running_and_confirming_consumes_it() {
+        let (mut shell, pty) = shell_with_terminal();
+
+        shell.closing_window = Some(window::Id::unique());
+        let _ = shell.update(Message::CancelCloseWindow);
+        assert!(!shell.quit_pending(), "cancel clears the pending quit");
+        assert_eq!(pty.kill_count(), 0, "cancelling kills nothing");
+
+        // Confirming consumes the pending id (it drives a window::close task).
+        shell.closing_window = Some(window::Id::unique());
+        let _ = shell.update(Message::ConfirmCloseWindow);
+        assert!(
+            shell.closing_window.is_none(),
+            "confirming consumes the pending window id"
+        );
     }
 
     /// Feed one browsable session into the shell's core so the archive flow
