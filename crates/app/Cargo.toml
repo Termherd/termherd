@@ -25,15 +25,15 @@ dist = true
 # OQ5); unsigned bundles still install with the usual first-launch prompt.
 [package.metadata.packager]
 product-name = "TermHerd"
-identifier = "dev.gallay.termherd"
+identifier = "dev.termherd"
 category = "DeveloperTool"
 description = "Terminal workspace for Claude Code sessions"
 long-description = """
 TermHerd is a native, keyboard-driven terminal workspace for managing Claude \
 Code sessions — browse, launch, arrange in tabs and splits, monitor status, \
 and search, on macOS, Windows and Linux."""
-homepage = "https://github.com/bastien-gallay/termherd"
-authors = ["Bastien Gallay <bastien@gallay.org>"]
+homepage = "https://github.com/Termherd/termherd"
+authors = ["TermHerd contributors"]
 license-file = "../../LICENSE"
 icons = [
     "icons/icon.icns",

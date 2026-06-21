@@ -6,7 +6,7 @@ short, scannable view; commits land features here when they ship.
 ## Working order (next up)
 
 Execution priority across the open Musts and the feedback issues (#18–#29,
-gist [`d1d02e5`](https://gist.github.com/bastien-gallay/d1d02e5db376112d9b2893e0f2f81886)).
+gist `d1d02e5`).
 The MoSCoW buckets below stay tied to PRD §5; this block is just the order to
 pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 
@@ -124,8 +124,7 @@ headline.
 ### Backlog — needs definition (from feedback gist, 2026-06-17)
 
 Routed here (not to GH issues) because each needs design before it can be
-scoped. Source: feedback gist
-[`d1d02e5`](https://gist.github.com/bastien-gallay/d1d02e5db376112d9b2893e0f2f81886).
+scoped. Source: feedback gist `d1d02e5`.
 The well-defined items from the same gist are tracked as issues #18–#29.
 
 - [ ] `F-favorites` — favorites in the sidebar. The gist asks for a dedicated

@@ -18,7 +18,7 @@ This is an early scaffold. Status, scope, and design live in:
 ## Install
 
 Each tagged release publishes desktop installers on the
-[Releases](https://github.com/bastien-gallay/termherd/releases) page. Pick the
+[Releases](https://github.com/Termherd/termherd/releases) page. Pick the
 one for your platform:
 
 - **macOS** — download `TermHerd_<version>_<arch>.dmg`, open it, and drag
@@ -38,12 +38,12 @@ that drop `termherd` into your Cargo bin directory:
 ```bash
 # macOS / Linux
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/bastien-gallay/termherd/releases/latest/download/termherd-installer.sh | sh
+  https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.sh | sh
 ```
 
 ```powershell
 # Windows
-powershell -c "irm https://github.com/bastien-gallay/termherd/releases/latest/download/termherd-installer.ps1 | iex"
+powershell -c "irm https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.ps1 | iex"
 ```
 
 ## Run from source
