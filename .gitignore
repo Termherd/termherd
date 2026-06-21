@@ -26,3 +26,5 @@
 # Claude Code local (per-machine) settings — never shared. The shared
 # .claude/settings.json may be tracked; the *.local.json overlay is not.
 .claude/settings.local.json
+# Local git worktrees (per-machine working copies); never repo content.
+.claude/worktrees/
