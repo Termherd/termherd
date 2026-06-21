@@ -15,9 +15,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use iced::advanced::widget::{self, operate, operation::focusable};
 use iced::futures::channel::mpsc::UnboundedReceiver;
+use iced::widget::text_editor;
 use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
@@ -141,6 +143,34 @@ enum Focus {
     Search,
 }
 
+/// A plan / memory document open in the main pane (F-plans-memory). Holds the
+/// editable buffer plus the state the save path needs: where it lives, whether
+/// it is in the writable scope, and the mtime captured at load for the
+/// concurrency guard.
+struct OpenDoc {
+    /// Sidebar label, shown in the editor header.
+    label: String,
+    /// File on disk; the scope predicate and save are measured against it.
+    path: PathBuf,
+    /// The editable text buffer (iced text editor state).
+    content: text_editor::Content,
+    /// mtime captured at load; the baseline for the concurrent-write guard.
+    /// `None` if it could not be read (then no conflict can be detected).
+    loaded_mtime: Option<SystemTime>,
+    /// Whether the write-scope predicate permits saving this path.
+    writable: bool,
+    /// Unsaved edits since load or the last successful save.
+    dirty: bool,
+    /// Transient feedback after a save attempt.
+    feedback: Option<DocFeedback>,
+}
+
+/// The outcome of the last save attempt, surfaced in the editor header.
+enum DocFeedback {
+    Saved,
+    Error(String),
+}
+
 struct Shell {
     /// The headless core; all browser and session state lives there.
     core: termherd_core::App,
@@ -166,8 +196,8 @@ struct Shell {
     renaming: Option<(String, String)>,
     /// Browsable plan / memory docs (F-plans-memory), refreshed on scan.
     docs: Vec<DocEntry>,
-    /// The doc currently shown read-only in the main pane: `(label, content)`.
-    viewing: Option<(String, String)>,
+    /// The doc currently open in the main pane for viewing/editing, if any.
+    open_doc: Option<OpenDoc>,
     /// A close awaiting confirmation: the tab index to kill, or `None` (#9).
     /// Killing a session is destructive, so the close button arms this and a
     /// confirmation bar must be accepted before the PTY is actually killed.
@@ -268,16 +298,24 @@ enum Message {
     RenameInput(String),
     /// Commit the inline rename (Enter or the ✓ button).
     CommitRename,
-    /// Open a plan / memory doc read-only in the main pane (F-plans-memory).
+    /// Open a plan / memory doc in the main pane (F-plans-memory).
     OpenDoc {
         label: String,
         path: PathBuf,
     },
-    /// A doc's contents finished loading.
+    /// A doc's contents finished loading, with the mtime captured at read.
     DocLoaded {
         label: String,
+        path: PathBuf,
         content: String,
+        mtime: Option<SystemTime>,
     },
+    /// An edit/cursor action from the doc text editor.
+    DocEdit(text_editor::Action),
+    /// Save the open doc to disk (Save button or the save chord).
+    SaveDoc,
+    /// A save finished: the file's new mtime, or why it was refused.
+    DocSaved(Result<SystemTime, crate::docs::SaveError>),
     /// Close the doc viewer, returning to the terminal.
     CloseDoc,
     /// Open a Ctrl/Cmd+clicked terminal link in the OS default handler (#28).
@@ -344,7 +382,7 @@ impl Shell {
             keymap: startup.keymap,
             renaming: None,
             docs: crate::docs::discover(&[]),
-            viewing: None,
+            open_doc: None,
             closing: None,
             archiving: None,
             link_modifier: false,
@@ -651,22 +689,70 @@ impl Shell {
                 }
                 None => Task::none(),
             },
-            Message::OpenDoc { label, path } => Task::perform(
-                async move {
-                    crate::docs::read(&path)
-                        .unwrap_or_else(|e| format!("(lecture impossible : {e})"))
-                },
-                move |content| Message::DocLoaded {
-                    label: label.clone(),
-                    content,
-                },
-            ),
-            Message::DocLoaded { label, content } => {
-                self.viewing = Some((label, content));
+            Message::OpenDoc { label, path } => {
+                let read_path = path.clone();
+                Task::perform(
+                    async move {
+                        let content = crate::docs::read(&read_path)
+                            .unwrap_or_else(|e| format!("(lecture impossible : {e})"));
+                        let mtime = crate::docs::mtime(&read_path).ok();
+                        (content, mtime)
+                    },
+                    move |(content, mtime)| Message::DocLoaded {
+                        label: label.clone(),
+                        path: path.clone(),
+                        content,
+                        mtime,
+                    },
+                )
+            }
+            Message::DocLoaded {
+                label,
+                path,
+                content,
+                mtime,
+            } => {
+                let writable = crate::docs::is_writable(&path);
+                self.open_doc = Some(OpenDoc {
+                    label,
+                    path,
+                    content: text_editor::Content::with_text(&content),
+                    loaded_mtime: mtime,
+                    writable,
+                    dirty: false,
+                    feedback: None,
+                });
+                Task::none()
+            }
+            Message::DocEdit(action) => {
+                if let Some(doc) = &mut self.open_doc {
+                    let edits = action.is_edit();
+                    doc.content.perform(action);
+                    if edits {
+                        doc.dirty = true;
+                        doc.feedback = None;
+                    }
+                }
+                Task::none()
+            }
+            Message::SaveDoc => self.save_open_doc(),
+            Message::DocSaved(result) => {
+                if let Some(doc) = &mut self.open_doc {
+                    match result {
+                        Ok(new_mtime) => {
+                            doc.loaded_mtime = Some(new_mtime);
+                            doc.dirty = false;
+                            doc.feedback = Some(DocFeedback::Saved);
+                        }
+                        Err(error) => {
+                            doc.feedback = Some(DocFeedback::Error(error.to_string()));
+                        }
+                    }
+                }
                 Task::none()
             }
             Message::CloseDoc => {
-                self.viewing = None;
+                self.open_doc = None;
                 Task::none()
             }
             Message::OpenUrl(url) => {
@@ -674,6 +760,25 @@ impl Shell {
                 self.perform(effects)
             }
         }
+    }
+
+    /// Save the open doc off-thread, if there is one with unsaved edits in the
+    /// writable scope. A no-op otherwise, so the save chord/button is harmless
+    /// when nothing needs writing.
+    fn save_open_doc(&self) -> Task<Message> {
+        let Some(doc) = &self.open_doc else {
+            return Task::none();
+        };
+        if !doc.writable || !doc.dirty {
+            return Task::none();
+        }
+        let path = doc.path.clone();
+        let contents = doc.content.text();
+        let open_mtime = doc.loaded_mtime;
+        Task::perform(
+            async move { crate::docs::save(&path, &contents, open_mtime) },
+            Message::DocSaved,
+        )
     }
 
     /// Whether a session id is still on the scanned project list — used to
@@ -816,6 +921,18 @@ impl Shell {
             }
             return Task::none();
         }
+        // An open doc owns the keyboard: the text editor handles keys itself, so
+        // swallow them here (never leak to the terminal underneath), but honour
+        // the save chord (Cmd/Ctrl+S).
+        if self.open_doc.is_some() {
+            if let keyboard::Event::KeyPressed { key, modifiers, .. } = &event
+                && modifiers.command()
+                && matches!(key, keyboard::Key::Character(c) if c.as_str() == "s")
+            {
+                return self.save_open_doc();
+            }
+            return Task::none();
+        }
         if self.focus != Focus::Terminal {
             return Task::none();
         }
@@ -859,7 +976,10 @@ impl Shell {
     /// excluded explicitly — this is the predicate [`Shell::on_key`] enforces
     /// step by step, shared so the IME path can't drift from it (#34).
     fn accepts_terminal_input(&self) -> bool {
-        self.focus == Focus::Terminal && self.renaming.is_none() && self.closing.is_none()
+        self.focus == Focus::Terminal
+            && self.renaming.is_none()
+            && self.closing.is_none()
+            && self.open_doc.is_none()
     }
 
     /// Route IME-composed text (dead/accent keys, CJK) to the focused terminal
