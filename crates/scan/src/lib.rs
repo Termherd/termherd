@@ -17,6 +17,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
@@ -30,12 +31,31 @@ use tracing::{debug, warn};
 /// Scanner over a projects root (normally `~/.claude/projects`).
 pub struct FsScanner {
     root: PathBuf,
+    /// The previous scan's `(records, skipped)` counts, packed into one word
+    /// (`records << 32 | skipped`). Lets a steady-state rescan whose outcome is
+    /// unchanged drop its skip summary to `debug!` instead of repeating the
+    /// `warn!` every few seconds while a live session appends JSONL (#13).
+    /// `u64::MAX` until the first scan, a value no real outcome can take.
+    last_outcome: AtomicU64,
 }
 
 impl FsScanner {
     #[must_use]
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            last_outcome: AtomicU64::new(u64::MAX),
+        }
+    }
+
+    /// Whether this scan's `(records, skipped)` counts differ from the previous
+    /// one, recording them for next time. The common live-session case — JSONL
+    /// appended to existing files, so both counts hold steady — returns `false`,
+    /// which is what demotes the repeated skip summary to `debug!` (#13). A new
+    /// or vanished session moves a count and returns `true`, logging loudly.
+    fn outcome_changed(&self, records: usize, skipped: usize) -> bool {
+        let summary = ((records as u64) << 32) | (skipped as u64 & 0xFFFF_FFFF);
+        self.last_outcome.swap(summary, Ordering::Relaxed) != summary
     }
 
     /// Scanner over the default Claude CLI location, `~/.claude/projects`.
@@ -101,6 +121,13 @@ impl ProjectScanner for FsScanner {
     fn scan(&self) -> Result<Vec<SessionRecord>, ScanError> {
         let outcome = scan_root(&self.root)?;
 
+        // The fs watcher fires a rescan on every debounced burst, and a live
+        // session appends JSONL every few seconds — so without dedup this
+        // summary drips endlessly. Log loudly only when the outcome actually
+        // changed since the last scan; an unchanged steady state stays at
+        // `debug` (#13).
+        let changed = self.outcome_changed(outcome.records.len(), outcome.skipped.len());
+
         // Q5: underivable folders are dropped like upstream, but never
         // silently. The detail is per-folder noise (dozens of `.worktrees`
         // checkouts skip cleanly on a busy machine), so it lives at `debug`;
@@ -109,11 +136,18 @@ impl ProjectScanner for FsScanner {
             debug!(folder = %folder.display(), "no cwd derivable; folder skipped");
         }
         if !outcome.skipped.is_empty() {
-            warn!(
-                skipped = outcome.skipped.len(),
-                "folders skipped (no cwd derivable); \
-                 set RUST_LOG=termherd_scan=debug for the list"
-            );
+            if changed {
+                warn!(
+                    skipped = outcome.skipped.len(),
+                    "folders skipped (no cwd derivable); \
+                     set RUST_LOG=termherd_scan=debug for the list"
+                );
+            } else {
+                debug!(
+                    skipped = outcome.skipped.len(),
+                    "folders skipped (unchanged since last scan)"
+                );
+            }
         }
         debug!(sessions = outcome.records.len(), root = %self.root.display(), "scan complete");
         Ok(outcome.records)
@@ -316,6 +350,34 @@ mod tests {
                 .skipped
                 .iter()
                 .all(|p| p.file_name().is_some_and(|n| n != "C--proj"))
+        );
+    }
+
+    #[test]
+    fn outcome_change_detection_drives_the_skip_summary_log_level() {
+        // #13: the first scan is always a change (nothing logged before); a
+        // rescan with the same counts — the steady-state append case — is not,
+        // so its skip summary drops to debug; a count that moves logs again.
+        let scanner = FsScanner::new(PathBuf::from("/unused"));
+        assert!(
+            scanner.outcome_changed(213, 44),
+            "first scan always changes"
+        );
+        assert!(
+            !scanner.outcome_changed(213, 44),
+            "identical counts must not re-log"
+        );
+        assert!(
+            scanner.outcome_changed(214, 44),
+            "a new session moves the record count"
+        );
+        assert!(
+            scanner.outcome_changed(214, 43),
+            "a vanished skip moves the skipped count"
+        );
+        assert!(
+            !scanner.outcome_changed(214, 43),
+            "settling back to a steady state stops logging again"
         );
     }
 

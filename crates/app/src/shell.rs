@@ -222,6 +222,11 @@ struct Shell {
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
     link_modifier: bool,
+    /// The session count logged by the last `scan completed` line. The fs
+    /// watcher rescans on every burst and a live session appends JSONL every
+    /// few seconds, so logging each rescan at `info` drips steadily; we only
+    /// emit `info` when the count actually moves, `debug` otherwise (#13).
+    last_scan_count: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -403,6 +408,7 @@ impl Shell {
             archiving: None,
             closing_window: None,
             link_modifier: false,
+            last_scan_count: None,
         }
     }
 
@@ -543,7 +549,17 @@ impl Shell {
         match message {
             Message::Window(id, event) => self.on_window_event(id, event),
             Message::ScanCompleted(Ok(records)) => {
-                tracing::info!(sessions = records.len(), "scan completed");
+                // Only announce a scan at `info` when the session count moved;
+                // a steady-state rescan (a live session appending JSONL) keeps
+                // the count and drops to `debug`, so the log stops dripping a
+                // line every few seconds (#13).
+                let count = records.len();
+                if self.last_scan_count == Some(count) {
+                    tracing::debug!(sessions = count, "scan completed (unchanged)");
+                } else {
+                    tracing::info!(sessions = count, "scan completed");
+                    self.last_scan_count = Some(count);
+                }
                 self.scan_error = None;
                 let effects = self
                     .core
