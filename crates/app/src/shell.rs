@@ -45,6 +45,12 @@ use view::project_label;
 /// Combined with the cell metrics ([`terminal::CELL_W`]/[`CELL_H`]) to size the
 /// PTY grid to the window (FR4 resize).
 const SIDEBAR_W: f32 = 300.0;
+/// Width the collapsed sidebar still occupies (#21): just the slim "▶" handle.
+/// The grid reserves this instead of `SIDEBAR_W` when hidden, so the reclaimed
+/// space becomes columns rather than stretched cells (#64). The view pins the
+/// handle to exactly this width (`view::view`), so it is a contract the layout
+/// honours, not an estimate that can silently drift.
+pub(super) const HANDLE_W: f32 = 28.0;
 const H_CHROME: f32 = 40.0;
 const V_CHROME: f32 = 84.0;
 
@@ -448,9 +454,26 @@ impl Shell {
         self.perform(effects)
     }
 
-    /// The terminal grid size (cols, rows) that fits the current window.
+    /// Collapse or restore the sidebar (#21), then resize the focused terminal
+    /// so the grid re-derives its column count for the new width — without this
+    /// the cells just stretch to fill the reclaimed space (#64). Shared by the
+    /// button (`Message::ToggleSidebar`) and the keymap (`Action::ToggleSidebar`).
+    fn toggle_sidebar(&mut self) -> Task<Message> {
+        let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
+        self.resize_focused()
+    }
+
+    /// The terminal grid size (cols, rows) that fits the current window. The
+    /// sidebar's width is only reserved while it's visible; collapsing it (#21)
+    /// hands that space to the grid as extra columns instead of stretching the
+    /// existing cells (#64).
     fn grid_size(&self) -> (u16, u16) {
-        let avail_w = (self.bounds.width - SIDEBAR_W - H_CHROME).max(CELL_W);
+        let sidebar = if self.core.sidebar_hidden {
+            HANDLE_W
+        } else {
+            SIDEBAR_W
+        };
+        let avail_w = (self.bounds.width - sidebar - H_CHROME).max(CELL_W);
         let avail_h = (self.bounds.height - V_CHROME).max(CELL_H);
         let cols = (avail_w / CELL_W).floor().clamp(20.0, 500.0) as u16;
         let rows = (avail_h / CELL_H).floor().clamp(5.0, 200.0) as u16;
@@ -647,10 +670,7 @@ impl Shell {
                 let effects = self.core.apply(termherd_core::Event::ToggleCollapsed(path));
                 self.perform(effects)
             }
-            Message::ToggleSidebar => {
-                let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
-                Task::none()
-            }
+            Message::ToggleSidebar => self.toggle_sidebar(),
             Message::StartRename { session, current } => {
                 self.renaming = Some((session, current));
                 operate(focusable::focus(rename_id()))
@@ -780,10 +800,7 @@ impl Shell {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
             }
-            Action::ToggleSidebar => {
-                let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
-                Task::none()
-            }
+            Action::ToggleSidebar => self.toggle_sidebar(),
             // Number-row jump straight to a tab (issue #26). An index past the
             // open tabs is absorbed by `core` as a no-op.
             Action::ActivateTab(index) => self.activate_tab(index),
@@ -995,6 +1012,7 @@ mod key_routing {
         writes: StdMutex<Vec<Vec<u8>>>,
         kills: StdMutex<usize>,
         spawns: StdMutex<usize>,
+        resizes: StdMutex<Vec<(u16, u16)>>,
     }
 
     impl RecordingPty {
@@ -1006,6 +1024,9 @@ mod key_routing {
         }
         fn spawn_count(&self) -> usize {
             *self.spawns.lock().expect("spawns lock")
+        }
+        fn resizes(&self) -> Vec<(u16, u16)> {
+            self.resizes.lock().expect("resizes lock").clone()
         }
     }
 
@@ -1021,7 +1042,11 @@ mod key_routing {
                 .push(bytes.to_vec());
             Ok(())
         }
-        fn resize(&self, _: SessionId, _: u16, _: u16) -> Result<(), PtyError> {
+        fn resize(&self, _: SessionId, cols: u16, rows: u16) -> Result<(), PtyError> {
+            self.resizes
+                .lock()
+                .expect("resizes lock")
+                .push((cols, rows));
             Ok(())
         }
         fn scroll(&self, _: SessionId, _: i32) -> Result<(), PtyError> {
@@ -1250,6 +1275,35 @@ mod key_routing {
         let (mut shell, _pty) = shell_with_terminal();
         let _ = shell.update(Message::RequestCloseTab(7));
         assert_eq!(shell.closing, None, "a stale index must not arm a close");
+    }
+
+    #[test]
+    fn collapsing_the_sidebar_widens_the_grid_and_resizes_the_pty() {
+        // #64: hiding the sidebar must grow the column count (the reclaimed
+        // width becomes columns), and the toggle must push that wider size to
+        // the PTY rather than leaving cols stale (which stretched the cells).
+        let (mut shell, pty) = shell_with_terminal();
+        let (cols_visible, _) = shell.grid_size();
+        let resizes_before = pty.resizes().len();
+
+        let _ = shell.toggle_sidebar();
+        assert!(shell.core.sidebar_hidden, "toggle should hide the sidebar");
+
+        let (cols_hidden, _) = shell.grid_size();
+        assert!(
+            cols_hidden > cols_visible,
+            "hiding the sidebar must add columns (was {cols_visible}, now {cols_hidden})"
+        );
+        let resizes = pty.resizes();
+        assert!(
+            resizes.len() > resizes_before,
+            "toggling the sidebar must resize the focused PTY"
+        );
+        assert_eq!(
+            resizes.last().map(|(cols, _)| *cols),
+            Some(cols_hidden),
+            "the resize must carry the new, wider column count"
+        );
     }
 
     #[test]
