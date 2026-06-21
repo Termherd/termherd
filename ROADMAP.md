@@ -149,7 +149,9 @@ The well-defined items from the same gist are tracked as issues #18–#29.
 - [ ] `F-i18n` — internationalization. Cross-cutting (string externalization,
   locale selection, layout/width implications); needs an approach decision
   before any slice can ship. Heaviest and least urgent for an early-adopter
-  audience — keep last
+  audience — keep last. Precursor shipped (#60): the UI is English-first with
+  every user-facing string centralised in `crates/app/src/strings.rs`, so the
+  remaining work is "add a catalogue", not "find every literal"
 
 ### Unsure (deferred)
 

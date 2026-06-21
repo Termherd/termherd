@@ -20,6 +20,7 @@ use termherd_core::browser::relative_age;
 use super::ime::ime_area;
 use super::terminal::{CELL_H, CELL_W, TerminalView};
 use super::{Focus, HANDLE_W, Message, Shell, rename_id, search_id};
+use crate::strings;
 
 impl Shell {
     pub(super) fn view(&self) -> Element<'_, Message> {
@@ -56,11 +57,8 @@ impl Shell {
         }
         let live = self.live_session_count();
         Some(Self::confirmation_bar(
-            format!(
-                "Quitter TermHerd ? {live} session(s) active(s) seront arrêtée(s) \
-                 brutalement — Claude sera tué."
-            ),
-            "Quitter",
+            strings::quit_prompt(live),
+            strings::QUIT,
             button::danger,
             Message::ConfirmCloseWindow,
             Message::CancelCloseWindow,
@@ -70,7 +68,7 @@ impl Shell {
     /// The session browser (FR1 + FR3): search box, then projects by recency.
     /// Clicking a project opens a fresh shell; clicking a session resumes it.
     fn sidebar(&self) -> Element<'_, Message> {
-        let mut search = text_input("Rechercher…", &self.core.search)
+        let mut search = text_input(strings::SEARCH_PLACEHOLDER, &self.core.search)
             .id(search_id())
             .size(12)
             .padding(6);
@@ -80,12 +78,12 @@ impl Shell {
         // Clicking the box hands keyboard focus to it (disabling terminal keys).
         let search = mouse_area(search).on_press(Message::FocusSearch);
         let titles_only = checkbox(self.core.search_titles_only)
-            .label("Titres uniquement")
+            .label(strings::TITLES_ONLY)
             .on_toggle(Message::SearchTitlesOnly)
             .text_size(11)
             .size(14);
         let show_archived = checkbox(self.core.show_archived)
-            .label("Afficher les archivées")
+            .label(strings::SHOW_ARCHIVED)
             .on_toggle(Message::ShowArchived)
             .text_size(11)
             .size(14);
@@ -113,12 +111,12 @@ impl Shell {
         let now = std::time::SystemTime::now();
         let mut list = column![].spacing(16).padding(12);
         if let Some(error) = &self.scan_error {
-            list = list.push(text(format!("Scan impossible : {error}")).size(12));
+            list = list.push(text(strings::scan_failed(error)).size(12));
         } else if visible.is_empty() {
             let label = if self.core.search.trim().is_empty() {
-                "Aucune session trouvée."
+                strings::NO_SESSIONS
             } else {
-                "Aucun résultat."
+                strings::NO_RESULTS
             };
             list = list.push(text(label).size(12));
         }
@@ -128,7 +126,7 @@ impl Shell {
             let collapsed = self.core.is_collapsed(PLANS_SECTION_KEY);
             let header = row![
                 fold_toggle(PLANS_SECTION_KEY, collapsed),
-                text("Plans & mémoire").size(12)
+                text(strings::PLANS_AND_MEMORY).size(12)
             ]
             .spacing(6)
             .align_y(iced::Center);
@@ -183,7 +181,7 @@ impl Shell {
                 // A coloured dot marks a session already open in TermHerd and
                 // carries its live activity (FR8).
                 if let Some(status) = live.get(id) {
-                    content = content.push(text("●").size(9).color(status_style(*status).1));
+                    content = content.push(text("●").size(9).color(status_color(*status)));
                 }
                 let title = self.core.session_title(s);
                 let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);
@@ -192,7 +190,7 @@ impl Shell {
                 // clickable title that resumes the session.
                 let middle: Element<'_, Message> = if renaming_this {
                     let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
-                    text_input("titre…", buffer)
+                    text_input(strings::RENAME_PLACEHOLDER, buffer)
                         .id(rename_id())
                         .on_input(Message::RenameInput)
                         .on_submit(Message::CommitRename)
@@ -296,8 +294,8 @@ impl Shell {
             .find(|s| s.session_id == session)
             .map_or_else(|| session.to_owned(), |s| self.core.session_title(s));
         Some(Self::confirmation_bar(
-            format!("Archiver « {} » ?", clip(&title, 24)),
-            "Archiver",
+            strings::archive_prompt(&clip(&title, 24)),
+            strings::ARCHIVE,
             button::primary,
             Message::ConfirmArchive,
             Message::CancelArchive,
@@ -312,7 +310,7 @@ impl Shell {
         if let Some((label, content)) = &self.viewing {
             let header = row![
                 text(label).size(13),
-                button(text("✕ fermer").size(12))
+                button(text(strings::DOC_CLOSE).size(12))
                     .on_press(Message::CloseDoc)
                     .style(button::text)
                     .padding(0),
@@ -358,14 +356,9 @@ impl Shell {
                 iced::widget::center(
                     column![
                         text("TermHerd").size(40),
-                        text(format!(
-                            "{} session(s) dans {} projet(s)",
-                            total,
-                            self.core.projects.len()
-                        ))
-                        .size(14),
-                        text("Cliquez un projet pour ouvrir un terminal,").size(13),
-                        text("ou une session pour la reprendre.").size(13),
+                        text(strings::welcome_counts(total, self.core.projects.len())).size(14),
+                        text(strings::WELCOME_HINT_OPEN).size(13),
+                        text(strings::WELCOME_HINT_RESUME).size(13),
                     ]
                     .spacing(8)
                     .align_x(iced::Center),
@@ -395,11 +388,8 @@ impl Shell {
         let index = self.closing?;
         let tab = self.core.workspace.tabs.get(index)?;
         Some(Self::confirmation_bar(
-            format!(
-                "Fermer « {} » ? La session sera terminée.",
-                clip(&tab.title, 24)
-            ),
-            "Fermer",
+            strings::close_tab_prompt(&clip(&tab.title, 24)),
+            strings::CLOSE,
             button::danger,
             Message::CloseTab(index),
             Message::CancelClose,
@@ -422,7 +412,7 @@ impl Shell {
             .on_press(on_confirm)
             .style(confirm_style)
             .padding(6);
-        let cancel = button(text("Annuler").size(12))
+        let cancel = button(text(strings::CANCEL).size(12))
             .on_press(on_cancel)
             .style(button::text)
             .padding(6);
@@ -449,7 +439,7 @@ impl Shell {
             let active = index == self.core.workspace.active;
             let mut label = row![].spacing(6).align_y(iced::Center);
             if let Some(status) = self.core.tab_status(index) {
-                label = label.push(text("●").size(9).color(status_style(status).1));
+                label = label.push(text("●").size(9).color(status_color(status)));
             }
             label = label.push(text(clip(&tab.title, 24)).size(12));
             let title = button(label)
@@ -470,16 +460,16 @@ impl Shell {
     }
 }
 
-/// The label and dot colour for an activity status (FR8). Shared by the
-/// focused-terminal badge and the sidebar's per-session dot so both stay in
-/// sync.
-fn status_style(status: SessionStatus) -> (&'static str, Color) {
+/// The dot colour for an activity status (FR8). Shared by the focused-terminal
+/// badge and the sidebar's per-session dot so both stay in sync; the matching
+/// label lives in [`strings::status_label`].
+fn status_color(status: SessionStatus) -> Color {
     match status {
-        SessionStatus::Starting => ("démarrage", Color::from_rgb(0.55, 0.55, 0.6)),
-        SessionStatus::Busy => ("occupé", Color::from_rgb(0.95, 0.7, 0.2)),
-        SessionStatus::Idle => ("prêt", Color::from_rgb(0.3, 0.8, 0.4)),
-        SessionStatus::Attention => ("attention", Color::from_rgb(0.95, 0.35, 0.35)),
-        SessionStatus::Exited => ("terminé", Color::from_rgb(0.5, 0.5, 0.5)),
+        SessionStatus::Starting => Color::from_rgb(0.55, 0.55, 0.6),
+        SessionStatus::Busy => Color::from_rgb(0.95, 0.7, 0.2),
+        SessionStatus::Idle => Color::from_rgb(0.3, 0.8, 0.4),
+        SessionStatus::Attention => Color::from_rgb(0.95, 0.35, 0.35),
+        SessionStatus::Exited => Color::from_rgb(0.5, 0.5, 0.5),
     }
 }
 
@@ -487,11 +477,13 @@ fn status_style(status: SessionStatus) -> (&'static str, Color) {
 /// focused terminal. The same dot annotates live rows in the sidebar and each
 /// tab in the tab strip.
 fn status_badge(status: SessionStatus) -> Element<'static, Message> {
-    let (label, color) = status_style(status);
-    row![text("●").size(13).color(color), text(label).size(13)]
-        .spacing(6)
-        .align_y(iced::Center)
-        .into()
+    row![
+        text("●").size(13).color(status_color(status)),
+        text(strings::status_label(status)).size(13)
+    ]
+    .spacing(6)
+    .align_y(iced::Center)
+    .into()
 }
 
 /// Fold key for the Plans & mémoire section (#22). Project groups key their
@@ -601,11 +593,7 @@ fn session_card(
         .modified
         .and_then(|m| now.duration_since(m).ok())
         .map(relative_age);
-    let meta = match age.as_deref() {
-        Some("now") => format!("À l'instant  ·  {count} messages"),
-        Some(age) => format!("Il y a {age}  ·  {count} messages"),
-        None => format!("{count} messages"),
-    };
+    let meta = strings::session_meta(age.as_deref(), count);
 
     // Title inherits the card's text colour; secondary lines are dimmed. Both
     // colours come from the theme palette (see `card_style`), never hardcoded.
