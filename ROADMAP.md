@@ -6,7 +6,7 @@ short, scannable view; commits land features here when they ship.
 ## Working order (next up)
 
 Execution priority across the open Musts and the feedback issues (#18–#29,
-gist [`d1d02e5`](https://gist.github.com/bastien-gallay/d1d02e5db376112d9b2893e0f2f81886)).
+gist `d1d02e5`).
 The MoSCoW buckets below stay tied to PRD §5; this block is just the order to
 pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 
@@ -78,7 +78,8 @@ headline.
   `KeyChord -> Action` map in `core::keymap` with a chord-string parser and
   platform-aware defaults; the `keys` section of `settings.json` overrides any
   action. Drives copy/paste, `Ctrl+Tab`/`Ctrl+Shift+Tab` cycling, close-tab,
-  focus-search and `toggle-sidebar` (hide pane / Ctrl+Cmd+B, #21) today;
+  focus-search, `toggle-sidebar` (hide pane / Ctrl+Cmd+B, #21) and
+  `scroll-top`/`scroll-bottom` (Ctrl/Cmd+Up/Down, #44) today;
   `split-*` / `focus-next/prev` bind as those features land
 - [x] `F-session-metadata` — star / rename / archive / custom titles for
   sessions (M3, moved to Must in PRD rev. 6): a `SessionMeta` overlay in
@@ -127,8 +128,7 @@ headline.
 ### Backlog — needs definition (from feedback gist, 2026-06-17)
 
 Routed here (not to GH issues) because each needs design before it can be
-scoped. Source: feedback gist
-[`d1d02e5`](https://gist.github.com/bastien-gallay/d1d02e5db376112d9b2893e0f2f81886).
+scoped. Source: feedback gist `d1d02e5`.
 The well-defined items from the same gist are tracked as issues #18–#29.
 
 - [ ] `F-favorites` — favorites in the sidebar. The gist asks for a dedicated
@@ -152,7 +152,9 @@ The well-defined items from the same gist are tracked as issues #18–#29.
 - [ ] `F-i18n` — internationalization. Cross-cutting (string externalization,
   locale selection, layout/width implications); needs an approach decision
   before any slice can ship. Heaviest and least urgent for an early-adopter
-  audience — keep last
+  audience — keep last. Precursor shipped (#60): the UI is English-first with
+  every user-facing string centralised in `crates/app/src/strings.rs`, so the
+  remaining work is "add a catalogue", not "find every literal"
 
 ### Unsure (deferred)
 

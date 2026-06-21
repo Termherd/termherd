@@ -109,32 +109,128 @@ pub enum Action {
     ToggleSidebar,
     Copy,
     Paste,
+    /// Jump the focused terminal's viewport to the top of its scrollback (#44).
+    ScrollTop,
+    /// Jump the focused terminal's viewport back to the live bottom (#44).
+    ScrollBottom,
     /// Jump straight to the tab at this zero-based index (issue #26). Bound to
     /// the platform's primary modifier and the number row — ⌘1…⌘9 on macOS,
     /// Ctrl+1…Ctrl+9 elsewhere — where the user-facing digit is 1-based.
     ActivateTab(usize),
 }
 
+/// One simple (non-parameterized) action's full definition: the kebab-case name
+/// it answers to in the `keys` section of `settings.json`, and its default
+/// chord specs. `mod` in a spec resolves to the platform primary modifier
+/// (⌘ on macOS, Ctrl elsewhere); other modifiers are literal. An empty
+/// `default_chords` means "no built-in binding yet" (wired as the feature lands)
+/// or "bound explicitly in [`Keymap::defaults`]" (the platform-irregular pair).
+struct ActionDef {
+    action: Action,
+    name: &'static str,
+    default_chords: &'static [&'static str],
+}
+
+/// The single source of truth for the simple action vocabulary *and* its
+/// defaults (#71): `from_config_name`, `config_name`, [`Keymap::defaults`] and
+/// the tests all derive from this one table, so adding a regular action is a
+/// single line here. The parameterized [`Action::ActivateTab`] family is named
+/// by [`activate_tab_from_config_name`] (its name carries an index); copy/paste
+/// carry no spec here because their non-macOS terminal-signal handling is
+/// irregular and stays explicit in [`Keymap::defaults`].
+const ACTIONS: &[ActionDef] = &[
+    ActionDef {
+        action: Action::OpenNewSession,
+        name: "open-new-session",
+        default_chords: &[],
+    },
+    ActionDef {
+        action: Action::CloseFocused,
+        name: "close-focused",
+        default_chords: &["mod+w"],
+    },
+    ActionDef {
+        action: Action::SplitHorizontal,
+        name: "split-horizontal",
+        default_chords: &[],
+    },
+    ActionDef {
+        action: Action::SplitVertical,
+        name: "split-vertical",
+        default_chords: &[],
+    },
+    ActionDef {
+        action: Action::FocusNext,
+        name: "focus-next",
+        default_chords: &[],
+    },
+    ActionDef {
+        action: Action::FocusPrev,
+        name: "focus-prev",
+        default_chords: &[],
+    },
+    ActionDef {
+        action: Action::NextTab,
+        name: "next-tab",
+        default_chords: &["ctrl+tab"],
+    },
+    ActionDef {
+        action: Action::PrevTab,
+        name: "prev-tab",
+        default_chords: &["ctrl+shift+tab"],
+    },
+    ActionDef {
+        action: Action::FocusSearch,
+        name: "focus-search",
+        default_chords: &["mod+f"],
+    },
+    ActionDef {
+        action: Action::ToggleSidebar,
+        name: "toggle-sidebar",
+        default_chords: &["mod+b"],
+    },
+    ActionDef {
+        action: Action::Copy,
+        name: "copy",
+        default_chords: &[],
+    },
+    ActionDef {
+        action: Action::Paste,
+        name: "paste",
+        default_chords: &[],
+    },
+    ActionDef {
+        action: Action::ScrollTop,
+        name: "scroll-top",
+        default_chords: &["mod+up"],
+    },
+    ActionDef {
+        action: Action::ScrollBottom,
+        name: "scroll-bottom",
+        default_chords: &["mod+down"],
+    },
+];
+
 impl Action {
     /// The action for a config key name (kebab-case), or `None` if unknown.
     /// This is the vocabulary the `keys` section of `settings.json` speaks.
     #[must_use]
     pub fn from_config_name(name: &str) -> Option<Action> {
-        Some(match name {
-            "open-new-session" => Action::OpenNewSession,
-            "close-focused" => Action::CloseFocused,
-            "split-horizontal" => Action::SplitHorizontal,
-            "split-vertical" => Action::SplitVertical,
-            "focus-next" => Action::FocusNext,
-            "focus-prev" => Action::FocusPrev,
-            "next-tab" => Action::NextTab,
-            "prev-tab" => Action::PrevTab,
-            "focus-search" => Action::FocusSearch,
-            "toggle-sidebar" => Action::ToggleSidebar,
-            "copy" => Action::Copy,
-            "paste" => Action::Paste,
-            _ => return activate_tab_from_config_name(name),
-        })
+        ACTIONS
+            .iter()
+            .find(|def| def.name == name)
+            .map(|def| def.action)
+            .or_else(|| activate_tab_from_config_name(name))
+    }
+
+    /// The config name for this action, or `None` for the parameterized
+    /// [`Action::ActivateTab`] (named `activate-tab-N`, not in [`ACTIONS`]).
+    #[must_use]
+    pub fn config_name(self) -> Option<&'static str> {
+        ACTIONS
+            .iter()
+            .find(|def| def.action == self)
+            .map(|def| def.name)
     }
 }
 
@@ -148,6 +244,19 @@ fn activate_tab_from_config_name(name: &str) -> Option<Action> {
     (1..=NUMBER_ROW_TABS)
         .contains(&n)
         .then(|| Action::ActivateTab(n - 1))
+}
+
+/// Parse a default chord spec from [`ACTIONS`], resolving the `mod` token to the
+/// platform primary modifier so one spec serves both ⌘ and Ctrl. Returns `None`
+/// on a malformed spec; specs are authored in-tree and a test asserts they all
+/// parse, so `None` never reaches a real keymap (and `core` forbids panicking).
+fn default_chord(spec: &str) -> Option<KeyChord> {
+    let primary = if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    };
+    KeyChord::parse(&spec.replace("mod", primary)).ok()
 }
 
 /// Resolves a [`KeyChord`] to its [`Action`]. Built from platform-aware
@@ -164,19 +273,30 @@ impl Default for Keymap {
 }
 
 impl Keymap {
-    /// The built-in bindings. macOS binds copy/paste/close/search to ⌘; the
-    /// other platforms use Ctrl (and Ctrl+Shift+C for copy, so plain Ctrl+C
-    /// stays the interrupt signal). Tab cycling is the same everywhere.
+    /// The built-in bindings. Regular actions come straight from the [`ACTIONS`]
+    /// table's default chords. Copy/paste are the exception — the other
+    /// platforms keep plain Ctrl+C/V as the terminal interrupt/literal and use
+    /// Ctrl+Shift+C for copy — so they are bound explicitly here.
     pub fn defaults() -> Self {
         let mut map = Keymap {
             bindings: HashMap::new(),
         };
+        // Regular actions: their default chords are data in the table.
+        for def in ACTIONS {
+            let chords: Vec<KeyChord> = def
+                .default_chords
+                .iter()
+                .copied()
+                .filter_map(default_chord)
+                .collect();
+            if !chords.is_empty() {
+                map.set(def.action, chords);
+            }
+        }
+        // Copy/paste are platform-irregular: see the note above.
         if cfg!(target_os = "macos") {
             map.set(Action::Copy, [KeyChord::new("c", MOD_CMD)]);
             map.set(Action::Paste, [KeyChord::new("v", MOD_CMD)]);
-            map.set(Action::CloseFocused, [KeyChord::new("w", MOD_CMD)]);
-            map.set(Action::FocusSearch, [KeyChord::new("f", MOD_CMD)]);
-            map.set(Action::ToggleSidebar, [KeyChord::new("b", MOD_CMD)]);
         } else {
             map.set(Action::Copy, [KeyChord::new("c", MOD_CTRL | MOD_SHIFT)]);
             map.set(
@@ -186,15 +306,7 @@ impl Keymap {
                     KeyChord::new("v", MOD_CTRL | MOD_SHIFT),
                 ],
             );
-            map.set(Action::CloseFocused, [KeyChord::new("w", MOD_CTRL)]);
-            map.set(Action::FocusSearch, [KeyChord::new("f", MOD_CTRL)]);
-            map.set(Action::ToggleSidebar, [KeyChord::new("b", MOD_CTRL)]);
         }
-        map.set(Action::NextTab, [KeyChord::new("tab", MOD_CTRL)]);
-        map.set(
-            Action::PrevTab,
-            [KeyChord::new("tab", MOD_CTRL | MOD_SHIFT)],
-        );
         // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9 (issue #26). The
         // digit is 1-based for the user; the action carries the 0-based index.
         for n in 1..=NUMBER_ROW_TABS {
@@ -319,27 +431,74 @@ mod tests {
     }
 
     #[test]
-    fn every_config_action_name_maps_to_an_action() {
-        // The full `keys` vocabulary the README documents must stay resolvable.
-        for name in [
-            "open-new-session",
-            "close-focused",
-            "split-horizontal",
-            "split-vertical",
-            "focus-next",
-            "focus-prev",
-            "next-tab",
-            "prev-tab",
-            "focus-search",
-            "toggle-sidebar",
-            "copy",
-            "paste",
-        ] {
-            assert!(
-                Action::from_config_name(name).is_some(),
-                "config action `{name}` should map to an Action",
+    fn the_action_vocabulary_round_trips_both_ways() {
+        // Every entry in the single-source table resolves by name and back to
+        // the same name, so name↔action can never drift (#71).
+        for def in ACTIONS {
+            assert_eq!(
+                Action::from_config_name(def.name),
+                Some(def.action),
+                "config action `{}` should map to {:?}",
+                def.name,
+                def.action,
+            );
+            assert_eq!(
+                def.action.config_name(),
+                Some(def.name),
+                "{:?} should report its config name `{}`",
+                def.action,
+                def.name,
             );
         }
+    }
+
+    #[test]
+    fn every_default_chord_spec_in_the_table_parses() {
+        // The specs are authored in-tree; a typo would silently drop a default
+        // binding (defaults() skips unparsable specs to keep core panic-free).
+        // Fail here instead so it never ships.
+        for def in ACTIONS {
+            for spec in def.default_chords {
+                assert!(
+                    default_chord(spec).is_some(),
+                    "default chord spec `{spec}` for {:?} must parse",
+                    def.action
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_default_bound_action_is_reconfigurable() {
+        // Guards the link between `defaults` and the vocabulary: a default-bound
+        // action with no config name would be unrebindable. ActivateTab is named
+        // separately (`activate-tab-N`), so it is allowed without a table entry.
+        let map = Keymap::defaults();
+        for action in map.bindings.values() {
+            let named = action.config_name().is_some() || matches!(action, Action::ActivateTab(_));
+            assert!(named, "default-bound {action:?} has no config name (#71)");
+        }
+    }
+
+    #[test]
+    fn defaults_bind_scroll_top_and_bottom_to_the_primary_modifier_arrows() {
+        let map = Keymap::defaults();
+        assert_eq!(
+            map.lookup(&KeyChord::new("up", primary_mod())),
+            Some(Action::ScrollTop)
+        );
+        assert_eq!(
+            map.lookup(&KeyChord::new("down", primary_mod())),
+            Some(Action::ScrollBottom)
+        );
+        assert_eq!(
+            Action::from_config_name("scroll-top"),
+            Some(Action::ScrollTop)
+        );
+        assert_eq!(
+            Action::from_config_name("scroll-bottom"),
+            Some(Action::ScrollBottom)
+        );
     }
 
     #[test]

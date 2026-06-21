@@ -127,6 +127,19 @@ pub struct SpawnSpec {
     pub rows: u16,
 }
 
+/// Where to move a terminal's viewport (#44). One scroll concept covers the
+/// mouse wheel's relative nudge and the absolute top/bottom jumps, so the event,
+/// effect and `PtyHost::scroll` port all speak it instead of special-casing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollTarget {
+    /// Relative line delta; positive scrolls up into history.
+    Delta(i32),
+    /// The oldest line in the scrollback.
+    Top,
+    /// The live bottom of the buffer.
+    Bottom,
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     /// A filesystem scan finished; replaces the whole browser state.
@@ -148,10 +161,11 @@ pub enum Event {
         cols: u16,
         rows: u16,
     },
-    /// The user scrolled a terminal's viewport (FR4 scrollback).
-    TerminalScrolled {
+    /// The user moved a terminal's viewport (FR4 scrollback): a relative wheel
+    /// delta, or an absolute jump to the top/bottom of the history (#44).
+    ScrollViewport {
         session: SessionId,
-        delta: i32,
+        target: ScrollTarget,
     },
     /// The OSC decoder reclassified a session's activity (FR8).
     StatusChanged {
@@ -221,8 +235,12 @@ pub enum Effect {
         cols: u16,
         rows: u16,
     },
-    /// Scroll a session's viewport by a line delta (positive = into history).
-    Scroll { session: SessionId, delta: i32 },
+    /// Move a session's viewport: a relative line delta or an absolute jump to
+    /// the top/bottom of the scrollback (#44).
+    Scroll {
+        session: SessionId,
+        target: ScrollTarget,
+    },
     /// Terminate a session's PTY process.
     Kill(SessionId),
     /// Persist the session metadata overlay (`F-session-metadata`).
@@ -282,9 +300,9 @@ impl App {
                     Vec::new()
                 }
             }
-            Event::TerminalScrolled { session, delta } => {
+            Event::ScrollViewport { session, target } => {
                 if self.is_live(session) {
-                    vec![Effect::Scroll { session, delta }]
+                    vec![Effect::Scroll { session, target }]
                 } else {
                     Vec::new()
                 }
@@ -397,6 +415,29 @@ impl App {
             .get(&record.session_id)
             .and_then(|meta| meta.title.clone())
             .unwrap_or_else(|| record.digest.display_title(None).to_owned())
+    }
+
+    /// Session ids in `group` whose resolved [`Self::session_title`] is shared
+    /// by another session in the same group — the rows that need a
+    /// disambiguator in the sidebar (#42). Collision is checked on the *final*
+    /// title (rename/metadata included), so two rows renamed alike still count.
+    /// The common, unique case returns an empty set, so callers leave it clean.
+    #[must_use]
+    pub fn colliding_titles(&self, group: &ProjectGroup) -> HashSet<String> {
+        let titled: Vec<(&str, String)> = group
+            .sessions
+            .iter()
+            .map(|s| (s.session_id.as_str(), self.session_title(s)))
+            .collect();
+        let mut counts: HashMap<&str, usize> = HashMap::new();
+        for (_, title) in &titled {
+            *counts.entry(title.as_str()).or_default() += 1;
+        }
+        titled
+            .iter()
+            .filter(|(_, title)| counts.get(title.as_str()).copied().unwrap_or(0) > 1)
+            .map(|(id, _)| (*id).to_owned())
+            .collect()
     }
 
     /// Whether a session (by Claude id) is starred / archived.
@@ -584,6 +625,7 @@ mod tests {
                 slug: None,
                 custom_title: None,
                 ai_title: None,
+                tail: Vec::new(),
             },
             modified: None,
         }
@@ -910,6 +952,31 @@ mod tests {
             app.session_title(&app.projects[0].sessions[0].clone()),
             derived
         );
+    }
+
+    #[test]
+    fn colliding_titles_flags_only_shared_titles_and_a_rename_resolves_it() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![
+            record("dup1", "/p", "vm tombée"),
+            record("dup2", "/p", "vm tombée"),
+            record("uniq", "/p", "something else"),
+        ]));
+        let group = app.projects[0].clone();
+
+        let collisions = app.colliding_titles(&group);
+        assert_eq!(
+            collisions,
+            HashSet::from(["dup1".to_owned(), "dup2".to_owned()])
+        );
+
+        // Renaming one of the pair to a unique title clears the collision for
+        // both — the set is checked on the resolved title.
+        app.apply(Event::RenameSession {
+            session: "dup1".into(),
+            title: "the original".into(),
+        });
+        assert!(app.colliding_titles(&group).is_empty());
     }
 
     #[test]

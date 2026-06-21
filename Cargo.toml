@@ -12,8 +12,8 @@ members = [
 edition = "2024"
 rust-version = "1.95"
 license = "MIT"
-authors = ["Bastien Gallay <bastien@gallay.org>"]
-repository = "https://github.com/bastien-gallay/termherd"
+authors = ["TermHerd contributors"]
+repository = "https://github.com/Termherd/termherd"
 publish = false
 
 # Workspace-level defaults. `core` and `claude` tighten clippy to `deny`

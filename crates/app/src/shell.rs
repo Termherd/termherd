@@ -24,7 +24,7 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Action, Effect, Keymap, LaunchSpec, SessionMeta, SessionRecord, SessionStatus,
+    Action, Effect, Keymap, LaunchSpec, ScrollTarget, SessionMeta, SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
@@ -47,6 +47,12 @@ use view::project_label;
 /// Combined with the cell metrics ([`terminal::CELL_W`]/[`CELL_H`]) to size the
 /// PTY grid to the window (FR4 resize).
 const SIDEBAR_W: f32 = 300.0;
+/// Width the collapsed sidebar still occupies (#21): just the slim "▶" handle.
+/// The grid reserves this instead of `SIDEBAR_W` when hidden, so the reclaimed
+/// space becomes columns rather than stretched cells (#64). The view pins the
+/// handle to exactly this width (`view::view`), so it is a contract the layout
+/// honours, not an estimate that can silently drift.
+pub(super) const HANDLE_W: f32 = 28.0;
 const H_CHROME: f32 = 40.0;
 const V_CHROME: f32 = 84.0;
 
@@ -207,6 +213,11 @@ struct Shell {
     /// arms this and a confirmation bar must be accepted first. Un-archiving is
     /// harmless and stays a one-click action.
     archiving: Option<String>,
+    /// A window close awaiting confirmation: the window id to close once the
+    /// user accepts, or `None`. Quitting hard-kills every live session's Claude
+    /// process (TerminateProcess / SIGKILL, no graceful shutdown), so a quit
+    /// with sessions still running arms this modal first.
+    closing_window: Option<window::Id>,
     /// Whether Ctrl (or Cmd) is currently held — the link-open modifier (#28).
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
@@ -271,6 +282,11 @@ enum Message {
     CloseTab(usize),
     /// Dismiss the close confirmation without killing anything (#9).
     CancelClose,
+    /// Confirm quitting TermHerd, closing the window (and hard-killing every
+    /// live session). Reached only after the quit modal is accepted.
+    ConfirmCloseWindow,
+    /// Dismiss the quit confirmation, keeping the app and its sessions running.
+    CancelCloseWindow,
     /// Toggle a browsed session's star (F-session-metadata).
     ToggleStar(String),
     /// Toggle a browsed session's archived flag (F-session-metadata). Used
@@ -385,6 +401,7 @@ impl Shell {
             open_doc: None,
             closing: None,
             archiving: None,
+            closing_window: None,
             link_modifier: false,
         }
     }
@@ -416,7 +433,7 @@ impl Shell {
                     cols,
                     rows,
                 } => self.pty.resize(session, cols, rows),
-                Effect::Scroll { session, delta } => self.pty.scroll(session, delta),
+                Effect::Scroll { session, target } => self.pty.scroll(session, target),
                 Effect::Kill(session) => self.pty.kill(session),
                 // Metadata persistence is a file write, not a PTY call.
                 Effect::SaveMetadata(metadata) => {
@@ -461,6 +478,19 @@ impl Shell {
         Task::batch([spawn, self.resize_focused()])
     }
 
+    /// Move the focused terminal's viewport (#44): the mouse wheel sends a
+    /// relative delta, the scroll-top/bottom shortcuts an absolute jump. Shared
+    /// so both paths go through the one `Event::ScrollViewport`.
+    fn scroll_focused(&mut self, target: ScrollTarget) -> Task<Message> {
+        let Some(session) = self.core.workspace.focused_session() else {
+            return Task::none();
+        };
+        let effects = self
+            .core
+            .apply(termherd_core::Event::ScrollViewport { session, target });
+        self.perform(effects)
+    }
+
     /// Tell the focused session's PTY to match the current pane geometry.
     fn resize_focused(&mut self) -> Task<Message> {
         let Some(session) = self.core.workspace.focused_session() else {
@@ -475,9 +505,26 @@ impl Shell {
         self.perform(effects)
     }
 
-    /// The terminal grid size (cols, rows) that fits the current window.
+    /// Collapse or restore the sidebar (#21), then resize the focused terminal
+    /// so the grid re-derives its column count for the new width — without this
+    /// the cells just stretch to fill the reclaimed space (#64). Shared by the
+    /// button (`Message::ToggleSidebar`) and the keymap (`Action::ToggleSidebar`).
+    fn toggle_sidebar(&mut self) -> Task<Message> {
+        let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
+        self.resize_focused()
+    }
+
+    /// The terminal grid size (cols, rows) that fits the current window. The
+    /// sidebar's width is only reserved while it's visible; collapsing it (#21)
+    /// hands that space to the grid as extra columns instead of stretching the
+    /// existing cells (#64).
     fn grid_size(&self) -> (u16, u16) {
-        let avail_w = (self.bounds.width - SIDEBAR_W - H_CHROME).max(CELL_W);
+        let sidebar = if self.core.sidebar_hidden {
+            HANDLE_W
+        } else {
+            SIDEBAR_W
+        };
+        let avail_w = (self.bounds.width - sidebar - H_CHROME).max(CELL_W);
         let avail_h = (self.bounds.height - V_CHROME).max(CELL_H);
         let cols = (avail_w / CELL_W).floor().clamp(20.0, 500.0) as u16;
         let rows = (avail_h / CELL_H).floor().clamp(5.0, 200.0) as u16;
@@ -585,15 +632,7 @@ impl Shell {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
             }
-            Message::TermScroll(delta) => {
-                let Some(session) = self.core.workspace.focused_session() else {
-                    return Task::none();
-                };
-                let effects = self
-                    .core
-                    .apply(termherd_core::Event::TerminalScrolled { session, delta });
-                self.perform(effects)
-            }
+            Message::TermScroll(delta) => self.scroll_focused(ScrollTarget::Delta(delta)),
             Message::CopySelection(text) => {
                 if text.is_empty() {
                     Task::none()
@@ -624,6 +663,14 @@ impl Shell {
             Message::CloseTab(index) => self.close_tab(index),
             Message::CancelClose => {
                 self.closing = None;
+                Task::none()
+            }
+            Message::ConfirmCloseWindow => match self.closing_window.take() {
+                Some(id) => window::close(id),
+                None => Task::none(),
+            },
+            Message::CancelCloseWindow => {
+                self.closing_window = None;
                 Task::none()
             }
             Message::ToggleStar(session) => {
@@ -666,10 +713,7 @@ impl Shell {
                 let effects = self.core.apply(termherd_core::Event::ToggleCollapsed(path));
                 self.perform(effects)
             }
-            Message::ToggleSidebar => {
-                let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
-                Task::none()
-            }
+            Message::ToggleSidebar => self.toggle_sidebar(),
             Message::StartRename { session, current } => {
                 self.renaming = Some((session, current));
                 operate(focusable::focus(rename_id()))
@@ -694,7 +738,7 @@ impl Shell {
                 Task::perform(
                     async move {
                         let content = crate::docs::read(&read_path)
-                            .unwrap_or_else(|e| format!("(lecture impossible : {e})"));
+                            .unwrap_or_else(crate::strings::doc_read_failed);
                         let mtime = crate::docs::mtime(&read_path).ok();
                         (content, mtime)
                     },
@@ -866,10 +910,9 @@ impl Shell {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
             }
-            Action::ToggleSidebar => {
-                let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
-                Task::none()
-            }
+            Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::ScrollTop => self.scroll_focused(ScrollTarget::Top),
+            Action::ScrollBottom => self.scroll_focused(ScrollTarget::Bottom),
             // Number-row jump straight to a tab (issue #26). An index past the
             // open tabs is absorbed by `core` as a no-op.
             Action::ActivateTab(index) => self.activate_tab(index),
@@ -886,6 +929,23 @@ impl Shell {
     fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
         // While renaming inline, let the text field own the keyboard.
         if self.renaming.is_some() {
+            return Task::none();
+        }
+        // The quit modal owns the keyboard while it is up: Enter quits, Escape
+        // cancels, every other key is swallowed. Checked first so it wins over
+        // the tab/archive prompts beneath it.
+        if self.quit_pending() {
+            if let keyboard::Event::KeyPressed { key, .. } = &event {
+                match key {
+                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
+                        return self.update(Message::ConfirmCloseWindow);
+                    }
+                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
+                        self.closing_window = None;
+                    }
+                    _ => {}
+                }
+            }
             return Task::none();
         }
         // A pending close confirmation captures the keyboard (#9): Enter
@@ -980,6 +1040,7 @@ impl Shell {
             && self.renaming.is_none()
             && self.closing.is_none()
             && self.open_doc.is_none()
+            && !self.quit_pending()
     }
 
     /// Route IME-composed text (dead/accent keys, CJK) to the focused terminal
@@ -1014,11 +1075,34 @@ impl Shell {
             }
             window::Event::CloseRequested => {
                 self.bounds.save();
-                tracing::info!("window bounds saved; closing");
-                window::close(id)
+                // Closing the window hard-kills every live session's Claude
+                // process. With sessions running, confirm first; otherwise quit
+                // straight away. Bounds are already saved either way.
+                if self.live_session_count() == 0 {
+                    tracing::info!("no live sessions; closing");
+                    window::close(id)
+                } else {
+                    self.closing_window = Some(id);
+                    Task::none()
+                }
             }
             _ => Task::none(),
         }
+    }
+
+    /// Whether a quit is awaiting confirmation (the modal is up).
+    fn quit_pending(&self) -> bool {
+        self.closing_window.is_some()
+    }
+
+    /// Count of sessions whose PTY is still running — the ones a quit would
+    /// hard-kill. Exited sessions linger in the map but cost nothing to drop.
+    fn live_session_count(&self) -> usize {
+        self.core
+            .sessions
+            .values()
+            .filter(|s| s.status != SessionStatus::Exited)
+            .count()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -1053,6 +1137,8 @@ mod key_routing {
         writes: StdMutex<Vec<Vec<u8>>>,
         kills: StdMutex<usize>,
         spawns: StdMutex<usize>,
+        resizes: StdMutex<Vec<(u16, u16)>>,
+        scrolls: StdMutex<Vec<ScrollTarget>>,
     }
 
     impl RecordingPty {
@@ -1064,6 +1150,12 @@ mod key_routing {
         }
         fn spawn_count(&self) -> usize {
             *self.spawns.lock().expect("spawns lock")
+        }
+        fn resizes(&self) -> Vec<(u16, u16)> {
+            self.resizes.lock().expect("resizes lock").clone()
+        }
+        fn scrolls(&self) -> Vec<ScrollTarget> {
+            self.scrolls.lock().expect("scrolls lock").clone()
         }
     }
 
@@ -1079,10 +1171,15 @@ mod key_routing {
                 .push(bytes.to_vec());
             Ok(())
         }
-        fn resize(&self, _: SessionId, _: u16, _: u16) -> Result<(), PtyError> {
+        fn resize(&self, _: SessionId, cols: u16, rows: u16) -> Result<(), PtyError> {
+            self.resizes
+                .lock()
+                .expect("resizes lock")
+                .push((cols, rows));
             Ok(())
         }
-        fn scroll(&self, _: SessionId, _: i32) -> Result<(), PtyError> {
+        fn scroll(&self, _: SessionId, target: ScrollTarget) -> Result<(), PtyError> {
+            self.scrolls.lock().expect("scrolls lock").push(target);
             Ok(())
         }
         fn kill(&self, _: SessionId) -> Result<(), PtyError> {
@@ -1310,6 +1407,104 @@ mod key_routing {
         assert_eq!(shell.closing, None, "a stale index must not arm a close");
     }
 
+    #[test]
+    fn collapsing_the_sidebar_widens_the_grid_and_resizes_the_pty() {
+        // #64: hiding the sidebar must grow the column count (the reclaimed
+        // width becomes columns), and the toggle must push that wider size to
+        // the PTY rather than leaving cols stale (which stretched the cells).
+        let (mut shell, pty) = shell_with_terminal();
+        let (cols_visible, _) = shell.grid_size();
+        let resizes_before = pty.resizes().len();
+
+        let _ = shell.toggle_sidebar();
+        assert!(shell.core.sidebar_hidden, "toggle should hide the sidebar");
+
+        let (cols_hidden, _) = shell.grid_size();
+        assert!(
+            cols_hidden > cols_visible,
+            "hiding the sidebar must add columns (was {cols_visible}, now {cols_hidden})"
+        );
+        let resizes = pty.resizes();
+        assert!(
+            resizes.len() > resizes_before,
+            "toggling the sidebar must resize the focused PTY"
+        );
+        assert_eq!(
+            resizes.last().map(|(cols, _)| *cols),
+            Some(cols_hidden),
+            "the resize must carry the new, wider column count"
+        );
+    }
+
+    #[test]
+    fn scroll_top_and_bottom_actions_jump_the_focused_viewport() {
+        // #44: the scroll-top/bottom shortcuts send an absolute jump to the
+        // focused session's PTY, through the same path as the mouse wheel.
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.run_action(Action::ScrollTop);
+        let _ = shell.run_action(Action::ScrollBottom);
+        // The wheel shares the path and lands a relative delta.
+        let _ = shell.update(Message::TermScroll(3));
+        assert_eq!(
+            pty.scrolls(),
+            vec![
+                ScrollTarget::Top,
+                ScrollTarget::Bottom,
+                ScrollTarget::Delta(3)
+            ]
+        );
+    }
+
+    #[test]
+    fn live_session_count_excludes_exited_sessions() {
+        let (mut shell, _pty) = shell_with_terminal();
+        assert_eq!(shell.live_session_count(), 1, "a launched session is live");
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited(session));
+        assert_eq!(
+            shell.live_session_count(),
+            0,
+            "an exited session no longer counts as live to kill"
+        );
+    }
+
+    #[test]
+    fn the_quit_modal_owns_the_keyboard() {
+        // While the quit modal is up, a plain key is swallowed (not sent to the
+        // terminal) and Escape dismisses it without quitting.
+        let (mut shell, pty) = shell_with_terminal();
+        shell.closing_window = Some(window::Id::unique());
+        let _ = shell.on_key(press(
+            Key::Character("a".into()),
+            Modifiers::default(),
+            Some("a"),
+        ));
+        assert!(
+            pty.writes().is_empty(),
+            "keys must not reach the PTY while the quit modal is up"
+        );
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+        assert!(!shell.quit_pending(), "Escape must dismiss the quit modal");
+    }
+
+    #[test]
+    fn cancelling_the_quit_keeps_the_app_running_and_confirming_consumes_it() {
+        let (mut shell, pty) = shell_with_terminal();
+
+        shell.closing_window = Some(window::Id::unique());
+        let _ = shell.update(Message::CancelCloseWindow);
+        assert!(!shell.quit_pending(), "cancel clears the pending quit");
+        assert_eq!(pty.kill_count(), 0, "cancelling kills nothing");
+
+        // Confirming consumes the pending id (it drives a window::close task).
+        shell.closing_window = Some(window::Id::unique());
+        let _ = shell.update(Message::ConfirmCloseWindow);
+        assert!(
+            shell.closing_window.is_none(),
+            "confirming consumes the pending window id"
+        );
+    }
+
     /// Feed one browsable session into the shell's core so the archive flow
     /// has something to act on.
     fn browse_one(shell: &mut Shell, id: &str) {
@@ -1323,6 +1518,7 @@ mod key_routing {
                 slug: None,
                 custom_title: None,
                 ai_title: None,
+                tail: Vec::new(),
             },
             modified: None,
         };

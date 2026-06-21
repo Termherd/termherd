@@ -12,7 +12,9 @@ pub mod metadata;
 pub mod ports;
 pub mod workspace;
 
-pub use app::{App, Effect, Event, LaunchSpec, LiveSession, SessionStatus, SpawnSpec};
+pub use app::{
+    App, Effect, Event, LaunchSpec, LiveSession, ScrollTarget, SessionStatus, SpawnSpec,
+};
 pub use browser::{ProjectGroup, SessionRecord};
 pub use keymap::{Action, ChordError, KeyChord, Keymap};
 pub use metadata::SessionMeta;

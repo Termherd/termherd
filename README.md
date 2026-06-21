@@ -18,7 +18,7 @@ This is an early scaffold. Status, scope, and design live in:
 ## Install
 
 Each tagged release publishes desktop installers on the
-[Releases](https://github.com/bastien-gallay/termherd/releases) page. Pick the
+[Releases](https://github.com/Termherd/termherd/releases) page. Pick the
 one for your platform:
 
 - **macOS** — download `TermHerd_<version>_<arch>.dmg`, open it, and drag
@@ -38,12 +38,12 @@ that drop `termherd` into your Cargo bin directory:
 ```bash
 # macOS / Linux
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/bastien-gallay/termherd/releases/latest/download/termherd-installer.sh | sh
+  https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.sh | sh
 ```
 
 ```powershell
 # Windows
-powershell -c "irm https://github.com/bastien-gallay/termherd/releases/latest/download/termherd-installer.ps1 | iex"
+powershell -c "irm https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.ps1 | iex"
 ```
 
 ## Run from source
@@ -82,8 +82,9 @@ start. There is no in-app settings panel yet — edit the file and restart.
   actions keep their per-platform defaults. Unknown actions and bad chords are
   ignored. Actions: `copy`, `paste`, `next-tab`, `prev-tab`, `close-focused`,
   `focus-search`, `toggle-sidebar` (hide / restore the session browser,
-  Ctrl/Cmd+B), and `activate-tab-1` … `activate-tab-9` (jump straight to the
-  Nth open tab).
+  Ctrl/Cmd+B), `scroll-top` / `scroll-bottom` (top / bottom of the scrollback,
+  Ctrl/Cmd+Up / Ctrl/Cmd+Down), and `activate-tab-1` … `activate-tab-9` (jump
+  straight to the Nth open tab).
 
 Window size and position persist separately to `~/.termherd/window.json`, and
 session stars / archives / custom titles to `~/.termherd/metadata.json` (an
@@ -101,6 +102,7 @@ All shortcuts are configurable via the `keys` section of the config file
 | Paste              | `Ctrl+V` / `Ctrl+Shift+V`  | `Cmd+V`       |
 | Next / prev tab    | `Ctrl+Tab` / `Ctrl+Shift+Tab` | (same)     |
 | Jump to tab 1–9    | `Ctrl+1` … `Ctrl+9`        | `Cmd+1` … `Cmd+9` |
+| Scroll top/bottom  | `Ctrl+Up` / `Ctrl+Down`    | `Cmd+Up` / `Cmd+Down` |
 | Close tab          | `Ctrl+W`                   | `Cmd+W`       |
 | Focus search       | `Ctrl+F`                   | `Cmd+F`       |
 | Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C`      |

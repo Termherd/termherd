@@ -389,7 +389,7 @@ pub(super) fn open_url(url: &str) -> Result<(), termherd_core::ports::PtyError> 
 /// macOS bundle identifier (matches `Cargo.toml`'s packager `identifier`).
 /// Used to attribute desktop notifications to TermHerd; see [`notify`].
 #[cfg(target_os = "macos")]
-const MACOS_BUNDLE_ID: &str = "dev.gallay.termherd";
+const MACOS_BUNDLE_ID: &str = "dev.termherd";
 
 /// Post a desktop notification to the OS notification centre (#29). Like
 /// `open_url`, this is an OS handoff, not a PTY call, and fire-and-forget: the

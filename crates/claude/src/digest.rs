@@ -24,6 +24,11 @@ pub struct SessionDigest {
     pub custom_title: Option<String>,
     /// AI-generated title (`ai-title` entry); the last one wins.
     pub ai_title: Option<String>,
+    /// The last few message snippets (oldest→newest), one condensed line each,
+    /// for a "where did this session end" preview in the sidebar tooltip. Kept
+    /// separate from [`Self::text_content`] so it captures the true *tail* even
+    /// when the indexed text hit its size cap mid-session.
+    pub tail: Vec<String>,
 }
 
 impl SessionDigest {
@@ -60,6 +65,10 @@ const TEXT_SLICE_UNITS: usize = 500;
 /// `text_content` stops growing once it reaches this many UTF-16 units.
 /// Upstream checks *before* appending, so the final size may exceed it.
 const TEXT_CONTENT_MAX_UNITS: usize = 8000;
+/// How many trailing message snippets [`SessionDigest::tail`] keeps.
+const TAIL_MESSAGES: usize = 3;
+/// Max UTF-16 length of one [`SessionDigest::tail`] snippet.
+const TAIL_SNIPPET_UNITS: usize = 100;
 
 /// Digest one session JSONL. Returns `None` when the session is not worth
 /// listing — no real user prompt, or no messages at all (mirrors upstream's
@@ -73,6 +82,7 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
     let mut slug: Option<String> = None;
     let mut custom_title: Option<String> = None;
     let mut ai_title: Option<String> = None;
+    let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
 
     for entry in crate::jsonl::entries(content) {
         if slug.is_none()
@@ -119,6 +129,17 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
             text_content.push('\n');
             text_content_units += slice.encode_utf16().count() + 1;
         }
+
+        // Rolling tail of the last few message lines, kept regardless of the
+        // text_content cap so it reflects how the session actually ended.
+        if (is_user || is_assistant)
+            && let Some(line) = first_nonempty_line(text)
+        {
+            tail.push_back(utf16_prefix(line, TAIL_SNIPPET_UNITS).to_owned());
+            if tail.len() > TAIL_MESSAGES {
+                tail.pop_front();
+            }
+        }
     }
 
     if summary.is_empty() || message_count < 1 {
@@ -131,7 +152,14 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         slug,
         custom_title,
         ai_title,
+        tail: tail.into(),
     })
+}
+
+/// First line of `text` with surrounding whitespace stripped, skipping leading
+/// blank lines — the one-line condensation used for [`SessionDigest::tail`].
+fn first_nonempty_line(text: &str) -> Option<&str> {
+    text.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
 /// The text of a transcript entry, mirroring the upstream lookup chain:
@@ -220,6 +248,22 @@ mod tests {
         assert_eq!(d.message_count, 1);
         assert_eq!(d.text_content, "hello world\n");
         assert_eq!(d.slug, None);
+    }
+
+    #[test]
+    fn tail_keeps_the_last_three_messages_as_condensed_lines() {
+        let jsonl = [
+            user_line("first"),
+            serde_json::json!({"type":"assistant","message":"second"}).to_string(),
+            user_line("third"),
+            serde_json::json!({"type":"assistant","message":"  \nfourth line one\nignored"})
+                .to_string(),
+        ]
+        .join("\n");
+        let d = digest_session(&jsonl).unwrap();
+        // Only the last three survive, each condensed to its first non-blank
+        // line (leading blank lines and trailing lines dropped).
+        assert_eq!(d.tail, vec!["second", "third", "fourth line one"]);
     }
 
     #[test]
