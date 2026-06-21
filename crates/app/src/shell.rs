@@ -22,7 +22,7 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Action, Effect, Keymap, LaunchSpec, SessionMeta, SessionRecord, SessionStatus,
+    Action, Effect, Keymap, LaunchSpec, ScrollTarget, SessionMeta, SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
@@ -395,7 +395,7 @@ impl Shell {
                     cols,
                     rows,
                 } => self.pty.resize(session, cols, rows),
-                Effect::Scroll { session, delta } => self.pty.scroll(session, delta),
+                Effect::Scroll { session, target } => self.pty.scroll(session, target),
                 Effect::Kill(session) => self.pty.kill(session),
                 // Metadata persistence is a file write, not a PTY call.
                 Effect::SaveMetadata(metadata) => {
@@ -438,6 +438,19 @@ impl Shell {
         self.closing = None;
         self.archiving = None;
         Task::batch([spawn, self.resize_focused()])
+    }
+
+    /// Move the focused terminal's viewport (#44): the mouse wheel sends a
+    /// relative delta, the scroll-top/bottom shortcuts an absolute jump. Shared
+    /// so both paths go through the one `Event::ScrollViewport`.
+    fn scroll_focused(&mut self, target: ScrollTarget) -> Task<Message> {
+        let Some(session) = self.core.workspace.focused_session() else {
+            return Task::none();
+        };
+        let effects = self
+            .core
+            .apply(termherd_core::Event::ScrollViewport { session, target });
+        self.perform(effects)
     }
 
     /// Tell the focused session's PTY to match the current pane geometry.
@@ -581,15 +594,7 @@ impl Shell {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
             }
-            Message::TermScroll(delta) => {
-                let Some(session) = self.core.workspace.focused_session() else {
-                    return Task::none();
-                };
-                let effects = self
-                    .core
-                    .apply(termherd_core::Event::TerminalScrolled { session, delta });
-                self.perform(effects)
-            }
+            Message::TermScroll(delta) => self.scroll_focused(ScrollTarget::Delta(delta)),
             Message::CopySelection(text) => {
                 if text.is_empty() {
                     Task::none()
@@ -801,6 +806,8 @@ impl Shell {
                 operate(focusable::focus(search_id()))
             }
             Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::ScrollTop => self.scroll_focused(ScrollTarget::Top),
+            Action::ScrollBottom => self.scroll_focused(ScrollTarget::Bottom),
             // Number-row jump straight to a tab (issue #26). An index past the
             // open tabs is absorbed by `core` as a no-op.
             Action::ActivateTab(index) => self.activate_tab(index),
@@ -1013,6 +1020,7 @@ mod key_routing {
         kills: StdMutex<usize>,
         spawns: StdMutex<usize>,
         resizes: StdMutex<Vec<(u16, u16)>>,
+        scrolls: StdMutex<Vec<ScrollTarget>>,
     }
 
     impl RecordingPty {
@@ -1027,6 +1035,9 @@ mod key_routing {
         }
         fn resizes(&self) -> Vec<(u16, u16)> {
             self.resizes.lock().expect("resizes lock").clone()
+        }
+        fn scrolls(&self) -> Vec<ScrollTarget> {
+            self.scrolls.lock().expect("scrolls lock").clone()
         }
     }
 
@@ -1049,7 +1060,8 @@ mod key_routing {
                 .push((cols, rows));
             Ok(())
         }
-        fn scroll(&self, _: SessionId, _: i32) -> Result<(), PtyError> {
+        fn scroll(&self, _: SessionId, target: ScrollTarget) -> Result<(), PtyError> {
+            self.scrolls.lock().expect("scrolls lock").push(target);
             Ok(())
         }
         fn kill(&self, _: SessionId) -> Result<(), PtyError> {
@@ -1303,6 +1315,25 @@ mod key_routing {
             resizes.last().map(|(cols, _)| *cols),
             Some(cols_hidden),
             "the resize must carry the new, wider column count"
+        );
+    }
+
+    #[test]
+    fn scroll_top_and_bottom_actions_jump_the_focused_viewport() {
+        // #44: the scroll-top/bottom shortcuts send an absolute jump to the
+        // focused session's PTY, through the same path as the mouse wheel.
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.run_action(Action::ScrollTop);
+        let _ = shell.run_action(Action::ScrollBottom);
+        // The wheel shares the path and lands a relative delta.
+        let _ = shell.update(Message::TermScroll(3));
+        assert_eq!(
+            pty.scrolls(),
+            vec![
+                ScrollTarget::Top,
+                ScrollTarget::Bottom,
+                ScrollTarget::Delta(3)
+            ]
         );
     }
 

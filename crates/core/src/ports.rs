@@ -6,7 +6,7 @@
 
 use std::time::SystemTime;
 
-use crate::app::SpawnSpec;
+use crate::app::{ScrollTarget, SpawnSpec};
 use crate::browser::SessionRecord;
 use crate::workspace::SessionId;
 
@@ -45,8 +45,9 @@ pub trait PtyHost: Send + Sync {
     fn write(&self, session: SessionId, bytes: &[u8]) -> Result<(), PtyError>;
     /// Resize a session's PTY to the given cell geometry.
     fn resize(&self, session: SessionId, cols: u16, rows: u16) -> Result<(), PtyError>;
-    /// Scroll a session's viewport by a line delta (positive = into history).
-    fn scroll(&self, session: SessionId, delta: i32) -> Result<(), PtyError>;
+    /// Move a session's viewport: a relative line delta or an absolute jump to
+    /// the top/bottom of the scrollback (#44).
+    fn scroll(&self, session: SessionId, target: ScrollTarget) -> Result<(), PtyError>;
     /// Terminate a session's process and drop its task.
     fn kill(&self, session: SessionId) -> Result<(), PtyError>;
 }

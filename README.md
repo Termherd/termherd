@@ -82,8 +82,9 @@ start. There is no in-app settings panel yet — edit the file and restart.
   actions keep their per-platform defaults. Unknown actions and bad chords are
   ignored. Actions: `copy`, `paste`, `next-tab`, `prev-tab`, `close-focused`,
   `focus-search`, `toggle-sidebar` (hide / restore the session browser,
-  Ctrl/Cmd+B), and `activate-tab-1` … `activate-tab-9` (jump straight to the
-  Nth open tab).
+  Ctrl/Cmd+B), `scroll-top` / `scroll-bottom` (top / bottom of the scrollback,
+  Ctrl/Cmd+Up / Ctrl/Cmd+Down), and `activate-tab-1` … `activate-tab-9` (jump
+  straight to the Nth open tab).
 
 Window size and position persist separately to `~/.termherd/window.json`, and
 session stars / archives / custom titles to `~/.termherd/metadata.json` (an
@@ -101,6 +102,7 @@ All shortcuts are configurable via the `keys` section of the config file
 | Paste              | `Ctrl+V` / `Ctrl+Shift+V`  | `Cmd+V`       |
 | Next / prev tab    | `Ctrl+Tab` / `Ctrl+Shift+Tab` | (same)     |
 | Jump to tab 1–9    | `Ctrl+1` … `Ctrl+9`        | `Cmd+1` … `Cmd+9` |
+| Scroll top/bottom  | `Ctrl+Up` / `Ctrl+Down`    | `Cmd+Up` / `Cmd+Down` |
 | Close tab          | `Ctrl+W`                   | `Cmd+W`       |
 | Focus search       | `Ctrl+F`                   | `Cmd+F`       |
 | Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C`      |
