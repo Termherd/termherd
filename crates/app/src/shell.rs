@@ -696,10 +696,7 @@ impl Shell {
                 None => Task::none(),
             },
             Message::OpenDoc { label, path } => Task::perform(
-                async move {
-                    crate::docs::read(&path)
-                        .unwrap_or_else(|e| format!("(lecture impossible : {e})"))
-                },
+                async move { crate::docs::read(&path).unwrap_or_else(crate::strings::doc_read_failed) },
                 move |content| Message::DocLoaded {
                     label: label.clone(),
                     content,

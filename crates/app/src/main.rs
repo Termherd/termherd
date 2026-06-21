@@ -9,6 +9,7 @@ mod docs;
 mod metadata_store;
 mod settings;
 mod shell;
+mod strings;
 mod window_config;
 
 use std::sync::Arc;
