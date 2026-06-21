@@ -24,7 +24,8 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Action, Effect, Keymap, LaunchSpec, ScrollTarget, SessionMeta, SessionRecord, SessionStatus,
+    Action, Effect, Keymap, Launch, LaunchSpec, ScrollTarget, SessionMeta, SessionRecord,
+    SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
@@ -40,8 +41,8 @@ mod view;
 
 use input::{chord_of, event_modifiers, key_mods, to_term_key};
 use streams::{PtyOutput, pty_stream, watch_stream};
+use termherd_core::browser::project_label;
 use terminal::{CELL_H, CELL_W, notify, open_url};
-use view::project_label;
 
 /// Sidebar width and the chrome reserved around the terminal, in logical px.
 /// Combined with the cell metrics ([`terminal::CELL_W`]/[`CELL_H`]) to size the
@@ -232,8 +233,11 @@ enum Message {
     ProjectsChanged,
     SearchChanged(String),
     SearchTitlesOnly(bool),
-    /// Open a fresh shell in the given project directory (FR4).
+    /// Open a fresh shell in the given project directory (FR4a, `$` button).
     LaunchProject(String),
+    /// Start a fresh Claude session in the given project directory (FR4a, 🤖
+    /// button) — distinct from resuming an existing one.
+    LaunchClaude(String),
     /// Resume a Claude session in its project directory (FR4).
     LaunchSession {
         cwd: String,
@@ -459,13 +463,20 @@ impl Shell {
 
     /// Launch a terminal: register it in `core`, perform the spawn, focus it,
     /// and size its PTY to the current pane (FR4).
-    fn launch(&mut self, cwd: String, resume: Option<String>) -> Task<Message> {
-        let title = project_label(&cwd).to_owned();
+    fn launch(&mut self, cwd: String, launch: Launch) -> Task<Message> {
+        // The kind is shown as a suffix so a shell tab and a Claude tab for the
+        // same repo stay distinct (#23); it's only the initial label — once the
+        // process titles itself over OSC (#24), that wins.
+        let label = project_label(&cwd);
+        let title = match &launch {
+            Launch::Shell => format!("{label} $"),
+            Launch::Claude { .. } => format!("{label} 🤖"),
+        };
         let effects = self
             .core
             .apply(termherd_core::Event::LaunchSession(LaunchSpec {
                 cwd: Some(cwd),
-                resume,
+                launch,
                 title,
             }));
         let spawn = self.perform(effects);
@@ -575,7 +586,8 @@ impl Shell {
                     .apply(termherd_core::Event::SearchTitlesOnlyToggled(titles_only));
                 Task::none()
             }
-            Message::LaunchProject(cwd) => self.launch(cwd, None),
+            Message::LaunchProject(cwd) => self.launch(cwd, Launch::Shell),
+            Message::LaunchClaude(cwd) => self.launch(cwd, Launch::Claude { resume: None }),
             Message::LaunchSession { cwd, resume } => {
                 // Re-clicking a session already open in TermHerd re-focuses its
                 // tab instead of spawning a second terminal for the same Claude
@@ -585,7 +597,12 @@ impl Shell {
                 {
                     return self.activate_tab(index);
                 }
-                self.launch(cwd, Some(resume))
+                self.launch(
+                    cwd,
+                    Launch::Claude {
+                        resume: Some(resume),
+                    },
+                )
             }
             Message::PtyOutput { session, screen } => {
                 self.screens.insert(session, screen);
@@ -1137,6 +1154,7 @@ mod key_routing {
         writes: StdMutex<Vec<Vec<u8>>>,
         kills: StdMutex<usize>,
         spawns: StdMutex<usize>,
+        launches: StdMutex<Vec<Launch>>,
         resizes: StdMutex<Vec<(u16, u16)>>,
         scrolls: StdMutex<Vec<ScrollTarget>>,
     }
@@ -1151,6 +1169,11 @@ mod key_routing {
         fn spawn_count(&self) -> usize {
             *self.spawns.lock().expect("spawns lock")
         }
+        /// The launch kind of every spawn, in order — lets a test assert which
+        /// button drove which kind of session (FR4a).
+        fn launches(&self) -> Vec<Launch> {
+            self.launches.lock().expect("launches lock").clone()
+        }
         fn resizes(&self) -> Vec<(u16, u16)> {
             self.resizes.lock().expect("resizes lock").clone()
         }
@@ -1160,8 +1183,12 @@ mod key_routing {
     }
 
     impl PtyHost for RecordingPty {
-        fn spawn(&self, _spec: SpawnSpec) -> Result<(), PtyError> {
+        fn spawn(&self, spec: SpawnSpec) -> Result<(), PtyError> {
             *self.spawns.lock().expect("spawns lock") += 1;
+            self.launches
+                .lock()
+                .expect("launches lock")
+                .push(spec.launch);
             Ok(())
         }
         fn write(&self, _session: SessionId, bytes: &[u8]) -> Result<(), PtyError> {
@@ -1212,12 +1239,58 @@ mod key_routing {
                 collapsed: HashSet::new(),
             },
         );
-        let _ = shell.launch("/tmp/project".to_string(), None);
+        let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
         assert!(
             shell.core.workspace.focused_session().is_some(),
             "a launched terminal should be focused"
         );
         (shell, pty)
+    }
+
+    #[test]
+    fn the_claude_button_launches_a_fresh_claude_session() {
+        let (mut shell, pty) = shell_with_terminal();
+        let before = pty.launches().len();
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let launches = pty.launches();
+        assert_eq!(launches.len(), before + 1, "one new spawn");
+        assert_eq!(
+            launches.last(),
+            Some(&Launch::Claude { resume: None }),
+            "the bot button starts a fresh Claude session — never a shell, never a resume"
+        );
+    }
+
+    #[test]
+    fn launch_buttons_title_tabs_by_kind() {
+        // The initial tab label distinguishes a shell ($) from a Claude (🤖)
+        // tab for the same repo (#23); OSC retitling (#24) takes over later.
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchProject("/tmp/faceto".to_string()));
+        let shell_tab = shell.core.workspace.focused_session().expect("focused");
+        assert_eq!(
+            shell.core.workspace.session_title(shell_tab),
+            Some("faceto $")
+        );
+        let _ = shell.update(Message::LaunchClaude("/tmp/faceto".to_string()));
+        let claude_tab = shell.core.workspace.focused_session().expect("focused");
+        assert_eq!(
+            shell.core.workspace.session_title(claude_tab),
+            Some("faceto 🤖")
+        );
+    }
+
+    #[test]
+    fn repeated_claude_launch_opens_distinct_tabs() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let before = shell.core.workspace.tabs.len();
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        assert_eq!(
+            shell.core.workspace.tabs.len(),
+            before + 2,
+            "fresh-Claude launches never dedupe — two clicks, two tabs"
+        );
     }
 
     fn press(key: Key, modifiers: Modifiers, text: Option<&str>) -> keyboard::Event {
@@ -1603,7 +1676,7 @@ mod key_routing {
         let (mut shell, _pty) = shell_with_terminal();
         browse_one(&mut shell, "sess");
         let _ = shell.update(Message::RequestArchive("sess".into()));
-        let _ = shell.launch("/tmp/project".to_string(), None);
+        let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
         assert_eq!(shell.archiving, None);
         let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::default(), None));
         assert!(
@@ -1618,9 +1691,19 @@ mod key_routing {
         // longer active. Re-clicking "sess" in the sidebar must bring its
         // existing tab forward, not spawn a third terminal.
         let (mut shell, pty) = shell_with_terminal();
-        let _ = shell.launch("/tmp/project".to_string(), Some("sess".to_string()));
+        let _ = shell.launch(
+            "/tmp/project".to_string(),
+            Launch::Claude {
+                resume: Some("sess".to_string()),
+            },
+        );
         let sess_tab = shell.core.workspace.active;
-        let _ = shell.launch("/tmp/other".to_string(), Some("other".to_string()));
+        let _ = shell.launch(
+            "/tmp/other".to_string(),
+            Launch::Claude {
+                resume: Some("other".to_string()),
+            },
+        );
         assert_ne!(
             shell.core.workspace.active, sess_tab,
             "second tab is active"

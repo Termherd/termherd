@@ -15,6 +15,8 @@ pub const NO_SESSIONS: &str = "No sessions found.";
 pub const NO_RESULTS: &str = "No results.";
 pub const PLANS_AND_MEMORY: &str = "Plans & memory";
 pub const RENAME_PLACEHOLDER: &str = "title…";
+pub const SIDEBAR_LAUNCH_SHELL: &str = "Open a shell here";
+pub const SIDEBAR_LAUNCH_CLAUDE: &str = "Start a fresh Claude session";
 
 /// Sidebar message when a project scan fails.
 #[must_use]
@@ -23,8 +25,8 @@ pub fn scan_failed(error: &str) -> String {
 }
 
 // --- Welcome pane (no session open) ---
-pub const WELCOME_HINT_OPEN: &str = "Click a project to open a terminal,";
-pub const WELCOME_HINT_RESUME: &str = "or a session to resume it.";
+pub const WELCOME_HINT_OPEN: &str = "Use $ for a shell or 🤖 for Claude beside a project,";
+pub const WELCOME_HINT_RESUME: &str = "or click a session to resume it.";
 
 /// The "N session(s) in M project(s)" summary on the welcome pane.
 #[must_use]

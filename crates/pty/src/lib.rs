@@ -28,7 +28,7 @@ use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, nativ
 use termherd_claude::osc::{OscSignal, decode_chunk};
 use termherd_core::ports::{PtyError, PtyHost};
 use termherd_core::workspace::SessionId;
-use termherd_core::{ScrollTarget, SessionStatus, SpawnSpec};
+use termherd_core::{Launch, ScrollTarget, SessionStatus, SpawnSpec};
 
 /// Read buffer for the per-session reader thread.
 const READ_BUF: usize = 8192;
@@ -229,6 +229,18 @@ fn fold_status(current: SessionStatus, signals: &[OscSignal]) -> SessionStatus {
     status
 }
 
+/// The line to type into the freshly spawned shell to start a [`Launch`], or
+/// `None` for a plain shell (the bare shell *is* the deliverable). Typing keeps
+/// `claude` resolution on the user's own shell + PATH, robust across platforms
+/// (FR4a). Pure so the three-mode contract is unit-tested without a real PTY.
+fn launch_command(launch: &Launch) -> Option<String> {
+    match launch {
+        Launch::Shell => None,
+        Launch::Claude { resume: None } => Some("claude\r".to_owned()),
+        Launch::Claude { resume: Some(id) } => Some(format!("claude --resume {id}\r")),
+    }
+}
+
 /// A sink for [`PtyEvent`]s. Cheap to clone, callable from the reader threads.
 pub type EventSink = Arc<dyn Fn(PtyEvent) + Send + Sync + 'static>;
 
@@ -377,14 +389,12 @@ impl PtyHost for PtyManager {
         ));
         let killer = child.clone_killer();
 
-        // Resuming a Claude session: type the command into the fresh shell.
-        // Shells buffer stdin, so writing it immediately is safe even before
-        // the prompt appears, and it keeps `claude` resolution to the user's
-        // own shell + PATH (robust across platforms).
-        if let Some(resume) = &spec.resume
+        // Start Claude by typing into the fresh shell (see `launch_command`).
+        // Shells buffer stdin, so writing immediately is safe even before the
+        // prompt appears.
+        if let Some(command) = launch_command(&spec.launch)
             && let Ok(mut w) = writer.lock()
         {
-            let command = format!("claude --resume {resume}\r");
             let _ = w.write_all(command.as_bytes());
             let _ = w.flush();
         }
@@ -893,7 +903,7 @@ mod tests {
         SpawnSpec {
             session,
             cwd: None,
-            resume: None,
+            launch: Launch::Shell,
             cols: 80,
             rows: 24,
         }
@@ -917,6 +927,31 @@ mod tests {
         assert_eq!(
             cmd.get_env("TERM"),
             Some(std::ffi::OsStr::new("xterm-256color"))
+        );
+    }
+
+    #[test]
+    fn a_plain_shell_launch_types_nothing() {
+        assert_eq!(launch_command(&Launch::Shell), None);
+    }
+
+    #[test]
+    fn a_fresh_claude_launch_types_bare_claude() {
+        // The point of #23: the 🤖 button must start Claude *fresh*, never with
+        // a stray `--resume`.
+        assert_eq!(
+            launch_command(&Launch::Claude { resume: None }),
+            Some("claude\r".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_resumed_claude_launch_types_resume_with_the_id() {
+        assert_eq!(
+            launch_command(&Launch::Claude {
+                resume: Some("abc-123".to_owned())
+            }),
+            Some("claude --resume abc-123\r".to_owned())
         );
     }
 
