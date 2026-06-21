@@ -65,6 +65,17 @@ pub fn relative_age(elapsed: Duration) -> String {
     }
 }
 
+/// Name a project from its path: the last non-empty path component, treating
+/// both `/` and `\` as separators so Windows and collapsed-worktree paths land
+/// on the same rule. Falls back to the whole input when it is all separators or
+/// empty, so the label is never blank.
+#[must_use]
+pub fn project_label(path: &str) -> &str {
+    path.rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or(path)
+}
+
 /// Group records by project path. Sessions are sorted most-recent-first
 /// inside each group; groups are sorted by most recent activity (sessions
 /// without an mtime sort last, ties broken by path for determinism).
@@ -151,6 +162,7 @@ fn session_matches(session: &SessionRecord, needle_lower: &str, titles_only: boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use std::time::{Duration, UNIX_EPOCH};
 
     fn record(project: &str, id: &str, age_secs: u64) -> SessionRecord {
@@ -272,5 +284,63 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].sessions.len(), 1);
         assert_eq!(filtered[0].sessions[0].session_id, "findme");
+    }
+
+    #[test]
+    fn project_label_is_the_last_path_component() {
+        assert_eq!(project_label("/Users/me/dev/termherd"), "termherd");
+    }
+
+    #[test]
+    fn project_label_ignores_a_trailing_separator() {
+        assert_eq!(project_label("/Users/me/dev/termherd/"), "termherd");
+    }
+
+    #[test]
+    fn project_label_handles_windows_separators() {
+        assert_eq!(project_label(r"C:\Users\me\dev\termherd"), "termherd");
+    }
+
+    #[test]
+    fn project_label_of_a_bare_name_is_itself() {
+        assert_eq!(project_label("termherd"), "termherd");
+    }
+
+    #[test]
+    fn project_label_falls_back_to_the_whole_input_when_all_separators() {
+        assert_eq!(project_label("/"), "/");
+        assert_eq!(project_label(""), "");
+    }
+
+    proptest! {
+        /// The label is always the last separator-joined segment.
+        #[test]
+        fn project_label_is_the_last_joined_segment(
+            segments in proptest::collection::vec("[^/\\\\]+", 1..6)
+        ) {
+            let path = segments.join("/");
+            let last = segments.last().unwrap().as_str();
+            prop_assert_eq!(project_label(&path), last);
+        }
+
+        /// A trailing separator never changes the label.
+        #[test]
+        fn project_label_ignores_trailing_separators(
+            segments in proptest::collection::vec("[^/\\\\]+", 1..6)
+        ) {
+            let base = segments.join("/");
+            let with_sep = format!("{base}/");
+            prop_assert_eq!(project_label(&base), project_label(&with_sep));
+        }
+
+        /// Whatever comes back carries no separator (given a separator-bearing path).
+        #[test]
+        fn project_label_has_no_separator(
+            segments in proptest::collection::vec("[^/\\\\]+", 2..6)
+        ) {
+            let path = segments.join("/");
+            let label = project_label(&path);
+            prop_assert!(!label.contains('/') && !label.contains('\\'));
+        }
     }
 }

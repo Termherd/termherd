@@ -155,6 +155,15 @@ Abbreviated acceptance criteria.
 - FR4 — Launch new / resume / reattach a session in an embedded terminal with
   correct shell + cleaned env; render ANSI, wide chars/emoji, scrollback,
   selection; resize propagates to the PTY.
+- FR4a — A launch has three distinct **kinds**, decided in `core` and carried
+  out by the `pty` adapter: a *plain shell* in the project dir, a *fresh
+  Claude* session (`claude`, no resume), and a *resumed Claude* session
+  (`claude --resume <id>`). The sidebar surfaces them per repo row as two
+  explicit buttons — `$` (plain shell) and 🤖 (fresh Claude) — while clicking
+  the repo *name* toggles collapse and clicking a session resumes it (#23).
+  Rationale: fresh-Claude launch was a *missing* mode (every prior spawn was a
+  bare shell unless a resume id was present), and overloading the repo name as
+  a launch trigger was an invisible affordance.
 - FR5 — Open sessions appear as **tabs**; switch, reorder, and close tabs.
 - FR6 — Any tab can **split** horizontally/vertically into panes, each hosting
   a session terminal; focus moves between panes; panes resize; closing the last

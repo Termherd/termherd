@@ -14,8 +14,10 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
    `F-plans-memory` editing slice gate a real v0.1.0 more than any new feature.
 2. **P0 — bugs in shipped features:** #19 (Tab key not forwarded — core
    terminal path), #18 (tab status stuck — misleading status badge).
-3. **P1 — cheap, on-thesis wins:** #26 (Ctrl+Number tabs), #23 (quick-launch
-   button). (#21 hide pane / Ctrl+B and #20 archive confirm — shipped.)
+3. **P1 — cheap, on-thesis wins:** #26 (Ctrl+Number tabs), #23 (sidebar launch
+   affordances: `$`/🤖 buttons + collapse-on-name; adds the missing fresh-Claude
+   launch mode — FR4a). (#21 hide pane / Ctrl+B and #20 archive confirm —
+   shipped.)
 4. **P2 — polish:** #25 drag-reorder tabs (FR5), #27 cursor +
    double-click. (#24 tab titles, #28 link click, #29 OS
    notifications — shipped.)

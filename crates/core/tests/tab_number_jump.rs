@@ -6,13 +6,13 @@
 //! on the third tab".
 
 use termherd_core::keymap::primary_mod;
-use termherd_core::{Action, App, Effect, Event, KeyChord, Keymap, LaunchSpec};
+use termherd_core::{Action, App, Effect, Event, KeyChord, Keymap, Launch, LaunchSpec};
 
 /// Open a session as a new (active) tab.
 fn launch(app: &mut App, title: &str) {
     let effects = app.apply(Event::LaunchSession(LaunchSpec {
         cwd: None,
-        resume: None,
+        launch: Launch::Shell,
         title: title.into(),
     }));
     assert!(

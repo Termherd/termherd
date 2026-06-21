@@ -15,7 +15,7 @@ use iced::widget::{
 use iced::{Color, Element, Fill, Font, Size};
 use termherd_core::SessionRecord;
 use termherd_core::SessionStatus;
-use termherd_core::browser::relative_age;
+use termherd_core::browser::{project_label, relative_age};
 
 use super::ime::ime_area;
 use super::terminal::{CELL_H, CELL_W, TerminalView};
@@ -93,7 +93,7 @@ impl Shell {
         // session is open twice, the most urgent status wins.
         let mut live: HashMap<&str, SessionStatus> = HashMap::new();
         for s in self.core.sessions.values() {
-            if let Some(resume) = s.resume.as_deref() {
+            if let Some(resume) = s.launch.resume_id() {
                 live.entry(resume)
                     .and_modify(|cur| {
                         if s.status.urgency() > cur.urgency() {
@@ -148,14 +148,29 @@ impl Shell {
         }
         for group in &visible {
             let collapsed = self.core.is_collapsed(&group.path);
-            // A disclosure triangle folds the session list (#22); the project
-            // name keeps its launch-a-terminal click beside it.
+            // The disclosure triangle and the name both fold the session list
+            // (#22/#23) — a tree header should fold, not launch. Launching moved
+            // to two explicit buttons beside it: `$` opens a plain shell, 🤖 a
+            // fresh Claude session, both in the repo dir (FR4a).
             let fold = fold_toggle(&group.path, collapsed);
-            let open = button(text(project_label(&group.path).to_owned()).size(14))
-                .on_press(Message::LaunchProject(group.path.clone()))
+            let name = button(text(project_label(&group.path).to_owned()).size(14))
+                .on_press(Message::ToggleCollapsed(group.path.clone()))
                 .style(button::text)
-                .padding(0);
-            let header = row![fold, open].spacing(6).align_y(iced::Center);
+                .padding(0)
+                .width(Fill);
+            let launch_shell = launch_button(
+                "$",
+                strings::SIDEBAR_LAUNCH_SHELL,
+                Message::LaunchProject(group.path.clone()),
+            );
+            let launch_claude = launch_button(
+                "🤖",
+                strings::SIDEBAR_LAUNCH_CLAUDE,
+                Message::LaunchClaude(group.path.clone()),
+            );
+            let header = row![fold, name, launch_shell, launch_claude]
+                .spacing(6)
+                .align_y(iced::Center);
             let mut g = column![header].spacing(4);
             // A folded project shows only its header, hiding the session list.
             if collapsed {
@@ -548,6 +563,27 @@ fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
         .into()
 }
 
+/// An icon button beside a project header that launches a session in the repo
+/// dir (#23, FR4a): the glyph is the affordance, the tooltip spells it out.
+/// Built once so the `$` (shell) and 🤖 (Claude) buttons can't drift in style.
+fn launch_button(
+    icon: &'static str,
+    tip: &'static str,
+    on_press: Message,
+) -> Element<'static, Message> {
+    tooltip(
+        button(text(icon).size(14))
+            .on_press(on_press)
+            .style(button::text)
+            .padding(0),
+        container(text(tip).size(12))
+            .padding(4)
+            .style(container::rounded_box),
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
 /// Overlay `content` as a centred modal over `base`, dimming everything behind
 /// it; a click on the scrim emits `on_blur` to dismiss. The base UI keeps
 /// rendering underneath but cannot be interacted with — the inner `opaque`
@@ -660,13 +696,6 @@ fn session_card(
         .max_width(360.0)
         .style(card_style)
         .into()
-}
-
-/// Last path component — what the sidebar shows as the project name.
-pub(super) fn project_label(path: &str) -> &str {
-    path.rsplit(['/', '\\'])
-        .find(|part| !part.is_empty())
-        .unwrap_or(path)
 }
 
 /// Collapse newlines to spaces and truncate to `max` characters with an ellipsis.

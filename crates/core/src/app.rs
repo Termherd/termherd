@@ -62,9 +62,10 @@ pub struct LiveSession {
     pub id: SessionId,
     /// Real project path the PTY runs in, if known.
     pub cwd: Option<String>,
-    /// Claude session id this terminal resumed, if any — lets the sidebar map
-    /// a browsed session row to its live activity (FR8).
-    pub resume: Option<String>,
+    /// What this terminal is running — a shell or a (possibly resumed) Claude
+    /// session. The resumed-id lets the sidebar map a browsed session row to its
+    /// live activity (FR8); read it via [`Launch::resume_id`].
+    pub launch: Launch,
     /// Activity derived from the OSC stream (FR8).
     pub status: SessionStatus,
 }
@@ -104,14 +105,39 @@ impl SessionStatus {
     }
 }
 
-/// What the user asked to open (FR4): a terminal in `cwd`, optionally
-/// resuming an existing Claude session.
+/// What to run in a launched terminal (FR4a). The core decides the *kind*; the
+/// `pty` adapter decides *how* to start it. `Shell` is a bare login shell;
+/// `Claude` starts the CLI — fresh when `resume` is `None`, else
+/// `claude --resume <id>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Launch {
+    /// A plain login shell in the working directory.
+    Shell,
+    /// A Claude session: fresh (`resume: None`) or resumed (`resume: Some(id)`).
+    Claude { resume: Option<String> },
+}
+
+impl Launch {
+    /// The Claude session id this launch resumes, if any — `None` for a shell
+    /// or a fresh Claude session. Lets the sidebar map a `claude_id` back to the
+    /// live tab hosting it.
+    #[must_use]
+    pub fn resume_id(&self) -> Option<&str> {
+        match self {
+            Launch::Claude { resume: Some(id) } => Some(id),
+            _ => None,
+        }
+    }
+}
+
+/// What the user asked to open (FR4): a terminal in `cwd`, running some
+/// [`Launch`] kind.
 #[derive(Debug, Clone)]
 pub struct LaunchSpec {
     /// Working directory for the new terminal (the real project path).
     pub cwd: Option<String>,
-    /// Claude session id to resume/reattach, if any.
-    pub resume: Option<String>,
+    /// What to run in the terminal.
+    pub launch: Launch,
     /// Tab title to show.
     pub title: String,
 }
@@ -122,7 +148,7 @@ pub struct LaunchSpec {
 pub struct SpawnSpec {
     pub session: SessionId,
     pub cwd: Option<String>,
-    pub resume: Option<String>,
+    pub launch: Launch,
     pub cols: u16,
     pub rows: u16,
 }
@@ -458,7 +484,7 @@ impl App {
     pub fn open_session_for(&self, claude_id: &str) -> Option<SessionId> {
         self.sessions
             .values()
-            .find(|s| s.resume.as_deref() == Some(claude_id))
+            .find(|s| s.launch.resume_id() == Some(claude_id))
             .map(|s| s.id)
     }
 
@@ -501,7 +527,7 @@ impl App {
             LiveSession {
                 id,
                 cwd: spec.cwd.clone(),
-                resume: spec.resume.clone(),
+                launch: spec.launch.clone(),
                 status: SessionStatus::Starting,
             },
         );
@@ -509,7 +535,7 @@ impl App {
         vec![Effect::Spawn(SpawnSpec {
             session: id,
             cwd: spec.cwd,
-            resume: spec.resume,
+            launch: spec.launch,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
         })]
@@ -536,14 +562,14 @@ impl App {
             LiveSession {
                 id,
                 cwd: cwd.clone(),
-                resume: None,
+                launch: Launch::Shell,
                 status: SessionStatus::Starting,
             },
         );
         vec![Effect::Spawn(SpawnSpec {
             session: id,
             cwd,
-            resume: None,
+            launch: Launch::Shell,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
         })]
@@ -682,7 +708,7 @@ mod tests {
         let mut app = App::new();
         let effects = app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            resume: None,
+            launch: Launch::Shell,
             title: "proj".into(),
         }));
 
@@ -707,11 +733,13 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            resume: Some("abc-123".into()),
+            launch: Launch::Claude {
+                resume: Some("abc-123".into()),
+            },
             title: "proj".into(),
         }));
         let id = app.workspace.focused_session().expect("a focused session");
-        assert_eq!(app.sessions[&id].resume.as_deref(), Some("abc-123"));
+        assert_eq!(app.sessions[&id].launch.resume_id(), Some("abc-123"));
     }
 
     #[test]
@@ -719,7 +747,9 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            resume: Some("abc-123".into()),
+            launch: Launch::Claude {
+                resume: Some("abc-123".into()),
+            },
             title: "proj".into(),
         }));
         let id = app.workspace.focused_session().expect("a focused session");
@@ -732,12 +762,12 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: None,
-            resume: None,
+            launch: Launch::Shell,
             title: "a".into(),
         }));
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: None,
-            resume: None,
+            launch: Launch::Shell,
             title: "b".into(),
         }));
         assert_eq!(app.sessions.len(), 2);
@@ -748,7 +778,7 @@ mod tests {
         let mut app = App::new();
         let spawn = app.apply(Event::LaunchSession(LaunchSpec {
             cwd: None,
-            resume: None,
+            launch: Launch::Shell,
             title: "a".into(),
         }));
         let id = match spawn.as_slice() {
@@ -791,7 +821,7 @@ mod tests {
         match app
             .apply(Event::LaunchSession(LaunchSpec {
                 cwd: None,
-                resume: None,
+                launch: Launch::Shell,
                 title: title.into(),
             }))
             .as_slice()
@@ -1012,7 +1042,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            resume: None,
+            launch: Launch::Shell,
             title: "proj".into(),
         }));
         let effects = app.apply(Event::SplitFocused(SplitDir::Vertical));
@@ -1078,7 +1108,7 @@ mod tests {
         let mut app = App::new();
         let spawn = app.apply(Event::LaunchSession(LaunchSpec {
             cwd: None,
-            resume: None,
+            launch: Launch::Shell,
             title: "a".into(),
         }));
         let id = match spawn.as_slice() {
