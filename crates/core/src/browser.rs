@@ -5,7 +5,7 @@
 //! bug class (#41/#44) is pinned here by construction and by tests.
 
 use std::collections::BTreeMap;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use termherd_claude::digest::SessionDigest;
 
@@ -34,6 +34,34 @@ impl ProjectGroup {
     #[must_use]
     pub fn last_activity(&self) -> Option<SystemTime> {
         self.sessions.iter().filter_map(|s| s.modified).max()
+    }
+}
+
+/// A compact, language-neutral relative age — `now`, `5m`, `3h`, `2d`, `4w`,
+/// `1y` — used to disambiguate sidebar rows whose titles collide within a
+/// project (#42). The caller supplies the elapsed `Duration`: core stays pure
+/// (no clock), the adapter owns the wall clock.
+#[must_use]
+pub fn relative_age(elapsed: Duration) -> String {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    const WEEK: u64 = 7 * DAY;
+    const YEAR: u64 = 365 * DAY;
+
+    let secs = elapsed.as_secs();
+    if secs < MINUTE {
+        "now".to_owned()
+    } else if secs < HOUR {
+        format!("{}m", secs / MINUTE)
+    } else if secs < DAY {
+        format!("{}h", secs / HOUR)
+    } else if secs < WEEK {
+        format!("{}d", secs / DAY)
+    } else if secs < YEAR {
+        format!("{}w", secs / WEEK)
+    } else {
+        format!("{}y", secs / YEAR)
     }
 }
 
@@ -136,6 +164,7 @@ mod tests {
                 slug: None,
                 custom_title: None,
                 ai_title: None,
+                tail: Vec::new(),
             },
             modified: Some(UNIX_EPOCH + Duration::from_secs(age_secs)),
         }
@@ -220,6 +249,18 @@ mod tests {
         ]);
         let hits = filter_projects(&groups, "web", true);
         assert_eq!(hits[0].sessions.len(), 2);
+    }
+
+    #[test]
+    fn relative_age_picks_the_largest_fitting_unit() {
+        assert_eq!(relative_age(Duration::from_secs(0)), "now");
+        assert_eq!(relative_age(Duration::from_secs(59)), "now");
+        assert_eq!(relative_age(Duration::from_secs(60)), "1m");
+        assert_eq!(relative_age(Duration::from_secs(59 * 60)), "59m");
+        assert_eq!(relative_age(Duration::from_secs(3600)), "1h");
+        assert_eq!(relative_age(Duration::from_secs(25 * 3600)), "1d");
+        assert_eq!(relative_age(Duration::from_secs(8 * 86_400)), "1w");
+        assert_eq!(relative_age(Duration::from_secs(400 * 86_400)), "1y");
     }
 
     #[test]
