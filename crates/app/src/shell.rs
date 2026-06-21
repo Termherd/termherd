@@ -27,7 +27,7 @@ use termherd_core::{
     Action, Effect, Keymap, Launch, LaunchSpec, ScrollTarget, SessionMeta, SessionRecord,
     SessionStatus,
 };
-use termherd_pty::{PtyEvent, Screen};
+use termherd_pty::{PtyEvent, Screen, TermKey};
 
 use crate::docs::DocEntry;
 use crate::settings::ThemeChoice;
@@ -39,7 +39,7 @@ mod streams;
 mod terminal;
 mod view;
 
-use input::{chord_of, event_modifiers, key_mods, to_term_key};
+use input::{chord_of, event_modifiers, key_mods, numpad_char, to_term_key};
 use streams::{PtyOutput, pty_stream, watch_stream};
 use termherd_core::browser::project_label;
 use terminal::{CELL_H, CELL_W, notify, open_url};
@@ -1018,6 +1018,7 @@ impl Shell {
             physical_key,
             modifiers,
             text,
+            location,
             ..
         } = event
         else {
@@ -1034,7 +1035,14 @@ impl Shell {
         {
             return self.run_action(action);
         }
-        let Some(term_key) = to_term_key(&key) else {
+        // A numpad key with NumLock on reports its un-locked name (`End`, arrows,
+        // …) but carries the digit/operator in `text`; type that instead of the
+        // navigation sequence its name would otherwise produce. Other keys map
+        // by name as usual.
+        let term_key = numpad_char(location, text.as_deref())
+            .map(TermKey::Char)
+            .or_else(|| to_term_key(&key));
+        let Some(term_key) = term_key else {
             return Task::none();
         };
         let Some(bytes) = termherd_pty::key_bytes(term_key, key_mods(modifiers), text.as_deref())

@@ -74,6 +74,22 @@ fn key_name(key: &keyboard::Key) -> Option<String> {
     }
 }
 
+/// The character a numpad key typed when NumLock turned it into text. With
+/// NumLock on, winit's `key_without_modifiers` reports the *un*-locked key — so
+/// numpad `1` arrives as `Named(End)`, `2` as `Named(ArrowDown)`, … — yet the
+/// digit/operator is still in `text`. Honouring it here keeps the numpad typing
+/// digits instead of moving the cursor. `None` for non-numpad keys, and for
+/// numpad keys with no printable single-char text (NumLock off → navigation;
+/// Numpad-Enter → its named sequence), which then fall through to [`to_term_key`].
+pub(super) fn numpad_char(location: keyboard::Location, text: Option<&str>) -> Option<char> {
+    if location != keyboard::Location::Numpad {
+        return None;
+    }
+    let mut chars = text?.chars();
+    let ch = chars.next()?;
+    (chars.next().is_none() && !ch.is_control()).then_some(ch)
+}
+
 /// Map an iced key to the framework-neutral [`TermKey`] the PTY codec speaks
 /// (`termherd_pty::key_bytes`). `None` for keys with no terminal sequence, so
 /// they reach no PTY. The byte protocol itself lives in the terminal adapter.
@@ -216,6 +232,28 @@ mod tests {
         ] {
             assert_eq!(physical_digit_name(&Physical::Code(code)), expected);
         }
+    }
+
+    #[test]
+    fn numpad_with_numlock_types_its_digit_not_a_navigation_key() {
+        // With NumLock on the key reports an un-locked name (handled by `key`),
+        // but `text` carries the digit/operator — that is what should be typed.
+        assert_eq!(
+            numpad_char(keyboard::Location::Numpad, Some("1")),
+            Some('1')
+        );
+        assert_eq!(
+            numpad_char(keyboard::Location::Numpad, Some("+")),
+            Some('+')
+        );
+        // Off the numpad the field is ignored — the main row already types via
+        // its own `text`, so this must not hijack it.
+        assert_eq!(numpad_char(keyboard::Location::Standard, Some("1")), None);
+        // No printable single char (NumLock off → navigation; Numpad-Enter →
+        // a control char; empty) falls through to the named-key mapping.
+        assert_eq!(numpad_char(keyboard::Location::Numpad, None), None);
+        assert_eq!(numpad_char(keyboard::Location::Numpad, Some("")), None);
+        assert_eq!(numpad_char(keyboard::Location::Numpad, Some("\r")), None);
     }
 
     #[test]
