@@ -34,6 +34,9 @@ pub fn welcome_counts(sessions: usize, projects: usize) -> String {
 
 // --- Doc viewer ---
 pub const DOC_CLOSE: &str = "✕ close";
+pub const DOC_SAVE: &str = "💾 save";
+pub const DOC_SAVED: &str = "saved";
+pub const DOC_MODIFIED: &str = "• modified";
 
 /// Shown in the doc pane when a plan/memory file can't be read.
 #[must_use]

@@ -188,7 +188,10 @@ Mapped from the NFR scorecard; each prior gap becomes a requirement.
   Linux: signed checksums on releases.
 - **Auto-update** — Should; background check/download from GitHub Releases.
 - **Security** — no webview ⇒ no remote-content/CSP surface; fs access scoped
-  to `~/.claude` (read) and `~/.termherd` (read/write); **no
+  to `~/.claude` (read) and `~/.termherd` (read/write), with one narrow,
+  ADR-ratified write exception for in-app plan/memory editing — writes reach
+  only `~/.claude/CLAUDE.md` and `~/.claude/plans/*.md`, never the session tree
+  (see [`docs/adr/0001`](adr/0001-plans-memory-write-scope.md)); **no
   `~/.claude/ide` writes in v1** (no IDE registration); external links via OS
   opener.
 - **Single-instance** — never races on the DB (Q8).

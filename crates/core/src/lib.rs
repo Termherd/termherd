@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod browser;
+pub mod docscope;
 pub mod keymap;
 pub mod links;
 pub mod metadata;

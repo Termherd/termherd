@@ -69,6 +69,12 @@ png = "0.17"
 # Desktop notifications to the OS notification centre (#29). Cross-platform:
 # mac-notification-sys on macOS, zbus on Linux, WinRT toasts on Windows.
 notify-rust = "4"
+# Typed save errors for the plans/memory write slice.
+thiserror = "2"
+
+[dev-dependencies]
+# Temp dirs for the atomic-write round-trip tests.
+tempfile = "3"
 
 # Embed `icons/icon.ico` into termherd.exe so the executable and its shortcuts
 # carry the app icon on Windows. Host-gated: only pulled in (and only run) when

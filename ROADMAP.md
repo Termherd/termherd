@@ -87,12 +87,15 @@ headline.
   the browser pins starred sessions, hides archived behind a toggle, and shows
   custom titles. Star / archive / inline rename (✎ → edit field) are all
   sidebar controls
-- [ ] `F-plans-memory` — browse/edit plans + `CLAUDE.md` (M3, moved to Must in
-  PRD rev. 6): **read-only browse/view shipped** — a sidebar "Plans & mémoire"
-  section lists `~/.claude/plans/*.md`, the global `CLAUDE.md` and each
-  project's `CLAUDE.md`, opening one read-only in the main pane (off-thread
-  read via the new `docs` adapter). Editing + the `~/.claude` write-scope
-  relaxation are the remaining slice
+- [x] `F-plans-memory` — browse/edit plans + `CLAUDE.md` (M3, moved to Must in
+  PRD rev. 6): a sidebar "Plans & mémoire" section lists `~/.claude/plans/*.md`,
+  the global `CLAUDE.md` and each project's `CLAUDE.md`, opening one in the main
+  pane (off-thread read via the `docs` adapter). The editing slice (#53) added
+  in-app editing with a narrow, ADR-ratified write-scope
+  ([`docs/adr/0001`](docs/adr/0001-plans-memory-write-scope.md)): writes reach
+  only `~/.claude/CLAUDE.md`, `~/.claude/plans/*.md` and project `CLAUDE.md`,
+  guarded by a pure `core::docscope` predicate, an mtime concurrency check, and
+  an atomic temp-then-rename save
 
 ### Should (post v0)
 

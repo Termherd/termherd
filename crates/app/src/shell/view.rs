@@ -10,7 +10,7 @@ use std::time::SystemTime;
 use iced::widget::canvas::Canvas;
 use iced::widget::{
     button, center, checkbox, column, container, mouse_area, opaque, row, scrollable, stack, text,
-    text_input, tooltip,
+    text_editor, text_input, tooltip,
 };
 use iced::{Color, Element, Fill, Font, Size};
 use termherd_core::SessionRecord;
@@ -19,7 +19,7 @@ use termherd_core::browser::relative_age;
 
 use super::ime::ime_area;
 use super::terminal::{CELL_H, CELL_W, TerminalView};
-use super::{Focus, HANDLE_W, Message, Shell, rename_id, search_id};
+use super::{DocFeedback, Focus, HANDLE_W, Message, OpenDoc, Shell, rename_id, search_id};
 use crate::strings;
 
 impl Shell {
@@ -305,23 +305,10 @@ impl Shell {
     /// The focused terminal: a status badge, then its grid drawn on a canvas.
     /// With no session open, a short summary of what the browser found.
     fn main_pane(&self) -> Element<'_, Message> {
-        // A plan / memory doc, when one is open, takes over the main pane
-        // read-only (F-plans-memory).
-        if let Some((label, content)) = &self.viewing {
-            let header = row![
-                text(label).size(13),
-                button(text(strings::DOC_CLOSE).size(12))
-                    .on_press(Message::CloseDoc)
-                    .style(button::text)
-                    .padding(0),
-            ]
-            .spacing(12)
-            .align_y(iced::Center);
-            let body = scrollable(text(content).size(12).font(Font::MONOSPACE)).height(Fill);
-            return container(column![header, body].spacing(8).padding(8))
-                .width(Fill)
-                .height(Fill)
-                .into();
+        // A plan / memory doc, when one is open, takes over the main pane for
+        // viewing/editing (F-plans-memory).
+        if let Some(doc) = &self.open_doc {
+            return doc_editor(doc);
         }
 
         let focused = self.core.workspace.focused_session();
@@ -457,6 +444,65 @@ impl Shell {
             bar = bar.push(row![title, close].align_y(iced::Center));
         }
         Some(bar.into())
+    }
+}
+
+/// Render an open plan/memory doc: a header (label, save state, actions) above
+/// the editable text area (F-plans-memory). A read-only doc omits the Save
+/// control; the header always carries a close button.
+fn doc_editor(doc: &OpenDoc) -> Element<'_, Message> {
+    let mut header = row![text(&doc.label).size(13)]
+        .spacing(12)
+        .align_y(iced::Center);
+
+    if doc.writable {
+        // A disabled button (no `on_press`) reads as "nothing to save".
+        let mut save = button(text(strings::DOC_SAVE).size(12))
+            .style(button::text)
+            .padding(0);
+        if doc.dirty {
+            save = save.on_press(Message::SaveDoc);
+        }
+        header = header.push(save);
+    }
+
+    if let Some(note) = save_note(doc) {
+        header = header.push(note);
+    }
+
+    header = header.push(
+        button(text(strings::DOC_CLOSE).size(12))
+            .on_press(Message::CloseDoc)
+            .style(button::text)
+            .padding(0),
+    );
+
+    let editor = text_editor(&doc.content)
+        .on_action(Message::DocEdit)
+        .font(Font::MONOSPACE)
+        .size(12)
+        .height(Fill);
+
+    container(column![header, editor].spacing(8).padding(8))
+        .width(Fill)
+        .height(Fill)
+        .into()
+}
+
+/// The save-state note for the editor header: the last save outcome if there is
+/// one, else a "modified" hint while there are unsaved edits, else nothing.
+fn save_note(doc: &OpenDoc) -> Option<Element<'_, Message>> {
+    const SAVED: Color = Color::from_rgb(0.3, 0.8, 0.4);
+    const ERROR: Color = Color::from_rgb(0.95, 0.35, 0.35);
+    const DIRTY: Color = Color::from_rgb(0.6, 0.6, 0.6);
+
+    match &doc.feedback {
+        Some(DocFeedback::Saved) => Some(text(strings::DOC_SAVED).size(11).color(SAVED).into()),
+        Some(DocFeedback::Error(message)) => {
+            Some(text(message.clone()).size(11).color(ERROR).into())
+        }
+        None if doc.dirty => Some(text(strings::DOC_MODIFIED).size(11).color(DIRTY).into()),
+        None => None,
     }
 }
 
