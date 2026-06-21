@@ -19,12 +19,14 @@ use termherd_core::browser::relative_age;
 
 use super::ime::ime_area;
 use super::terminal::{CELL_H, CELL_W, TerminalView};
-use super::{Focus, Message, Shell, rename_id, search_id};
+use super::{Focus, HANDLE_W, Message, Shell, rename_id, search_id};
 
 impl Shell {
     pub(super) fn view(&self) -> Element<'_, Message> {
         // Hiding the sidebar (#21) hands its width to the terminal; a slim
         // always-present handle brings it back without needing the shortcut.
+        // The handle is pinned to `HANDLE_W` so the grid reserves exactly what
+        // it occupies — keeping `grid_size` honest rather than estimating (#64).
         let base: Element<'_, Message> = if self.core.sidebar_hidden {
             let handle = container(
                 button(text("▶").size(12))
@@ -32,6 +34,7 @@ impl Shell {
                     .style(button::text)
                     .padding(4),
             )
+            .width(HANDLE_W)
             .padding(4);
             row![handle, self.main_pane()].into()
         } else {

@@ -47,8 +47,10 @@ use view::project_label;
 const SIDEBAR_W: f32 = 300.0;
 /// Width the collapsed sidebar still occupies (#21): just the slim "▶" handle.
 /// The grid reserves this instead of `SIDEBAR_W` when hidden, so the reclaimed
-/// space becomes columns rather than stretched cells (#64).
-const HANDLE_W: f32 = 28.0;
+/// space becomes columns rather than stretched cells (#64). The view pins the
+/// handle to exactly this width (`view::view`), so it is a contract the layout
+/// honours, not an estimate that can silently drift.
+pub(super) const HANDLE_W: f32 = 28.0;
 const H_CHROME: f32 = 40.0;
 const V_CHROME: f32 = 84.0;
 
