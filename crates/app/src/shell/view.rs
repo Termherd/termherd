@@ -487,12 +487,12 @@ fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
 /// Everything is pulled from the theme palette, so it tracks the theme system
 /// once that lands rather than baking in a colour.
 fn card_style(theme: &iced::Theme) -> container::Style {
-    let palette = theme.extended_palette();
+    let surface = card_surface(theme);
     container::Style {
-        background: Some(palette.background.strong.color.into()),
-        text_color: Some(palette.background.strong.text),
+        background: Some(surface.color.into()),
+        text_color: Some(surface.text),
         border: iced::Border {
-            color: palette.background.weak.color,
+            color: theme.extended_palette().background.weak.color,
             width: 1.0,
             radius: 6.0.into(),
         },
@@ -504,10 +504,17 @@ fn card_style(theme: &iced::Theme) -> container::Style {
 /// card's text colour mixed toward its background, so it stays legible and
 /// theme-derived on both light and dark palettes.
 fn card_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
-    let pair = theme.extended_palette().background.strong;
+    let surface = card_surface(theme);
     iced::widget::text::Style {
-        color: Some(mix(pair.text, pair.color, 0.35)),
+        color: Some(mix(surface.text, surface.color, 0.35)),
     }
+}
+
+/// The palette tier the hover card paints on — its surface colour and the text
+/// colour meant to sit on it. Single-sourced so the "which tier" choice (and
+/// the eventual theme-system wiring) lives in one place.
+fn card_surface(theme: &iced::Theme) -> iced::theme::palette::Pair {
+    theme.extended_palette().background.strong
 }
 
 /// Linear blend from `a` to `b` by `t` in `[0, 1]`.
