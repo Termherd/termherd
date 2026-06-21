@@ -33,6 +33,7 @@ fn main() -> iced::Result {
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
+        built = env!("TERMHERD_BUILD_DATE"),
         "termherd starting (M1 browser)"
     );
 
