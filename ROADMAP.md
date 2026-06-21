@@ -78,7 +78,8 @@ headline.
   `KeyChord -> Action` map in `core::keymap` with a chord-string parser and
   platform-aware defaults; the `keys` section of `settings.json` overrides any
   action. Drives copy/paste, `Ctrl+Tab`/`Ctrl+Shift+Tab` cycling, close-tab,
-  focus-search and `toggle-sidebar` (hide pane / Ctrl+Cmd+B, #21) today;
+  focus-search, `toggle-sidebar` (hide pane / Ctrl+Cmd+B, #21) and
+  `scroll-top`/`scroll-bottom` (Ctrl/Cmd+Up/Down, #44) today;
   `split-*` / `focus-next/prev` bind as those features land
 - [x] `F-session-metadata` — star / rename / archive / custom titles for
   sessions (M3, moved to Must in PRD rev. 6): a `SessionMeta` overlay in

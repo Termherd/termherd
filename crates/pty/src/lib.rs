@@ -28,7 +28,7 @@ use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, nativ
 use termherd_claude::osc::{OscSignal, decode_chunk};
 use termherd_core::ports::{PtyError, PtyHost};
 use termherd_core::workspace::SessionId;
-use termherd_core::{SessionStatus, SpawnSpec};
+use termherd_core::{ScrollTarget, SessionStatus, SpawnSpec};
 
 /// Read buffer for the per-session reader thread.
 const READ_BUF: usize = 8192;
@@ -283,8 +283,8 @@ enum TermCmd {
     Bytes(Vec<u8>),
     /// Resize the grid (the PTY itself is resized by the manager).
     Resize(u16, u16),
-    /// Scroll the viewport by a line delta (positive = into history).
-    Scroll(i32),
+    /// Move the viewport: a relative line delta or an absolute top/bottom jump.
+    Scroll(ScrollTarget),
     /// The PTY reached end of file; the process is gone.
     Eof,
 }
@@ -451,7 +451,7 @@ impl PtyHost for PtyManager {
             .map_err(|e| PtyError::Io(e.to_string()))
     }
 
-    fn scroll(&self, session: SessionId, delta: i32) -> Result<(), PtyError> {
+    fn scroll(&self, session: SessionId, target: ScrollTarget) -> Result<(), PtyError> {
         let map = self
             .sessions
             .lock()
@@ -460,7 +460,7 @@ impl PtyHost for PtyManager {
             .get(&session)
             .ok_or(PtyError::NoSuchSession(session.0.get()))?;
         s.ctrl
-            .send(TermCmd::Scroll(delta))
+            .send(TermCmd::Scroll(target))
             .map_err(|_| PtyError::Io("terminal thread gone".into()))
     }
 
@@ -641,8 +641,13 @@ fn spawn_term(
                     TermCmd::Resize(c, r) => {
                         term.resize(TermSize::new(c as usize, r as usize));
                     }
-                    TermCmd::Scroll(delta) => {
-                        term.scroll_display(Scroll::Delta(delta));
+                    TermCmd::Scroll(target) => {
+                        let scroll = match target {
+                            ScrollTarget::Delta(delta) => Scroll::Delta(delta),
+                            ScrollTarget::Top => Scroll::Top,
+                            ScrollTarget::Bottom => Scroll::Bottom,
+                        };
+                        term.scroll_display(scroll);
                     }
                     TermCmd::Eof => break,
                 }

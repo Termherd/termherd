@@ -127,6 +127,19 @@ pub struct SpawnSpec {
     pub rows: u16,
 }
 
+/// Where to move a terminal's viewport (#44). One scroll concept covers the
+/// mouse wheel's relative nudge and the absolute top/bottom jumps, so the event,
+/// effect and `PtyHost::scroll` port all speak it instead of special-casing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollTarget {
+    /// Relative line delta; positive scrolls up into history.
+    Delta(i32),
+    /// The oldest line in the scrollback.
+    Top,
+    /// The live bottom of the buffer.
+    Bottom,
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     /// A filesystem scan finished; replaces the whole browser state.
@@ -148,10 +161,11 @@ pub enum Event {
         cols: u16,
         rows: u16,
     },
-    /// The user scrolled a terminal's viewport (FR4 scrollback).
-    TerminalScrolled {
+    /// The user moved a terminal's viewport (FR4 scrollback): a relative wheel
+    /// delta, or an absolute jump to the top/bottom of the history (#44).
+    ScrollViewport {
         session: SessionId,
-        delta: i32,
+        target: ScrollTarget,
     },
     /// The OSC decoder reclassified a session's activity (FR8).
     StatusChanged {
@@ -221,8 +235,12 @@ pub enum Effect {
         cols: u16,
         rows: u16,
     },
-    /// Scroll a session's viewport by a line delta (positive = into history).
-    Scroll { session: SessionId, delta: i32 },
+    /// Move a session's viewport: a relative line delta or an absolute jump to
+    /// the top/bottom of the scrollback (#44).
+    Scroll {
+        session: SessionId,
+        target: ScrollTarget,
+    },
     /// Terminate a session's PTY process.
     Kill(SessionId),
     /// Persist the session metadata overlay (`F-session-metadata`).
@@ -282,9 +300,9 @@ impl App {
                     Vec::new()
                 }
             }
-            Event::TerminalScrolled { session, delta } => {
+            Event::ScrollViewport { session, target } => {
                 if self.is_live(session) {
-                    vec![Effect::Scroll { session, delta }]
+                    vec![Effect::Scroll { session, target }]
                 } else {
                     Vec::new()
                 }

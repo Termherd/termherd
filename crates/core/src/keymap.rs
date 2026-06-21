@@ -109,6 +109,10 @@ pub enum Action {
     ToggleSidebar,
     Copy,
     Paste,
+    /// Jump the focused terminal's viewport to the top of its scrollback (#44).
+    ScrollTop,
+    /// Jump the focused terminal's viewport back to the live bottom (#44).
+    ScrollBottom,
     /// Jump straight to the tab at this zero-based index (issue #26). Bound to
     /// the platform's primary modifier and the number row — ⌘1…⌘9 on macOS,
     /// Ctrl+1…Ctrl+9 elsewhere — where the user-facing digit is 1-based.
@@ -133,6 +137,8 @@ impl Action {
             "toggle-sidebar" => Action::ToggleSidebar,
             "copy" => Action::Copy,
             "paste" => Action::Paste,
+            "scroll-top" => Action::ScrollTop,
+            "scroll-bottom" => Action::ScrollBottom,
             _ => return activate_tab_from_config_name(name),
         })
     }
@@ -195,6 +201,10 @@ impl Keymap {
             Action::PrevTab,
             [KeyChord::new("tab", MOD_CTRL | MOD_SHIFT)],
         );
+        // Jump to the top / bottom of the scrollback (#44): ⌘↑/⌘↓ on macOS,
+        // Ctrl+↑/Ctrl+↓ elsewhere — the same primary modifier as the tab jumps.
+        map.set(Action::ScrollTop, [KeyChord::new("up", primary_mod())]);
+        map.set(Action::ScrollBottom, [KeyChord::new("down", primary_mod())]);
         // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9 (issue #26). The
         // digit is 1-based for the user; the action carries the 0-based index.
         for n in 1..=NUMBER_ROW_TABS {
@@ -334,12 +344,35 @@ mod tests {
             "toggle-sidebar",
             "copy",
             "paste",
+            "scroll-top",
+            "scroll-bottom",
         ] {
             assert!(
                 Action::from_config_name(name).is_some(),
                 "config action `{name}` should map to an Action",
             );
         }
+    }
+
+    #[test]
+    fn defaults_bind_scroll_top_and_bottom_to_the_primary_modifier_arrows() {
+        let map = Keymap::defaults();
+        assert_eq!(
+            map.lookup(&KeyChord::new("up", primary_mod())),
+            Some(Action::ScrollTop)
+        );
+        assert_eq!(
+            map.lookup(&KeyChord::new("down", primary_mod())),
+            Some(Action::ScrollBottom)
+        );
+        assert_eq!(
+            Action::from_config_name("scroll-top"),
+            Some(Action::ScrollTop)
+        );
+        assert_eq!(
+            Action::from_config_name("scroll-bottom"),
+            Some(Action::ScrollBottom)
+        );
     }
 
     #[test]
