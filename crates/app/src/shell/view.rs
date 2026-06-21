@@ -9,7 +9,8 @@ use std::time::SystemTime;
 
 use iced::widget::canvas::Canvas;
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, text, text_input, tooltip,
+    button, center, checkbox, column, container, mouse_area, opaque, row, scrollable, stack, text,
+    text_input, tooltip,
 };
 use iced::{Color, Element, Fill, Font, Size};
 use termherd_core::SessionRecord;
@@ -24,7 +25,7 @@ impl Shell {
     pub(super) fn view(&self) -> Element<'_, Message> {
         // Hiding the sidebar (#21) hands its width to the terminal; a slim
         // always-present handle brings it back without needing the shortcut.
-        if self.core.sidebar_hidden {
+        let base: Element<'_, Message> = if self.core.sidebar_hidden {
             let handle = container(
                 button(text("▶").size(12))
                     .on_press(Message::ToggleSidebar)
@@ -35,7 +36,32 @@ impl Shell {
             row![handle, self.main_pane()].into()
         } else {
             row![self.sidebar(), self.main_pane()].into()
+        };
+        // A pending quit overlays a modal confirmation, so the about-to-die
+        // sessions stay untouchable until the user decides.
+        match self.quit_confirmation() {
+            Some(card) => modal(base, card, Message::CancelCloseWindow),
+            None => base,
         }
+    }
+
+    /// The quit-confirmation modal card (shown when a window close is armed and
+    /// live sessions would be hard-killed). `None` when no quit is pending.
+    fn quit_confirmation(&self) -> Option<Element<'_, Message>> {
+        if !self.quit_pending() {
+            return None;
+        }
+        let live = self.live_session_count();
+        Some(Self::confirmation_bar(
+            format!(
+                "Quitter TermHerd ? {live} session(s) active(s) seront arrêtée(s) \
+                 brutalement — Claude sera tué."
+            ),
+            "Quitter",
+            button::danger,
+            Message::ConfirmCloseWindow,
+            Message::CancelCloseWindow,
+        ))
     }
 
     /// The session browser (FR1 + FR3): search box, then projects by recency.
@@ -479,6 +505,37 @@ fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
         .style(button::text)
         .padding(0)
         .into()
+}
+
+/// Overlay `content` as a centred modal over `base`, dimming everything behind
+/// it; a click on the scrim emits `on_blur` to dismiss. The base UI keeps
+/// rendering underneath but cannot be interacted with — the inner `opaque`
+/// swallows clicks on the card, the outer one blocks the layers below.
+fn modal<'a>(
+    base: Element<'a, Message>,
+    content: Element<'a, Message>,
+    on_blur: Message,
+) -> Element<'a, Message> {
+    stack(vec![
+        base,
+        opaque(mouse_area(center(opaque(content)).style(modal_backdrop)).on_press(on_blur)),
+    ])
+    .into()
+}
+
+/// Semi-transparent scrim drawn behind a modal so the dialog reads as the only
+/// actionable surface.
+fn modal_backdrop(_theme: &iced::Theme) -> container::Style {
+    container::Style {
+        background: Some(
+            Color {
+                a: 0.6,
+                ..Color::BLACK
+            }
+            .into(),
+        ),
+        ..container::Style::default()
+    }
 }
 
 /// Background for the session hover card — a step away from the surrounding
