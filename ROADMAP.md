@@ -145,6 +145,13 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
 - [ ] `F-scheduled-tasks`
 - [ ] `F-mcp-ide-bridge` — live MCP/IDE bridge to Claude (moved from Unsure,
   PRD rev. 6); decoupled from the still-Unsure diff panel
+- [ ] `F-mcp-control-surface` — termherd *exposes* an MCP server over its own
+  control/config surface (`list_options`/`set_option` + schema resource, plus
+  orchestration tools: open session, split pane, focus, rename tab, run in
+  another session), driven by the in-app Claude sessions. Inverse of
+  `F-mcp-ide-bridge` (termherd is the server, the session is the client).
+  Filed as #90; still design-first — needs a `/feature-torture` pass to settle
+  scope before slices become standalone issues
 
 ### Backlog — needs definition (from feedback gist, 2026-06-17)
 
