@@ -19,7 +19,7 @@ use termherd_core::browser::relative_age;
 
 use super::ime::ime_area;
 use super::terminal::{CELL_H, CELL_W, TerminalView};
-use super::{DocFeedback, Focus, HANDLE_W, Message, OpenDoc, Shell, rename_id, search_id};
+use super::{DocFeedback, HANDLE_W, Message, OpenDoc, Shell, rename_id, search_id};
 use crate::strings;
 
 impl Shell {
@@ -68,13 +68,16 @@ impl Shell {
     /// The session browser (FR1 + FR3): search box, then projects by recency.
     /// Clicking a project opens a fresh shell; clicking a session resumes it.
     fn sidebar(&self) -> Element<'_, Message> {
-        let mut search = text_input(strings::SEARCH_PLACEHOLDER, &self.core.search)
+        // Always wire `on_input`: a `text_input` with no handler is *disabled*
+        // in iced, so it refuses the click that would focus it and the box can
+        // never be typed into while a terminal holds focus. Terminal-vs-search
+        // key routing is governed by `self.focus` in `on_key`, not by enabling
+        // the widget, so leaving it live here is safe.
+        let search = text_input(strings::SEARCH_PLACEHOLDER, &self.core.search)
             .id(search_id())
+            .on_input(Message::SearchChanged)
             .size(12)
             .padding(6);
-        if self.focus == Focus::Search {
-            search = search.on_input(Message::SearchChanged);
-        }
         // Clicking the box hands keyboard focus to it (disabling terminal keys).
         let search = mouse_area(search).on_press(Message::FocusSearch);
         let titles_only = checkbox(self.core.search_titles_only)
