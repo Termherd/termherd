@@ -4,6 +4,7 @@
 //! protocol and the grid model live in `termherd_pty`; this is pure rendering
 //! and pointer logic.
 
+use iced::advanced::mouse::{Click, click};
 use iced::advanced::text::Shaping;
 use iced::widget::canvas::{self, Frame, Geometry, Text};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme, mouse};
@@ -50,6 +51,9 @@ pub(super) struct TermState {
     /// The link currently under the pointer while the modifier is held (#28):
     /// its row, column span `[start, end)`, and the URL to open on click.
     hover: Option<HoverLink>,
+    /// The last left-button press, kept so iced's click tracker can tell a
+    /// double-click (select the word/filename under it) from a single one (#27).
+    last_click: Option<Click>,
 }
 
 /// A link the pointer is hovering with Ctrl/Cmd held — what to highlight and,
@@ -120,12 +124,29 @@ impl canvas::Program<Message> for TerminalView<'_> {
             // Drag to select; the press is not captured so the wrapping
             // `mouse_area` still hands keyboard focus to the terminal.
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
+                let position = cursor.position_in(bounds)?;
                 let (col, row) = cell_at(cursor, bounds, self.screen)?;
                 // Ctrl/Cmd+click on a link opens it rather than selecting (#28).
                 if self.link_modifier
                     && let Some(link) = link_at(self.screen, col, row)
                 {
                     return Some(canvas::Action::publish(Message::OpenUrl(link.url)));
+                }
+                // A double-click selects the whole word / filename under the
+                // pointer and copies it, like a terminal (#27). iced's click
+                // tracker classifies the press from the previous one's time and
+                // distance.
+                let clicked = Click::new(position, mouse::Button::Left, state.last_click);
+                state.last_click = Some(clicked);
+                if clicked.kind() == click::Kind::Double
+                    && let Some((anchor, head)) = word_at(self.screen, col, row)
+                {
+                    state.selecting = false;
+                    state.anchor = Some(anchor);
+                    state.head = Some(head);
+                    return Some(canvas::Action::publish(Message::CopySelection(
+                        selection_text(self.screen, anchor, head),
+                    )));
                 }
                 state.selecting = true;
                 state.anchor = Some((col, row));
@@ -256,15 +277,19 @@ impl canvas::Program<Message> for TerminalView<'_> {
     }
 
     /// A hand pointer over a hovered link with the modifier held (#28), so the
-    /// link is visibly clickable; the normal pointer otherwise.
+    /// link is visibly clickable; otherwise the text/I-beam cursor while over
+    /// the grid, signalling that the text is selectable (#27); the default
+    /// pointer when off the terminal entirely.
     fn mouse_interaction(
         &self,
         state: &TermState,
-        _bounds: Rectangle,
-        _cursor: mouse::Cursor,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         if self.link_modifier && state.owner == Some(self.session) && state.hover.is_some() {
             mouse::Interaction::Pointer
+        } else if cursor.position_in(bounds).is_some() {
+            mouse::Interaction::Text
         } else {
             mouse::Interaction::default()
         }
@@ -306,6 +331,35 @@ fn link_at(screen: &Screen, col: u16, row: u16) -> Option<HoverLink> {
         end: span.end as u16,
         url,
     })
+}
+
+/// Whether a character belongs to a double-click "word" (#27). Alphanumerics
+/// plus the punctuation that holds filenames and paths together, so a unit like
+/// `~/src/main.rs:42` selects whole; whitespace and bracketing punctuation
+/// (quotes, parens, commas) are boundaries.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '\\' | '~' | ':' | '@' | '+')
+}
+
+/// The word / filename under grid cell `(col, row)` as an inclusive cell range
+/// `(anchor, head)`, or `None` when the cell is not part of a word (e.g. blank).
+/// A word is the maximal run of [`is_word_char`] cells around `col` — this is
+/// what a double-click selects (#27).
+fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16), (u16, u16))> {
+    let line = screen.lines.get(row as usize)?;
+    let here = col as usize;
+    if !line.get(here).is_some_and(|cell| is_word_char(cell.c)) {
+        return None;
+    }
+    let mut start = here;
+    while start > 0 && is_word_char(line[start - 1].c) {
+        start -= 1;
+    }
+    let mut end = here;
+    while end + 1 < line.len() && is_word_char(line[end + 1].c) {
+        end += 1;
+    }
+    Some(((start as u16, row), (end as u16, row)))
 }
 
 /// Order two cells in reading order (row, then column).
@@ -696,5 +750,86 @@ mod tests {
         let mut state = TermState::default();
         let _ = bare.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
         assert!(state.hover.is_none());
+    }
+
+    #[test]
+    fn word_at_spans_a_filename_run() {
+        // #27: a path/filename is one word — letters, digits and the joining
+        // punctuation (`/ . :`) all count, blanks bound it.
+        let screen = screen_from("see src/main.rs:42 now");
+        // Column 8 ('m') sits inside the `src/main.rs:42` run (cols 4..=17).
+        assert_eq!(word_at(&screen, 8, 0), Some(((4, 0), (17, 0))));
+        // A blank cell is not part of any word.
+        assert_eq!(word_at(&screen, 3, 0), None);
+        // A column past the line has no word.
+        assert_eq!(word_at(&screen, 99, 0), None);
+    }
+
+    #[test]
+    fn double_click_selects_and_copies_the_word_under_the_pointer() {
+        // #27: two consecutive presses on the same cell select the whole
+        // word/filename run and publish a copy — without leaving an active drag.
+        use canvas::Program;
+        let line = "see src/main.rs now";
+        let screen = screen_from(line);
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: false,
+        };
+        let mut state = TermState::default();
+        let cursor = at_col(line.len(), 8); // inside `src/main.rs` (cols 4..=14)
+        let _ = view.update(&mut state, &press(), test_bounds(), cursor);
+        let action = view.update(&mut state, &press(), test_bounds(), cursor);
+        assert_eq!(state.anchor, Some((4, 0)));
+        assert_eq!(state.head, Some((14, 0)));
+        assert!(
+            !state.selecting,
+            "a word selection is settled, not a live drag"
+        );
+        assert!(action.is_some(), "double-click publishes a copy");
+    }
+
+    #[test]
+    fn double_click_on_a_blank_starts_a_plain_selection() {
+        // #27: with no word under the pointer the double-click falls back to the
+        // ordinary press behaviour rather than selecting nothing oddly.
+        use canvas::Program;
+        let line = "ab   cd"; // cols 2,3,4 are blanks
+        let screen = screen_from(line);
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: false,
+        };
+        let mut state = TermState::default();
+        let cursor = at_col(line.len(), 3);
+        let _ = view.update(&mut state, &press(), test_bounds(), cursor);
+        let _ = view.update(&mut state, &press(), test_bounds(), cursor);
+        assert!(state.selecting, "a blank double-click is a normal press");
+        assert_eq!(state.anchor, Some((3, 0)));
+        assert_eq!(state.head, Some((3, 0)));
+    }
+
+    #[test]
+    fn pointer_is_a_text_beam_over_the_grid_only() {
+        // #27: the I-beam signals selectable text while over the terminal; off
+        // it (e.g. the cursor sits over the sidebar) the default pointer returns.
+        use canvas::Program;
+        let screen = test_screen();
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: false,
+        };
+        let state = TermState::default();
+        assert_eq!(
+            view.mouse_interaction(&state, test_bounds(), at(50.0, 50.0)),
+            mouse::Interaction::Text
+        );
+        assert_eq!(
+            view.mouse_interaction(&state, test_bounds(), at(250.0, 50.0)),
+            mouse::Interaction::default()
+        );
     }
 }
