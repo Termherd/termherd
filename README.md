@@ -122,7 +122,8 @@ where those keys produce `&`, `é`, … without Shift.
 
 Dragging a selection with the mouse also copies it on release, and the wheel
 scrolls back through history. In the sidebar, click a project or session to
-open it; a tab's `×` also closes it.
+open it; a tab's `×` also closes it. Hovering a tab shows the session's fuller
+description (the same card the sidebar shows).
 
 ## Test
 
