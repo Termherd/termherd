@@ -4,7 +4,6 @@
 
 use std::path::PathBuf;
 
-use display_info::DisplayInfo;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -58,9 +57,10 @@ pub struct ScreenRect {
 /// failure — the caller treats "no monitors known" as "cannot validate" and
 /// keeps the saved position untouched, never hiding a window because the query
 /// failed.
+#[cfg(not(target_os = "linux"))]
 #[must_use]
 pub fn current_screens() -> Vec<ScreenRect> {
-    match DisplayInfo::all() {
+    match display_info::DisplayInfo::all() {
         Ok(displays) => displays
             .iter()
             .map(|d| {
@@ -82,6 +82,17 @@ pub fn current_screens() -> Vec<ScreenRect> {
             Vec::new()
         }
     }
+}
+
+/// Linux has no monitor enumeration here: `display-info`'s X11 backend
+/// hard-links libxcb, which the project avoids (dlopen-only X11/Wayland, lighter
+/// build/.deb). Returning empty makes the caller trust the saved position — the
+/// pre-existing behaviour — so the off-screen guard is a Windows/macOS feature
+/// for now, where the reported bug occurs.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn current_screens() -> Vec<ScreenRect> {
+    Vec::new()
 }
 
 impl WindowConfig {

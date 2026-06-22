@@ -71,11 +71,18 @@ png = "0.17"
 notify-rust = "4"
 # Typed save errors for the plans/memory write slice.
 thiserror = "2"
-display-info = "0.5.9"
 
 [dev-dependencies]
 # Temp dirs for the atomic-write round-trip tests.
 tempfile = "3"
+
+# Monitor geometry for the off-screen window guard. Limited to non-Linux: the
+# Linux backend hard-links libxcb, which cuts against the project's
+# dlopen-only X11/Wayland policy (and would add a build/.deb dependency). On
+# Linux the guard falls back to trusting the saved position (see
+# `window_config::current_screens`).
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+display-info = "0.5.9"
 
 # Embed `icons/icon.ico` into termherd.exe so the executable and its shortcuts
 # carry the app icon on Windows. Host-gated: only pulled in (and only run) when
