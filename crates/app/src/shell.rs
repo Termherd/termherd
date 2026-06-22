@@ -65,6 +65,17 @@ fn rename_id() -> widget::Id {
     widget::Id::new("termherd-rename")
 }
 
+/// The user's home directory, the fallback cwd for "new shell here" when no
+/// session is open to inherit one from (#77). Falls back to "." if neither
+/// `USERPROFILE` (Windows) nor `HOME` (Unix) is set, so a launch always has a
+/// directory to start in.
+fn home_dir() -> String {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(|h| h.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".to_string())
+}
+
 /// Resolved user configuration handed to the shell at startup: the theme,
 /// keymap and metadata overlay built from `settings.json` / `metadata.json`.
 /// Bundled so the composition root passes one value, not a long argument list.
@@ -83,7 +94,11 @@ pub fn run(
     pty_rx: UnboundedReceiver<PtyEvent>,
     startup: Startup,
 ) -> iced::Result {
-    let config = WindowConfig::load();
+    // Restore the saved bounds, but discard a position that now lands off every
+    // connected monitor (e.g. a second screen that has since been unplugged), so
+    // the window can't open out of reach.
+    let config =
+        WindowConfig::load().with_onscreen_position(&crate::window_config::current_screens());
     let position = match (config.x, config.y) {
         (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
         _ => window::Position::Centered,
@@ -484,6 +499,51 @@ impl Shell {
         // Opening another session drops any pending confirmation (#9, #20): a
         // stray Enter in the terminal must not confirm a sidebar prompt that's
         // no longer in view.
+        self.closing = None;
+        self.archiving = None;
+        Task::batch([spawn, self.resize_focused()])
+    }
+
+    /// The working directory of the focused session, if one is open and its cwd
+    /// is known. The anchor for the "new in context" shortcuts (#77).
+    fn focused_cwd(&self) -> Option<String> {
+        let id = self.core.workspace.focused_session()?;
+        self.core.sessions.get(&id)?.cwd.clone()
+    }
+
+    /// Open a fresh shell in the focused session's directory (#77), or in the
+    /// home directory when nothing is open — so the shortcut still works from an
+    /// empty workspace.
+    fn new_shell_here(&mut self) -> Task<Message> {
+        let cwd = self.focused_cwd().unwrap_or_else(home_dir);
+        self.launch(cwd, Launch::Shell)
+    }
+
+    /// Open a fresh Claude session in the repo containing the focused session
+    /// (#77). Walks up to the repo root so a session running in a subdirectory
+    /// still lands at the repo. Inert when nothing is open — there is no context
+    /// to derive a repo from.
+    fn new_claude_here(&mut self) -> Task<Message> {
+        let Some(cwd) = self.focused_cwd() else {
+            return Task::none();
+        };
+        let root = termherd_scan::repo_root(std::path::Path::new(&cwd))
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or(cwd);
+        self.launch(root, Launch::Claude { resume: None })
+    }
+
+    /// Reopen the most recently closed tab (#78), restoring its mode and
+    /// directory. The reopen lives in `core`; here we just perform the spawn and
+    /// focus the restored terminal, mirroring [`Self::launch`]. A no-op when the
+    /// close stack is empty (`core` yields no effects).
+    fn reopen_closed_tab(&mut self) -> Task<Message> {
+        let effects = self.core.apply(termherd_core::Event::ReopenClosedTab);
+        if effects.is_empty() {
+            return Task::none();
+        }
+        let spawn = self.perform(effects);
+        self.focus = Focus::Terminal;
         self.closing = None;
         self.archiving = None;
         Task::batch([spawn, self.resize_focused()])
@@ -930,6 +990,11 @@ impl Shell {
             Action::ToggleSidebar => self.toggle_sidebar(),
             Action::ScrollTop => self.scroll_focused(ScrollTarget::Top),
             Action::ScrollBottom => self.scroll_focused(ScrollTarget::Bottom),
+            // New shell / Claude session in the focused context (#77), and
+            // reopen the last closed tab (#78).
+            Action::NewShellHere => self.new_shell_here(),
+            Action::NewClaudeSessionHere => self.new_claude_here(),
+            Action::ReopenClosedTab => self.reopen_closed_tab(),
             // Number-row jump straight to a tab (issue #26). An index past the
             // open tabs is absorbed by `core` as a no-op.
             Action::ActivateTab(index) => self.activate_tab(index),
@@ -1010,9 +1075,6 @@ impl Shell {
             }
             return Task::none();
         }
-        if self.focus != Focus::Terminal {
-            return Task::none();
-        }
         let keyboard::Event::KeyPressed {
             key,
             physical_key,
@@ -1024,17 +1086,24 @@ impl Shell {
         else {
             return Task::none();
         };
-        let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
-        };
         // A configured shortcut wins over raw terminal input: build the chord
-        // and run its action if the keymap binds one (FR9). Unbound keys fall
-        // through to the terminal, so plain Ctrl+C stays the interrupt signal.
+        // and run its action if the keymap binds one (FR9). Resolved before the
+        // terminal-focus guard so command chords are global — `mod+T` opens the
+        // first shell even from an empty workspace with the search box focused
+        // (#77). Run-action handlers that need a session guard for one
+        // themselves. Unbound keys fall through to the terminal, so plain Ctrl+C
+        // stays the interrupt signal.
         if let Some(chord) = chord_of(&key, &physical_key, modifiers)
             && let Some(action) = self.keymap.lookup(&chord)
         {
             return self.run_action(action);
         }
+        if self.focus != Focus::Terminal {
+            return Task::none();
+        }
+        let Some(session) = self.core.workspace.focused_session() else {
+            return Task::none();
+        };
         // A numpad key with NumLock on reports its un-locked name (`End`, arrows,
         // …) but carries the digit/operator in `text`; type that instead of the
         // navigation sequence its name would otherwise produce. Other keys map
@@ -1534,6 +1603,132 @@ mod key_routing {
                 ScrollTarget::Delta(3)
             ]
         );
+    }
+
+    /// A `Shell` with no terminal open (empty workspace), plus its recording
+    /// PTY — for the "new shell here" empty-workspace path (#77).
+    fn empty_shell() -> (Shell, Arc<RecordingPty>) {
+        let pty = Arc::new(RecordingPty::default());
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let shell = Shell::new(
+            WindowConfig::default(),
+            Arc::new(EmptyScanner),
+            None,
+            pty.clone(),
+            PtyOutput::new(rx),
+            Startup {
+                theme: ThemeChoice::default(),
+                keymap: Keymap::defaults(),
+                metadata: HashMap::new(),
+                collapsed: HashSet::new(),
+            },
+        );
+        assert!(shell.core.workspace.focused_session().is_none());
+        (shell, pty)
+    }
+
+    /// The cwd registered for the currently focused session, for asserting which
+    /// directory a context launch (#77) landed in.
+    fn focused_cwd(shell: &Shell) -> Option<String> {
+        let id = shell.core.workspace.focused_session()?;
+        shell.core.sessions.get(&id)?.cwd.clone()
+    }
+
+    #[test]
+    fn new_shell_here_inherits_the_focused_directory() {
+        // #77: mod+T opens a shell in the focused session's cwd.
+        let (mut shell, pty) = shell_with_terminal();
+        let before = pty.spawn_count();
+        let _ = shell.run_action(Action::NewShellHere);
+        assert_eq!(pty.spawn_count(), before + 1, "one new shell spawned");
+        assert_eq!(pty.launches().last(), Some(&Launch::Shell));
+        assert_eq!(focused_cwd(&shell).as_deref(), Some("/tmp/project"));
+    }
+
+    #[test]
+    fn new_shell_here_falls_back_to_home_on_an_empty_workspace() {
+        // #77: with nothing open, mod+T still opens a shell — in the home dir.
+        let (mut shell, pty) = empty_shell();
+        let _ = shell.run_action(Action::NewShellHere);
+        assert_eq!(pty.spawn_count(), 1, "a shell opens even with no context");
+        assert_eq!(pty.launches().last(), Some(&Launch::Shell));
+        assert_eq!(
+            focused_cwd(&shell).as_deref(),
+            Some(home_dir().as_str()),
+            "the empty-workspace shell lands in the home directory"
+        );
+    }
+
+    #[test]
+    fn new_claude_here_launches_claude_in_the_focused_context() {
+        // #77: mod+Alt+T starts a fresh Claude session anchored on the focused
+        // context. With no `.git` above the cwd, repo_root falls back to it.
+        let (mut shell, pty) = shell_with_terminal();
+        let before = pty.spawn_count();
+        let _ = shell.run_action(Action::NewClaudeSessionHere);
+        assert_eq!(pty.spawn_count(), before + 1);
+        assert_eq!(
+            pty.launches().last(),
+            Some(&Launch::Claude { resume: None })
+        );
+        assert_eq!(focused_cwd(&shell).as_deref(), Some("/tmp/project"));
+    }
+
+    #[test]
+    fn new_claude_here_is_inert_without_a_context() {
+        // #77: the Claude variant has nothing to anchor on in an empty
+        // workspace, so it does nothing (unlike the shell variant).
+        let (mut shell, pty) = empty_shell();
+        let _ = shell.run_action(Action::NewClaudeSessionHere);
+        assert_eq!(pty.spawn_count(), 0, "no repo to derive — no launch");
+    }
+
+    #[test]
+    fn reopen_closed_tab_restores_the_last_close_and_then_drains() {
+        // #78: close a tab, mod+Shift+T brings it back; a second reopen with an
+        // empty stack does nothing.
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::CloseTab(0));
+        assert!(shell.core.workspace.tabs.is_empty());
+        let spawns_before = pty.spawn_count();
+
+        let _ = shell.run_action(Action::ReopenClosedTab);
+        assert_eq!(pty.spawn_count(), spawns_before + 1, "the tab comes back");
+        assert_eq!(shell.core.workspace.tabs.len(), 1);
+        assert_eq!(focused_cwd(&shell).as_deref(), Some("/tmp/project"));
+
+        let spawns_after_reopen = pty.spawn_count();
+        let _ = shell.run_action(Action::ReopenClosedTab);
+        assert_eq!(
+            pty.spawn_count(),
+            spawns_after_reopen,
+            "a second reopen with an empty stack is a no-op"
+        );
+    }
+
+    #[test]
+    fn command_chords_fire_without_terminal_focus() {
+        // #77: the chord dispatch runs before the terminal-focus guard, so the
+        // very first shell can be opened by keyboard from the empty, search-
+        // focused workspace. mod+T = Cmd+T on macOS, Ctrl+T elsewhere.
+        let primary = if cfg!(target_os = "macos") {
+            Modifiers::LOGO
+        } else {
+            Modifiers::CTRL
+        };
+        let (mut shell, pty) = empty_shell();
+        assert_eq!(
+            shell.focus,
+            Focus::Search,
+            "an empty workspace starts on search"
+        );
+        let _ = shell.on_key(press(Key::Character("t".into()), primary, Some("t")));
+        assert_eq!(
+            pty.spawn_count(),
+            1,
+            "mod+T opened a shell despite no terminal focus"
+        );
+        assert_eq!(pty.launches().last(), Some(&Launch::Shell));
     }
 
     #[test]

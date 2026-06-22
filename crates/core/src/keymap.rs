@@ -113,6 +113,15 @@ pub enum Action {
     ScrollTop,
     /// Jump the focused terminal's viewport back to the live bottom (#44).
     ScrollBottom,
+    /// Open a fresh shell in the focused session's working directory, or the
+    /// home directory when nothing is open (#77).
+    NewShellHere,
+    /// Open a fresh Claude session in the repo containing the focused session
+    /// (#77). Inert when there is no focused session to derive a repo from.
+    NewClaudeSessionHere,
+    /// Reopen the most recently closed tab, restoring its mode and directory
+    /// (#78). A no-op when no tab has been closed yet.
+    ReopenClosedTab,
     /// Jump straight to the tab at this zero-based index (issue #26). Bound to
     /// the platform's primary modifier and the number row — ⌘1…⌘9 on macOS,
     /// Ctrl+1…Ctrl+9 elsewhere — where the user-facing digit is 1-based.
@@ -208,6 +217,21 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::ScrollBottom,
         name: "scroll-bottom",
         default_chords: &["mod+down"],
+    },
+    ActionDef {
+        action: Action::NewShellHere,
+        name: "new-shell-here",
+        default_chords: &["mod+t"],
+    },
+    ActionDef {
+        action: Action::NewClaudeSessionHere,
+        name: "new-claude-session-here",
+        default_chords: &["mod+alt+t"],
+    },
+    ActionDef {
+        action: Action::ReopenClosedTab,
+        name: "reopen-closed-tab",
+        default_chords: &["mod+shift+t"],
     },
 ];
 
@@ -498,6 +522,38 @@ mod tests {
         assert_eq!(
             Action::from_config_name("scroll-bottom"),
             Some(Action::ScrollBottom)
+        );
+    }
+
+    #[test]
+    fn defaults_bind_the_context_tab_chords_to_the_primary_modifier_t() {
+        // #77/#78: new shell (mod+T), new Claude session (mod+Alt+T) and reopen
+        // closed tab (mod+Shift+T) all hang off T with the platform primary mod.
+        let map = Keymap::defaults();
+        assert_eq!(
+            map.lookup(&KeyChord::new("t", primary_mod())),
+            Some(Action::NewShellHere)
+        );
+        assert_eq!(
+            map.lookup(&KeyChord::new("t", primary_mod() | MOD_ALT)),
+            Some(Action::NewClaudeSessionHere)
+        );
+        assert_eq!(
+            map.lookup(&KeyChord::new("t", primary_mod() | MOD_SHIFT)),
+            Some(Action::ReopenClosedTab)
+        );
+        // The three names answer in the config vocabulary too.
+        assert_eq!(
+            Action::from_config_name("new-shell-here"),
+            Some(Action::NewShellHere)
+        );
+        assert_eq!(
+            Action::from_config_name("new-claude-session-here"),
+            Some(Action::NewClaudeSessionHere)
+        );
+        assert_eq!(
+            Action::from_config_name("reopen-closed-tab"),
+            Some(Action::ReopenClosedTab)
         );
     }
 
