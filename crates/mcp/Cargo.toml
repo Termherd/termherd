@@ -1,0 +1,25 @@
+[package]
+name = "termherd-mcp"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+# The MCP control-surface server (F-mcp-control-surface, #90). A standalone
+# stdio binary an in-app Claude session launches via its `mcpServers` config;
+# the library half holds the pure, testable protocol + option logic.
+[[bin]]
+name = "termherd-mcp"
+path = "src/main.rs"
+
+[lib]
+name = "termherd_mcp"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true
