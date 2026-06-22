@@ -16,6 +16,7 @@ use iced::{Color, Element, Fill, Font, Size};
 use termherd_core::SessionRecord;
 use termherd_core::SessionStatus;
 use termherd_core::browser::{project_label, relative_age};
+use termherd_core::workspace::Tab;
 
 use super::ime::ime_area;
 use super::terminal::{CELL_H, CELL_W, TerminalView};
@@ -444,6 +445,9 @@ impl Shell {
         if tabs.is_empty() {
             return None;
         }
+        // One wall-clock read per render feeds every tab's relative "last
+        // activity" age, matching the sidebar; the app layer owns the clock.
+        let now = SystemTime::now();
         let mut bar = row![].spacing(4).align_y(iced::Center);
         for (index, tab) in tabs.iter().enumerate() {
             let active = index == self.core.workspace.active;
@@ -460,6 +464,14 @@ impl Shell {
             } else {
                 title.style(button::text)
             };
+            // The chip clips the title; hovering reveals the fuller description
+            // (#76) — the very session card the sidebar shows when the tab
+            // resumes a browsed session, else a minimal title + cwd card.
+            let title = tooltip(
+                title,
+                self.tab_hover_card(index, tab, now),
+                tooltip::Position::Bottom,
+            );
             let close = button(text("×").size(14))
                 .on_press(Message::RequestCloseTab(index))
                 .style(button::text)
@@ -467,6 +479,31 @@ impl Shell {
             bar = bar.push(row![title, close].align_y(iced::Center));
         }
         Some(bar.into())
+    }
+
+    /// The hover card for a tab (#76). A tab that resumes a browsed session
+    /// shows the *same* [`session_card`] the sidebar does — one derive (the core
+    /// resolves the record via [`termherd_core::App::tab_record`]), no divergent
+    /// formatting. A shell or a fresh, not-yet-scanned session has no record, so
+    /// it falls back to a minimal card with the full title and the working
+    /// directory it runs in.
+    fn tab_hover_card(
+        &self,
+        index: usize,
+        tab: &Tab,
+        now: SystemTime,
+    ) -> Element<'static, Message> {
+        match self.core.tab_record(index) {
+            Some(record) => session_card(self.core.session_title(record), record, now),
+            None => {
+                let cwd = tab
+                    .sessions()
+                    .first()
+                    .and_then(|id| self.core.sessions.get(id))
+                    .and_then(|s| s.cwd.clone());
+                tab_card(tab.title.clone(), cwd)
+            }
+        }
     }
 }
 
@@ -698,6 +735,21 @@ fn session_card(
                 .size(10)
                 .style(card_secondary_text),
         );
+    }
+    container(card)
+        .padding(8)
+        .max_width(360.0)
+        .style(card_style)
+        .into()
+}
+
+/// The minimal hover card for a tab with no browsed record — a shell or a fresh
+/// session (#76): the full, untruncated title and the working directory it runs
+/// in. Styled like [`session_card`] so the two hover surfaces read alike.
+fn tab_card(title: String, cwd: Option<String>) -> Element<'static, Message> {
+    let mut card = column![text(title).size(12)].spacing(4);
+    if let Some(cwd) = cwd {
+        card = card.push(text(cwd).size(10).style(card_secondary_text));
     }
     container(card)
         .padding(8)

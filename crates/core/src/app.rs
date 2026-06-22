@@ -526,6 +526,31 @@ impl App {
             .map(|s| s.id)
     }
 
+    /// The browsed record for the Claude session `claude_id`, if the last scan
+    /// found it. The inverse of [`Self::open_session_for`]: it maps a live tab
+    /// back to the sidebar entry it resumes, so the tab hover can reuse the same
+    /// session card the sidebar shows (#76) instead of a second derive. `None`
+    /// for a shell or a fresh, not-yet-scanned session.
+    #[must_use]
+    pub fn record_for(&self, claude_id: &str) -> Option<&SessionRecord> {
+        self.projects
+            .iter()
+            .flat_map(|group| &group.sessions)
+            .find(|record| record.session_id == claude_id)
+    }
+
+    /// The browsed record for the tab at `index` — the sidebar entry its first
+    /// pane resumes (#76), so a tab hover can show the same session card. `None`
+    /// for an out-of-range index, or a tab whose first pane is a shell or a
+    /// fresh, not-yet-scanned session (no resume id / no record).
+    #[must_use]
+    pub fn tab_record(&self, index: usize) -> Option<&SessionRecord> {
+        let tab = self.workspace.tabs.get(index)?;
+        let first = tab.sessions().first().copied()?;
+        let claude_id = self.sessions.get(&first)?.launch.resume_id()?;
+        self.record_for(claude_id)
+    }
+
     /// Whether a project's session list is folded shut in the sidebar (#22).
     #[must_use]
     pub fn is_collapsed(&self, path: &str) -> bool {
@@ -836,6 +861,59 @@ mod tests {
         let id = app.workspace.focused_session().expect("a focused session");
         assert_eq!(app.open_session_for("abc-123"), Some(id));
         assert_eq!(app.open_session_for("not-open"), None);
+    }
+
+    #[test]
+    fn record_for_maps_a_claude_id_back_to_its_browsed_record() {
+        // #76: a live tab's resume id resolves to the sidebar record, so the
+        // tab hover can reuse the same session card.
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![
+            record("abc-123", "/proj", "fix the login bug"),
+            record("def-456", "/other", "write the docs"),
+        ]));
+        assert_eq!(
+            app.record_for("def-456").map(|r| r.project_path.as_str()),
+            Some("/other")
+        );
+        assert_eq!(
+            app.record_for("abc-123").map(|r| r.digest.summary.as_str()),
+            Some("fix the login bug")
+        );
+        // A shell / fresh session id has no browsed record.
+        assert!(app.record_for("not-scanned").is_none());
+    }
+
+    #[test]
+    fn tab_record_resolves_a_resumed_tab_and_skips_shells_and_unknowns() {
+        // #76: a tab resuming a scanned session maps back to its record; a shell
+        // tab (no resume id) and an out-of-range index map to nothing.
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record(
+            "abc-123",
+            "/proj",
+            "fix the login bug",
+        )]));
+        // Tab 0: a resumed Claude session that the scan knows.
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Claude {
+                resume: Some("abc-123".into()),
+            },
+            title: "proj 🤖".into(),
+        }));
+        // Tab 1: a plain shell — no resume id, so no record.
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Shell,
+            title: "proj $".into(),
+        }));
+        assert_eq!(
+            app.tab_record(0).map(|r| r.session_id.as_str()),
+            Some("abc-123")
+        );
+        assert!(app.tab_record(1).is_none(), "a shell tab has no record");
+        assert!(app.tab_record(9).is_none(), "an out-of-range index is None");
     }
 
     #[test]

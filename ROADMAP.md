@@ -97,7 +97,10 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   most-urgent `tab_status`) are pure in `core`. Tab labels follow the title
   Claude reports over OSC 0 (#24): the `osc` decoder now carries the title
   text, the `pty` reader forwards a change as `PtyEvent::Title`, and
-  `Workspace::set_session_title` relabels the hosting tab. Drag-reorder (FR5) and
+  `Workspace::set_session_title` relabels the hosting tab. Hovering a tab shows
+  the session's fuller description — the same hover card the sidebar uses for a
+  resumed session, a title + cwd card otherwise (#76, `App::tab_record` resolves
+  the record so the two surfaces stay single-sourced). Drag-reorder (FR5) and
   keyboard switching (deferred to `F-keyboard-shortcuts`) still to come
 - [x] `F-keyboard-shortcuts` — configurable keymap → actions (M3): pure
   `KeyChord -> Action` map in `core::keymap` with a chord-string parser and
