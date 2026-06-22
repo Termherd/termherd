@@ -53,6 +53,24 @@ pub struct App {
     /// the structural fix for the `realSessionId` race (Q6) — ids are minted
     /// here, single-threaded, before any PTY exists.
     next_session: u64,
+    /// LIFO stack of recently closed tabs, for reopen (#78). Capped at
+    /// [`MAX_CLOSED_TABS`] so a long session can't grow it without bound;
+    /// closing past the cap drops the oldest entry.
+    closed_tabs: Vec<ClosedTab>,
+}
+
+/// How many closed tabs the reopen stack (#78) remembers. Walking back further
+/// than this is rare enough that the unbounded-growth risk outweighs it.
+const MAX_CLOSED_TABS: usize = 16;
+
+/// Enough of a closed tab to recreate it on reopen (#78): the kind it ran, the
+/// directory it ran in, and the label it carried. A split tab is reduced to its
+/// first pane — reopen restores a single terminal, not the whole pane tree.
+#[derive(Debug, Clone)]
+pub struct ClosedTab {
+    pub title: String,
+    pub cwd: Option<String>,
+    pub launch: Launch,
 }
 
 /// A terminal session the app is hosting. The PTY handle and terminal grid
@@ -209,6 +227,9 @@ pub enum Event {
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.
     CloseTab(usize),
+    /// Reopen the most recently closed tab (#78), restoring its mode and
+    /// directory. A no-op when nothing has been closed.
+    ReopenClosedTab,
     /// Split the focused pane, opening a fresh session beside it (FR6).
     SplitFocused(SplitDir),
     /// Close the focused pane (FR6); its PTY is killed and the split collapses.
@@ -356,6 +377,7 @@ impl App {
                 Vec::new()
             }
             Event::CloseTab(index) => self.close_tab(index),
+            Event::ReopenClosedTab => self.reopen_closed_tab(),
             Event::SplitFocused(dir) => self.split_focused(dir),
             Event::CloseFocusedPane => match self.workspace.close_focused() {
                 Some(id) => {
@@ -593,12 +615,55 @@ impl App {
 
     /// Close a tab (FR5): drop its sessions from the live registry and ask the
     /// runtime to kill each PTY. An out-of-range index yields no effects.
+    /// Snapshots the tab onto the reopen stack first (#78), so the close can be
+    /// undone before its sessions are forgotten.
     fn close_tab(&mut self, index: usize) -> Vec<Effect> {
+        self.remember_closed_tab(index);
         let sessions = self.workspace.close_tab(index);
         for id in &sessions {
             self.sessions.remove(id);
         }
         sessions.into_iter().map(Effect::Kill).collect()
+    }
+
+    /// Push the tab at `index` onto the reopen stack (#78), capturing the kind,
+    /// directory and label needed to recreate it. Reduced to the tab's first
+    /// pane — reopen restores one terminal, not a whole split. A no-op for an
+    /// out-of-range index or a tab whose first session is no longer live.
+    fn remember_closed_tab(&mut self, index: usize) {
+        let Some(tab) = self.workspace.tabs.get(index) else {
+            return;
+        };
+        let title = tab.title.clone();
+        let Some(first) = tab.sessions().first().copied() else {
+            return;
+        };
+        let Some(session) = self.sessions.get(&first) else {
+            return;
+        };
+        self.closed_tabs.push(ClosedTab {
+            title,
+            cwd: session.cwd.clone(),
+            launch: session.launch.clone(),
+        });
+        // Keep only the most recent entries; drop the oldest past the cap.
+        if self.closed_tabs.len() > MAX_CLOSED_TABS {
+            self.closed_tabs.remove(0);
+        }
+    }
+
+    /// Reopen the most recently closed tab (#78), relaunching it in the mode and
+    /// directory it was closed in. Re-closing then reopening walks the stack in
+    /// LIFO order. No effects when the stack is empty.
+    fn reopen_closed_tab(&mut self) -> Vec<Effect> {
+        let Some(closed) = self.closed_tabs.pop() else {
+            return Vec::new();
+        };
+        self.launch(LaunchSpec {
+            cwd: closed.cwd,
+            launch: closed.launch,
+            title: closed.title,
+        })
     }
 
     /// The activity status to badge on the tab at `index` (FR8): the most
@@ -888,6 +953,79 @@ mod tests {
         // The surviving session stays live and focused.
         assert_eq!(app.workspace.focused_session(), Some(first));
         assert!(app.sessions.contains_key(&first));
+    }
+
+    #[test]
+    fn reopen_restores_a_closed_tab_in_its_mode_and_directory() {
+        // #78: closing a Claude tab then reopening relaunches the same kind in
+        // the same directory, with its label.
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/repo".into()),
+            launch: Launch::Claude {
+                resume: Some("abc".into()),
+            },
+            title: "repo 🤖".into(),
+        }));
+        let original = app.workspace.focused_session().expect("focused");
+        app.apply(Event::CloseTab(0));
+        assert!(app.workspace.tabs.is_empty());
+
+        let effects = app.apply(Event::ReopenClosedTab);
+        let spec = match effects.as_slice() {
+            [Effect::Spawn(spec)] => spec,
+            other => panic!("expected one Spawn, got {other:?}"),
+        };
+        assert_ne!(spec.session, original, "reopen mints a fresh session id");
+        assert_eq!(spec.cwd.as_deref(), Some("/repo"));
+        assert_eq!(
+            spec.launch,
+            Launch::Claude {
+                resume: Some("abc".into())
+            }
+        );
+        assert_eq!(app.workspace.tabs.len(), 1);
+        assert_eq!(app.workspace.tabs[0].title, "repo 🤖");
+    }
+
+    #[test]
+    fn reopen_with_nothing_closed_is_a_noop() {
+        let mut app = App::new();
+        assert!(app.apply(Event::ReopenClosedTab).is_empty());
+        // Even after a launch with no close, there is nothing on the stack.
+        launch(&mut app, "a");
+        assert!(app.apply(Event::ReopenClosedTab).is_empty());
+    }
+
+    #[test]
+    fn reopen_walks_the_close_stack_in_lifo_order() {
+        // #78: closing A then B and reopening twice restores B first, then A.
+        let mut app = App::new();
+        let open = |app: &mut App, dir: &str| {
+            app.apply(Event::LaunchSession(LaunchSpec {
+                cwd: Some(dir.into()),
+                launch: Launch::Shell,
+                title: dir.into(),
+            }));
+        };
+        open(&mut app, "/a");
+        open(&mut app, "/b");
+        // Close the later tab (index 1 = /b) then the remaining one (/a).
+        app.apply(Event::CloseTab(1));
+        app.apply(Event::CloseTab(0));
+        assert!(app.workspace.tabs.is_empty());
+
+        let first = app.apply(Event::ReopenClosedTab);
+        let second = app.apply(Event::ReopenClosedTab);
+        let cwd_of = |effects: &[Effect]| match effects {
+            [Effect::Spawn(spec)] => spec.cwd.clone(),
+            other => panic!("expected one Spawn, got {other:?}"),
+        };
+        // LIFO: the last close (/a) comes back first, then /b.
+        assert_eq!(cwd_of(&first).as_deref(), Some("/a"));
+        assert_eq!(cwd_of(&second).as_deref(), Some("/b"));
+        // Stack drained.
+        assert!(app.apply(Event::ReopenClosedTab).is_empty());
     }
 
     #[test]

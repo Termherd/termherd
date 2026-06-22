@@ -83,8 +83,12 @@ start. There is no in-app settings panel yet — edit the file and restart.
   ignored. Actions: `copy`, `paste`, `next-tab`, `prev-tab`, `close-focused`,
   `focus-search`, `toggle-sidebar` (hide / restore the session browser,
   Ctrl/Cmd+B), `scroll-top` / `scroll-bottom` (top / bottom of the scrollback,
-  Ctrl/Cmd+Up / Ctrl/Cmd+Down), and `activate-tab-1` … `activate-tab-9` (jump
-  straight to the Nth open tab).
+  Ctrl/Cmd+Up / Ctrl/Cmd+Down), `new-shell-here` (a shell in the focused
+  session's directory, or home when nothing is open, Ctrl/Cmd+T),
+  `new-claude-session-here` (a fresh Claude session in the focused session's
+  repo, Ctrl/Cmd+Alt+T), `reopen-closed-tab` (restore the last closed tab,
+  Ctrl/Cmd+Shift+T), and `activate-tab-1` … `activate-tab-9` (jump straight to
+  the Nth open tab).
 
 Window size and position persist separately to `~/.termherd/window.json`, and
 session stars / archives / custom titles to `~/.termherd/metadata.json` (an
@@ -103,6 +107,9 @@ All shortcuts are configurable via the `keys` section of the config file
 | Next / prev tab    | `Ctrl+Tab` / `Ctrl+Shift+Tab` | (same)     |
 | Jump to tab 1–9    | `Ctrl+1` … `Ctrl+9`        | `Cmd+1` … `Cmd+9` |
 | Scroll top/bottom  | `Ctrl+Up` / `Ctrl+Down`    | `Cmd+Up` / `Cmd+Down` |
+| New shell here     | `Ctrl+T`                   | `Cmd+T`       |
+| New Claude here    | `Ctrl+Alt+T`               | `Cmd+Alt+T`   |
+| Reopen closed tab  | `Ctrl+Shift+T`             | `Cmd+Shift+T` |
 | Close tab          | `Ctrl+W`                   | `Cmd+W`       |
 | Focus search       | `Ctrl+F`                   | `Cmd+F`       |
 | Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C`      |
