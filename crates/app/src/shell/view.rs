@@ -214,14 +214,22 @@ impl Shell {
                         .width(Fill)
                         .into()
                 } else {
-                    // Colliding rows carry a relative last-activity age so the
-                    // duplicate titles stay distinguishable (#42).
+                    // Colliding rows carry a disambiguator so duplicate titles
+                    // stay distinguishable (#42). When a custom/AI title masks a
+                    // different real conversation (the /clear title-carryover,
+                    // #93) the divergent summary tells them apart by content;
+                    // otherwise we fall back to the last-activity age.
                     let mut label = format!("{}  ·  {}", clip(&title, 26), s.digest.message_count);
-                    if collisions.contains(id)
-                        && let Some(age) = s.modified.and_then(|m| now.duration_since(m).ok())
-                    {
-                        label.push_str("  ·  ");
-                        label.push_str(&relative_age(age));
+                    if collisions.contains(id) {
+                        if let Some(summary) = self.core.collision_subtitle(s) {
+                            label.push_str("  ·  ");
+                            label.push_str(&clip(&summary, 28));
+                        } else if let Some(age) =
+                            s.modified.and_then(|m| now.duration_since(m).ok())
+                        {
+                            label.push_str("  ·  ");
+                            label.push_str(&relative_age(age));
+                        }
                     }
                     content = content.push(text(label).size(11));
                     let launch = button(content)
