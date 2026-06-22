@@ -90,7 +90,9 @@ start. There is no in-app settings panel yet — edit the file and restart.
   Ctrl/Cmd+Shift+T), and `activate-tab-1` … `activate-tab-9` (jump straight to
   the Nth open tab).
 
-Window size and position persist separately to `~/.termherd/window.json`, and
+Window size and position persist separately to `~/.termherd/window.json` (a
+position left off every connected monitor — e.g. on a screen since unplugged —
+is dropped so the window re-centers instead of opening out of reach), and
 session stars / archives / custom titles to `~/.termherd/metadata.json` (an
 overlay — TermHerd never writes under `~/.claude`). Star (★), archive (⊟) and
 rename (✎) are buttons on each sidebar row.

@@ -24,6 +24,9 @@ ignore = [
     # `paste` is unmaintained (no vulnerability) and a transitive dep of
     # iced; drops out whenever iced's tree moves off it.
     { id = "RUSTSEC-2024-0436", reason = "unmaintained, transitive via iced" },
+    # `fxhash` is unmaintained (no vulnerability), pulled in transitively by
+    # `display-info` (monitor geometry for the off-screen window guard).
+    { id = "RUSTSEC-2025-0057", reason = "unmaintained, transitive via display-info" },
 ]
 
 [bans]

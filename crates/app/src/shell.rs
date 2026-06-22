@@ -94,7 +94,11 @@ pub fn run(
     pty_rx: UnboundedReceiver<PtyEvent>,
     startup: Startup,
 ) -> iced::Result {
-    let config = WindowConfig::load();
+    // Restore the saved bounds, but discard a position that now lands off every
+    // connected monitor (e.g. a second screen that has since been unplugged), so
+    // the window can't open out of reach.
+    let config =
+        WindowConfig::load().with_onscreen_position(&crate::window_config::current_screens());
     let position = match (config.x, config.y) {
         (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
         _ => window::Position::Centered,
