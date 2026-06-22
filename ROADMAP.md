@@ -167,7 +167,12 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   another session), driven by the in-app Claude sessions. Inverse of
   `F-mcp-ide-bridge` (termherd is the server, the session is the client).
   Filed as #90; still design-first — needs a `/feature-torture` pass to settle
-  scope before slices become standalone issues
+  the full scope before the remaining slices become standalone issues. A first,
+  limited slice has landed: `crates/mcp` (`termherd-mcp`), a **read-only** stdio
+  MCP server exposing `list_options` + the option schema resource over the
+  existing `settings.json`, with the protocol/option logic pure and unit-tested.
+  `set_option` (writes), the `keys` surface and the orchestration tools
+  (open session / split / focus / rename / run-in-session) are still to come
 
 ### Backlog — needs definition (from feedback gist, 2026-06-17)
 

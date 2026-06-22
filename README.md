@@ -125,6 +125,31 @@ scrolls back through history. In the sidebar, click a project or session to
 open it; a tab's `×` also closes it. Hovering a tab shows the session's fuller
 description (the same card the sidebar shows).
 
+## MCP control surface (experimental)
+
+`termherd-mcp` is a small [MCP](https://modelcontextprotocol.io) server that
+exposes termherd's own configuration to a Claude session, so you can ask "what
+can I configure here?" from inside the conversation termherd already hosts. This
+first slice is **read-only**: one tool, `list_options`, and the option **schema**
+as a resource, both reflecting `~/.termherd/settings.json`. Writing settings
+(`set_option`) and workspace orchestration (open session, split, focus, …) are
+planned follow-ups (`F-mcp-control-surface`, [#90]).
+
+It speaks JSON-RPC over stdio. Register it with Claude Code by adding it to your
+`mcpServers` config (point `command` at the built binary):
+
+```json
+{
+  "mcpServers": {
+    "termherd": { "command": "/path/to/termherd-mcp" }
+  }
+}
+```
+
+Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
+
+[#90]: https://github.com/Termherd/termherd/issues/90
+
 ## Test
 
 ```bash
