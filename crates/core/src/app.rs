@@ -466,6 +466,22 @@ impl App {
             .collect()
     }
 
+    /// The content disambiguator for a row whose title collides with another
+    /// in its group (#42): the session's real first-prompt `summary` when it
+    /// *diverges* from the shown title. A custom/AI title or rename can mask a
+    /// completely different conversation — Claude Code carries a custom title
+    /// across `/clear` into a fresh, unrelated session (#93), so two rows read
+    /// identically while their summaries differ. Surfacing the summary tells
+    /// them apart by content, where the last-activity age only tells them apart
+    /// by time. `None` when the title *is* the summary (no masking), so the
+    /// caller falls back to the age disambiguator.
+    #[must_use]
+    pub fn collision_subtitle(&self, record: &SessionRecord) -> Option<String> {
+        let title = self.session_title(record);
+        let summary = record.digest.summary.as_str();
+        (!summary.is_empty() && summary != title).then(|| summary.to_owned())
+    }
+
     /// Whether a session (by Claude id) is starred / archived.
     #[must_use]
     pub fn is_starred(&self, session_id: &str) -> bool {
@@ -1007,6 +1023,44 @@ mod tests {
             title: "the original".into(),
         });
         assert!(app.colliding_titles(&group).is_empty());
+    }
+
+    #[test]
+    fn collision_subtitle_surfaces_a_masked_summary_but_not_a_plain_one() {
+        let mut app = App::new();
+        // Two sessions Claude Code gave the same custom title (the /clear
+        // title-carryover, #93), masking two different real first prompts.
+        let mut carried = record("clr", "/p", "regardons les soucis du ROR");
+        carried.digest.custom_title = Some("login/logout petit souci".into());
+        let mut original = record("orig", "/p", "ouvre un worktree auth/login");
+        original.digest.custom_title = Some("login/logout petit souci".into());
+        app.apply(Event::ScanCompleted(vec![
+            carried.clone(),
+            original.clone(),
+        ]));
+
+        // Each colliding row falls back to its real summary, so the two are
+        // distinguishable by content, not just by age.
+        assert_eq!(
+            app.collision_subtitle(&carried).as_deref(),
+            Some("regardons les soucis du ROR")
+        );
+        assert_eq!(
+            app.collision_subtitle(&original).as_deref(),
+            Some("ouvre un worktree auth/login")
+        );
+
+        // A row whose title *is* its summary (no masking) has nothing extra to
+        // show — the caller keeps the age disambiguator.
+        let plain = record("plain", "/p", "vm tombée");
+        assert_eq!(app.collision_subtitle(&plain), None);
+
+        // A user rename that matches the summary is likewise not a divergence.
+        app.apply(Event::RenameSession {
+            session: "clr".into(),
+            title: "regardons les soucis du ROR".into(),
+        });
+        assert_eq!(app.collision_subtitle(&carried), None);
     }
 
     #[test]

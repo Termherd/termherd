@@ -130,7 +130,10 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   no message `uuid` is shared across sessions, and there are no sub-120s
   session transitions. Current Claude Code appends a resume to the same file
   (stable `sessionId`), so separate fork files don't occur. Revisit only if
-  Claude reintroduces forked session files
+  Claude reintroduces forked session files. A neighbouring but distinct case
+  *does* occur: Claude carries a `customTitle` across `/clear` into a fresh,
+  unrelated session, so two real files read alike — handled not by fork
+  detection but by the summary disambiguator (#93), not a fork
 - [ ] `F-terminal-split` — split panes (h/v), focus, resize (moved from Must,
   PRD rev. 5): the pure pane-tree core already landed — `Workspace::split` /
   `close_focused` / `focus_next`/`prev` and the `App` events
