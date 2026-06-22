@@ -11,12 +11,14 @@ The MoSCoW buckets below stay tied to PRD §5; this block is just the order to
 pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 
 1. **Finish the Musts** (`v0.1.0` milestone) — release packaging is now: macOS
-   via **Homebrew** (#61, a cask installs the unsigned bundle without a
-   Gatekeeper block), **Linux** signed checksums (#52), and the
-   `F-plans-memory` editing slice (#53). Deferred to P2, post-release: real
-   macOS Developer ID signing (#51 — no free OSS path, $99/yr) and **Windows**
-   Authenticode via the free **SignPath Foundation** (#62 — viable, not parked;
-   gated only on a policy page + MFA + their approval wait). See feature-torture
+   ships **unsigned** (`.dmg` + manual `xattr`) — the **Homebrew** path (#61)
+   is **parked P2** since Homebrew 5.1 removed `--no-quarantine` (all taps), so
+   an unsigned cask can no longer bypass Gatekeeper; **Linux** signed checksums
+   (#52); and the `F-plans-memory` editing slice (#53). Deferred to P2,
+   post-release: macOS Developer ID notarization (#51 — no free OSS path,
+   $99/yr, now the sole fluent macOS path) and **Windows** Authenticode via the
+   free **SignPath Foundation** (#62 — viable, not parked; gated only on a
+   policy page + MFA + their approval wait). See feature-torture
    `F-packaging-ci.md`.
 2. **P0 — bugs in shipped features:** #19 (Tab key not forwarded — core
    terminal path), #18 (tab status stuck — misleading status badge).
