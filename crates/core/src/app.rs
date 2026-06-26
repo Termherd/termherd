@@ -176,16 +176,14 @@ pub struct SpawnSpec {
 /// effect and `PtyHost::scroll` port all speak it instead of special-casing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScrollTarget {
-    /// Relative line delta; positive scrolls up into history.
-    Delta(i32),
     /// The oldest line in the scrollback.
     Top,
     /// The live bottom of the buffer.
     Bottom,
     /// A mouse-wheel turn over a pointer cell (`col`/`row`, 0-based) of `lines`
-    /// (positive = up). Unlike [`Delta`](Self::Delta) this carries the pointer
-    /// so a full-screen app with mouse reporting can be handed the wheel as
-    /// input; the adapter falls back to scrollback when it isn't (#98).
+    /// (positive = up). Carrying the pointer lets a full-screen app with mouse
+    /// reporting be handed the wheel as input; the adapter falls back to a
+    /// relative scrollback nudge when it isn't one (#98).
     Wheel { col: u16, row: u16, lines: i32 },
 }
 

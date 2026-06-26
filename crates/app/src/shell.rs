@@ -287,10 +287,12 @@ enum Message {
     /// Give keyboard focus to the terminal / the search box.
     FocusTerminal,
     FocusSearch,
-    /// The mouse wheel turned over the terminal: a line delta plus the pointer
-    /// cell, so a mouse-mode app gets the wheel as input and a plain shell gets
+    /// The mouse wheel turned over a terminal: the session under the pointer
+    /// (not necessarily the focused one — splits), the pointer cell, and a line
+    /// delta, so a mouse-mode app gets the wheel as input and a plain shell gets
     /// scrollback (FR4, #98).
     TermScroll {
+        session: SessionId,
         col: u16,
         row: u16,
         lines: i32,
@@ -562,6 +564,12 @@ impl Shell {
         let Some(session) = self.core.workspace.focused_session() else {
             return Task::none();
         };
+        self.scroll_session(session, target)
+    }
+
+    /// Move a specific session's viewport. The wheel targets the pane under the
+    /// pointer, which need not be the focused one in a split layout (#98).
+    fn scroll_session(&mut self, session: SessionId, target: ScrollTarget) -> Task<Message> {
         let effects = self
             .core
             .apply(termherd_core::Event::ScrollViewport { session, target });
@@ -715,9 +723,12 @@ impl Shell {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
             }
-            Message::TermScroll { col, row, lines } => {
-                self.scroll_focused(ScrollTarget::Wheel { col, row, lines })
-            }
+            Message::TermScroll {
+                session,
+                col,
+                row,
+                lines,
+            } => self.scroll_session(session, ScrollTarget::Wheel { col, row, lines }),
             Message::CopySelection(text) => {
                 if text.is_empty() {
                     Task::none()
@@ -1601,8 +1612,15 @@ mod key_routing {
         let (mut shell, pty) = shell_with_terminal();
         let _ = shell.run_action(Action::ScrollTop);
         let _ = shell.run_action(Action::ScrollBottom);
-        // The wheel shares the path and lands a wheel turn at the pointer cell.
+        // The wheel shares the path and lands a wheel turn at the pointer cell,
+        // routed to the session under the pointer (#98).
+        let session = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("a launched terminal is focused");
         let _ = shell.update(Message::TermScroll {
+            session,
             col: 0,
             row: 0,
             lines: 3,

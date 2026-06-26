@@ -662,15 +662,18 @@ fn spawn_term(
                             ScrollTarget::Wheel { col, row, lines } => {
                                 match wheel_bytes(*term.mode(), col, row, lines) {
                                     Some(bytes) => {
-                                        if let Ok(mut w) = input.lock() {
-                                            let _ = w.write_all(&bytes);
+                                        if let Ok(mut w) = input.lock()
+                                            && let Err(error) = w.write_all(&bytes)
+                                        {
+                                            tracing::debug!(
+                                                session = session.0.get(),
+                                                %error,
+                                                "wheel forward to PTY failed"
+                                            );
                                         }
                                     }
                                     None => term.scroll_display(Scroll::Delta(lines)),
                                 }
-                            }
-                            ScrollTarget::Delta(delta) => {
-                                term.scroll_display(Scroll::Delta(delta));
                             }
                             ScrollTarget::Top => term.scroll_display(Scroll::Top),
                             ScrollTarget::Bottom => term.scroll_display(Scroll::Bottom),
@@ -858,14 +861,15 @@ pub fn wheel_bytes(mode: TermMode, col: u16, row: u16, lines: i32) -> Option<Vec
     // per line, in SS3 form when DECCKM (app-cursor) is on, else CSI.
     if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
         let final_byte = if up { b'A' } else { b'B' };
-        let intro = if mode.contains(TermMode::APP_CURSOR) {
-            b'O'
+        // CSI form reuses the cursor-key encoder; DECCKM swaps it for SS3.
+        let seq = if mode.contains(TermMode::APP_CURSOR) {
+            vec![0x1b, b'O', final_byte]
         } else {
-            b'['
+            csi_letter(final_byte, 1)
         };
-        let mut out = Vec::with_capacity(3 * count);
+        let mut out = Vec::with_capacity(seq.len() * count);
         for _ in 0..count {
-            out.extend_from_slice(&[0x1b, intro, final_byte]);
+            out.extend_from_slice(&seq);
         }
         return Some(out);
     }

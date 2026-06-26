@@ -155,10 +155,12 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 let step = state.scroll.step(lines);
                 // The pointer cell rides along so a mouse-mode app (Claude's TUI)
                 // can be handed the wheel as input; the adapter falls back to our
-                // scrollback when it isn't one (#98).
-                let (col, row) = cell_at(cursor, bounds, self.screen).unwrap_or((0, 0));
+                // scrollback when it isn't one (#98). Computed only once a whole
+                // line is banked, so sub-line trackpad ticks stay cheap.
                 (step != 0).then(|| {
+                    let (col, row) = cell_at(cursor, bounds, self.screen).unwrap_or((0, 0));
                     canvas::Action::publish(Message::TermScroll {
+                        session: self.session,
                         col,
                         row,
                         lines: step,
