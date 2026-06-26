@@ -238,6 +238,33 @@ struct Shell {
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
     link_modifier: bool,
+    /// Set once the quit path has asked the iced runtime to terminate (#75).
+    /// The observable proof that quitting reached `iced::exit` — closing the
+    /// only window is *not* enough on macOS (winit cancels the OS terminate and
+    /// `exit_on_close_request(false)` keeps the runtime alive), so the process
+    /// would otherwise survive Cmd+Q and hold the single-instance lock.
+    exiting: bool,
+}
+
+/// What a quit request should do, decided purely from session state so the
+/// branch is unit-testable without an iced runtime — the resulting `Task` is
+/// opaque, but this decision is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QuitIntent {
+    /// No live sessions to hard-kill — terminate the runtime straight away.
+    Exit,
+    /// Live sessions would be hard-killed on quit — confirm before exiting.
+    Confirm,
+}
+
+/// Decide whether a quit can proceed immediately or must be confirmed first,
+/// from the count of sessions whose PTY is still running (#75, #80).
+fn quit_intent(live_sessions: usize) -> QuitIntent {
+    if live_sessions == 0 {
+        QuitIntent::Exit
+    } else {
+        QuitIntent::Confirm
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -430,6 +457,7 @@ impl Shell {
             archiving: None,
             closing_window: None,
             link_modifier: false,
+            exiting: false,
         }
     }
 
@@ -762,7 +790,10 @@ impl Shell {
                 Task::none()
             }
             Message::ConfirmCloseWindow => match self.closing_window.take() {
-                Some(id) => window::close(id),
+                Some(_) => {
+                    self.exiting = true;
+                    iced::exit()
+                }
                 None => Task::none(),
             },
             Message::CancelCloseWindow => {
@@ -1188,15 +1219,24 @@ impl Shell {
             }
             window::Event::CloseRequested => {
                 self.bounds.save();
-                // Closing the window hard-kills every live session's Claude
-                // process. With sessions running, confirm first; otherwise quit
-                // straight away. Bounds are already saved either way.
-                if self.live_session_count() == 0 {
-                    tracing::info!("no live sessions; closing");
-                    window::close(id)
-                } else {
-                    self.closing_window = Some(id);
-                    Task::none()
+                // A quit hard-kills every live session's Claude process, so with
+                // sessions running we confirm first; otherwise terminate the
+                // runtime straight away. `iced::exit` (not `window::close`) is
+                // what actually ends the process: on macOS winit cancels the OS
+                // terminate and `exit_on_close_request(false)` keeps the runtime
+                // alive, so a mere window close would survive (#75). Note: on
+                // macOS this path is the window-close button — Cmd+Q is consumed
+                // by AppKit and never delivered here as `CloseRequested` (#100).
+                match quit_intent(self.live_session_count()) {
+                    QuitIntent::Exit => {
+                        tracing::info!("no live sessions; exiting");
+                        self.exiting = true;
+                        iced::exit()
+                    }
+                    QuitIntent::Confirm => {
+                        self.closing_window = Some(id);
+                        Task::none()
+                    }
                 }
             }
             _ => Task::none(),
@@ -1806,12 +1846,75 @@ mod key_routing {
         assert!(!shell.quit_pending(), "cancel clears the pending quit");
         assert_eq!(pty.kill_count(), 0, "cancelling kills nothing");
 
-        // Confirming consumes the pending id (it drives a window::close task).
+        // Confirming consumes the pending id (it drives an iced::exit task).
         shell.closing_window = Some(window::Id::unique());
         let _ = shell.update(Message::ConfirmCloseWindow);
         assert!(
             shell.closing_window.is_none(),
             "confirming consumes the pending window id"
+        );
+    }
+
+    #[test]
+    fn closing_with_no_live_sessions_terminates_the_runtime() {
+        // #75: with nothing running, Cmd+Q (a CloseRequested on macOS) must
+        // actually terminate the iced runtime — not merely close the window and
+        // leave the process, holding the single-instance lock, behind.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited(session));
+        assert_eq!(shell.live_session_count(), 0, "precondition: nothing live");
+
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::CloseRequested,
+        ));
+        assert!(
+            shell.exiting,
+            "a quit with no live sessions must terminate the runtime, not just the window"
+        );
+        assert!(
+            !shell.quit_pending(),
+            "no confirmation modal when nothing is running"
+        );
+    }
+
+    #[test]
+    fn closing_with_live_sessions_confirms_before_exiting() {
+        // A live session would be hard-killed, so the first CloseRequested arms
+        // the modal instead of exiting — the runtime stays up until confirmed.
+        let (mut shell, _pty) = shell_with_terminal();
+        assert_eq!(
+            shell.live_session_count(),
+            1,
+            "precondition: one live session"
+        );
+
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::CloseRequested,
+        ));
+        assert!(shell.quit_pending(), "a live session arms the quit modal");
+        assert!(
+            !shell.exiting,
+            "the runtime must not terminate before the quit is confirmed"
+        );
+    }
+
+    #[test]
+    fn confirming_the_quit_terminates_the_runtime() {
+        // Accepting the modal must reach `iced::exit`, not just `window::close`
+        // — that distinction is the whole of #75.
+        let (mut shell, _pty) = shell_with_terminal();
+        shell.closing_window = Some(window::Id::unique());
+        let _ = shell.update(Message::ConfirmCloseWindow);
+        assert!(
+            shell.exiting,
+            "confirming the quit must terminate the runtime"
+        );
+        assert!(
+            shell.closing_window.is_none(),
+            "confirming consumes the pending quit"
         );
     }
 
