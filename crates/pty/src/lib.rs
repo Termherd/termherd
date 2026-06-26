@@ -596,6 +596,9 @@ fn spawn_term(
     std::thread::Builder::new()
         .name(format!("pty-tm-{}", session.0.get()))
         .spawn(move || {
+            // The responder writes cursor-report replies; the loop keeps its own
+            // handle to forward wheel input to mouse-mode apps (#98).
+            let input = writer.clone();
             let mut term = Term::new(
                 Config::default(),
                 &TermSize::new(cols as usize, rows as usize),
@@ -652,12 +655,26 @@ fn spawn_term(
                         term.resize(TermSize::new(c as usize, r as usize));
                     }
                     TermCmd::Scroll(target) => {
-                        let scroll = match target {
-                            ScrollTarget::Delta(delta) => Scroll::Delta(delta),
-                            ScrollTarget::Top => Scroll::Top,
-                            ScrollTarget::Bottom => Scroll::Bottom,
-                        };
-                        term.scroll_display(scroll);
+                        // A wheel turn over a mouse-mode / alt-scroll app is
+                        // forwarded as input bytes; otherwise (and for the
+                        // absolute jumps) it moves our own scrollback (#98).
+                        match target {
+                            ScrollTarget::Wheel { col, row, lines } => {
+                                match wheel_bytes(*term.mode(), col, row, lines) {
+                                    Some(bytes) => {
+                                        if let Ok(mut w) = input.lock() {
+                                            let _ = w.write_all(&bytes);
+                                        }
+                                    }
+                                    None => term.scroll_display(Scroll::Delta(lines)),
+                                }
+                            }
+                            ScrollTarget::Delta(delta) => {
+                                term.scroll_display(Scroll::Delta(delta));
+                            }
+                            ScrollTarget::Top => term.scroll_display(Scroll::Top),
+                            ScrollTarget::Bottom => term.scroll_display(Scroll::Bottom),
+                        }
                     }
                     TermCmd::Eof => break,
                 }
@@ -798,6 +815,69 @@ pub fn key_bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<
             .filter(|t| !t.is_empty())
             .map(|t| t.as_bytes().to_vec()),
     }
+}
+
+/// Translate a wheel scroll into the bytes a full-screen application expects,
+/// or `None` when the terminal isn't asking for wheel input — a normal screen
+/// with no mouse mode, where the caller scrolls its own scrollback instead
+/// (#98). This is why scrolling a Claude/vim/less TUI did nothing: those run in
+/// the alternate screen with mouse reporting on, so the wheel must be *forwarded
+/// to the app*, not applied to a (non-existent) scrollback.
+///
+/// `col`/`row` are 0-based pointer cell coordinates; `lines` is the signed wheel
+/// delta (positive = up/back, negative = down/forward), matching the viewport
+/// convention used elsewhere. Pure and GUI-free, next to [`key_bytes`].
+#[must_use]
+pub fn wheel_bytes(mode: TermMode, col: u16, row: u16, lines: i32) -> Option<Vec<u8>> {
+    if lines == 0 {
+        return None;
+    }
+    let count = lines.unsigned_abs() as usize;
+    let up = lines > 0;
+
+    // Mouse reporting: each wheel notch is a button-press event — button 64 up,
+    // 65 down — at the pointer cell. SGR when negotiated (1006), else legacy X10.
+    let mouse = TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_MOTION | TermMode::MOUSE_DRAG;
+    if mode.intersects(mouse) {
+        let button: u8 = if up { 64 } else { 65 };
+        // Mouse coordinates are 1-based.
+        let (c, r) = (col + 1, row + 1);
+        let mut out = Vec::new();
+        for _ in 0..count {
+            if mode.contains(TermMode::SGR_MOUSE) {
+                out.extend_from_slice(format!("\x1b[<{button};{c};{r}M").as_bytes());
+            } else {
+                // ESC[M Cb Cx Cy, every value biased by 32 and capped at a byte.
+                out.extend_from_slice(&[0x1b, b'[', b'M', x10(u16::from(button)), x10(c), x10(r)]);
+            }
+        }
+        return Some(out);
+    }
+
+    // Alternate-scroll (1007) in the alt screen, no mouse mode: one cursor key
+    // per line, in SS3 form when DECCKM (app-cursor) is on, else CSI.
+    if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
+        let final_byte = if up { b'A' } else { b'B' };
+        let intro = if mode.contains(TermMode::APP_CURSOR) {
+            b'O'
+        } else {
+            b'['
+        };
+        let mut out = Vec::with_capacity(3 * count);
+        for _ in 0..count {
+            out.extend_from_slice(&[0x1b, intro, final_byte]);
+        }
+        return Some(out);
+    }
+
+    // Normal screen, no mouse mode: the caller scrolls its own scrollback.
+    None
+}
+
+/// The legacy X10 mouse-coordinate byte: value biased by 32, saturating at the
+/// 255 ceiling beyond which the unextended protocol can't address a cell.
+fn x10(v: u16) -> u8 {
+    v.saturating_add(32).min(255) as u8
 }
 
 /// The xterm modifier parameter (`1` = none): `+Shift`, `+Alt×2`, `+Ctrl×4`,
@@ -1278,6 +1358,83 @@ mod tests {
             [1, 2, 3]
         );
         assert_eq!(resolve(Color::Named(NamedColor::Background)), DEFAULT_BG);
+    }
+
+    // --- #98: wheel forwarding for mouse-mode / alt-screen TUIs --------------
+
+    const MOUSE: TermMode = TermMode::MOUSE_REPORT_CLICK;
+
+    #[test]
+    fn normal_screen_without_mouse_falls_back_to_scrollback() {
+        // No mouse mode, no alt-screen: the caller should scroll its own
+        // scrollback, so the codec declines (the plain-shell case, still works).
+        assert_eq!(wheel_bytes(TermMode::empty(), 3, 4, 1), None);
+    }
+
+    #[test]
+    fn zero_lines_is_a_noop() {
+        assert_eq!(wheel_bytes(MOUSE | TermMode::SGR_MOUSE, 0, 0, 0), None);
+    }
+
+    #[test]
+    fn sgr_mouse_wheel_up_is_button_64_at_the_pointer_cell() {
+        // SGR: ESC[<b;col;row M, 1-based cell, wheel-up = button 64 (#98).
+        let mode = MOUSE | TermMode::SGR_MOUSE;
+        assert_eq!(wheel_bytes(mode, 4, 2, 1), Some(b"\x1b[<64;5;3M".to_vec()));
+    }
+
+    #[test]
+    fn sgr_mouse_wheel_down_is_button_65() {
+        let mode = MOUSE | TermMode::SGR_MOUSE;
+        assert_eq!(wheel_bytes(mode, 4, 2, -1), Some(b"\x1b[<65;5;3M".to_vec()));
+    }
+
+    #[test]
+    fn sgr_mouse_emits_one_event_per_line() {
+        // A 3-line notch is three wheel events, not one (#98).
+        let mode = MOUSE | TermMode::SGR_MOUSE;
+        assert_eq!(
+            wheel_bytes(mode, 0, 0, 3),
+            Some(b"\x1b[<64;1;1M\x1b[<64;1;1M\x1b[<64;1;1M".to_vec())
+        );
+    }
+
+    #[test]
+    fn legacy_mouse_wheel_uses_x10_encoding() {
+        // Without SGR: ESC[M Cb Cx Cy, each value offset by 32. Button 64+32=96,
+        // cell (0,0) → 1-based (1,1) → 33,33.
+        assert_eq!(
+            wheel_bytes(MOUSE, 0, 0, 1),
+            Some(vec![0x1b, b'[', b'M', 96, 33, 33])
+        );
+    }
+
+    #[test]
+    fn alternate_scroll_sends_cursor_arrows_in_the_alt_screen() {
+        // 1007 without mouse reporting: one cursor key per line, up = Up (#98).
+        let mode = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        assert_eq!(wheel_bytes(mode, 9, 9, 2), Some(b"\x1b[A\x1b[A".to_vec()));
+        assert_eq!(wheel_bytes(mode, 9, 9, -1), Some(b"\x1b[B".to_vec()));
+    }
+
+    #[test]
+    fn alternate_scroll_honours_app_cursor_mode() {
+        // DECCKM on → SS3 form (ESC O A) instead of CSI (ESC [ A).
+        let mode = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL | TermMode::APP_CURSOR;
+        assert_eq!(wheel_bytes(mode, 0, 0, 1), Some(b"\x1bOA".to_vec()));
+    }
+
+    #[test]
+    fn alternate_scroll_outside_the_alt_screen_is_scrollback() {
+        // 1007 set but on the normal screen → decline, scroll the scrollback.
+        assert_eq!(wheel_bytes(TermMode::ALTERNATE_SCROLL, 0, 0, 1), None);
+    }
+
+    #[test]
+    fn mouse_reporting_takes_priority_over_alternate_scroll() {
+        // A TUI with both negotiated gets real wheel events, not arrows.
+        let mode = MOUSE | TermMode::SGR_MOUSE | TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        assert_eq!(wheel_bytes(mode, 0, 0, 1), Some(b"\x1b[<64;1;1M".to_vec()));
     }
 
     #[test]

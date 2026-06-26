@@ -287,8 +287,14 @@ enum Message {
     /// Give keyboard focus to the terminal / the search box.
     FocusTerminal,
     FocusSearch,
-    /// The mouse wheel scrolled the terminal by a line delta (FR4 scrollback).
-    TermScroll(i32),
+    /// The mouse wheel turned over the terminal: a line delta plus the pointer
+    /// cell, so a mouse-mode app gets the wheel as input and a plain shell gets
+    /// scrollback (FR4, #98).
+    TermScroll {
+        col: u16,
+        row: u16,
+        lines: i32,
+    },
     /// Copy the given text (a terminal selection) to the clipboard (FR4).
     CopySelection(String),
     /// Clipboard contents read back for a paste into the focused terminal (FR4).
@@ -374,7 +380,7 @@ impl Message {
                 | Self::LaunchSession { .. }
                 | Self::FocusTerminal
                 | Self::FocusSearch
-                | Self::TermScroll(_)
+                | Self::TermScroll { .. }
                 | Self::Paste(_)
                 | Self::ActivateTab(_)
                 | Self::RequestCloseTab(_)
@@ -709,7 +715,9 @@ impl Shell {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
             }
-            Message::TermScroll(delta) => self.scroll_focused(ScrollTarget::Delta(delta)),
+            Message::TermScroll { col, row, lines } => {
+                self.scroll_focused(ScrollTarget::Wheel { col, row, lines })
+            }
             Message::CopySelection(text) => {
                 if text.is_empty() {
                     Task::none()
@@ -1593,14 +1601,22 @@ mod key_routing {
         let (mut shell, pty) = shell_with_terminal();
         let _ = shell.run_action(Action::ScrollTop);
         let _ = shell.run_action(Action::ScrollBottom);
-        // The wheel shares the path and lands a relative delta.
-        let _ = shell.update(Message::TermScroll(3));
+        // The wheel shares the path and lands a wheel turn at the pointer cell.
+        let _ = shell.update(Message::TermScroll {
+            col: 0,
+            row: 0,
+            lines: 3,
+        });
         assert_eq!(
             pty.scrolls(),
             vec![
                 ScrollTarget::Top,
                 ScrollTarget::Bottom,
-                ScrollTarget::Delta(3)
+                ScrollTarget::Wheel {
+                    col: 0,
+                    row: 0,
+                    lines: 3
+                }
             ]
         );
     }

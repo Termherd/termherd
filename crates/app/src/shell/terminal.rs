@@ -54,6 +54,43 @@ pub(super) struct TermState {
     /// The last left-button press, kept so iced's click tracker can tell a
     /// double-click (select the word/filename under it) from a single one (#27).
     last_click: Option<Click>,
+    /// Banks fractional wheel deltas so fine-grained trackpad scrolls add up
+    /// instead of rounding to zero (#98).
+    scroll: ScrollAccumulator,
+}
+
+/// Converts a wheel delta into a number of terminal lines. Mice send discrete
+/// `Lines`; trackpads (notably macOS) send fine-grained `Pixels`, which we map
+/// through the cell height. The result is fractional on purpose — banking the
+/// fraction is the accumulator's job, not this one's (FR4).
+fn delta_to_lines(delta: &mouse::ScrollDelta, cell_h: f32) -> f32 {
+    match delta {
+        mouse::ScrollDelta::Lines { y, .. } => *y,
+        mouse::ScrollDelta::Pixels { y, .. } => y / cell_h,
+    }
+}
+
+/// Banks the fractional part of successive wheel deltas so that fine-grained
+/// trackpad scrolls aren't lost. macOS sends a stream of small pixel deltas
+/// (a few px each); each one alone is a fraction of a cell and would round to
+/// zero, so without banking the carry the terminal never scrolls (#98).
+#[derive(Default)]
+pub(super) struct ScrollAccumulator {
+    residual: f32,
+}
+
+impl ScrollAccumulator {
+    /// Add `lines` to the carry and return the whole lines to scroll now,
+    /// keeping the leftover fraction for next time. Banking the carry is what
+    /// lets a run of sub-line trackpad deltas add up instead of each rounding
+    /// to zero (#98). By construction the residual stays within one line, so
+    /// the emitted total never drifts from the true input.
+    fn step(&mut self, lines: f32) -> i32 {
+        self.residual += lines;
+        let whole = self.residual.trunc();
+        self.residual -= whole;
+        whole as i32
+    }
 }
 
 /// A link the pointer is hovering with Ctrl/Cmd held — what to highlight and,
@@ -114,12 +151,19 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 // The selection is in viewport coordinates, so scrolling would
                 // leave it floating over the wrong text; drop it (#8).
                 state.clear_selection();
-                let lines = match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => *y,
-                    mouse::ScrollDelta::Pixels { y, .. } => y / CELL_H,
-                };
-                let delta = lines.round() as i32;
-                (delta != 0).then(|| canvas::Action::publish(Message::TermScroll(delta)))
+                let lines = delta_to_lines(delta, CELL_H);
+                let step = state.scroll.step(lines);
+                // The pointer cell rides along so a mouse-mode app (Claude's TUI)
+                // can be handed the wheel as input; the adapter falls back to our
+                // scrollback when it isn't one (#98).
+                let (col, row) = cell_at(cursor, bounds, self.screen).unwrap_or((0, 0));
+                (step != 0).then(|| {
+                    canvas::Action::publish(Message::TermScroll {
+                        col,
+                        row,
+                        lines: step,
+                    })
+                })
             }
             // Drag to select; the press is not captured so the wrapping
             // `mouse_area` still hands keyboard focus to the terminal.
@@ -831,5 +875,83 @@ mod tests {
             view.mouse_interaction(&state, test_bounds(), at(250.0, 50.0)),
             mouse::Interaction::default()
         );
+    }
+
+    // --- #98: wheel scroll accumulation (macOS trackpad) ---------------------
+
+    /// A pixel wheel delta of `px`, as macOS trackpads send.
+    fn pixels(px: f32) -> mouse::ScrollDelta {
+        mouse::ScrollDelta::Pixels { x: 0.0, y: px }
+    }
+    /// A discrete line wheel delta, as a mouse notch sends.
+    fn lines(y: f32) -> mouse::ScrollDelta {
+        mouse::ScrollDelta::Lines { x: 0.0, y }
+    }
+
+    #[test]
+    fn whole_line_deltas_scroll_one_for_one() {
+        // Regression guard: a mouse notch must keep scrolling exactly one line.
+        let mut acc = ScrollAccumulator::default();
+        assert_eq!(acc.step(delta_to_lines(&lines(1.0), CELL_H)), 1);
+        assert_eq!(acc.step(delta_to_lines(&lines(3.0), CELL_H)), 3);
+        assert_eq!(acc.step(delta_to_lines(&lines(-1.0), CELL_H)), -1);
+    }
+
+    #[test]
+    fn small_trackpad_deltas_eventually_scroll_instead_of_vanishing() {
+        // Each macOS pixel delta is a fraction of a cell (6/18 ≈ 0.33 line) and
+        // rounds to zero alone; banked, a few of them must move one line (#98).
+        let mut acc = ScrollAccumulator::default();
+        let one = delta_to_lines(&pixels(6.0), CELL_H); // ≈ 0.333 line
+        let total: i32 = (0..4).map(|_| acc.step(one)).sum();
+        assert!(
+            total >= 1,
+            "four 6px trackpad ticks must scroll at least one line, got {total}"
+        );
+    }
+
+    #[test]
+    fn no_scroll_is_lost_across_a_stream() {
+        // A run of sub-line deltas totalling 2.6 lines must emit 2 lines now and
+        // bank the 0.6 leftover — never silently drop the lot.
+        let mut acc = ScrollAccumulator::default();
+        let step = delta_to_lines(&pixels(CELL_H * 0.26), CELL_H); // 0.26 line
+        let total: i32 = (0..10).map(|_| acc.step(step)).sum();
+        assert_eq!(total, 2, "10 × 0.26 line = 2.6 → 2 lines emitted");
+    }
+
+    #[test]
+    fn accumulation_is_direction_symmetric() {
+        // Upward (negative) trackpad scroll banks exactly like downward.
+        let mut acc = ScrollAccumulator::default();
+        let up = delta_to_lines(&pixels(-6.0), CELL_H); // ≈ -0.333 line
+        let total: i32 = (0..4).map(|_| acc.step(up)).sum();
+        assert!(
+            total <= -1,
+            "four upward ticks must scroll at least one line up, got {total}"
+        );
+    }
+
+    proptest::proptest! {
+        /// Conservation: at every prefix of an arbitrary delta stream the lines
+        /// emitted so far stay within one line of the true cumulative input —
+        /// nothing is lost, nothing is invented (#98).
+        #[test]
+        fn emitted_lines_never_drift_more_than_one_line(
+            deltas in proptest::collection::vec(-5.0f32..5.0, 0..200)
+        ) {
+            let mut acc = ScrollAccumulator::default();
+            let mut input = 0.0f32;
+            let mut emitted = 0i64;
+            for d in deltas {
+                input += d;
+                emitted += i64::from(acc.step(d));
+                proptest::prop_assert!(
+                    (input - emitted as f32).abs() < 1.0,
+                    "drift {} exceeds one line (input {input}, emitted {emitted})",
+                    (input - emitted as f32).abs()
+                );
+            }
+        }
     }
 }
