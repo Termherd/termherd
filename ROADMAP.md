@@ -105,10 +105,16 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   a tab; a tab strip switches between them, each chip carrying its activity
   dot (the FR8 tab badge) and a close button that kills the session's PTY —
   the first UI-driven `Effect::Kill`. Tab tree edits (`activate`/`close_tab`,
-  most-urgent `tab_status`) are pure in `core`. Tab labels follow the title
-  Claude reports over OSC 0 (#24): the `osc` decoder now carries the title
-  text, the `pty` reader forwards a change as `PtyEvent::Title`, and
-  `Workspace::set_session_title` relabels the hosting tab. Hovering a tab shows
+  most-urgent `tab_status`) are pure in `core`. Tab labels: a resumed tab takes
+  the session name from the scanned digest (#109/#118) — current Claude (2.1.195)
+  renders status in-band in its TUI and emits no OSC title, so the OSC-0 override
+  (#24) never fires there; a fresh/unscanned session keeps the `<repo>` kind
+  label. The OSC plumbing stays in place and still wins where a Claude does emit
+  a title: the `osc` decoder carries the title text, the `pty` reader forwards a
+  change as `PtyEvent::Title`, and `Workspace::set_session_title` relabels the
+  hosting tab — which also lets a sidebar rename retitle the open tab live.
+  Reflecting Claude's *own* `/rename` and live task name is tracked as #119.
+  Hovering a tab shows
   the session's fuller description — the same hover card the sidebar uses for a
   resumed session, a title + cwd card otherwise (#76, `App::tab_record` resolves
   the record so the two surfaces stay single-sourced). Drag-reorder (FR5) and
