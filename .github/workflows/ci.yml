@@ -82,6 +82,20 @@ jobs:
           tool: cargo-deny
       - run: cargo deny check
 
+  machete:
+    name: cargo-machete
+    runs-on: ubuntu-latest
+    # Fail when a crate declares a dependency it no longer uses — unused deps
+    # add build time and supply-chain surface. Fast, ubuntu-only: a metadata +
+    # source scan, no full build. Tool version is pinned (bump it together with
+    # this comment); the install-action itself is SHA-pinned like every action.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
+        with:
+          tool: cargo-machete@0.9.2
+      - run: cargo machete
+
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest

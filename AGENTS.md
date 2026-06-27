@@ -26,6 +26,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace             # CI uses `cargo nextest run --workspace`
 cargo deny check                   # if cargo-deny installed
+cargo machete                      # unused deps; if cargo-machete installed
 
 # Markdown is also gated in CI
 markdownlint-cli2                  # uses .markdownlint-cli2.jsonc
