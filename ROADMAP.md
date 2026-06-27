@@ -185,6 +185,27 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   `set_option` (writes), the `keys` surface and the orchestration tools
   (open session / split / focus / rename / run-in-session) are still to come
 
+- [ ] `F-capture` — capture termherd (screenshots / screencasts) along a
+  fidelity ladder, for three goals: **G1** dev/AI debug loop, **G2** promo &
+  tutorial visuals, **G3** bug-repro recordings (devs now, maybe end users
+  later). Brainstorm: `brainstorm/20260627-auto-capture-screenshots.md`.
+  Grounding: termherd is an iced 0.14 GUI, so it ships
+  `window::screenshot()` (cross-platform, `png` already a dep) and
+  `iced_test::screenshot()` for headless CI; TTY recorders (asciinema/VHS)
+  only capture the inner terminal, not the GUI shell. Capture is an
+  `Event`→`Effect` (pure `core`, I/O in `app`), surviving the hexagonal
+  tightening. Ladder:
+  - **Rung 0+1 (G1) — graduated to #108** (`tech-health`): one keybind →
+    `Effect` → a state/PTY-text dump *and* an iced PNG to a known dir an AI
+    can read. The cheap, on-thesis first slice.
+  - **Rung 2 (G3, then G2) — design-first:** in-app gif/mp4 record mode
+    (screenshot loop → encoder). Unlocks bug-repro recordings and promo
+    screencasts. Needs a `/feature-torture` pass (encoder dep, frame timer,
+    privacy/redaction of PTY content for end users) before it graduates.
+  - **Seeded demo-data mode — design-first:** fixtures of fake sessions for
+    clean, reproducible captures. Force-multiplier for G2/G3, not a capture
+    method; revisit when rung 2 comes forward.
+
 ### Backlog — needs definition (from feedback gist, 2026-06-17)
 
 Routed here (not to GH issues) because each needs design before it can be
