@@ -7,6 +7,23 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (tab reorder)
+
+- Open session tabs can be reordered by drag-and-drop (#25, FR5). Press a tab
+  and drag it onto another slot; the carried tab fades and the drop slot is
+  outlined, and the reorder commits on release (a plain click still just
+  activates the tab). The order lives solely in `core::Workspace::move_tab` (a
+  pure mutator that keeps the active tab pointed at the same tab); the iced tab
+  strip holds only transient pointer state, so there is no rival tab tree.
+
+### Fixed (scroll proptest)
+
+- Relaxed the `emitted_lines_never_drift_more_than_one_line` scroll proptest
+  (#98): it reconstructed the cumulative input in `f32`, so rounding noise over
+  a long delta stream could nudge the drift just past one line (~1e-6) and fail
+  a sound accumulator. It now sums in `f64` with a small epsilon; the found
+  counterexample is kept as a regression seed.
+
 ### Added (search snippet)
 
 - Search results now show *what* matched (#58). A content hit (in a session's

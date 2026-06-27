@@ -238,12 +238,24 @@ struct Shell {
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
     link_modifier: bool,
+    /// An in-progress tab drag (FR5 reorder, #25): the tab being dragged and
+    /// the slot the pointer is currently over. `None` when no drag is active.
+    /// Transient pointer state only — the tab order itself lives in `core`.
+    tab_drag: Option<TabDrag>,
     /// Set once the quit path has asked the iced runtime to terminate (#75).
     /// The observable proof that quitting reached `iced::exit` — closing the
     /// only window is *not* enough on macOS (winit cancels the OS terminate and
     /// `exit_on_close_request(false)` keeps the runtime alive), so the process
     /// would otherwise survive Cmd+Q and hold the single-instance lock.
     exiting: bool,
+}
+
+/// A tab drag in flight (#25): the index the drag started on and the slot the
+/// pointer is hovering now. The reorder is committed once, on release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TabDrag {
+    from: usize,
+    over: usize,
 }
 
 /// What a quit request should do, decided purely from session state so the
@@ -328,14 +340,21 @@ enum Message {
     CopySelection(String),
     /// Clipboard contents read back for a paste into the focused terminal (FR4).
     Paste(Option<String>),
-    /// Bring the tab at this index to the front (FR5).
-    ActivateTab(usize),
     /// Ask to close the tab at this index — arms the confirmation bar (#9).
     RequestCloseTab(usize),
     /// Confirm the pending close, killing the tab's session(s) (FR5, #9).
     CloseTab(usize),
     /// Dismiss the close confirmation without killing anything (#9).
     CancelClose,
+    /// A tab drag began on this index — the pointer pressed it (FR5, #25).
+    TabDragStart(usize),
+    /// During a drag, the pointer entered the tab at this index (#25).
+    TabDragOver(usize),
+    /// The drag's pointer was released: commit the reorder, else it was a
+    /// plain click that activates the pressed tab (#25).
+    TabDragEnd,
+    /// The drag left the tab strip without a drop — abandon it (#25).
+    TabDragCancel,
     /// Confirm quitting TermHerd, closing the window (and hard-killing every
     /// live session). Reached only after the quit modal is accepted.
     ConfirmCloseWindow,
@@ -411,7 +430,8 @@ impl Message {
                 | Self::FocusSearch
                 | Self::TermScroll { .. }
                 | Self::Paste(_)
-                | Self::ActivateTab(_)
+                | Self::TabDragStart(_)
+                | Self::TabDragEnd
                 | Self::RequestCloseTab(_)
                 | Self::CloseTab(_)
                 | Self::ToggleStar(_)
@@ -457,6 +477,7 @@ impl Shell {
             archiving: None,
             closing_window: None,
             link_modifier: false,
+            tab_drag: None,
             exiting: false,
         }
     }
@@ -765,7 +786,6 @@ impl Shell {
                     iced::clipboard::write(text)
                 }
             }
-            Message::ActivateTab(index) => self.activate_tab(index),
             Message::Paste(content) => {
                 let Some(text) = content.filter(|t| !t.is_empty()) else {
                     return Task::none();
@@ -787,6 +807,39 @@ impl Shell {
             Message::CloseTab(index) => self.close_tab(index),
             Message::CancelClose => {
                 self.closing = None;
+                Task::none()
+            }
+            Message::TabDragStart(index) => {
+                if index < self.core.workspace.tabs.len() {
+                    self.tab_drag = Some(TabDrag {
+                        from: index,
+                        over: index,
+                    });
+                }
+                Task::none()
+            }
+            Message::TabDragOver(index) => {
+                if let Some(drag) = self.tab_drag.as_mut()
+                    && index < self.core.workspace.tabs.len()
+                {
+                    drag.over = index;
+                }
+                Task::none()
+            }
+            Message::TabDragEnd => match self.tab_drag.take() {
+                // A real drag (the pointer crossed onto another tab): reorder.
+                Some(TabDrag { from, over }) if from != over => {
+                    let _ = self
+                        .core
+                        .apply(termherd_core::Event::MoveTab { from, to: over });
+                    Task::none()
+                }
+                // No movement — the press/release was a plain click: activate.
+                Some(TabDrag { from, .. }) => self.activate_tab(from),
+                None => Task::none(),
+            },
+            Message::TabDragCancel => {
+                self.tab_drag = None;
                 Task::none()
             }
             Message::ConfirmCloseWindow => match self.closing_window.take() {
@@ -1582,6 +1635,71 @@ mod key_routing {
         let _ = shell.update(Message::CancelClose);
         assert_eq!(shell.closing, None);
         assert_eq!(pty.kill_count(), 0);
+    }
+
+    /// The first session id hosted by each tab, in tab order — a stable handle
+    /// to assert reordering against.
+    fn tab_order(shell: &Shell) -> Vec<SessionId> {
+        shell
+            .core
+            .workspace
+            .tabs
+            .iter()
+            .map(|t| t.sessions()[0])
+            .collect()
+    }
+
+    /// A shell with three open tabs (the launched terminal plus two more).
+    fn shell_with_three_tabs() -> Shell {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.launch("/tmp/b".to_string(), Launch::Shell);
+        let _ = shell.launch("/tmp/c".to_string(), Launch::Shell);
+        assert_eq!(shell.core.workspace.tabs.len(), 3);
+        shell
+    }
+
+    #[test]
+    fn dragging_a_tab_reorders_the_workspace() {
+        let mut shell = shell_with_three_tabs();
+        let before = tab_order(&shell);
+        // Press tab 0, drag across onto tab 2's slot, release.
+        let _ = shell.update(Message::TabDragStart(0));
+        let _ = shell.update(Message::TabDragOver(1));
+        let _ = shell.update(Message::TabDragOver(2));
+        let _ = shell.update(Message::TabDragEnd);
+        assert_eq!(tab_order(&shell), vec![before[1], before[2], before[0]]);
+        assert!(shell.tab_drag.is_none(), "the drag is cleared on release");
+    }
+
+    #[test]
+    fn a_plain_tab_click_activates_without_reordering() {
+        let mut shell = shell_with_three_tabs(); // active is the last tab (2)
+        let before = tab_order(&shell);
+        // Press and release on tab 0 with no hover onto another tab — a click.
+        let _ = shell.update(Message::TabDragStart(0));
+        let _ = shell.update(Message::TabDragEnd);
+        assert_eq!(tab_order(&shell), before, "a click must not reorder");
+        assert_eq!(shell.core.workspace.active, 0, "the clicked tab is active");
+        assert!(shell.tab_drag.is_none());
+    }
+
+    #[test]
+    fn leaving_the_strip_abandons_a_drag() {
+        let mut shell = shell_with_three_tabs();
+        let before = tab_order(&shell);
+        let active_before = shell.core.workspace.active;
+        let _ = shell.update(Message::TabDragStart(0));
+        let _ = shell.update(Message::TabDragOver(2));
+        let _ = shell.update(Message::TabDragCancel);
+        // A release that arrives after the cancel finds no drag and does nothing.
+        let _ = shell.update(Message::TabDragEnd);
+        assert_eq!(
+            tab_order(&shell),
+            before,
+            "an abandoned drag changes nothing"
+        );
+        assert_eq!(shell.core.workspace.active, active_before);
+        assert!(shell.tab_drag.is_none());
     }
 
     #[test]
