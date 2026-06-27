@@ -281,11 +281,25 @@ impl Shell {
                     .style(button::text)
                     .padding(0);
 
-                g = g.push(
-                    row![star, middle, rename, archive]
-                        .spacing(6)
-                        .align_y(iced::Center),
-                );
+                let entry = row![star, middle, rename, archive]
+                    .spacing(6)
+                    .align_y(iced::Center);
+                // A content hit shows its matched line in muted text beneath the
+                // row, so search reveals *what* matched, not merely *that* it did
+                // (#58). Title-only hits return `None` and stay single-line. The
+                // core windows the line around the hit; we clip to the sidebar.
+                g = match self.core.search_snippet(s) {
+                    Some(snip) => g.push(
+                        column![
+                            entry,
+                            text(clip(&snip.line, 44))
+                                .size(10)
+                                .style(sidebar_secondary_text),
+                        ]
+                        .spacing(1),
+                    ),
+                    None => g.push(entry),
+                };
             }
             list = list.push(g);
         }
@@ -682,6 +696,20 @@ fn card_style(theme: &iced::Theme) -> container::Style {
 /// Dimmed text for the card's secondary lines (meta + transcript tail): the
 /// card's text colour mixed toward its background, so it stays legible and
 /// theme-derived on both light and dark palettes.
+/// Dimmed secondary text for the sidebar — search-match snippets (#58). Mixes
+/// the normal text toward the background so it reads muted, theme-aware rather
+/// than a hardcoded grey.
+fn sidebar_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
+    let palette = theme.extended_palette();
+    iced::widget::text::Style {
+        color: Some(mix(
+            palette.background.base.text,
+            palette.background.base.color,
+            0.4,
+        )),
+    }
+}
+
 fn card_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
     let surface = card_surface(theme);
     iced::widget::text::Style {

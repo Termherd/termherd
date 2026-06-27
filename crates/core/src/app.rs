@@ -10,7 +10,9 @@
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU64;
 
-use crate::browser::{ProjectGroup, SessionRecord, filter_projects, group_projects};
+use crate::browser::{
+    MatchSnippet, ProjectGroup, SessionRecord, content_snippet, filter_projects, group_projects,
+};
 use crate::metadata::SessionMeta;
 use crate::workspace::{SessionId, SplitDir, Workspace};
 
@@ -456,6 +458,18 @@ impl App {
         }
         groups.retain(|group| !group.sessions.is_empty());
         groups
+    }
+
+    /// The located content hit for a session under the current search (#58),
+    /// or `None` when the row is shown for a title hit (or titles-only mode):
+    /// nothing in the content matched, so there is nothing to point at.
+    #[must_use]
+    pub fn search_snippet(&self, record: &SessionRecord) -> Option<MatchSnippet> {
+        if self.search_titles_only {
+            return None;
+        }
+        let needle = self.search.trim().to_lowercase();
+        content_snippet(&record.digest, &needle)
     }
 
     /// The title to show for a session: the user's custom title if set, else
