@@ -96,6 +96,20 @@ jobs:
           tool: cargo-machete@0.9.2
       - run: cargo machete
 
+  deps:
+    name: dependency-rule
+    runs-on: ubuntu-latest
+    # Architecture fitness function: the hexagonal dependency rule (adapters
+    # depend on core, never the reverse) holds by construction, not by reviewer
+    # vigilance. Pure `cargo metadata` parse — no build, ubuntu-only (the graph
+    # is platform-independent). jq is preinstalled on ubuntu-latest runners.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+      - run: ./scripts/check-crate-deps.sh
+
   actionlint:
     name: actionlint
     runs-on: ubuntu-latest

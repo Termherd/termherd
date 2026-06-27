@@ -17,6 +17,11 @@ run:
 run-isolated:
     TMPDIR="$(mktemp -d)" cargo run -p termherd-app
 
+# Assert the hexagonal crate dependency rule (deps point inward only). Mirrors
+# the `deps` CI job; run before pushing a new crate or cross-crate dependency.
+check-deps:
+    ./scripts/check-crate-deps.sh
+
 # Build the shipping binary (host target) — the input the packager bundles.
 build-release:
     cargo build --release -p termherd-app
