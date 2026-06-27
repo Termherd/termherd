@@ -112,19 +112,27 @@ confirm-when-live, confirm-consumes).
 #chip("gap", amber) *No red unit test for the fix itself.* The behavioural
 change is entirely the AppKit menu repoint — FFI, not headless-testable, and it
 routes into an *already-green* `CloseRequested` path. Forcing a red test here
-would be ceremony (YAGNI). Correctness is verified by *running the app*:
+would be ceremony (YAGNI). Correctness is verified by *running the app*
+(`cd` to the worktree, `TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p
+termherd-app` to dodge the single-instance lock of a release build):
 1. launch, open ≥1 live Claude session, press *Cmd+Q* → confirm modal appears;
 2. with no live session, *Cmd+Q* → clean exit (no lingering process / lock);
-3. menu *TermHerd ▸ Quit* → same confirm flow as Cmd+Q.
+3. menu *TermHerd ▸ Quit* → same confirm flow as Cmd+Q;
+4. *minimised-window guard* — *Cmd+M* to minimise the sole window, then *Cmd+Q*:
+  Quit must still fire (not beep). This is the no-key-window case the explicit
+  menu-item target fixes; with a nil target NSMenu auto-enabling would disable
+  Quit here.
 
 == 6 · State at this note
-*Implemented.* Tidy-first `request_quit` extraction, the convergence guard, the
-objc2 `macos` module, its macOS-target deps, and the `Opened` wiring all landed.
-All gates green: `fmt`, `clippy -D warnings`, full workspace tests (89 app +
-core/claude/scan/pty). Outstanding: the *live Cmd+Q check* — needs the app run
-by hand (a release `TermHerd.app` currently holds the single-instance lock).
-Expected: launch with ≥1 live session → Cmd+Q shows the confirm modal; no
-session → Cmd+Q exits clean; menu Quit behaves identically.
+*Implemented + reviewed.* Tidy-first `request_quit` extraction, the convergence
+guard, the objc2 `macos` module, its deps, and the `Opened` wiring landed; a
+self-review pass then pinned the Quit item's target to the app window (the
+no-key-window fix in §5 step 4), quietened a duplicate-`Opened` warning, and
+logged the off-main-thread skip. All gates green: `fmt`, `clippy -D warnings`,
+full workspace tests (89 app + core/claude/scan/pty), `cargo deny`,
+markdownlint. Live-verified: the repoint fires at launch and targets a window;
+Cmd+Q with a live session → confirm modal; with none → clean exit. Outstanding:
+the *minimised-window* check (§5 step 4) — can't be driven headlessly.
 
 == 7 · Docs consulted
 `AGENTS.md` (the `unsafe_code = "deny"` invariant + the `cfg(target_os)`
