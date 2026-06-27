@@ -232,6 +232,12 @@ pub enum Event {
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.
     CloseTab(usize),
+    /// The user dragged the tab at `from` to rest at index `to` (FR5, #25). A
+    /// pure reorder: no PTY is touched, so it yields no effects.
+    MoveTab {
+        from: usize,
+        to: usize,
+    },
     /// Reopen the most recently closed tab (#78), restoring its mode and
     /// directory. A no-op when nothing has been closed.
     ReopenClosedTab,
@@ -382,6 +388,10 @@ impl App {
                 Vec::new()
             }
             Event::CloseTab(index) => self.close_tab(index),
+            Event::MoveTab { from, to } => {
+                self.workspace.move_tab(from, to);
+                Vec::new()
+            }
             Event::ReopenClosedTab => self.reopen_closed_tab(),
             Event::SplitFocused(dir) => self.split_focused(dir),
             Event::CloseFocusedPane => match self.workspace.close_focused() {

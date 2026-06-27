@@ -157,6 +157,23 @@ impl Workspace {
         }
     }
 
+    /// Move the tab at `from` so it lands at index `to` (FR5 drag-reorder,
+    /// #25), shifting the tabs in between. The active tab is kept pointing at
+    /// the *same* tab, whether it was the moved one or merely shifted by it.
+    /// Returns `None` (no change) if either index is out of range; `from == to`
+    /// is a successful no-op.
+    pub fn move_tab(&mut self, from: usize, to: usize) -> Option<()> {
+        if from >= self.tabs.len() || to >= self.tabs.len() {
+            return None;
+        }
+        if from != to {
+            let tab = self.tabs.remove(from);
+            self.tabs.insert(to, tab);
+            self.active = shift_index(self.active, from, to);
+        }
+        Some(())
+    }
+
     /// Close the tab at `index` (FR5), returning the sessions it hosted so the
     /// caller can kill their PTYs. The active index is kept pointing at a valid
     /// tab: tabs after the removed one shift down, and closing the active tab
@@ -243,6 +260,23 @@ impl Workspace {
         let next = (current as i32 + delta).rem_euclid(len) as usize;
         tab.focus = paths[next].clone();
         Some(())
+    }
+}
+
+/// Where an index `i` ends up after the tab at `from` is removed and
+/// reinserted at `to` (see [`Workspace::move_tab`]). The moved tab lands on
+/// `to`; every other index is mapped through the remove-then-insert shift.
+fn shift_index(i: usize, from: usize, to: usize) -> usize {
+    if i == from {
+        return to;
+    }
+    // After removing `from`, indices past it slide down one…
+    let after_remove = if i > from { i - 1 } else { i };
+    // …then inserting at `to` pushes indices at or beyond it up one.
+    if after_remove >= to {
+        after_remove + 1
+    } else {
+        after_remove
     }
 }
 
@@ -562,5 +596,91 @@ mod tests {
         let mut ws = Workspace::new();
         assert!(ws.focus_next().is_none());
         assert!(ws.close_focused().is_none());
+    }
+
+    /// The session ids hosted by each tab, in tab order — a stable identity to
+    /// assert reordering against.
+    fn tab_order(ws: &Workspace) -> Vec<SessionId> {
+        ws.tabs.iter().map(|t| t.sessions()[0]).collect()
+    }
+
+    #[test]
+    fn move_tab_shifts_a_tab_to_the_right() {
+        let mut ws = workspace_with_tabs(4); // [1,2,3,4], active = 3
+        assert_eq!(ws.move_tab(1, 2), Some(()));
+        assert_eq!(tab_order(&ws), vec![sid(1), sid(3), sid(2), sid(4)]);
+        // The active tab (sid 4) only shifted, so `active` still points at it.
+        assert_eq!(ws.focused_session(), Some(sid(4)));
+    }
+
+    #[test]
+    fn move_tab_shifts_a_tab_to_the_left() {
+        let mut ws = workspace_with_tabs(4);
+        assert_eq!(ws.move_tab(2, 0), Some(()));
+        assert_eq!(tab_order(&ws), vec![sid(3), sid(1), sid(2), sid(4)]);
+    }
+
+    #[test]
+    fn move_tab_follows_the_moved_active_tab() {
+        let mut ws = workspace_with_tabs(3); // active = 2 (sid 3)
+        assert_eq!(ws.move_tab(2, 0), Some(()));
+        assert_eq!(tab_order(&ws), vec![sid(3), sid(1), sid(2)]);
+        // Dragging the active tab keeps it active at its new slot.
+        assert_eq!(ws.active, 0);
+        assert_eq!(ws.focused_session(), Some(sid(3)));
+    }
+
+    #[test]
+    fn move_tab_tracks_active_when_a_tab_jumps_over_it() {
+        let mut ws = workspace_with_tabs(3);
+        assert!(ws.activate(1).is_some()); // active = sid 2
+        // Move sid 1 to the end: [2,3,1]; active must still be sid 2.
+        assert_eq!(ws.move_tab(0, 2), Some(()));
+        assert_eq!(tab_order(&ws), vec![sid(2), sid(3), sid(1)]);
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+    }
+
+    #[test]
+    fn move_tab_same_index_is_a_noop() {
+        let mut ws = workspace_with_tabs(3);
+        assert_eq!(ws.move_tab(1, 1), Some(()));
+        assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(3)]);
+        assert_eq!(ws.active, 2);
+    }
+
+    #[test]
+    fn move_tab_out_of_range_changes_nothing() {
+        let mut ws = workspace_with_tabs(2);
+        assert!(ws.move_tab(0, 5).is_none());
+        assert!(ws.move_tab(5, 0).is_none());
+        assert_eq!(tab_order(&ws), vec![sid(1), sid(2)]);
+        assert_eq!(ws.active, 1);
+    }
+
+    proptest::proptest! {
+        /// Reordering preserves the multiset of tabs and always keeps the same
+        /// tab active — never panics, never loses or duplicates a tab.
+        #[test]
+        fn move_tab_is_a_permutation_that_preserves_the_active_tab(
+            count in 1usize..8,
+            from in 0usize..8,
+            to in 0usize..8,
+        ) {
+            let mut ws = workspace_with_tabs(count);
+            let active_before = ws.tabs[ws.active].sessions()[0];
+            let mut before = tab_order(&ws);
+            let result = ws.move_tab(from, to);
+            if from < count && to < count {
+                proptest::prop_assert_eq!(result, Some(()));
+                // Same set of tabs, and the active tab is unchanged in identity.
+                let mut after = tab_order(&ws);
+                before.sort_by_key(|s| s.0.get());
+                after.sort_by_key(|s| s.0.get());
+                proptest::prop_assert_eq!(before, after);
+                proptest::prop_assert_eq!(ws.tabs[ws.active].sessions()[0], active_before);
+            } else {
+                proptest::prop_assert_eq!(result, None);
+            }
+        }
     }
 }

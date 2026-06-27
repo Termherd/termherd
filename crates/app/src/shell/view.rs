@@ -462,37 +462,75 @@ impl Shell {
         // One wall-clock read per render feeds every tab's relative "last
         // activity" age, matching the sidebar; the app layer owns the clock.
         let now = SystemTime::now();
+        let drag = self.tab_drag.map(|d| (d.from, d.over));
+        // Where a release would drop the carried tab: `move_tab` lands it *at*
+        // index `over`, so the insertion bar sits before `over` when dragging
+        // left and after it when dragging right. `None` until the pointer has
+        // actually crossed onto another slot.
+        let caret_at = drag.and_then(|(from, over)| match over.cmp(&from) {
+            std::cmp::Ordering::Greater => Some(over + 1),
+            std::cmp::Ordering::Less => Some(over),
+            std::cmp::Ordering::Equal => None,
+        });
         let mut bar = row![].spacing(4).align_y(iced::Center);
         for (index, tab) in tabs.iter().enumerate() {
             let active = index == self.core.workspace.active;
-            let mut label = row![].spacing(6).align_y(iced::Center);
+            // The carried tab fades to a ghost; the drop point is shown by the
+            // insertion bar between chips, not on the chip itself.
+            let dragging_this = drag.is_some_and(|(from, _)| from == index);
+
+            let mut inner = row![].spacing(6).align_y(iced::Center);
             if let Some(status) = self.core.tab_status(index) {
-                label = label.push(text("●").size(9).color(status_color(status)));
+                inner = inner.push(text("●").size(9).color(status_color(status)));
             }
-            label = label.push(text(clip(&tab.title, 24)).size(12));
-            let title = button(label)
-                .on_press(Message::ActivateTab(index))
-                .padding(6);
-            let title = if active {
-                title.style(button::primary)
-            } else {
-                title.style(button::text)
-            };
+            inner = inner.push(text(clip(&tab.title, 24)).size(12));
+            // The × lives inside the chip so it sits on the active tab's fill,
+            // and its colour follows the chip's text so it stays legible there.
+            inner = inner.push(
+                button(text("×").size(14))
+                    .on_press(Message::RequestCloseTab(index))
+                    .style(move |theme: &iced::Theme, _status| button::Style {
+                        background: None,
+                        text_color: tab_chip_text(theme, active),
+                        ..button::Style::default()
+                    })
+                    .padding(0),
+            );
+            let chip = container(inner)
+                .padding(6)
+                .style(move |theme: &iced::Theme| tab_chip_style(theme, active, dragging_this));
+            // A press starts a drag; entering another chip moves the drop slot.
+            // Release/cancel are handled by the strip below, so a plain click
+            // (press and release on the same chip) still just activates it. The
+            // × button captures its own click, so it never starts a drag.
+            let chip = mouse_area(chip)
+                .on_press(Message::TabDragStart(index))
+                .on_enter(Message::TabDragOver(index));
             // The chip clips the title; hovering reveals the fuller description
             // (#76) — the very session card the sidebar shows when the tab
             // resumes a browsed session, else a minimal title + cwd card.
-            let title = tooltip(
-                title,
+            let chip = tooltip(
+                chip,
                 self.tab_hover_card(index, tab, now),
                 tooltip::Position::Bottom,
             );
-            let close = button(text("×").size(14))
-                .on_press(Message::RequestCloseTab(index))
-                .style(button::text)
-                .padding(4);
-            bar = bar.push(row![title, close].align_y(iced::Center));
+            if caret_at == Some(index) {
+                bar = bar.push(insertion_caret());
+            }
+            bar = bar.push(chip);
         }
-        Some(bar.into())
+        // A drop past the last tab parks the bar at the strip's end.
+        if caret_at == Some(tabs.len()) {
+            bar = bar.push(insertion_caret());
+        }
+        // One release anywhere over the strip ends the drag (committing the
+        // reorder at the last-hovered slot); leaving the strip abandons it.
+        Some(
+            mouse_area(bar)
+                .on_release(Message::TabDragEnd)
+                .on_exit(Message::TabDragCancel)
+                .into(),
+        )
     }
 
     /// The hover card for a tab (#76). A tab that resumes a browsed session
@@ -696,6 +734,56 @@ fn card_style(theme: &iced::Theme) -> container::Style {
 /// Dimmed text for the card's secondary lines (meta + transcript tail): the
 /// card's text colour mixed toward its background, so it stays legible and
 /// theme-derived on both light and dark palettes.
+/// The text colour for a tab chip — the contrasting colour on the active tab's
+/// primary fill, the normal foreground otherwise. Shared by the title and the
+/// × so they always match.
+fn tab_chip_text(theme: &iced::Theme, active: bool) -> Color {
+    let palette = theme.extended_palette();
+    if active {
+        palette.primary.base.text
+    } else {
+        palette.background.base.text
+    }
+}
+
+/// A tab chip's look (#25), now a styled container rather than a button (the
+/// drag needs `mouse_area` to see press *and* release, which a button would
+/// capture). `active` paints the primary fill; `dragging` fades the tab being
+/// carried to a ghost. All colours come from the theme palette — never
+/// hardcoded.
+fn tab_chip_style(theme: &iced::Theme, active: bool, dragging: bool) -> container::Style {
+    let palette = theme.extended_palette();
+    let bg = active.then_some(palette.primary.base.color);
+    let fg = tab_chip_text(theme, active);
+    let fade = |c: Color| mix(c, palette.background.base.color, 0.55);
+    container::Style {
+        background: bg.map(|c| iced::Background::Color(if dragging { fade(c) } else { c })),
+        text_color: Some(if dragging { fade(fg) } else { fg }),
+        border: iced::Border {
+            radius: 4.0.into(),
+            ..iced::Border::default()
+        },
+        ..container::Style::default()
+    }
+}
+
+/// The vertical insertion bar shown between chips during a drag (#25) — the
+/// legible "it drops here" marker, painted in the theme accent.
+fn insertion_caret<'a>() -> Element<'a, Message> {
+    container(text(""))
+        .width(3)
+        .height(24)
+        .style(|theme: &iced::Theme| container::Style {
+            background: Some(theme.extended_palette().primary.strong.color.into()),
+            border: iced::Border {
+                radius: 2.0.into(),
+                ..iced::Border::default()
+            },
+            ..container::Style::default()
+        })
+        .into()
+}
+
 /// Dimmed secondary text for the sidebar — search-match snippets (#58). Mixes
 /// the normal text toward the background so it reads muted, theme-aware rather
 /// than a hardcoded grey.
