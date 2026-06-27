@@ -1260,6 +1260,27 @@ impl Shell {
 
     fn on_window_event(&mut self, id: window::Id, event: window::Event) -> Task<Message> {
         match event {
+            window::Event::Opened { .. } => {
+                // Reroute the macOS menu Quit item (and ⌘Q) through the iced
+                // runtime. Done here, not in the boot closure: iced constructs
+                // the app state *before* `run_app`, so the boot closure runs
+                // ahead of winit's `applicationDidFinishLaunching` (where the
+                // default menu is installed). By the time the window is `Opened`
+                // the event loop is running and the menu exists, and we are on
+                // the main thread. Fires once (single window); no-op on other
+                // platforms.
+                #[cfg(target_os = "macos")]
+                match objc2_foundation::MainThreadMarker::new() {
+                    Some(mtm) => crate::macos::route_quit_through_close(mtm),
+                    // We expect to be on the main thread here; if not, skipping
+                    // would silently leave Cmd+Q on AppKit's hard-kill
+                    // `terminate:` with no trace explaining why. Log it.
+                    None => tracing::warn!(
+                        "window Opened off the main thread; Cmd+Q stays on AppKit terminate:"
+                    ),
+                }
+                Task::none()
+            }
             window::Event::Moved(position) => {
                 self.bounds.x = Some(position.x);
                 self.bounds.y = Some(position.y);
@@ -1272,27 +1293,38 @@ impl Shell {
             }
             window::Event::CloseRequested => {
                 self.bounds.save();
-                // A quit hard-kills every live session's Claude process, so with
-                // sessions running we confirm first; otherwise terminate the
-                // runtime straight away. `iced::exit` (not `window::close`) is
-                // what actually ends the process: on macOS winit cancels the OS
-                // terminate and `exit_on_close_request(false)` keeps the runtime
-                // alive, so a mere window close would survive (#75). Note: on
-                // macOS this path is the window-close button — Cmd+Q is consumed
-                // by AppKit and never delivered here as `CloseRequested` (#100).
-                match quit_intent(self.live_session_count()) {
-                    QuitIntent::Exit => {
-                        tracing::info!("no live sessions; exiting");
-                        self.exiting = true;
-                        iced::exit()
-                    }
-                    QuitIntent::Confirm => {
-                        self.closing_window = Some(id);
-                        Task::none()
-                    }
-                }
+                self.request_quit(id)
             }
             _ => Task::none(),
+        }
+    }
+
+    /// The single convergence point for every way the user can quit TermHerd.
+    /// All three macOS triggers — the window-close button, the menu Quit item,
+    /// and Cmd+Q — arrive here as a `CloseRequested` window event: the menu
+    /// Quit action is repointed from AppKit's `terminate:` to `performClose:`
+    /// at startup (`crate::macos`), so it routes through winit's
+    /// `windowShouldClose:` like the close button instead of terminating the
+    /// process out from under us. Keeping one seam is the structural fix — a
+    /// second, unguarded quit path is exactly the defect this prevents.
+    ///
+    /// A quit hard-kills every live session's Claude process, so with sessions
+    /// running we confirm first; otherwise we terminate the runtime straight
+    /// away. `iced::exit` (not `window::close`) is what actually ends the
+    /// process: on macOS winit cancels the OS terminate and
+    /// `exit_on_close_request(false)` keeps the runtime alive, so a mere window
+    /// close would survive.
+    fn request_quit(&mut self, id: window::Id) -> Task<Message> {
+        match quit_intent(self.live_session_count()) {
+            QuitIntent::Exit => {
+                tracing::info!("no live sessions; exiting");
+                self.exiting = true;
+                iced::exit()
+            }
+            QuitIntent::Confirm => {
+                self.closing_window = Some(id);
+                Task::none()
+            }
         }
     }
 
@@ -2033,6 +2065,46 @@ mod key_routing {
         assert!(
             shell.closing_window.is_none(),
             "confirming consumes the pending quit"
+        );
+    }
+
+    #[test]
+    fn cmd_q_routes_through_the_same_seam_as_the_close_button() {
+        // On macOS the menu Quit item (and Cmd+Q) is repointed to
+        // `performClose:`, so it reaches the runtime as the *same*
+        // `CloseRequested` window event the close button produces. That native
+        // repoint can't be exercised headlessly. What this test *can* pin is the
+        // shared destination: both the close-button event and a direct
+        // `request_quit` arm the confirm modal identically for a live session.
+        // It guards `request_quit`'s confirm behaviour and that `CloseRequested`
+        // routes into it — it does not, and cannot, prove some *other* future
+        // code path won't bypass `request_quit`; keeping that single seam is a
+        // design rule, not something this test enforces.
+        let (mut shell, _pty) = shell_with_terminal();
+        assert_eq!(
+            shell.live_session_count(),
+            1,
+            "precondition: one live session"
+        );
+
+        let close_button = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::CloseRequested,
+        ));
+        assert!(shell.quit_pending(), "the close button arms the modal");
+        drop(close_button);
+        shell.closing_window = None;
+
+        // The macOS menu Quit / Cmd+Q path lands on the identical seam.
+        let _ = shell.request_quit(window::Id::unique());
+        assert!(
+            shell.quit_pending(),
+            "Cmd+Q (via performClose: → CloseRequested → request_quit) must arm \
+             the same modal, never bypass it"
+        );
+        assert!(
+            !shell.exiting,
+            "a live session must not be hard-killed without confirmation"
         );
     }
 

@@ -6,6 +6,8 @@
 
 mod collapsed_store;
 mod docs;
+#[cfg(target_os = "macos")]
+mod macos;
 mod metadata_store;
 mod settings;
 mod shell;

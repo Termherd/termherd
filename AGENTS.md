@@ -34,6 +34,34 @@ markdownlint-cli2                  # uses .markdownlint-cli2.jsonc
 Toolchain is pinned to **Rust 1.95.0 / edition 2024** via `rust-toolchain.toml`
 (Q10) — do not bump without updating the pin.
 
+### Running & observing a build
+
+Some behaviour is GUI/OS-level and **cannot be exercised by a headless test**
+— the macOS Cmd+Q quit-confirm flow, window placement, the PTY canvas. Verify
+those by running the app and reading its `tracing` output:
+
+```bash
+# `tracing` is the only observation channel — there is no `println!`. Raise the
+# level with RUST_LOG (default is `info,…`, see `DEFAULT_FILTER` in main.rs).
+RUST_LOG=info cargo run -p termherd-app
+
+# Add log lines at the seam you're verifying (info!/warn!, never println!), run,
+# and grep the output for them — e.g. the quit path logs `request_quit`'s branch
+# and the macOS menu repoint.
+```
+
+The app is **single-instance** (an flock at `std::env::temp_dir()/…`). To run a
+build *alongside* one that already holds the lock — common, since a dev/agent
+session often runs *inside* a release `TermHerd.app` you can't quit — point the
+new process at a throwaway temp dir so its lock path differs:
+
+```bash
+TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app   # second instance
+```
+
+`temp_dir()` honours `$TMPDIR`, so both run. Launch detached when you need to
+keep interacting with the original window (e.g. to compare quit behaviour).
+
 ## Architecture — the dependency rule
 
 Hexagonal workspace. The single most important invariant:
@@ -94,7 +122,12 @@ exists). Do not relax them locally.
 - **No global mutable state.** No `static mut`, no `lazy_static`, no
   require-time singletons. Construct dependencies in `main()` and inject.
 - **One logging stack:** `tracing`. No `println!` outside tests.
-- **`unsafe_code = "deny"`** workspace-wide.
+- **`unsafe_code = "deny"`** workspace-wide. The lone sanctioned exception is
+  `crates/app/src/macos.rs` (AppKit FFI for the Cmd+Q quit path): a `#![cfg(…)]`
+  module with a module-scoped `#![allow(unsafe_code)]` and a `// SAFETY:` note
+  on every block. Any further exception needs the same — OS-FFI that can't be
+  expressed safely, quarantined in its own `cfg`-gated module — not a relaxation
+  scattered through otherwise-safe code.
 
 ## Conventions
 
