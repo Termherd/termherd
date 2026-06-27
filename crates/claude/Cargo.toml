@@ -22,3 +22,6 @@ expect_used = "deny"
 panic = "deny"
 todo = "warn"
 unimplemented = "warn"
+# Function-length gate (threshold in clippy.toml). Repeated from the workspace
+# table because this crate carries its own lint table instead of inheriting.
+too_many_lines = "warn"

@@ -3,3 +3,9 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
+
+# Function-length gate (clippy::too_many_lines, enabled in the lint tables).
+# 150 lets the flat event/message dispatchers (core's `App::apply`) and similar
+# big `match` arms breathe, while still catching genuine bloat. Functions that
+# exceed it on purpose carry a local `#[allow]` with a rationale.
+too-many-lines-threshold = 150

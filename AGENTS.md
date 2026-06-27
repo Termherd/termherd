@@ -129,6 +129,11 @@ exists). Do not relax them locally.
   on every block. Any further exception needs the same — OS-FFI that can't be
   expressed safely, quarantined in its own `cfg`-gated module — not a relaxation
   scattered through otherwise-safe code.
+- **Function length is gated.** `clippy::too_many_lines` (threshold 150 in
+  `clippy.toml`) fails CI on over-long functions — a proxy for local
+  complexity. A function that exceeds it on purpose (a flat dispatcher / layout
+  builder) carries a local `#[allow(clippy::too_many_lines)]` with a rationale,
+  never a relaxed global threshold.
 
 ## Conventions
 

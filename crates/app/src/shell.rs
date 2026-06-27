@@ -665,6 +665,11 @@ impl Shell {
         (cols, rows)
     }
 
+    // The iced `update` is a flat `match` over every `Message` variant — the
+    // app's central event dispatcher. Length here is breadth (one arm per
+    // message), not nested complexity; splitting it would scatter the dispatch.
+    // Tracked as a refactor candidate (shell.rs is the god-object signal A).
+    #[allow(clippy::too_many_lines)]
     fn update(&mut self, message: Message) -> Task<Message> {
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
         // is open discards it — the blur-cancels-edit convention. Only genuine
