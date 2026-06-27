@@ -90,6 +90,17 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   deferred to GitHub traction / a sponsor ($99/yr). Linux ships **signed
   checksums** (#52). **Windows** Authenticode via free **SignPath
   Foundation** (#62, P2)*
+- [ ] `F-quality-gates` — intrinsic-quality CI gates beyond the existing
+  fmt/clippy/test/deny set, targeting the structural/maintainability axis
+  (complexity, domain boundaries, merge-conflict risk). Scoped from a
+  brainstorm (`brainstorm/20260627-ci-quality-gates.md`). **P1:** function
+  length (#105), unused deps (#106), and the crate-level dependency rule as an
+  architecture fitness function enforcing the hexagonal inward-only invariant
+  (#107). **P2 follow-ups** (not yet filed): intra-crate module rules (D
+  phase 2, `cargo-modules`/archtest) and cognitive-complexity (signal C).
+  **P3 / report-only** (blocked on a quality-report home): file length
+  (signal A) and churn×size hotspots (signal J). Dropped: MSRV check,
+  `todo!`→deny, PR-size warning (rationale in the report). `tech-health`
 - [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is
   a tab; a tab strip switches between them, each chip carrying its activity
   dot (the FR8 tab badge) and a close button that kills the session's PTY —
