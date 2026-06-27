@@ -404,8 +404,16 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace          # `cargo test --workspace` locally
 cargo deny check                       # if cargo-deny installed
+cargo machete                          # unused deps; if cargo-machete installed
+just check-deps                        # hexagonal crate dependency rule
 markdownlint-cli2                      # 80-col prose; see .markdownlint-cli2.jsonc
 ```
+
+CI also runs `actionlint` (workflow YAML) and CodeQL (SAST) — those aren't part
+of the routine local loop. For the **full picture** — every gate, what it
+protects, when it runs (PR / merge / schedule / release), how to mirror it, and
+the sanctioned exceptions — see the CI reference & runbook at
+[`docs/CI.md`](docs/CI.md).
 
 Markdown prose wraps at **80 columns** (tables and code blocks are exempt). This
 file obeys that rule; keep it that way when you edit.
