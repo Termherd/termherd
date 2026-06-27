@@ -537,12 +537,23 @@ impl Shell {
     /// and size its PTY to the current pane (FR4).
     fn launch(&mut self, cwd: String, launch: Launch) -> Task<Message> {
         // The kind is shown as a suffix so a shell tab and a Claude tab for the
-        // same repo stay distinct (#23); it's only the initial label — once the
-        // process titles itself over OSC (#24), that wins.
+        // same repo stay distinct (#23). Resuming a known session takes its real
+        // name from the scanned digest (#109) — current Claude renders status
+        // in-band and emits no OSC title, so the live override (#24) never fires;
+        // without this every resumed tab in a repo would read alike. A fresh or
+        // unscanned session keeps the kind label; an OSC title still wins later.
         let label = project_label(&cwd);
         let title = match &launch {
             Launch::Shell => format!("{label} $"),
-            Launch::Claude { .. } => format!("{label} 🤖"),
+            Launch::Claude {
+                resume: Some(claude_id),
+            } => self
+                .core
+                .record_for(claude_id)
+                .map(|record| self.core.session_title(record))
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| format!("{label} 🤖")),
+            Launch::Claude { resume: None } => format!("{label} 🤖"),
         };
         let effects = self
             .core
@@ -1467,6 +1478,132 @@ mod key_routing {
             shell.core.workspace.session_title(claude_tab),
             Some("faceto 🤖")
         );
+    }
+
+    /// Feed one browsable Claude session with a chosen name into the core, so a
+    /// later resume can pick its digest title up (#109).
+    fn browse_named(shell: &mut Shell, id: &str, path: &str, summary: &str, custom: Option<&str>) {
+        let record = SessionRecord {
+            session_id: id.to_string(),
+            project_path: path.to_string(),
+            digest: termherd_claude::digest::SessionDigest {
+                summary: summary.to_string(),
+                message_count: 1,
+                text_content: String::new(),
+                slug: None,
+                custom_title: custom.map(str::to_string),
+                ai_title: None,
+                tail: Vec::new(),
+            },
+            modified: None,
+        };
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(vec![record]));
+    }
+
+    #[test]
+    fn resuming_a_known_session_titles_the_tab_with_its_session_name() {
+        // #109: Claude (2.1.195) emits no OSC title, so the live-title override
+        // (#24) never fires here — the tab must take the session's name from the
+        // scanned digest instead of the generic `project 🤖` kind label.
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_named(
+            &mut shell,
+            "sess",
+            "/tmp/project",
+            "Fix the login bug",
+            None,
+        );
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "sess".to_string(),
+        });
+        let tab = shell.core.workspace.focused_session().expect("focused");
+        assert_eq!(
+            shell.core.workspace.session_title(tab),
+            Some("Fix the login bug"),
+            "a resumed tab shows the session name, not the kind label"
+        );
+    }
+
+    #[test]
+    fn resuming_prefers_a_custom_title_over_the_summary() {
+        // The #46 title precedence (custom > summary) must carry into the tab.
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_named(
+            &mut shell,
+            "sess",
+            "/tmp/project",
+            "raw first prompt",
+            Some("Renamed session"),
+        );
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "sess".to_string(),
+        });
+        let tab = shell.core.workspace.focused_session().expect("focused");
+        assert_eq!(
+            shell.core.workspace.session_title(tab),
+            Some("Renamed session")
+        );
+    }
+
+    #[test]
+    fn an_osc_title_still_overrides_the_resumed_digest_name() {
+        // The digest name is only the *initial* label. On any Claude/platform
+        // that does emit an OSC title (#24), that live title must still win —
+        // guards the path #109 deliberately leaves intact.
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_named(
+            &mut shell,
+            "sess",
+            "/tmp/project",
+            "Fix the login bug",
+            None,
+        );
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "sess".to_string(),
+        });
+        let tab = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyTitle {
+            session: tab,
+            title: "✳ refactoring".to_string(),
+        });
+        assert_eq!(
+            shell.core.workspace.session_title(tab),
+            Some("✳ refactoring"),
+            "a live OSC title overrides the initial digest name"
+        );
+    }
+
+    #[test]
+    fn resuming_a_session_with_a_blank_name_keeps_the_kind_label() {
+        // A scanned record whose digest yields an empty title must not blank the
+        // tab — fall back to the kind label.
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_named(&mut shell, "sess", "/tmp/project", "", None);
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "sess".to_string(),
+        });
+        let tab = shell.core.workspace.focused_session().expect("focused");
+        assert_eq!(shell.core.workspace.session_title(tab), Some("project 🤖"));
+    }
+
+    #[test]
+    fn resuming_an_unknown_session_keeps_the_kind_label() {
+        // No scanned record (a session the last scan missed) → the tab keeps the
+        // cwd-derived kind label rather than an empty or wrong name. Green today;
+        // guards the fix's fallback so it never regresses.
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/ghost".to_string(),
+            resume: "missing".to_string(),
+        });
+        let tab = shell.core.workspace.focused_session().expect("focused");
+        assert_eq!(shell.core.workspace.session_title(tab), Some("ghost 🤖"));
     }
 
     #[test]

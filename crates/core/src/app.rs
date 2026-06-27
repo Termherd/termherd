@@ -419,10 +419,29 @@ impl App {
             Event::ToggleArchive(session) => {
                 self.update_meta(session, |meta| meta.archived = !meta.archived)
             }
-            Event::RenameSession { session, title } => self.update_meta(session, |meta| {
-                let trimmed = title.trim();
-                meta.title = (!trimmed.is_empty()).then(|| trimmed.to_owned());
-            }),
+            Event::RenameSession { session, title } => {
+                let trimmed = title.trim().to_owned();
+                let effects = self.update_meta(session.clone(), |meta| {
+                    meta.title = (!trimmed.is_empty()).then(|| trimmed.clone());
+                });
+                // Keep a live tab in step with the sidebar (#109 follow-up): an
+                // open session resuming this id is retitled too. A non-empty
+                // rename wins directly; clearing restores the digest-derived name
+                // when the session is still in the last scan.
+                if let Some(live) = self.open_session_for(&session) {
+                    let next = if trimmed.is_empty() {
+                        self.record_for(&session)
+                            .map(|record| self.session_title(record))
+                            .filter(|name| !name.trim().is_empty())
+                    } else {
+                        Some(trimmed)
+                    };
+                    if let Some(next) = next {
+                        self.workspace.set_session_title(live, next);
+                    }
+                }
+                effects
+            }
             Event::ShowArchivedToggled(show) => {
                 self.show_archived = show;
                 Vec::new()
@@ -1240,6 +1259,46 @@ mod tests {
         assert_eq!(
             app.session_title(&app.projects[0].sessions[0].clone()),
             derived
+        );
+    }
+
+    #[test]
+    fn renaming_a_session_retitles_its_open_tab_and_clearing_restores_the_name() {
+        // #109 follow-up: a sidebar rename must retitle the live tab too, not
+        // just the sidebar row — and clearing it restores the digest name.
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record(
+            "a",
+            "/p",
+            "derived summary",
+        )]));
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/p".into()),
+            launch: Launch::Claude {
+                resume: Some("a".into()),
+            },
+            title: "derived summary".into(),
+        }));
+        let session = app.workspace.focused_session().expect("a launched tab");
+
+        app.apply(Event::RenameSession {
+            session: "a".into(),
+            title: "My Title".into(),
+        });
+        assert_eq!(
+            app.workspace.session_title(session),
+            Some("My Title"),
+            "a sidebar rename retitles the open tab"
+        );
+
+        app.apply(Event::RenameSession {
+            session: "a".into(),
+            title: "  ".into(),
+        });
+        assert_eq!(
+            app.workspace.session_title(session),
+            Some("derived summary"),
+            "clearing the rename restores the digest name on the open tab"
         );
     }
 
