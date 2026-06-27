@@ -201,9 +201,10 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   only capture the inner terminal, not the GUI shell. Capture is an
   `Event`→`Effect` (pure `core`, I/O in `app`), surviving the hexagonal
   tightening. Ladder:
-  - **Rung 0+1 (G1) — graduated to #108** (`tech-health`): one keybind →
-    `Effect` → a state/PTY-text dump *and* an iced PNG to a known dir an AI
-    can read. The cheap, on-thesis first slice.
+  - **Rung 0+1 (G1) — shipped (#108)** (`tech-health`): ⌘⇧S → `Event::Capture`
+    → `Effect::Capture` → a JSON state+PTY-text dump *and* an iced PNG to
+    `~/.termherd/captures/capture-<ts>.{json,png}` an AI reads by newest stamp.
+    The cheap, on-thesis first slice.
   - **Rung 2 (G3, then G2) — design-first:** in-app gif/mp4 record mode
     (screenshot loop → encoder). Unlocks bug-repro recordings and promo
     screencasts. Needs a `/feature-torture` pass (encoder dep, frame timer,

@@ -24,8 +24,8 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Action, Effect, Keymap, Launch, LaunchSpec, ScrollTarget, SessionMeta, SessionRecord,
-    SessionStatus,
+    Action, CaptureDump, Effect, Keymap, Launch, LaunchSpec, ScrollTarget, SessionMeta,
+    SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen, TermKey};
 
@@ -409,6 +409,12 @@ enum Message {
     CloseDoc,
     /// Open a Ctrl/Cmd+clicked terminal link in the OS default handler (#28).
     OpenUrl(String),
+    /// The window screenshot for a capture finished (#108); encode it to PNG at
+    /// `png_path` (the companion of the already-written JSON dump).
+    CaptureScreenshot {
+        screenshot: window::Screenshot,
+        png_path: PathBuf,
+    },
 }
 
 impl Message {
@@ -525,6 +531,14 @@ impl Shell {
                 Effect::OpenUrl(url) => open_url(&url),
                 // A desktop notification is an OS handoff too (#29).
                 Effect::Notify { title, body } => notify(&title, &body),
+                // Capture is performed by `Shell::capture`, not here: the JSON
+                // dump and the PNG must share one timestamp, and the PNG needs
+                // an async `window::screenshot` follow-up this fire-and-forget
+                // loop can't return. Reaching this arm is unexpected — log it.
+                Effect::Capture(_) => {
+                    tracing::warn!("Effect::Capture routed through perform; ignored");
+                    Ok(())
+                }
             };
             if let Err(error) = outcome {
                 tracing::warn!(%error, "pty effect failed");
@@ -615,6 +629,62 @@ impl Shell {
         self.closing = None;
         self.archiving = None;
         Task::batch([spawn, self.resize_focused()])
+    }
+
+    /// The focused terminal's visible grid as text, for a capture (#108). `None`
+    /// when nothing is focused or its screen has not rendered yet — `core` then
+    /// records a focus-less dump.
+    fn focused_pty_text(&self) -> Option<String> {
+        let id = self.core.workspace.focused_session()?;
+        self.screens.get(&id).map(Screen::text)
+    }
+
+    /// Capture the current state for the AI dev loop (#108): hand `core` the
+    /// focused terminal's text, then write the JSON dump and take the PNG into
+    /// `~/.termherd/captures/`. A no-op when no home directory is set.
+    fn capture(&mut self) -> Task<Message> {
+        let Some(dir) = crate::capture::captures_dir() else {
+            tracing::warn!("no home directory; capture skipped");
+            return Task::none();
+        };
+        let focused_pty_text = self.focused_pty_text();
+        let effects = self
+            .core
+            .apply(termherd_core::Event::Capture { focused_pty_text });
+        for effect in effects {
+            if let Effect::Capture(dump) = effect {
+                return self.perform_capture(&dir, dump);
+            }
+        }
+        Task::none()
+    }
+
+    /// Write the rung-0 JSON dump into `dir` now and schedule the rung-1 PNG.
+    /// Both share one timestamp so the pair is easy to find; the JSON is written
+    /// synchronously (cheap), the PNG follows once iced returns the window
+    /// screenshot. `dir` is a seam: production passes `~/.termherd/captures`,
+    /// tests a throwaway. Any I/O failure is logged, never fatal — a missed
+    /// capture must not take the app down.
+    fn perform_capture(&self, dir: &std::path::Path, dump: CaptureDump) -> Task<Message> {
+        if let Err(error) = std::fs::create_dir_all(dir) {
+            tracing::warn!(%error, "could not create captures dir; capture skipped");
+            return Task::none();
+        }
+        let stamp = crate::capture::stamp(SystemTime::now());
+        match crate::capture::write_dump(dir, &stamp, &dump) {
+            Ok(path) => tracing::info!(path = %path.display(), "capture dump written"),
+            Err(error) => tracing::warn!(%error, "could not write capture dump"),
+        }
+        let png_path = crate::capture::png_path(dir, &stamp);
+        // Screenshot the live window (rung 1), then encode + write the PNG.
+        // `Task::<Option>::and_then` only fires for `Some`, so a window-less run
+        // simply skips the PNG and the JSON dump still stands.
+        window::latest()
+            .and_then(window::screenshot)
+            .map(move |screenshot| Message::CaptureScreenshot {
+                screenshot,
+                png_path: png_path.clone(),
+            })
     }
 
     /// Move the focused terminal's viewport (#44): the mouse wheel sends a
@@ -999,6 +1069,18 @@ impl Shell {
                 let effects = self.core.apply(termherd_core::Event::OpenUrl(url));
                 self.perform(effects)
             }
+            Message::CaptureScreenshot {
+                screenshot,
+                png_path,
+            } => {
+                match crate::capture::write_png(&png_path, &screenshot) {
+                    Ok(()) => {
+                        tracing::info!(path = %png_path.display(), "capture screenshot written");
+                    }
+                    Err(error) => tracing::warn!(%error, "could not write capture screenshot"),
+                }
+                Task::none()
+            }
         }
     }
 
@@ -1114,6 +1196,8 @@ impl Shell {
             Action::NewShellHere => self.new_shell_here(),
             Action::NewClaudeSessionHere => self.new_claude_here(),
             Action::ReopenClosedTab => self.reopen_closed_tab(),
+            // Capture the current state for the AI dev loop (#108).
+            Action::Capture => self.capture(),
             // Number-row jump straight to a tab (issue #26). An index past the
             // open tabs is absorbed by `core` as a no-op.
             Action::ActivateTab(index) => self.activate_tab(index),
@@ -1722,6 +1806,64 @@ mod key_routing {
         shell.focus = Focus::Search;
         let _ = shell.update(Message::ImeCommit("ê".to_string()));
         assert!(pty.writes().is_empty());
+    }
+
+    /// Build a `Screen` of one line of text, for seeding the focused PTY of a
+    /// capture test.
+    fn screen_of(text: &str) -> Screen {
+        let line: Vec<termherd_pty::ScreenCell> = text
+            .chars()
+            .map(|c| termherd_pty::ScreenCell {
+                c,
+                fg: [0, 0, 0],
+                bg: [0, 0, 0],
+                bold: false,
+            })
+            .collect();
+        Screen {
+            cols: line.len() as u16,
+            rows: 1,
+            lines: vec![line],
+            cursor: None,
+            scrolled: false,
+            bracketed_paste: false,
+        }
+    }
+
+    #[test]
+    fn capture_writes_a_json_dump_with_the_focused_pty_text() {
+        // #108: a capture writes capture-<ts>.json with the focused tab, its
+        // status, and the focused terminal's visible text. Driven through the
+        // `perform_capture` dir seam so it lands in a tempdir, not the real home;
+        // the PNG is an async iced screenshot and is not exercised here.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of("$ cargo test"));
+
+        // Build the dump through the same seam `capture()` uses for PTY text.
+        let text = shell.focused_pty_text();
+        assert_eq!(text.as_deref(), Some("$ cargo test"));
+        let dump = shell.core.build_capture(text);
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = shell.perform_capture(dir.path(), dump);
+
+        let written = std::fs::read_dir(dir.path())
+            .expect("captures dir exists")
+            .filter_map(Result::ok)
+            .find(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("capture-") && name.ends_with(".json")
+            })
+            .expect("a capture-*.json was written");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(written.path()).expect("read"))
+                .expect("valid json");
+        assert_eq!(json["active_tab"], 0);
+        assert_eq!(json["focused_pty"], "$ cargo test");
+        assert_eq!(json["tabs"][0]["title"], "project $");
+        assert_eq!(json["tabs"][0]["focus_session"], session.0.get());
     }
 
     #[test]
