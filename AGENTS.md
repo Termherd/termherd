@@ -122,7 +122,12 @@ exists). Do not relax them locally.
 - **No global mutable state.** No `static mut`, no `lazy_static`, no
   require-time singletons. Construct dependencies in `main()` and inject.
 - **One logging stack:** `tracing`. No `println!` outside tests.
-- **`unsafe_code = "deny"`** workspace-wide.
+- **`unsafe_code = "deny"`** workspace-wide. The lone sanctioned exception is
+  `crates/app/src/macos.rs` (AppKit FFI for the Cmd+Q quit path): a `#![cfg(…)]`
+  module with a module-scoped `#![allow(unsafe_code)]` and a `// SAFETY:` note
+  on every block. Any further exception needs the same — OS-FFI that can't be
+  expressed safely, quarantined in its own `cfg`-gated module — not a relaxation
+  scattered through otherwise-safe code.
 
 ## Conventions
 

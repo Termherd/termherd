@@ -83,7 +83,13 @@ proptest = "1"
 # builds, so this adds no duplicate native crates to the tree.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5.2"
-objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSMenu", "NSMenuItem"] }
+objc2-app-kit = { version = "0.2.2", features = [
+    "NSApplication",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+    "NSWindow",
+] }
 objc2-foundation = { version = "0.2.2", features = ["NSArray"] }
 
 # Monitor geometry for the off-screen window guard. Limited to non-Linux: the

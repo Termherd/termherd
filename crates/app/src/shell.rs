@@ -1217,8 +1217,14 @@ impl Shell {
                 // the main thread. Fires once (single window); no-op on other
                 // platforms.
                 #[cfg(target_os = "macos")]
-                if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
-                    crate::macos::route_quit_through_close(mtm);
+                match objc2_foundation::MainThreadMarker::new() {
+                    Some(mtm) => crate::macos::route_quit_through_close(mtm),
+                    // We expect to be on the main thread here; if not, skipping
+                    // would silently leave Cmd+Q on AppKit's hard-kill
+                    // `terminate:` with no trace explaining why. Log it.
+                    None => tracing::warn!(
+                        "window Opened off the main thread; Cmd+Q stays on AppKit terminate:"
+                    ),
                 }
                 Task::none()
             }
@@ -1949,11 +1955,13 @@ mod key_routing {
         // On macOS the menu Quit item (and Cmd+Q) is repointed to
         // `performClose:`, so it reaches the runtime as the *same*
         // `CloseRequested` window event the close button produces. That native
-        // repoint can't be exercised headlessly, but its whole point is that
-        // every quit trigger funnels through `request_quit`. This pins that
-        // single convergence: a live session must arm the confirm modal here,
-        // exactly as a CloseRequested does — so no future change can split off
-        // a second, unguarded quit path (the very defect this guards against).
+        // repoint can't be exercised headlessly. What this test *can* pin is the
+        // shared destination: both the close-button event and a direct
+        // `request_quit` arm the confirm modal identically for a live session.
+        // It guards `request_quit`'s confirm behaviour and that `CloseRequested`
+        // routes into it — it does not, and cannot, prove some *other* future
+        // code path won't bypass `request_quit`; keeping that single seam is a
+        // design rule, not something this test enforces.
         let (mut shell, _pty) = shell_with_terminal();
         assert_eq!(
             shell.live_session_count(),
