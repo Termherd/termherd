@@ -90,6 +90,17 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   deferred to GitHub traction / a sponsor ($99/yr). Linux ships **signed
   checksums** (#52). **Windows** Authenticode via free **SignPath
   Foundation** (#62, P2)*
+- [ ] `F-quality-gates` — intrinsic-quality CI gates beyond the existing
+  fmt/clippy/test/deny set, targeting the structural/maintainability axis
+  (complexity, domain boundaries, merge-conflict risk). Scoped from a
+  brainstorm (`brainstorm/20260627-ci-quality-gates.md`). **P1:** function
+  length (#105), unused deps (#106), and the crate-level dependency rule as an
+  architecture fitness function enforcing the hexagonal inward-only invariant
+  (#107). **P2 follow-ups** (not yet filed): intra-crate module rules (D
+  phase 2, `cargo-modules`/archtest) and cognitive-complexity (signal C).
+  **P3 / report-only** (blocked on a quality-report home): file length
+  (signal A) and churn×size hotspots (signal J). Dropped: MSRV check,
+  `todo!`→deny, PR-size warning (rationale in the report). `tech-health`
 - [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is
   a tab; a tab strip switches between them, each chip carrying its activity
   dot (the FR8 tab badge) and a close button that kills the session's PTY —
@@ -173,6 +184,27 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   existing `settings.json`, with the protocol/option logic pure and unit-tested.
   `set_option` (writes), the `keys` surface and the orchestration tools
   (open session / split / focus / rename / run-in-session) are still to come
+
+- [ ] `F-capture` — capture termherd (screenshots / screencasts) along a
+  fidelity ladder, for three goals: **G1** dev/AI debug loop, **G2** promo &
+  tutorial visuals, **G3** bug-repro recordings (devs now, maybe end users
+  later). Brainstorm: `brainstorm/20260627-auto-capture-screenshots.md`.
+  Grounding: termherd is an iced 0.14 GUI, so it ships
+  `window::screenshot()` (cross-platform, `png` already a dep) and
+  `iced_test::screenshot()` for headless CI; TTY recorders (asciinema/VHS)
+  only capture the inner terminal, not the GUI shell. Capture is an
+  `Event`→`Effect` (pure `core`, I/O in `app`), surviving the hexagonal
+  tightening. Ladder:
+  - **Rung 0+1 (G1) — graduated to #108** (`tech-health`): one keybind →
+    `Effect` → a state/PTY-text dump *and* an iced PNG to a known dir an AI
+    can read. The cheap, on-thesis first slice.
+  - **Rung 2 (G3, then G2) — design-first:** in-app gif/mp4 record mode
+    (screenshot loop → encoder). Unlocks bug-repro recordings and promo
+    screencasts. Needs a `/feature-torture` pass (encoder dep, frame timer,
+    privacy/redaction of PTY content for end users) before it graduates.
+  - **Seeded demo-data mode — design-first:** fixtures of fake sessions for
+    clean, reproducible captures. Force-multiplier for G2/G3, not a capture
+    method; revisit when rung 2 comes forward.
 
 ### Backlog — needs definition (from feedback gist, 2026-06-17)
 

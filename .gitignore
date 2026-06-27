@@ -28,3 +28,5 @@
 .claude/settings.local.json
 # Local git worktrees (per-machine working copies); never repo content.
 .claude/worktrees/
+# Local PRDs, planning notes, and extracted artifacts; locally controlled.
+.local/
