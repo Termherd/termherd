@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (search snippet)
+
+- Search results now show *what* matched (#58). A content hit (in a session's
+  first prompt, indexed transcript text, or slug) renders the matched line in
+  muted text under the session row, windowed around the hit and clipped to the
+  sidebar; title-only hits stay single-line. The location is computed by a pure
+  `core::browser::content_snippet` returning the line plus the match's byte
+  range, unit-tested for content/title/slug hits and long-line truncation.
+
 ### Fixed (tab status)
 
 - Tab activity dots (and the focused-terminal badge) stayed frozen on the

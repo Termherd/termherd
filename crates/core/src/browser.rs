@@ -5,6 +5,7 @@
 //! bug class (#41/#44) is pinned here by construction and by tests.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::time::{Duration, SystemTime};
 
 use termherd_claude::digest::SessionDigest;
@@ -151,12 +152,89 @@ fn session_matches(session: &SessionRecord, needle_lower: &str, titles_only: boo
     if titles_only {
         return false;
     }
-    let d = &session.digest;
-    d.summary.to_lowercase().contains(needle_lower)
-        || d.slug
-            .as_deref()
-            .is_some_and(|s| s.to_lowercase().contains(needle_lower))
-        || d.text_content.to_lowercase().contains(needle_lower)
+    content_snippet(&session.digest, needle_lower).is_some()
+}
+
+/// A located content match (#58): the line that matched, truncated around the
+/// hit when long, plus the byte range within [`Self::line`] the needle covers.
+/// Shown in muted text under a session row so a content hit reveals *what*
+/// matched, not merely *that* something did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchSnippet {
+    /// The matched line, with `…` marking either end that was clipped.
+    pub line: String,
+    /// Byte range of the match within [`Self::line`] (after truncation).
+    pub range: Range<usize>,
+}
+
+/// Most chars [`MatchSnippet::line`] shows; longer matched lines are windowed
+/// around the hit.
+const SNIPPET_MAX_CHARS: usize = 80;
+/// How many chars of leading context to keep before the hit when windowing.
+const SNIPPET_LEAD_CHARS: usize = 16;
+const ELLIPSIS: char = '…';
+
+/// Locate the first content hit for an already-lowercased `needle_lower` across
+/// a session's summary, indexed text (line by line), and slug — the same
+/// fields [`session_matches`] tests, so a content match always yields a
+/// snippet. `None` when nothing but the title matched (or nothing did).
+#[must_use]
+pub fn content_snippet(digest: &SessionDigest, needle_lower: &str) -> Option<MatchSnippet> {
+    if needle_lower.is_empty() {
+        return None;
+    }
+    std::iter::once(digest.summary.as_str())
+        .chain(digest.text_content.lines())
+        .chain(digest.slug.as_deref())
+        .find_map(|line| locate(line, needle_lower).map(|hit| snippet_around(line, hit)))
+}
+
+/// Byte range of the first case-insensitive occurrence of `needle_lower` in
+/// `line`. Lowercasing can shift byte offsets (rare, non-ASCII case-folding);
+/// when the mapped offsets no longer land on char boundaries we fall back to
+/// flagging the whole line rather than risk slicing mid-character.
+fn locate(line: &str, needle_lower: &str) -> Option<Range<usize>> {
+    let start = line.to_lowercase().find(needle_lower)?;
+    let end = start + needle_lower.len();
+    if line.is_char_boundary(start) && line.is_char_boundary(end) {
+        Some(start..end)
+    } else {
+        Some(0..line.len())
+    }
+}
+
+/// Window `line` to at most [`SNIPPET_MAX_CHARS`] around `hit`, keeping a little
+/// leading context and marking each clipped end with `…`. The returned range is
+/// re-based onto the (possibly shortened, `…`-prefixed) output.
+fn snippet_around(line: &str, hit: Range<usize>) -> MatchSnippet {
+    // Every valid slice point, in order — the hit endpoints are among them.
+    let bounds: Vec<usize> = line
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(line.len()))
+        .collect();
+    let last = bounds.len().saturating_sub(1);
+    let si = bounds.iter().position(|&b| b == hit.start).unwrap_or(0);
+    let ei = bounds.iter().position(|&b| b == hit.end).unwrap_or(last);
+
+    let ws = si.saturating_sub(SNIPPET_LEAD_CHARS);
+    let we = (ws + SNIPPET_MAX_CHARS).max(ei).min(last);
+
+    let mut out = String::new();
+    let mut range_start = hit.start - bounds[ws];
+    if ws > 0 {
+        out.push(ELLIPSIS);
+        range_start += ELLIPSIS.len_utf8();
+    }
+    out.push_str(&line[bounds[ws]..bounds[we]]);
+    if we < last {
+        out.push(ELLIPSIS);
+    }
+    let range_end = range_start + (hit.end - hit.start);
+    MatchSnippet {
+        line: out,
+        range: range_start..range_end,
+    }
 }
 
 #[cfg(test)]
@@ -284,6 +362,92 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].sessions.len(), 1);
         assert_eq!(filtered[0].sessions[0].session_id, "findme");
+    }
+
+    #[test]
+    fn content_snippet_locates_the_match_in_the_summary() {
+        let mut r = record("/a", "s1", 1);
+        r.digest.summary = "Fix the login bug".into();
+        let snip = content_snippet(&r.digest, "login").unwrap();
+        assert_eq!(snip.line, "Fix the login bug");
+        // The span carries original case; the needle is lowercased only to find.
+        assert_eq!(&snip.line[snip.range.clone()], "login");
+    }
+
+    #[test]
+    fn content_snippet_finds_a_hit_inside_indexed_text() {
+        let mut r = record("/a", "s1", 1);
+        r.digest.summary = "unrelated".into();
+        r.digest.text_content = "first line\nsecond has the needle here\nthird\n".into();
+        let snip = content_snippet(&r.digest, "needle").unwrap();
+        assert_eq!(snip.line, "second has the needle here");
+        assert_eq!(&snip.line[snip.range.clone()], "needle");
+    }
+
+    #[test]
+    fn content_snippet_matches_the_slug() {
+        let mut r = record("/a", "s1", 1);
+        r.digest.summary = "x".into();
+        r.digest.slug = Some("fix-login-bug".into());
+        let snip = content_snippet(&r.digest, "login").unwrap();
+        assert_eq!(snip.line, "fix-login-bug");
+        assert_eq!(&snip.line[snip.range.clone()], "login");
+    }
+
+    #[test]
+    fn content_snippet_is_none_for_a_title_only_hit() {
+        let mut r = record("/a", "s1", 1);
+        r.digest.summary = "ordinary prompt".into();
+        r.digest.custom_title = Some("Secret Project".into());
+        r.digest.text_content = "ordinary prompt\n".into();
+        // "secret" lives only in the custom title — a title-only hit, no snippet…
+        assert!(content_snippet(&r.digest, "secret").is_none());
+        // …yet the row is still kept, because the title matched.
+        assert!(session_matches(&r, "secret", false));
+    }
+
+    #[test]
+    fn content_snippet_returns_the_first_hit_only() {
+        let mut r = record("/a", "s1", 1);
+        r.digest.summary = "alpha needle one".into();
+        r.digest.text_content = "later needle two\n".into();
+        let snip = content_snippet(&r.digest, "needle").unwrap();
+        assert_eq!(snip.line, "alpha needle one");
+    }
+
+    #[test]
+    fn content_snippet_windows_a_long_line_around_the_hit() {
+        let mut r = record("/a", "s1", 1);
+        r.digest.summary = "x".into();
+        r.digest.text_content = format!("{}NEEDLE{}\n", "a".repeat(200), "b".repeat(200));
+        let snip = content_snippet(&r.digest, "needle").unwrap();
+        // At most the window plus an ellipsis at each clipped end.
+        assert!(snip.line.chars().count() <= SNIPPET_MAX_CHARS + 2);
+        assert!(snip.line.starts_with(ELLIPSIS) && snip.line.ends_with(ELLIPSIS));
+        assert_eq!(&snip.line[snip.range.clone()], "NEEDLE");
+    }
+
+    #[test]
+    fn content_snippet_ignores_an_empty_needle() {
+        let r = record("/a", "s1", 1);
+        assert!(content_snippet(&r.digest, "").is_none());
+    }
+
+    proptest! {
+        /// Whatever a snippet returns, its range always indexes a valid slice of
+        /// its own line — never panics, never mid-character.
+        #[test]
+        fn content_snippet_range_is_always_a_valid_slice(
+            body in "[a-zA-Z0-9 ]{0,300}",
+            needle in "[a-z]{1,8}",
+        ) {
+            let mut r = record("/a", "s1", 1);
+            r.digest.summary = String::new();
+            r.digest.text_content = format!("{body}\n");
+            if let Some(snip) = content_snippet(&r.digest, &needle) {
+                prop_assert!(snip.line.get(snip.range.clone()).is_some());
+            }
+        }
     }
 
     #[test]
