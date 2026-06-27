@@ -68,6 +68,10 @@ impl Shell {
 
     /// The session browser (FR1 + FR3): search box, then projects by recency.
     /// Clicking a project opens a fresh shell; clicking a session resumes it.
+    // Length is the layout tree built inline (nested iced column/row builders),
+    // not branching complexity. Tracked as a refactor candidate (extract the
+    // project/session row builders) rather than blocking the gate.
+    #[allow(clippy::too_many_lines)]
     fn sidebar(&self) -> Element<'_, Message> {
         let mut search = text_input(strings::SEARCH_PLACEHOLDER, &self.core.search)
             .id(search_id())

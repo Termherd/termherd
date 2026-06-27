@@ -28,6 +28,11 @@ expect_used = "warn"
 panic = "warn"
 todo = "warn"
 unimplemented = "warn"
+# Function length as a proxy for local complexity. The threshold lives in
+# clippy.toml (too-many-lines-threshold). `warn` here + CI's `-D warnings`
+# makes it blocking in CI while staying a warning during local edits. `core`
+# and `claude` carry their own lint tables, so they repeat this line.
+too_many_lines = "warn"
 
 [profile.release]
 lto = "thin"
