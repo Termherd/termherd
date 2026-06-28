@@ -4,11 +4,13 @@
 //! require-time singletons): tracing, single-instance, the filesystem
 //! scanner, then the iced shell.
 
+mod capture;
 mod collapsed_store;
 mod docs;
 #[cfg(target_os = "macos")]
 mod macos;
 mod metadata_store;
+mod paths;
 mod settings;
 mod shell;
 mod strings;

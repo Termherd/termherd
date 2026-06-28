@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod browser;
+pub mod capture;
 pub mod docscope;
 pub mod keymap;
 pub mod links;
@@ -16,6 +17,7 @@ pub use app::{
     App, Effect, Event, Launch, LaunchSpec, LiveSession, ScrollTarget, SessionStatus, SpawnSpec,
 };
 pub use browser::{ProjectGroup, SessionRecord};
+pub use capture::{CaptureDump, CaptureTab};
 pub use keymap::{Action, ChordError, KeyChord, Keymap};
 pub use metadata::SessionMeta;
 pub use workspace::{Branch, Pane, SessionId, SplitDir, Tab, Workspace};

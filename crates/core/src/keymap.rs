@@ -122,6 +122,9 @@ pub enum Action {
     /// Reopen the most recently closed tab, restoring its mode and directory
     /// (#78). A no-op when no tab has been closed yet.
     ReopenClosedTab,
+    /// Capture the current state for the AI dev loop (#108): a JSON state dump
+    /// plus a PNG screenshot, written to `~/.termherd/captures/`.
+    Capture,
     /// Jump straight to the tab at this zero-based index (issue #26). Bound to
     /// the platform's primary modifier and the number row — ⌘1…⌘9 on macOS,
     /// Ctrl+1…Ctrl+9 elsewhere — where the user-facing digit is 1-based.
@@ -232,6 +235,11 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::ReopenClosedTab,
         name: "reopen-closed-tab",
         default_chords: &["mod+shift+t"],
+    },
+    ActionDef {
+        action: Action::Capture,
+        name: "capture",
+        default_chords: &["mod+shift+s"],
     },
 ];
 
@@ -555,6 +563,18 @@ mod tests {
             Action::from_config_name("reopen-closed-tab"),
             Some(Action::ReopenClosedTab)
         );
+    }
+
+    #[test]
+    fn defaults_bind_capture_to_the_primary_modifier_shift_s() {
+        // #108: ⌘⇧S (macOS) / Ctrl+Shift+S triggers the state+PNG capture, and
+        // the action answers to `capture` in the config vocabulary.
+        let map = Keymap::defaults();
+        assert_eq!(
+            map.lookup(&KeyChord::new("s", primary_mod() | MOD_SHIFT)),
+            Some(Action::Capture)
+        );
+        assert_eq!(Action::from_config_name("capture"), Some(Action::Capture));
     }
 
     #[test]

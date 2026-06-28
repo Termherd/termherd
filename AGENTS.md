@@ -67,6 +67,24 @@ TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app   # second instance
 `temp_dir()` honours `$TMPDIR`, so both run. Launch detached when you need to
 keep interacting with the original window (e.g. to compare quit behaviour).
 
+### Capturing state for the AI dev loop (#108)
+
+Press **⌘⇧S** (macOS) / **Ctrl+Shift+S** (rebindable as `capture`) to dump the
+running app's state for an AI assistant to read — rung 0+1 of `F-capture`. Each
+press writes a timestamped pair to `~/.termherd/captures/`:
+
+- `capture-<ts>.json` — a diffable state dump: active tab, every tab's title /
+  activity status / hosted sessions, the focused pane, and the focused
+  terminal's visible text. No vision needed.
+- `capture-<ts>.png` — the real window pixels (iced `window::screenshot`), for
+  render / colour / glyph bugs the text dump can't show.
+
+`<ts>` is a UTC `YYYYMMDD-HHMMSS-mmm` stamp, so the **latest capture is the
+highest-named pair** — an AI finds it by sorting the directory. Capture stays
+pure in `core` (`Event::Capture` → `Effect::Capture(CaptureDump)`); all I/O —
+the clock, JSON/PNG encoding, the files — lives in the `app` adapter
+(`crates/app/src/capture.rs`).
+
 ## Architecture — the dependency rule
 
 Hexagonal workspace. The single most important invariant:

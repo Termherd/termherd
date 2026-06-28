@@ -174,8 +174,7 @@ fn last_component(path: &str) -> &str {
 
 /// `~/.claude` — home of plans and memory.
 fn claude_home() -> Option<PathBuf> {
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-    Some(PathBuf::from(home).join(".claude"))
+    Some(crate::paths::home_dir()?.join(".claude"))
 }
 
 /// `~/.claude` if it resolves, else a path that is the prefix of nothing — so a

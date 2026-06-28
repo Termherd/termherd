@@ -200,8 +200,7 @@ fn position_is_reachable(window: ScreenRect, screens: &[ScreenRect]) -> bool {
 
 /// `~/.termherd/window.json` — the app data dir from the PRD (§7).
 fn config_path() -> Option<PathBuf> {
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-    Some(PathBuf::from(home).join(".termherd").join("window.json"))
+    Some(crate::paths::termherd_dir()?.join("window.json"))
 }
 
 #[cfg(test)]
