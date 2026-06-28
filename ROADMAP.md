@@ -209,10 +209,14 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
     → `Effect::Capture` → a JSON state+PTY-text dump *and* an iced PNG to
     `~/.termherd/captures/capture-<ts>.{json,png}` an AI reads by newest stamp.
     The cheap, on-thesis first slice.
-  - **Rung 2 (G3, then G2) — design-first:** in-app gif/mp4 record mode
-    (screenshot loop → encoder). Unlocks bug-repro recordings and promo
-    screencasts. Needs a `/feature-torture` pass (encoder dep, frame timer,
-    privacy/redaction of PTY content for end users) before it graduates.
+  - **Rung 2 (G3) — reshaped ✂️, graduated to #124** (`tech-health`):
+    feature-torture (`.personal/feature-torture/reports/F-capture-rung2.md`)
+    cut the gif+mp4 bundle to **one dev-only GIF screencast** slice (pure-Rust
+    `gif`, screenshot-loop, hard time cap; record state machine pure in `core`).
+    **In-app mp4 is cut** — `x264` is GPL (relicenses the MIT binary) and
+    `openh264` compiles C via `build.rs` on all 3 CI legs, both breaking the
+    no-FFI / MIT / no-`unsafe` posture; **G2 promo polish routes to external
+    recorders**. Unblocked now that #108 has merged.
   - **Seeded demo-data mode — design-first:** fixtures of fake sessions for
     clean, reproducible captures. Force-multiplier for G2/G3, not a capture
     method; revisit when rung 2 comes forward.
