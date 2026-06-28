@@ -78,7 +78,7 @@ emitted only for the active tab):
 {
   "active_tab": 1,
   "tabs": [
-    { "active": false, "title": "termherd $", "status": "idle", "sessions": [1] },
+    { "active": false, "title": "termherd $", "status": "ready", "sessions": [1] },
     {
       "active": true,
       "title": "termherd 🤖",
@@ -99,8 +99,9 @@ Empty workspace (nothing launched yet):
 
 Field rules:
 
-- `status` is one of `starting` / `busy` / `idle` / `attention` / `exited` (the
-  most urgent among a tab's sessions).
+- `status` is the UI badge vocabulary (`strings::status_label`, so the dump
+  reads the same as the PNG): `starting` / `busy` / `ready` / `attention` /
+  `exited` (the most urgent among a tab's sessions).
 - `sessions` are the tab's panes left to right — one id for a plain tab, several
   for a split.
 - `focused_pty` is the focused terminal's visible text (`\n`-joined rows,
@@ -120,11 +121,10 @@ Field rules:
   deliberately left to the pixel rung. Different bug classes, one shared
   keybind.
 
-## Tests (10)
+## Tests (9)
 
-- **core (4):** dump snapshots tabs/focus/status/pty-text; empty-workspace
-  dump; split pane membership in order; `SessionStatus::as_str`; keymap
-  `mod+shift+s` ↔ `capture`.
+- **core (3):** dump snapshots tabs/focus/status/pty-text; empty-workspace
+  dump; split pane membership in order; keymap `mod+shift+s` ↔ `capture`.
 - **app (6):** `stamp` formats a known UTC instant and sorts chronologically;
   JSON shape (incl. `focus_session` omitted on the inactive tab); `write_dump`;
   `write_png` round-trips dimensions; shell-level capture writes the JSON with
@@ -136,11 +136,13 @@ by running the app.
 
 ## Files
 
-- `crates/core/src/capture.rs` — `CaptureDump` / `CaptureTab`,
-  `SessionStatus::as_str`.
+- `crates/core/src/capture.rs` — `CaptureDump` / `CaptureTab`.
 - `crates/core/src/app.rs` — `Event::Capture`, `Effect::Capture`,
   `App::build_capture`.
 - `crates/core/src/keymap.rs` — `Action::Capture`, default `mod+shift+s`.
-- `crates/app/src/capture.rs` — stamp, JSON encode, PNG encode, output dir.
+- `crates/app/src/capture.rs` — stamp, JSON encode (status via the shared UI
+  `strings::status_label`), PNG encode, output dir.
+- `crates/app/src/paths.rs` — shared `home_dir` / `termherd_dir` the stores
+  resolve through (one `~/.termherd` resolver, not seven).
 - `crates/app/src/shell.rs` — `Shell::capture` / `perform_capture`, the
-  `CaptureScreenshot` message.
+  `CaptureScreenshot` → off-thread `CaptureWritten` PNG encode.

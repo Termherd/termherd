@@ -504,7 +504,7 @@ impl App {
                     status: self.tab_status(index),
                     sessions: tab.sessions().into_iter().map(|s| s.0.get()).collect(),
                     // Only the active tab has a live focus to report.
-                    focus_session: active.then(|| focused.map(|s| s.0.get())).flatten(),
+                    focus_session: focused.filter(|_| active).map(|s| s.0.get()),
                 }
             })
             .collect();
@@ -1705,16 +1705,6 @@ mod tests {
         let tab = &dump.tabs[0];
         assert_eq!(tab.sessions, vec![base.0.get(), split.0.get()]);
         assert_eq!(tab.focus_session, Some(split.0.get()));
-    }
-
-    #[test]
-    fn session_status_as_str_tags_every_variant() {
-        use SessionStatus::*;
-        assert_eq!(Starting.as_str(), "starting");
-        assert_eq!(Busy.as_str(), "busy");
-        assert_eq!(Idle.as_str(), "idle");
-        assert_eq!(Attention.as_str(), "attention");
-        assert_eq!(Exited.as_str(), "exited");
     }
 
     proptest::proptest! {

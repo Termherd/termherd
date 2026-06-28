@@ -10,6 +10,7 @@ mod docs;
 #[cfg(target_os = "macos")]
 mod macos;
 mod metadata_store;
+mod paths;
 mod settings;
 mod shell;
 mod strings;

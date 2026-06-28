@@ -40,19 +40,3 @@ pub struct CaptureTab {
     /// elsewhere (an inactive tab has no live focus to report).
     pub focus_session: Option<u64>,
 }
-
-impl SessionStatus {
-    /// A stable lowercase tag for the capture dump (and any other serialised
-    /// surface). Kept explicit rather than derived from `Debug` so the wire
-    /// form can't drift if the variant names are ever refactored.
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            SessionStatus::Starting => "starting",
-            SessionStatus::Busy => "busy",
-            SessionStatus::Idle => "idle",
-            SessionStatus::Attention => "attention",
-            SessionStatus::Exited => "exited",
-        }
-    }
-}

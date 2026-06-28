@@ -15,14 +15,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use iced::window::Screenshot;
 use serde::Serialize;
-use termherd_core::{CaptureDump, SessionStatus};
+use termherd_core::CaptureDump;
 
 /// `~/.termherd/captures` — the capture output dir (PRD §7 app data dir). `None`
 /// when no home directory is set, in which case capture is skipped.
 #[must_use]
 pub fn captures_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-    Some(PathBuf::from(home).join(".termherd").join("captures"))
+    Some(crate::paths::termherd_dir()?.join("captures"))
 }
 
 /// A UTC `YYYYMMDD-HHMMSS-mmm` stamp for `now`, used as the capture filename
@@ -125,7 +124,9 @@ impl<'a> From<&'a CaptureDump> for DumpDto<'a> {
                 .map(|tab| TabDto {
                     active: tab.active,
                     title: &tab.title,
-                    status: tab.status.map(SessionStatus::as_str),
+                    // The same vocabulary the UI badge shows (`strings::status_label`),
+                    // so the dump and the PNG read alike — one stringification, no drift.
+                    status: tab.status.map(crate::strings::status_label),
                     sessions: &tab.sessions,
                     focus_session: tab.focus_session,
                 })
@@ -137,7 +138,7 @@ impl<'a> From<&'a CaptureDump> for DumpDto<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use termherd_core::CaptureTab;
+    use termherd_core::{CaptureTab, SessionStatus};
 
     #[test]
     fn stamp_formats_a_known_instant_in_utc() {
@@ -186,7 +187,8 @@ mod tests {
         assert_eq!(json["active_tab"], 1);
         assert_eq!(json["focused_pty"], "$ cargo test");
         assert_eq!(json["tabs"][0]["title"], "proj $");
-        assert_eq!(json["tabs"][0]["status"], "idle");
+        // Status uses the UI vocabulary (`status_label`): Idle renders "ready".
+        assert_eq!(json["tabs"][0]["status"], "ready");
         // focus_session is omitted on the inactive tab, present on the active.
         assert!(json["tabs"][0].get("focus_session").is_none());
         assert_eq!(json["tabs"][1]["status"], "busy");

@@ -70,8 +70,7 @@ fn rename_id() -> widget::Id {
 /// `USERPROFILE` (Windows) nor `HOME` (Unix) is set, so a launch always has a
 /// directory to start in.
 fn home_dir() -> String {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
+    crate::paths::home_dir()
         .map(|h| h.to_string_lossy().into_owned())
         .unwrap_or_else(|| ".".to_string())
 }
@@ -410,11 +409,15 @@ enum Message {
     /// Open a Ctrl/Cmd+clicked terminal link in the OS default handler (#28).
     OpenUrl(String),
     /// The window screenshot for a capture finished (#108); encode it to PNG at
-    /// `png_path` (the companion of the already-written JSON dump).
+    /// `png_path` (the companion of the already-written JSON dump). The encode
+    /// runs off the UI thread, so this only spawns it.
     CaptureScreenshot {
         screenshot: window::Screenshot,
         png_path: PathBuf,
     },
+    /// The capture PNG finished encoding off-thread (#108): the path written, or
+    /// the error to log.
+    CaptureWritten(Result<PathBuf, String>),
 }
 
 impl Message {
@@ -1073,9 +1076,23 @@ impl Shell {
                 screenshot,
                 png_path,
             } => {
-                match crate::capture::write_png(&png_path, &screenshot) {
-                    Ok(()) => {
-                        tracing::info!(path = %png_path.display(), "capture screenshot written");
+                // Encoding a multi-megapixel RGBA buffer to PNG is tens to
+                // hundreds of ms; run it off the runtime thread so ⌘⇧S doesn't
+                // freeze the UI (the screenshot itself is refcounted `Bytes`,
+                // cheap to hand off).
+                Task::perform(
+                    async move {
+                        crate::capture::write_png(&png_path, &screenshot)
+                            .map(|()| png_path)
+                            .map_err(|error| error.to_string())
+                    },
+                    Message::CaptureWritten,
+                )
+            }
+            Message::CaptureWritten(result) => {
+                match result {
+                    Ok(path) => {
+                        tracing::info!(path = %path.display(), "capture screenshot written");
                     }
                     Err(error) => tracing::warn!(%error, "could not write capture screenshot"),
                 }
