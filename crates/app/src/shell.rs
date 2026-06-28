@@ -85,6 +85,8 @@ pub struct Startup {
     pub metadata: HashMap<String, SessionMeta>,
     /// Folded project paths restored from disk (#22).
     pub collapsed: HashSet<String>,
+    /// GIF screencast budget from settings (#127).
+    pub record: RecordConfig,
 }
 
 pub fn run(
@@ -117,6 +119,7 @@ pub fn run(
                     keymap: startup.keymap.clone(),
                     metadata: startup.metadata.clone(),
                     collapsed: startup.collapsed.clone(),
+                    record: startup.record,
                 },
             );
             let initial_scan = shell.rescan();
@@ -506,7 +509,7 @@ impl Shell {
             link_modifier: false,
             tab_drag: None,
             exiting: false,
-            record_config: RecordConfig::default(),
+            record_config: startup.record,
             recorder: None,
             record_inflight: 0,
             record_finish_pending: false,
@@ -570,7 +573,7 @@ impl Shell {
                 // encoder thread. Reaching this arm is unexpected — log it.
                 Effect::StartRecording
                 | Effect::CaptureFrame
-                | Effect::FinishRecording
+                | Effect::FinishRecording { .. }
                 | Effect::CancelRecording => {
                     tracing::warn!("record effect routed through perform; ignored");
                     Ok(())
@@ -747,8 +750,18 @@ impl Shell {
                         .and_then(window::screenshot)
                         .map(Message::RecordFrame);
                 }
-                Effect::FinishRecording => self.request_finish_recording(),
-                Effect::CancelRecording => self.cancel_recording(),
+                // `core` names the stop reason; logged the moment it happens (not
+                // after the encoder drains) so start↔stop is unambiguous in the
+                // trace.
+                Effect::FinishRecording { capped } => {
+                    let reason = if capped { "cap reached" } else { "manual" };
+                    tracing::info!(reason, "screencast recording stopped");
+                    self.request_finish_recording();
+                }
+                Effect::CancelRecording => {
+                    tracing::info!("screencast recording cancelled (no frames captured)");
+                    self.cancel_recording();
+                }
                 _ => {}
             }
         }
@@ -772,7 +785,11 @@ impl Shell {
         let stamp = crate::capture::stamp(SystemTime::now());
         let path = dir.join(format!("capture-{stamp}.gif"));
         self.recorder = Some(Recorder::start(path, self.record_config));
-        tracing::info!("screencast recording started");
+        tracing::info!(
+            fps = self.record_config.fps,
+            cap_frames = self.record_config.max_frames(),
+            "screencast recording started"
+        );
     }
 
     /// Finish the screencast once every in-flight frame screenshot has been
@@ -1721,6 +1738,7 @@ mod key_routing {
                 keymap: Keymap::defaults(),
                 metadata: HashMap::new(),
                 collapsed: HashSet::new(),
+                record: RecordConfig::default(),
             },
         );
         let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
@@ -2292,6 +2310,7 @@ mod key_routing {
                 keymap: Keymap::defaults(),
                 metadata: HashMap::new(),
                 collapsed: HashSet::new(),
+                record: RecordConfig::default(),
             },
         );
         assert!(shell.core.workspace.focused_session().is_none());

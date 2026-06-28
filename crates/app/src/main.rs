@@ -81,6 +81,7 @@ fn main() -> iced::Result {
         keymap,
         metadata,
         collapsed,
+        record: settings.record_config(),
     };
     let result = shell::run(scanner, watch_root, pty, pty_rx, startup);
     // Keep the single-instance guard alive until the GUI exits.

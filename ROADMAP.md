@@ -20,8 +20,8 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
    free **SignPath Foundation** (#62 — viable, not parked; gated only on a
    policy page + MFA + their approval wait). See feature-torture
    `F-packaging-ci.md`.
-2. **P0 — bugs in shipped features:** #19 (Tab key not forwarded — core
-   terminal path), #18 (tab status stuck — misleading status badge).
+2. **P0 — clear.** Both closed: #19 (Tab forwarding — a false negative; plain
+   Tab already sends `\t`, Shift+Tab `CSI Z`) and #18 (tab status stuck).
 3. **P1 — cheap, on-thesis wins:** #26 (Ctrl+Number tabs), #23 (sidebar launch
    affordances: `$`/🤖 buttons + collapse-on-name; adds the missing fresh-Claude
    launch mode — FR4a). (#21 hide pane / Ctrl+B and #20 archive confirm —
@@ -209,14 +209,15 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
     → `Effect::Capture` → a JSON state+PTY-text dump *and* an iced PNG to
     `~/.termherd/captures/capture-<ts>.{json,png}` an AI reads by newest stamp.
     The cheap, on-thesis first slice.
-  - **Rung 2 (G3) — reshaped ✂️, graduated to #124** (`tech-health`):
+  - **Rung 2 (G3) — shipped (#124, #126)** (`tech-health`): reshaped ✂️ by
     feature-torture (`.personal/feature-torture/reports/F-capture-rung2.md`)
-    cut the gif+mp4 bundle to **one dev-only GIF screencast** slice (pure-Rust
-    `gif`, screenshot-loop, hard time cap; record state machine pure in `core`).
-    **In-app mp4 is cut** — `x264` is GPL (relicenses the MIT binary) and
-    `openh264` compiles C via `build.rs` on all 3 CI legs, both breaking the
-    no-FFI / MIT / no-`unsafe` posture; **G2 promo polish routes to external
-    recorders**. Unblocked now that #108 has merged.
+    to **one dev-only GIF screencast** slice (⌘⇧R toggle, pure-Rust `gif`,
+    screenshot-loop on a thread timer, hard frame cap; record state machine pure
+    in `core`, encoder on a dedicated thread in `app`). **In-app mp4 was cut** —
+    `x264` is GPL (relicenses the MIT binary) and `openh264` compiles C via
+    `build.rs` on all 3 CI legs, both breaking the no-FFI / MIT / no-`unsafe`
+    posture; **G2 promo polish routes to external recorders**. Settings-
+    configurable budget (fps/cap/scale) is a follow-up (#127).
   - **Seeded demo-data mode — design-first:** fixtures of fake sessions for
     clean, reproducible captures. Force-multiplier for G2/G3, not a capture
     method; revisit when rung 2 comes forward.

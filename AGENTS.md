@@ -87,8 +87,9 @@ the clock, JSON/PNG encoding, the files — lives in the `app` adapter
 
 For motion (rung 2, #124), press **⌘⇧R** / **Ctrl+Shift+R** (rebindable as
 `toggle-record`) to start a **GIF screencast**; press again to stop, or let it
-auto-stop at the cap (default 8 fps / 30 s / 0.5× scale). It writes
-`capture-<ts>.gif` to the same dir. Same hexagonal split: `core` owns the
+auto-stop at the cap (default 8 fps / 30 s / 0.5× scale, set under a `record`
+block in `settings.json` — #127). It writes `capture-<ts>.gif` to the same dir.
+Same hexagonal split: `core` owns the
 idle→recording state machine (frames are the time proxy — no clock), and the
 `gif` encoder runs on a dedicated thread in `app` (`crates/app/src/record.rs`)
 so the UI — and the recording — stay smooth.
