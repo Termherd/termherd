@@ -11,6 +11,7 @@ pub mod keymap;
 pub mod links;
 pub mod metadata;
 pub mod ports;
+pub mod record;
 pub mod workspace;
 
 pub use app::{
@@ -20,4 +21,5 @@ pub use browser::{ProjectGroup, SessionRecord};
 pub use capture::{CaptureDump, CaptureTab};
 pub use keymap::{Action, ChordError, KeyChord, Keymap};
 pub use metadata::SessionMeta;
+pub use record::Recording;
 pub use workspace::{Branch, Pane, SessionId, SplitDir, Tab, Workspace};
