@@ -46,6 +46,20 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 powershell -c "irm https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.ps1 | iex"
 ```
 
+### Verify a Linux download
+
+Linux release binaries carry a sigstore *keyless* build-provenance attestation
+(no signing key — the signer is the release workflow, via GitHub OIDC, logged
+in the public Rekor transparency log). Verify a download with the `gh` CLI:
+
+```bash
+gh attestation verify termherd-x86_64-unknown-linux-gnu.tar.xz \
+  --repo Termherd/termherd
+```
+
+A successful check proves both integrity and that the artifact was built by
+this repository's CI. A `SHA256SUMS` file is also attached to each release.
+
 ## Run from source
 
 ```bash
