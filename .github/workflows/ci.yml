@@ -136,7 +136,13 @@ jobs:
           bash download-actionlint.bash 1.7.7
           echo "path=$(pwd)/actionlint" >> "$GITHUB_OUTPUT"
       - name: Run actionlint
-        run: ${{ steps.install.outputs.path }} -color
+        # actionlint v1.7.7's bundled metadata for attest-build-provenance
+        # predates its `subject-checksums` input (a real, current input — see
+        # sign-release.yml). Ignore that one stale "not defined" note; it is a
+        # false positive, not a workflow error.
+        run: >-
+          ${{ steps.install.outputs.path }} -color
+          -ignore 'input "subject-checksums" is not defined'
 
   markdown:
     name: markdownlint
