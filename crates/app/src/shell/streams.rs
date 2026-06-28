@@ -71,6 +71,43 @@ pub(super) fn pty_stream(output: &PtyOutput) -> impl Stream<Item = Message> + us
     )
 }
 
+/// Drives the screencast frame timer (#124). A background thread ticks every
+/// `interval`; each tick becomes a [`Message::RecordTick`]. The subscription is
+/// present only while recording, so dropping it tears the thread down — its
+/// `send` fails once the receiver is gone. A plain `std::thread::sleep` loop,
+/// so no async-runtime feature is needed (iced's default backend has no timer).
+#[derive(Clone, Hash)]
+pub(super) struct RecordTicker {
+    pub(super) interval: Duration,
+}
+
+/// One frame-timer stream: a thread sleeps `interval` and pushes a tick, the
+/// async half forwards each as a [`Message::RecordTick`] until the stream is
+/// dropped (recording stopped).
+pub(super) fn record_tick_stream(ticker: &RecordTicker) -> impl Stream<Item = Message> + use<> {
+    let interval = ticker.interval;
+    iced::stream::channel(
+        4,
+        move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            let (tx, mut rx) = iced::futures::channel::mpsc::unbounded::<()>();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(interval);
+                    // Receiver gone (subscription dropped) → stop ticking.
+                    if tx.unbounded_send(()).is_err() {
+                        break;
+                    }
+                }
+            });
+            while rx.next().await.is_some() {
+                if output.send(Message::RecordTick).await.is_err() {
+                    break;
+                }
+            }
+        },
+    )
+}
+
 /// One fs-watch stream per projects root: forwards each debounced change
 /// burst as a [`Message::ProjectsChanged`]. The watcher lives as long as
 /// the stream; if it cannot start, the sidebar simply stops live-updating

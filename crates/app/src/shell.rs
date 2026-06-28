@@ -30,6 +30,7 @@ use termherd_core::{
 use termherd_pty::{PtyEvent, Screen, TermKey};
 
 use crate::docs::DocEntry;
+use crate::record::{RecordConfig, Recorder};
 use crate::settings::ThemeChoice;
 use crate::window_config::WindowConfig;
 
@@ -40,7 +41,7 @@ mod terminal;
 mod view;
 
 use input::{chord_of, event_modifiers, key_mods, numpad_char, to_term_key};
-use streams::{PtyOutput, pty_stream, watch_stream};
+use streams::{PtyOutput, RecordTicker, pty_stream, record_tick_stream, watch_stream};
 use termherd_core::browser::project_label;
 use terminal::{CELL_H, CELL_W, notify, open_url};
 
@@ -247,6 +248,17 @@ struct Shell {
     /// `exit_on_close_request(false)` keeps the runtime alive), so the process
     /// would otherwise survive Cmd+Q and hold the single-instance lock.
     exiting: bool,
+    /// The GIF screencast budget (#124): fps / duration cap / frame scale.
+    /// Default for now; `settings.json` configurability is a follow-up.
+    record_config: RecordConfig,
+    /// The recorder thread for an in-progress screencast (#124), or `None`. The
+    /// encoder lives off the UI thread; the shell only feeds it frames.
+    recorder: Option<Recorder>,
+    /// Frame screenshots requested but not yet handed to the recorder (#124).
+    /// A stop waits for this to drain so the final frames aren't lost.
+    record_inflight: u32,
+    /// A finish is pending until the last in-flight frame is handed off (#124).
+    record_finish_pending: bool,
 }
 
 /// A tab drag in flight (#25): the index the drag started on and the slot the
@@ -418,6 +430,12 @@ enum Message {
     /// The capture PNG finished encoding off-thread (#108): the path written, or
     /// the error to log.
     CaptureWritten(Result<PathBuf, String>),
+    /// The screencast frame timer fired (#124): ask `core` for the next frame /
+    /// auto-stop decision.
+    RecordTick,
+    /// A recorded window screenshot is ready (#124); hand it to the encoder
+    /// thread.
+    RecordFrame(window::Screenshot),
 }
 
 impl Message {
@@ -488,6 +506,10 @@ impl Shell {
             link_modifier: false,
             tab_drag: None,
             exiting: false,
+            record_config: RecordConfig::default(),
+            recorder: None,
+            record_inflight: 0,
+            record_finish_pending: false,
         }
     }
 
@@ -540,6 +562,17 @@ impl Shell {
                 // loop can't return. Reaching this arm is unexpected — log it.
                 Effect::Capture(_) => {
                     tracing::warn!("Effect::Capture routed through perform; ignored");
+                    Ok(())
+                }
+                // Record effects are performed by `Shell::run_record_effects`,
+                // not here: `CaptureFrame` needs an async `window::screenshot`
+                // follow-up this loop can't return, and start/finish manage the
+                // encoder thread. Reaching this arm is unexpected — log it.
+                Effect::StartRecording
+                | Effect::CaptureFrame
+                | Effect::FinishRecording
+                | Effect::CancelRecording => {
+                    tracing::warn!("record effect routed through perform; ignored");
                     Ok(())
                 }
             };
@@ -688,6 +721,102 @@ impl Shell {
                 screenshot,
                 png_path: png_path.clone(),
             })
+    }
+
+    /// Start or stop the GIF screencast (#124): hand `core` the frame cap from
+    /// the record budget and perform whatever effects it returns.
+    fn toggle_record(&mut self) -> Task<Message> {
+        let max_frames = self.record_config.max_frames();
+        let effects = self
+            .core
+            .apply(termherd_core::Event::ToggleRecord { max_frames });
+        self.run_record_effects(effects)
+    }
+
+    /// Perform the record effects `core` returned (#124): open/feed/finish the
+    /// encoder thread. `CaptureFrame` is the only one with an async follow-up —
+    /// it screenshots the window, the result arriving as [`Message::RecordFrame`].
+    fn run_record_effects(&mut self, effects: Vec<Effect>) -> Task<Message> {
+        let mut task = Task::none();
+        for effect in effects {
+            match effect {
+                Effect::StartRecording => self.start_recording(),
+                Effect::CaptureFrame => {
+                    self.record_inflight += 1;
+                    task = window::latest()
+                        .and_then(window::screenshot)
+                        .map(Message::RecordFrame);
+                }
+                Effect::FinishRecording => self.request_finish_recording(),
+                Effect::CancelRecording => self.cancel_recording(),
+                _ => {}
+            }
+        }
+        task
+    }
+
+    /// Open the recorder thread for a new screencast (#124), writing to
+    /// `capture-<ts>.gif` in the #108 capture dir. A missing home dir or an
+    /// uncreatable dir aborts the start — logged, never fatal.
+    fn start_recording(&mut self) {
+        self.record_inflight = 0;
+        self.record_finish_pending = false;
+        let Some(dir) = crate::capture::captures_dir() else {
+            tracing::warn!("no home directory; recording skipped");
+            return;
+        };
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(%error, "could not create captures dir; recording skipped");
+            return;
+        }
+        let stamp = crate::capture::stamp(SystemTime::now());
+        let path = dir.join(format!("capture-{stamp}.gif"));
+        self.recorder = Some(Recorder::start(path, self.record_config));
+        tracing::info!("screencast recording started");
+    }
+
+    /// Finish the screencast once every in-flight frame screenshot has been
+    /// handed to the encoder (#124), so a stop never drops the final frames. If
+    /// none are in flight (a manual stop), finish straight away.
+    fn request_finish_recording(&mut self) {
+        if self.record_inflight == 0 {
+            self.finish_recorder();
+        } else {
+            self.record_finish_pending = true;
+        }
+    }
+
+    /// Flush and close the encoder thread (#124).
+    fn finish_recorder(&mut self) {
+        if let Some(recorder) = self.recorder.take() {
+            recorder.finish();
+        }
+        self.record_inflight = 0;
+        self.record_finish_pending = false;
+    }
+
+    /// Abandon the screencast, deleting any partial file (#124) — the zero-frame
+    /// stop.
+    fn cancel_recording(&mut self) {
+        if let Some(recorder) = self.recorder.take() {
+            recorder.cancel();
+        }
+        self.record_inflight = 0;
+        self.record_finish_pending = false;
+    }
+
+    /// Hand one recorded window screenshot to the encoder thread (#124), then
+    /// finish if this was the last frame a stop was waiting on.
+    fn on_record_frame(&mut self, screenshot: window::Screenshot) -> Task<Message> {
+        if let Some(recorder) = self.recorder.as_ref() {
+            let (width, height) = (screenshot.size.width, screenshot.size.height);
+            recorder.frame(screenshot.rgba.to_vec(), width, height);
+        }
+        self.record_inflight = self.record_inflight.saturating_sub(1);
+        if self.record_finish_pending && self.record_inflight == 0 {
+            self.finish_recorder();
+        }
+        Task::none()
     }
 
     /// Move the focused terminal's viewport (#44): the mouse wheel sends a
@@ -1098,6 +1227,11 @@ impl Shell {
                 }
                 Task::none()
             }
+            Message::RecordTick => {
+                let effects = self.core.apply(termherd_core::Event::RecordTick);
+                self.run_record_effects(effects)
+            }
+            Message::RecordFrame(screenshot) => self.on_record_frame(screenshot),
         }
     }
 
@@ -1215,6 +1349,8 @@ impl Shell {
             Action::ReopenClosedTab => self.reopen_closed_tab(),
             // Capture the current state for the AI dev loop (#108).
             Action::Capture => self.capture(),
+            // Start / stop the GIF screencast (#124).
+            Action::ToggleRecord => self.toggle_record(),
             // Number-row jump straight to a tab (issue #26). An index past the
             // open tabs is absorbed by `core` as a no-op.
             Action::ActivateTab(index) => self.activate_tab(index),
@@ -1469,6 +1605,16 @@ impl Shell {
             subs.push(Subscription::run_with(root.clone(), watch_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
+        // The screencast frame timer runs only while recording (#124): one tick
+        // per frame at the configured fps drives `Event::RecordTick`.
+        if self.core.is_recording() {
+            subs.push(Subscription::run_with(
+                RecordTicker {
+                    interval: self.record_config.frame_interval(),
+                },
+                record_tick_stream,
+            ));
+        }
         Subscription::batch(subs)
     }
 }

@@ -15,6 +15,7 @@ use crate::browser::{
 };
 use crate::capture::{CaptureDump, CaptureTab};
 use crate::metadata::SessionMeta;
+use crate::record::Recording;
 use crate::workspace::{SessionId, SplitDir, Workspace};
 
 /// Cell size a freshly launched PTY starts at, before the widget reports its
@@ -60,6 +61,10 @@ pub struct App {
     /// [`MAX_CLOSED_TABS`] so a long session can't grow it without bound;
     /// closing past the cap drops the oldest entry.
     closed_tabs: Vec<ClosedTab>,
+    /// The in-progress GIF screencast (#124), or `None` when not recording. The
+    /// frame timer and encoder live in the `app`; `core` only counts frames
+    /// against the cap and decides capture/finish.
+    recording: Option<Recording>,
 }
 
 /// How many closed tabs the reopen stack (#78) remembers. Walking back further
@@ -284,6 +289,15 @@ pub enum Event {
     Capture {
         focused_pty_text: Option<String>,
     },
+    /// Start or stop the GIF screencast (#124). Starting carries the frame cap
+    /// (`fps × max_seconds`) the app derives from settings; a no-op when the cap
+    /// is zero.
+    ToggleRecord {
+        max_frames: u32,
+    },
+    /// One frame tick from the app's record timer (#124): capture a frame, and
+    /// auto-stop once the cap is reached. A no-op when not recording.
+    RecordTick,
 }
 
 /// Side effects the runtime must perform. The iced shell turns these into
@@ -322,6 +336,20 @@ pub enum Effect {
     /// encodes it to `capture-<ts>.json` and takes the companion PNG; `core`
     /// only builds the pure, diffable payload.
     Capture(CaptureDump),
+    /// Begin a GIF screencast (#124): the app opens the encoder and starts its
+    /// frame timer. `core` has already entered the recording state.
+    StartRecording,
+    /// Capture one screencast frame (#124): the app screenshots the window and
+    /// appends it to the open encoder.
+    CaptureFrame,
+    /// Finalise the GIF screencast (#124): the app flushes the encoder and writes
+    /// `capture-<ts>.gif`. Emitted on a manual stop with frames captured, or when
+    /// the frame cap auto-stops the recording.
+    FinishRecording,
+    /// Abandon a screencast that captured no frames (#124): the app drops the
+    /// encoder without writing a file. Emitted when a recording is stopped before
+    /// the first frame.
+    CancelRecording,
 }
 
 impl App {
@@ -480,7 +508,54 @@ impl App {
             Event::Capture { focused_pty_text } => {
                 vec![Effect::Capture(self.build_capture(focused_pty_text))]
             }
+            Event::ToggleRecord { max_frames } => self.toggle_record(max_frames),
+            Event::RecordTick => self.record_tick(),
         }
+    }
+
+    /// Start or stop the GIF screencast (#124). Starting from idle enters the
+    /// recording state and asks the app to open its encoder; a zero `max_frames`
+    /// is a no-op (nothing to record). Stopping finalises the GIF when frames
+    /// were captured, or cancels it outright when none were (the zero-frame
+    /// guard — a start immediately followed by a stop writes no file).
+    fn toggle_record(&mut self, max_frames: u32) -> Vec<Effect> {
+        match self.recording.take() {
+            None => {
+                if max_frames == 0 {
+                    return Vec::new();
+                }
+                self.recording = Some(Recording {
+                    frames: 0,
+                    max_frames,
+                });
+                vec![Effect::StartRecording]
+            }
+            Some(recording) if recording.frames > 0 => vec![Effect::FinishRecording],
+            Some(_) => vec![Effect::CancelRecording],
+        }
+    }
+
+    /// One frame of the screencast (#124): count it and ask the app to capture
+    /// it, then auto-stop once the cap is reached. A tick while not recording is
+    /// a silent no-op (a stray timer beat after a stop).
+    fn record_tick(&mut self) -> Vec<Effect> {
+        let Some(recording) = self.recording.as_mut() else {
+            return Vec::new();
+        };
+        recording.frames += 1;
+        let mut effects = vec![Effect::CaptureFrame];
+        if recording.frames >= recording.max_frames {
+            self.recording = None;
+            effects.push(Effect::FinishRecording);
+        }
+        effects
+    }
+
+    /// Whether a GIF screencast is in progress (#124) — the app gates its frame
+    /// timer subscription on this.
+    #[must_use]
+    pub fn is_recording(&self) -> bool {
+        self.recording.is_some()
     }
 
     /// Assemble the capture snapshot for the AI dev loop (#108). Pure: it reads
@@ -1705,6 +1780,109 @@ mod tests {
         let tab = &dump.tabs[0];
         assert_eq!(tab.sessions, vec![base.0.get(), split.0.get()]);
         assert_eq!(tab.focus_session, Some(split.0.get()));
+    }
+
+    // ---- #124: GIF screencast record state machine ----
+
+    #[test]
+    fn toggle_record_starts_then_a_manual_toggle_finishes() {
+        let mut app = App::new();
+        assert!(!app.is_recording());
+
+        let start = app.apply(Event::ToggleRecord { max_frames: 10 });
+        assert!(matches!(start.as_slice(), [Effect::StartRecording]));
+        assert!(app.is_recording());
+
+        // Capture a couple of frames, then stop by hand.
+        assert!(matches!(
+            app.apply(Event::RecordTick).as_slice(),
+            [Effect::CaptureFrame]
+        ));
+        assert!(matches!(
+            app.apply(Event::RecordTick).as_slice(),
+            [Effect::CaptureFrame]
+        ));
+        let stop = app.apply(Event::ToggleRecord { max_frames: 10 });
+        assert!(matches!(stop.as_slice(), [Effect::FinishRecording]));
+        assert!(!app.is_recording());
+    }
+
+    #[test]
+    fn the_frame_cap_auto_stops_the_recording() {
+        let mut app = App::new();
+        app.apply(Event::ToggleRecord { max_frames: 3 });
+
+        // The first two ticks just capture; the third hits the cap and finishes.
+        assert!(matches!(
+            app.apply(Event::RecordTick).as_slice(),
+            [Effect::CaptureFrame]
+        ));
+        assert!(matches!(
+            app.apply(Event::RecordTick).as_slice(),
+            [Effect::CaptureFrame]
+        ));
+        let last = app.apply(Event::RecordTick);
+        assert!(
+            matches!(
+                last.as_slice(),
+                [Effect::CaptureFrame, Effect::FinishRecording]
+            ),
+            "the cap frame is captured, then the recording finishes, got {last:?}"
+        );
+        assert!(!app.is_recording(), "the cap auto-stops the recording");
+
+        // A stray tick after the auto-stop is a silent no-op.
+        assert!(app.apply(Event::RecordTick).is_empty());
+    }
+
+    #[test]
+    fn stopping_before_any_frame_cancels_without_writing() {
+        // The zero-frame guard: start then immediately stop → no file (#124).
+        let mut app = App::new();
+        app.apply(Event::ToggleRecord { max_frames: 10 });
+        let stop = app.apply(Event::ToggleRecord { max_frames: 10 });
+        assert!(matches!(stop.as_slice(), [Effect::CancelRecording]));
+        assert!(!app.is_recording());
+    }
+
+    #[test]
+    fn a_zero_cap_record_is_a_noop() {
+        let mut app = App::new();
+        assert!(app.apply(Event::ToggleRecord { max_frames: 0 }).is_empty());
+        assert!(!app.is_recording());
+    }
+
+    #[test]
+    fn a_record_tick_while_idle_is_a_noop() {
+        let mut app = App::new();
+        assert!(app.apply(Event::RecordTick).is_empty());
+        assert!(!app.is_recording());
+    }
+
+    proptest::proptest! {
+        /// For any cap ≥ 1, exactly `max_frames` ticks capture `max_frames`
+        /// frames and produce exactly one `FinishRecording`, leaving the app
+        /// idle — and `apply` never panics (Q5).
+        #[test]
+        fn a_recording_captures_exactly_its_cap_then_finishes(max_frames in 1u32..200) {
+            let mut app = App::new();
+            app.apply(Event::ToggleRecord { max_frames });
+
+            let mut captured = 0u32;
+            let mut finishes = 0u32;
+            for _ in 0..max_frames {
+                for effect in app.apply(Event::RecordTick) {
+                    match effect {
+                        Effect::CaptureFrame => captured += 1,
+                        Effect::FinishRecording => finishes += 1,
+                        other => proptest::prop_assert!(false, "unexpected {:?}", other),
+                    }
+                }
+            }
+            proptest::prop_assert_eq!(captured, max_frames);
+            proptest::prop_assert_eq!(finishes, 1);
+            proptest::prop_assert!(!app.is_recording());
+        }
     }
 
     proptest::proptest! {

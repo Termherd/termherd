@@ -11,6 +11,7 @@ mod docs;
 mod macos;
 mod metadata_store;
 mod paths;
+mod record;
 mod settings;
 mod shell;
 mod strings;

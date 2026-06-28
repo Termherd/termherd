@@ -71,6 +71,7 @@ png = "0.17"
 notify-rust = "4"
 # Typed save errors for the plans/memory write slice.
 thiserror = "2"
+gif = "0.14.2"
 
 [dev-dependencies]
 # Temp dirs for the atomic-write round-trip tests.

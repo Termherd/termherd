@@ -125,6 +125,9 @@ pub enum Action {
     /// Capture the current state for the AI dev loop (#108): a JSON state dump
     /// plus a PNG screenshot, written to `~/.termherd/captures/`.
     Capture,
+    /// Start or stop the GIF screencast (#124): a toggle that records the window
+    /// to `~/.termherd/captures/capture-<ts>.gif`.
+    ToggleRecord,
     /// Jump straight to the tab at this zero-based index (issue #26). Bound to
     /// the platform's primary modifier and the number row — ⌘1…⌘9 on macOS,
     /// Ctrl+1…Ctrl+9 elsewhere — where the user-facing digit is 1-based.
@@ -240,6 +243,11 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::Capture,
         name: "capture",
         default_chords: &["mod+shift+s"],
+    },
+    ActionDef {
+        action: Action::ToggleRecord,
+        name: "toggle-record",
+        default_chords: &["mod+shift+r"],
     },
 ];
 
@@ -575,6 +583,21 @@ mod tests {
             Some(Action::Capture)
         );
         assert_eq!(Action::from_config_name("capture"), Some(Action::Capture));
+    }
+
+    #[test]
+    fn defaults_bind_toggle_record_to_the_primary_modifier_shift_r() {
+        // #124: ⌘⇧R (macOS) / Ctrl+Shift+R toggles the GIF screencast, and the
+        // action answers to `toggle-record` in the config vocabulary.
+        let map = Keymap::defaults();
+        assert_eq!(
+            map.lookup(&KeyChord::new("r", primary_mod() | MOD_SHIFT)),
+            Some(Action::ToggleRecord)
+        );
+        assert_eq!(
+            Action::from_config_name("toggle-record"),
+            Some(Action::ToggleRecord)
+        );
     }
 
     #[test]
