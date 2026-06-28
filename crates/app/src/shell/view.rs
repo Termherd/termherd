@@ -401,6 +401,9 @@ impl Shell {
         if let Some(bar) = self.tab_bar() {
             pane = pane.push(bar);
         }
+        if let Some(indicator) = self.recording_indicator() {
+            pane = pane.push(indicator);
+        }
         if let Some(confirm) = self.close_confirmation() {
             pane = pane.push(confirm);
         }
@@ -533,6 +536,26 @@ impl Shell {
             mouse_area(bar)
                 .on_release(Message::TabDragEnd)
                 .on_exit(Message::TabDragCancel)
+                .into(),
+        )
+    }
+
+    /// The `● REC n/cap` indicator shown while a GIF screencast records (#124),
+    /// so the recording state — and how close it is to the auto-stop cap — is
+    /// unmistakable. `None` when not recording. Independent of the tab strip, so
+    /// it shows even on an empty workspace.
+    fn recording_indicator(&self) -> Option<Element<'_, Message>> {
+        // The shared alert red (matches `Attention` / the editor error note), so
+        // the recording cue never drifts from the rest of the palette.
+        const REC: Color = Color::from_rgb(0.95, 0.35, 0.35);
+        let (frames, cap) = self.core.recording_progress()?;
+        // Show the frame *being captured* (1-based), so the count climbs
+        // 1/cap → cap/cap instead of stopping one short — the cap tick captures
+        // the final frame and ends the recording in the same step.
+        let shown = (frames + 1).min(cap);
+        Some(
+            container(text(format!("● REC {shown}/{cap}")).size(12).color(REC))
+                .padding([2, 8])
                 .into(),
         )
     }

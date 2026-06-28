@@ -343,9 +343,10 @@ pub enum Effect {
     /// appends it to the open encoder.
     CaptureFrame,
     /// Finalise the GIF screencast (#124): the app flushes the encoder and writes
-    /// `capture-<ts>.gif`. Emitted on a manual stop with frames captured, or when
-    /// the frame cap auto-stops the recording.
-    FinishRecording,
+    /// `capture-<ts>.gif`. `capped` names *why* it stopped — `true` when the frame
+    /// cap auto-stopped it, `false` on a manual ⌘⇧R stop — so the app logs the
+    /// reason from `core`'s decision rather than re-deriving it from the effect mix.
+    FinishRecording { capped: bool },
     /// Abandon a screencast that captured no frames (#124): the app drops the
     /// encoder without writing a file. Emitted when a recording is stopped before
     /// the first frame.
@@ -530,7 +531,9 @@ impl App {
                 });
                 vec![Effect::StartRecording]
             }
-            Some(recording) if recording.frames > 0 => vec![Effect::FinishRecording],
+            Some(recording) if recording.frames > 0 => {
+                vec![Effect::FinishRecording { capped: false }]
+            }
             Some(_) => vec![Effect::CancelRecording],
         }
     }
@@ -546,7 +549,7 @@ impl App {
         let mut effects = vec![Effect::CaptureFrame];
         if recording.frames >= recording.max_frames {
             self.recording = None;
-            effects.push(Effect::FinishRecording);
+            effects.push(Effect::FinishRecording { capped: true });
         }
         effects
     }
@@ -556,6 +559,15 @@ impl App {
     #[must_use]
     pub fn is_recording(&self) -> bool {
         self.recording.is_some()
+    }
+
+    /// Screencast progress as `(frames captured, frame cap)` while recording, or
+    /// `None` when idle (#124). The shell renders it as the `● REC n/cap`
+    /// indicator so the recording state — and how close it is to auto-stop — is
+    /// visible at a glance.
+    #[must_use]
+    pub fn recording_progress(&self) -> Option<(u32, u32)> {
+        self.recording.map(|r| (r.frames, r.max_frames))
     }
 
     /// Assemble the capture snapshot for the AI dev loop (#108). Pure: it reads
@@ -1803,7 +1815,10 @@ mod tests {
             [Effect::CaptureFrame]
         ));
         let stop = app.apply(Event::ToggleRecord { max_frames: 10 });
-        assert!(matches!(stop.as_slice(), [Effect::FinishRecording]));
+        assert!(matches!(
+            stop.as_slice(),
+            [Effect::FinishRecording { capped: false }]
+        ));
         assert!(!app.is_recording());
     }
 
@@ -1825,7 +1840,10 @@ mod tests {
         assert!(
             matches!(
                 last.as_slice(),
-                [Effect::CaptureFrame, Effect::FinishRecording]
+                [
+                    Effect::CaptureFrame,
+                    Effect::FinishRecording { capped: true }
+                ]
             ),
             "the cap frame is captured, then the recording finishes, got {last:?}"
         );
@@ -1859,6 +1877,27 @@ mod tests {
         assert!(!app.is_recording());
     }
 
+    #[test]
+    fn recording_progress_tracks_frames_against_the_cap() {
+        let mut app = App::new();
+        assert_eq!(app.recording_progress(), None, "idle has no progress");
+
+        app.apply(Event::ToggleRecord { max_frames: 3 });
+        assert_eq!(app.recording_progress(), Some((0, 3)), "starts at 0/cap");
+
+        app.apply(Event::RecordTick);
+        assert_eq!(app.recording_progress(), Some((1, 3)));
+
+        // The cap tick finishes the recording, so progress clears.
+        app.apply(Event::RecordTick);
+        app.apply(Event::RecordTick);
+        assert_eq!(
+            app.recording_progress(),
+            None,
+            "cleared once the cap stops it"
+        );
+    }
+
     proptest::proptest! {
         /// For any cap ≥ 1, exactly `max_frames` ticks capture `max_frames`
         /// frames and produce exactly one `FinishRecording`, leaving the app
@@ -1874,7 +1913,7 @@ mod tests {
                 for effect in app.apply(Event::RecordTick) {
                     match effect {
                         Effect::CaptureFrame => captured += 1,
-                        Effect::FinishRecording => finishes += 1,
+                        Effect::FinishRecording { .. } => finishes += 1,
                         other => proptest::prop_assert!(false, "unexpected {:?}", other),
                     }
                 }
