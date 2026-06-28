@@ -123,26 +123,20 @@ jobs:
       - name: Install actionlint
         # taiki-e/install-action does not ship actionlint and the crate has
         # no prebuilt binaries, so we use the upstream downloader — pinned to
-        # actionlint's v1.7.7 commit and verified by sha256 before running, so
+        # actionlint's v1.7.12 commit and verified by sha256 before running, so
         # this is never an unverified `curl | bash`.
         id: install
         env:
-          ACTIONLINT_SHA: 03d0035246f3e81f36aed592ffb4bebf33a03106 # v1.7.7
-          DOWNLOADER_SHA256: 221d1d16c03e4e4fcd867de34104e8d479bdce20ccdfa553b9a5c0dc29bf6af2
+          ACTIONLINT_SHA: 914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
+          DOWNLOADER_SHA256: 72fa3e45ac20f3c3a512d6747b4fcf719e21f890e8c43e78d48a41fdfb900c4e
         run: |
           curl -fsSL -o download-actionlint.bash \
             "https://raw.githubusercontent.com/rhysd/actionlint/${ACTIONLINT_SHA}/scripts/download-actionlint.bash"
           echo "${DOWNLOADER_SHA256}  download-actionlint.bash" | sha256sum --check --status
-          bash download-actionlint.bash 1.7.7
+          bash download-actionlint.bash 1.7.12
           echo "path=$(pwd)/actionlint" >> "$GITHUB_OUTPUT"
       - name: Run actionlint
-        # actionlint v1.7.7's bundled metadata for attest-build-provenance
-        # predates its `subject-checksums` input (a real, current input — see
-        # sign-release.yml). Ignore that one stale "not defined" note; it is a
-        # false positive, not a workflow error.
-        run: >-
-          ${{ steps.install.outputs.path }} -color
-          -ignore 'input "subject-checksums" is not defined'
+        run: ${{ steps.install.outputs.path }} -color
 
   markdown:
     name: markdownlint
