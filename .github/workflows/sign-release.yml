@@ -1,0 +1,74 @@
+# Signs the Linux release artifacts (#52).
+#
+# Publishes a `SHA256SUMS` over the Linux build tarballs and a sigstore
+# *keyless* build-provenance attestation over it. There is no stored secret:
+# the signer identity is this workflow itself, via GitHub OIDC, recorded in the
+# public Rekor transparency log. A SHA256SUMS attestation proves both integrity
+# (digest) and origin (built by `Termherd/termherd` CI) — strictly more than a
+# GPG-signed checksums file, with no long-lived key to protect or rotate.
+#
+# Verify a download:
+#   gh attestation verify <linux-artifact> --repo Termherd/termherd
+# (offline: `gh attestation download … --repo Termherd/termherd` first.)
+#
+# Runs after the dist-generated `release.yml` publishes the Release: its `host`
+# job attaches the Linux tarballs *before* `gh release create`, so they exist
+# when the `release: published` event fires here. This touches nothing dist
+# generates. The `.deb`/`.AppImage` GUI bundles (package.yml) are out of scope:
+# they arrive asynchronously and signing them is a separate slice.
+name: Sign release
+
+on:
+  release:
+    types: [published]
+  # Manual re-sign (e.g. after a re-run), by tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to (re)sign
+        required: true
+
+permissions:
+  contents: write      # upload SHA256SUMS to the Release
+  id-token: write      # OIDC token for sigstore keyless signing
+  attestations: write  # write the attestation to the repo
+
+jobs:
+  sign:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Download Linux release artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p linux
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern '*-unknown-linux-gnu.tar.xz' --dir linux
+          ls -l linux
+
+      - name: Generate SHA256SUMS
+        working-directory: linux
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(*-unknown-linux-gnu.tar.xz)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No Linux artifacts found on release $TAG" >&2
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
+          cat SHA256SUMS
+
+      # Keyless sigstore provenance over every entry in SHA256SUMS. No secret:
+      # identity = this workflow via OIDC, logged in Rekor.
+      - name: Attest SHA256SUMS
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-checksums: linux/SHA256SUMS
+
+      - name: Upload SHA256SUMS to the release
+        run: |
+          gh release upload "$TAG" linux/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --clobber

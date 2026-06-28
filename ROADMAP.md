@@ -88,7 +88,11 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   ships macOS **unsigned** (`.dmg` + manual `xattr`), and Developer ID
   notarization (#51, no free OSS path) is now the sole fluent macOS path,
   deferred to GitHub traction / a sponsor ($99/yr). Linux ships **signed
-  checksums** (#52). **Windows** Authenticode via free **SignPath
+  checksums** (#52, done) — a `sign-release.yml` workflow attaches a
+  `SHA256SUMS` over the Linux tarballs and a sigstore *keyless*
+  (GitHub OIDC, no stored key) build-provenance attestation; verify with
+  `gh attestation verify <artifact> --repo Termherd/termherd`. **Windows**
+  Authenticode via free **SignPath
   Foundation** (#62, P2)*
 - [ ] `F-quality-gates` — intrinsic-quality CI gates beyond the existing
   fmt/clippy/test/deny set, targeting the structural/maintainability axis
