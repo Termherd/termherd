@@ -15,7 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use iced::advanced::widget::{self, operate, operation::focusable};
 use iced::futures::channel::mpsc::UnboundedReceiver;
@@ -30,7 +30,7 @@ use termherd_core::{
 use termherd_pty::{PtyEvent, Screen, TermKey};
 
 use crate::docs::DocEntry;
-use crate::record::{RecordConfig, Recorder};
+use crate::record::{FrameStats, FrameThrottle, RecordConfig, Recorder};
 use crate::settings::ThemeChoice;
 use crate::window_config::WindowConfig;
 
@@ -41,7 +41,7 @@ mod terminal;
 mod view;
 
 use input::{chord_of, event_modifiers, key_mods, numpad_char, to_term_key};
-use streams::{PtyOutput, RecordTicker, pty_stream, record_tick_stream, watch_stream};
+use streams::{PtyOutput, pty_stream, watch_stream};
 use termherd_core::browser::project_label;
 use terminal::{CELL_H, CELL_W, notify, open_url};
 
@@ -262,6 +262,18 @@ struct Shell {
     record_inflight: u32,
     /// A finish is pending until the last in-flight frame is handed off (#124).
     record_finish_pending: bool,
+    /// When the in-progress recording started (#128) — the origin for the
+    /// throttle's logical timeline. `None` when not recording.
+    record_started: Option<Instant>,
+    /// Throttles the window's present-rate frame source down to the configured
+    /// fps (#128). `None` when not recording.
+    record_throttle: Option<FrameThrottle>,
+    /// When the previous frame was handed to the encoder (#128), so each frame's
+    /// on-screen duration is the real wall-clock gap since the last one.
+    record_last_frame: Option<Instant>,
+    /// Per-frame gap statistics for the in-progress recording (#128) — logged at
+    /// stop to evidence real-time capture (vs the idle-window time-lapse).
+    record_stats: FrameStats,
 }
 
 /// A tab drag in flight (#25): the index the drag started on and the slot the
@@ -433,9 +445,12 @@ enum Message {
     /// The capture PNG finished encoding off-thread (#108): the path written, or
     /// the error to log.
     CaptureWritten(Result<PathBuf, String>),
-    /// The screencast frame timer fired (#124): ask `core` for the next frame /
-    /// auto-stop decision.
-    RecordTick,
+    /// The window presented a frame while recording (#128): the present clock
+    /// from `window::frames()`. Throttled down to the configured fps, each kept
+    /// tick asks `core` for the next frame / auto-stop decision. Driving capture
+    /// off real presents (not a wall-clock timer) is what keeps an idle window's
+    /// screenshots resolving in real time.
+    RecordFrameTick(Instant),
     /// A recorded window screenshot is ready (#124); hand it to the encoder
     /// thread.
     RecordFrame(window::Screenshot),
@@ -513,6 +528,10 @@ impl Shell {
             recorder: None,
             record_inflight: 0,
             record_finish_pending: false,
+            record_started: None,
+            record_throttle: None,
+            record_last_frame: None,
+            record_stats: FrameStats::default(),
         }
     }
 
@@ -727,13 +746,29 @@ impl Shell {
     }
 
     /// Start or stop the GIF screencast (#124): hand `core` the frame cap from
-    /// the record budget and perform whatever effects it returns.
+    /// the record budget and perform whatever effects it returns. Ignored while a
+    /// previous recording is still draining (#128), so a back-to-back ⌘⇧R can't
+    /// replace the recorder mid-finish.
     fn toggle_record(&mut self) -> Task<Message> {
+        if self.record_toggle_blocked() {
+            tracing::info!("record toggle ignored: previous screencast still finishing");
+            return Task::none();
+        }
         let max_frames = self.record_config.max_frames();
         let effects = self
             .core
             .apply(termherd_core::Event::ToggleRecord { max_frames });
         self.run_record_effects(effects)
+    }
+
+    /// Whether a ⌘⇧R press must be ignored because the previous recording is
+    /// still draining its in-flight frames (#128 problem 2). `core` has already
+    /// returned to idle by the time a finish is pending, so without this guard a
+    /// back-to-back start replaces `self.recorder` mid-finish — orphaning the
+    /// first GIF (it finalises via `Drop`, but logs no `screencast written` and
+    /// may be truncated).
+    fn record_toggle_blocked(&self) -> bool {
+        self.record_finish_pending
     }
 
     /// Perform the record effects `core` returned (#124): open/feed/finish the
@@ -774,6 +809,11 @@ impl Shell {
     fn start_recording(&mut self) {
         self.record_inflight = 0;
         self.record_finish_pending = false;
+        // Fresh timing state for the throttle, the per-frame gap, and the stats.
+        self.record_started = Some(Instant::now());
+        self.record_throttle = Some(FrameThrottle::new(self.record_config.frame_interval()));
+        self.record_last_frame = None;
+        self.record_stats = FrameStats::default();
         let Some(dir) = crate::capture::captures_dir() else {
             tracing::warn!("no home directory; recording skipped");
             return;
@@ -792,6 +832,22 @@ impl Shell {
         );
     }
 
+    /// A window present arrived while recording (#128): throttle the present rate
+    /// down to the configured fps and, on a kept tick, ask `core` for the next
+    /// frame / auto-stop decision. Skipped ticks are dropped — they only served
+    /// to keep the window presenting so the screenshot pipeline stays real-time.
+    fn on_record_frame_tick(&mut self, now: Instant) -> Task<Message> {
+        let (Some(started), Some(throttle)) = (self.record_started, self.record_throttle.as_mut())
+        else {
+            return Task::none();
+        };
+        if !throttle.should_capture(now.saturating_duration_since(started)) {
+            return Task::none();
+        }
+        let effects = self.core.apply(termherd_core::Event::RecordTick);
+        self.run_record_effects(effects)
+    }
+
     /// Finish the screencast once every in-flight frame screenshot has been
     /// handed to the encoder (#124), so a stop never drops the final frames. If
     /// none are in flight (a manual stop), finish straight away.
@@ -803,13 +859,23 @@ impl Shell {
         }
     }
 
-    /// Flush and close the encoder thread (#124).
+    /// Flush and close the encoder thread (#124), logging the frame-gap spread
+    /// (#128) — the evidence that capture ran in real time (gaps ≈ the interval)
+    /// rather than time-lapsed (gaps ballooning past it).
     fn finish_recorder(&mut self) {
         if let Some(recorder) = self.recorder.take() {
             recorder.finish();
         }
-        self.record_inflight = 0;
-        self.record_finish_pending = false;
+        if let Some(summary) = self.record_stats.summary() {
+            tracing::info!(
+                frames = summary.gaps,
+                min_ms = summary.min.as_millis(),
+                max_ms = summary.max.as_millis(),
+                mean_ms = summary.mean.as_millis(),
+                "screencast frame gaps"
+            );
+        }
+        self.reset_record_state();
     }
 
     /// Abandon the screencast, deleting any partial file (#124) — the zero-frame
@@ -818,16 +884,42 @@ impl Shell {
         if let Some(recorder) = self.recorder.take() {
             recorder.cancel();
         }
+        self.reset_record_state();
+    }
+
+    /// Clear the per-recording runtime state once the encoder is done (#124,
+    /// #128), returning the shell to idle.
+    fn reset_record_state(&mut self) {
         self.record_inflight = 0;
         self.record_finish_pending = false;
+        self.record_started = None;
+        self.record_throttle = None;
+        self.record_last_frame = None;
+        self.record_stats = FrameStats::default();
     }
 
     /// Hand one recorded window screenshot to the encoder thread (#124), then
-    /// finish if this was the last frame a stop was waiting on.
+    /// finish if this was the last frame a stop was waiting on. The gap since the
+    /// previous handed frame becomes this frame's on-screen duration (#128), and
+    /// is folded into the stats — the gaps are the present-gating measurement.
     fn on_record_frame(&mut self, screenshot: window::Screenshot) -> Task<Message> {
+        let now = Instant::now();
+        let previous = self.record_last_frame;
+        // The first frame has no predecessor, so it shows for the nominal
+        // interval; later frames show for the real gap since the last one.
+        let gap = previous.map_or_else(
+            || self.record_config.frame_interval(),
+            |last| now.saturating_duration_since(last),
+        );
         if let Some(recorder) = self.recorder.as_ref() {
             let (width, height) = (screenshot.size.width, screenshot.size.height);
-            recorder.frame(screenshot.rgba.to_vec(), width, height);
+            recorder.frame(screenshot.rgba.to_vec(), width, height, gap);
+            // Only *measured* gaps count toward the benchmark — the first frame's
+            // nominal interval isn't a real arrival gap and would skew min/mean.
+            if previous.is_some() {
+                self.record_stats.record_gap(gap);
+            }
+            self.record_last_frame = Some(now);
         }
         self.record_inflight = self.record_inflight.saturating_sub(1);
         if self.record_finish_pending && self.record_inflight == 0 {
@@ -1244,10 +1336,7 @@ impl Shell {
                 }
                 Task::none()
             }
-            Message::RecordTick => {
-                let effects = self.core.apply(termherd_core::Event::RecordTick);
-                self.run_record_effects(effects)
-            }
+            Message::RecordFrameTick(now) => self.on_record_frame_tick(now),
             Message::RecordFrame(screenshot) => self.on_record_frame(screenshot),
         }
     }
@@ -1622,15 +1711,13 @@ impl Shell {
             subs.push(Subscription::run_with(root.clone(), watch_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
-        // The screencast frame timer runs only while recording (#124): one tick
-        // per frame at the configured fps drives `Event::RecordTick`.
+        // The screencast is driven by the window's present clock while recording
+        // (#128): `window::frames()` yields one tick per present (self-sustaining,
+        // since each tick requests the next redraw), which keeps an idle window
+        // presenting so screenshots resolve in real time. `on_record_frame_tick`
+        // throttles these down to the configured fps.
         if self.core.is_recording() {
-            subs.push(Subscription::run_with(
-                RecordTicker {
-                    interval: self.record_config.frame_interval(),
-                },
-                record_tick_stream,
-            ));
+            subs.push(window::frames().map(Message::RecordFrameTick));
         }
         Subscription::batch(subs)
     }
@@ -2749,5 +2836,25 @@ mod key_routing {
         let _ = shell.update(Message::ConfirmArchive);
         assert!(!shell.core.is_archived("sess"));
         assert_eq!(shell.archiving, None);
+    }
+
+    // ---- #128: a back-to-back ⌘⇧R must not orphan a draining recorder ----
+
+    #[test]
+    fn a_toggle_is_blocked_while_the_previous_recording_drains() {
+        let (mut shell, _pty) = shell_with_terminal();
+        // Idle: a toggle is free to start a recording.
+        assert!(
+            !shell.record_toggle_blocked(),
+            "an idle shell accepts a record toggle"
+        );
+        // Mid-drain: a finish is pending on in-flight frame screenshots. A new
+        // ⌘⇧R must be ignored, not replace the recorder under the encoder.
+        shell.record_finish_pending = true;
+        shell.record_inflight = 1;
+        assert!(
+            shell.record_toggle_blocked(),
+            "a draining recorder blocks a new toggle"
+        );
     }
 }
