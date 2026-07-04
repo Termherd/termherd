@@ -108,7 +108,7 @@ pub fn run(
     let pty_output = PtyOutput::new(pty_rx);
     iced::application(
         move || {
-            let shell = Shell::new(
+            let mut shell = Shell::new(
                 config,
                 scanner.clone(),
                 watch_root.clone(),
@@ -221,6 +221,13 @@ struct Shell {
     renaming: Option<(String, String)>,
     /// Browsable plan / memory docs (F-plans-memory), refreshed on scan.
     docs: Vec<DocEntry>,
+    /// Whether a scan is currently in flight. At most one runs at a time;
+    /// see [`Shell::rescan`].
+    scan_in_flight: bool,
+    /// A change arrived while a scan was in flight — run one follow-up scan
+    /// when it settles. Any number of mid-scan bursts coalesce into this
+    /// single bit, so a busy projects tree can't queue unbounded scans.
+    rescan_pending: bool,
     /// The doc currently open in the main pane for viewing/editing, if any.
     open_doc: Option<OpenDoc>,
     /// A close awaiting confirmation: the tab index to kill, or `None` (#9).
@@ -311,6 +318,8 @@ enum Message {
     ScanCompleted(Result<Vec<SessionRecord>, String>),
     /// The fs watcher saw the projects tree change (FR2).
     ProjectsChanged,
+    /// A background plan/memory docs rediscovery finished (F-plans-memory).
+    DocsDiscovered(Vec<DocEntry>),
     SearchChanged(String),
     SearchTitlesOnly(bool),
     /// Open a fresh shell in the given project directory (FR4a, `$` button).
@@ -516,7 +525,11 @@ impl Shell {
             theme: startup.theme.to_iced(),
             keymap: startup.keymap,
             renaming: None,
-            docs: crate::docs::discover(&[]),
+            // Populated by the first scan's `refresh_docs` — `discover` does
+            // blocking fs I/O, which must stay off the UI thread.
+            docs: Vec::new(),
+            scan_in_flight: false,
+            rescan_pending: false,
             open_doc: None,
             closing: None,
             archiving: None,
@@ -540,12 +553,46 @@ impl Shell {
         self.theme.clone()
     }
 
-    /// Run one scan off the UI thread (FR2) and feed the result back.
-    fn rescan(&self) -> Task<Message> {
+    /// Run one scan off the UI thread (FR2) and feed the result back. At most
+    /// one scan runs at a time: changes seen while one is in flight coalesce
+    /// into a single follow-up (`rescan_pending`), so a busy projects tree —
+    /// a live Claude session appends to its JSONL continuously — can't stack
+    /// overlapping scans (#131).
+    fn rescan(&mut self) -> Task<Message> {
+        if self.scan_in_flight {
+            self.rescan_pending = true;
+            return Task::none();
+        }
+        self.scan_in_flight = true;
         let scanner = self.scanner.clone();
         Task::perform(
             async move { scanner.scan().map_err(|e| e.to_string()) },
             Message::ScanCompleted,
+        )
+    }
+
+    /// A scan settled (success or failure): clear the in-flight flag and, if
+    /// changes arrived while it ran, start the single follow-up scan they
+    /// coalesced into.
+    fn scan_settled(&mut self) -> Option<Task<Message>> {
+        self.scan_in_flight = false;
+        if self.rescan_pending {
+            self.rescan_pending = false;
+            Some(self.rescan())
+        } else {
+            None
+        }
+    }
+
+    /// Rediscover the plan/memory docs off the UI thread (F-plans-memory).
+    /// `discover` stats a `CLAUDE.md` per project path; on a dead path (an
+    /// unplugged network mount, a removed directory) that stat can block for
+    /// tens of seconds, so it must never run on the UI thread (#131).
+    fn refresh_docs(&self) -> Task<Message> {
+        let paths: Vec<String> = self.core.projects.iter().map(|g| g.path.clone()).collect();
+        Task::perform(
+            async move { crate::docs::discover(&paths) },
+            Message::DocsDiscovered,
         )
     }
 
@@ -1010,16 +1057,27 @@ impl Shell {
                     .core
                     .apply(termherd_core::Event::ScanCompleted(records));
                 debug_assert!(effects.is_empty());
-                // Refresh plan/memory docs now that the project paths are known
-                // (a project's CLAUDE.md sits in its real directory).
-                let paths: Vec<String> =
-                    self.core.projects.iter().map(|g| g.path.clone()).collect();
-                self.docs = crate::docs::discover(&paths);
-                Task::none()
+                // If changes arrived mid-scan, the coalesced follow-up scan
+                // will refresh the docs itself; otherwise refresh them now
+                // that the project paths are known (a project's CLAUDE.md
+                // sits in its real directory).
+                match self.scan_settled() {
+                    Some(next_scan) => next_scan,
+                    None => self.refresh_docs(),
+                }
             }
             Message::ScanCompleted(Err(error)) => {
                 tracing::warn!(%error, "scan failed");
                 self.scan_error = Some(error);
+                // Even on failure, discover the global docs (memory, plans) so
+                // the docs pane isn't empty when the very first scan fails.
+                match self.scan_settled() {
+                    Some(next_scan) => next_scan,
+                    None => self.refresh_docs(),
+                }
+            }
+            Message::DocsDiscovered(docs) => {
+                self.docs = docs;
                 Task::none()
             }
             Message::ProjectsChanged => {
