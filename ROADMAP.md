@@ -51,7 +51,9 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   the keymap — no native menu API in iced; menu items mirror keymap actions)
 - [x] `F-session-browser` — scan + derive + group + list + live fs-watch
   updates (debounced `notify`, FR2); a per-project disclosure triangle folds
-  its session list, persisted to `~/.termherd/collapsed.json` (#22)
+  its session list, persisted to `~/.termherd/collapsed.json` (#22); long
+  groups list only the N most recent sessions with a "… N more" expander
+  (`sidebar.session_limit` in `settings.json`, default 5, 0 = all; #131)
 - [x] `F-builtin-terminal` — PTY + native terminal widget (M2):
   `termherd-pty` adapter (`portable-pty` + `alacritty_terminal`,
   reader + terminal thread per session, cursor-report reply for ConPTY);
