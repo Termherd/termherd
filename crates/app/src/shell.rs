@@ -557,7 +557,7 @@ impl Shell {
     /// one scan runs at a time: changes seen while one is in flight coalesce
     /// into a single follow-up (`rescan_pending`), so a busy projects tree —
     /// a live Claude session appends to its JSONL continuously — can't stack
-    /// overlapping scans (#131).
+    /// overlapping scans (#132).
     fn rescan(&mut self) -> Task<Message> {
         if self.scan_in_flight {
             self.rescan_pending = true;
@@ -587,7 +587,7 @@ impl Shell {
     /// Rediscover the plan/memory docs off the UI thread (F-plans-memory).
     /// `discover` stats a `CLAUDE.md` per project path; on a dead path (an
     /// unplugged network mount, a removed directory) that stat can block for
-    /// tens of seconds, so it must never run on the UI thread (#131).
+    /// tens of seconds, so it must never run on the UI thread (#132).
     fn refresh_docs(&self) -> Task<Message> {
         let paths: Vec<String> = self.core.projects.iter().map(|g| g.path.clone()).collect();
         Task::perform(
