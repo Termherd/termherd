@@ -73,15 +73,27 @@ impl Shell {
     // project/session row builders) rather than blocking the gate.
     #[allow(clippy::too_many_lines)]
     fn sidebar(&self) -> Element<'_, Message> {
-        let mut search = text_input(strings::SEARCH_PLACEHOLDER, &self.core.search)
+        let search = text_input(strings::SEARCH_PLACEHOLDER, &self.core.search)
             .id(search_id())
             .size(12)
             .padding(6);
-        if self.focus == Focus::Search {
-            search = search.on_input(Message::SearchChanged);
-        }
-        // Clicking the box hands keyboard focus to it (disabling terminal keys).
-        let search = mouse_area(search).on_press(Message::FocusSearch);
+        // The box only accepts input while it owns the keyboard; otherwise a
+        // typed key must reach the terminal, not the search. But a disabled
+        // `text_input` still *captures* any click over it (iced 0.14), so a
+        // plain `mouse_area` wrapper never sees the press and clicking the box
+        // could not restore focus. A transparent catcher stacked on top wins
+        // the press instead (a Stack dispatches topmost-first) and hands the
+        // keyboard back.
+        let search: Element<'_, Message> = if self.focus == Focus::Search {
+            search.on_input(Message::SearchChanged).into()
+        } else {
+            stack![
+                search,
+                mouse_area(iced::widget::Space::new().width(Fill).height(Fill))
+                    .on_press(Message::FocusSearch)
+            ]
+            .into()
+        };
         let titles_only = checkbox(self.core.search_titles_only)
             .label(strings::TITLES_ONLY)
             .on_toggle(Message::SearchTitlesOnly)
