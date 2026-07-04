@@ -14,15 +14,23 @@
 //!
 //! [`watch_changes`] provides the debounced fs watch behind live sidebar
 //! updates (FR2). Still to come: `rayon` parallel parsing for large trees.
+//!
+//! Rescans are incremental (#133): the walk (`read_dir` + one stat per file)
+//! always runs in full — it is what detects adds and removes — but a session
+//! file is only re-read and re-digested when its mtime or size changed since
+//! the previous scan. A live Claude session appending to one transcript costs
+//! one file read per rescan, not one per session.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
 
 use notify::{RecursiveMode, Watcher};
 
 use termherd_claude::derive::{collapse_worktree, extract_cwd};
-use termherd_claude::digest::digest_session;
+use termherd_claude::digest::{SessionDigest, digest_session};
 use termherd_core::SessionRecord;
 use termherd_core::ports::{ProjectScanner, ScanError};
 use tracing::{debug, warn};
@@ -30,12 +38,19 @@ use tracing::{debug, warn};
 /// Scanner over a projects root (normally `~/.claude/projects`).
 pub struct FsScanner {
     root: PathBuf,
+    /// Digest/cwd results of the previous scan, keyed by file signature
+    /// (#133). Interior mutability because [`ProjectScanner::scan`] takes
+    /// `&self`; the shell serialises scans, so the lock is uncontended.
+    cache: Mutex<ScanCache>,
 }
 
 impl FsScanner {
     #[must_use]
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            cache: Mutex::new(ScanCache::default()),
+        }
     }
 
     /// Scanner over the default Claude CLI location, `~/.claude/projects`.
@@ -97,9 +112,57 @@ pub fn watch_changes(
     Ok(WatchHandle { _watcher: watcher })
 }
 
+/// A file's cache-invalidation signature (#133): mtime + size. Either
+/// changing marks the cached derivation stale; requiring both to match
+/// mitigates coarse mtime granularity on some filesystems.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileSig {
+    mtime: SystemTime,
+    size: u64,
+}
+
+/// The signature `path` currently carries, or `None` when it cannot be
+/// stat'ed — then the file is treated as always-dirty, never cached.
+fn file_sig(path: &Path) -> Option<FileSig> {
+    let meta = fs::metadata(path).ok()?;
+    Some(FileSig {
+        mtime: meta.modified().ok()?,
+        size: meta.len(),
+    })
+}
+
+/// One prior digest: reused while the file's signature is unchanged. `None`
+/// digests (an unparsable transcript) are cached too, so a permanently
+/// invalid file is not re-read on every scan.
+struct CachedDigest {
+    sig: FileSig,
+    digest: Option<SessionDigest>,
+}
+
+/// One prior cwd derivation for a folder: reused while the transcript it
+/// came from is unchanged.
+struct CachedCwd {
+    source: PathBuf,
+    sig: FileSig,
+    cwd: String,
+}
+
+/// What the previous scan learned (#133). Each scan builds a fresh
+/// generation and replaces the old wholesale, so entries for files and
+/// folders that vanished are pruned by never being carried over.
+#[derive(Default)]
+struct ScanCache {
+    digests: HashMap<PathBuf, CachedDigest>,
+    cwds: HashMap<PathBuf, CachedCwd>,
+}
+
 impl ProjectScanner for FsScanner {
     fn scan(&self) -> Result<Vec<SessionRecord>, ScanError> {
-        let outcome = scan_root(&self.root)?;
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let outcome = scan_root(&self.root, &mut cache)?;
 
         // Q5: underivable folders are dropped like upstream, but never
         // silently. The detail is per-folder noise (dozens of `.worktrees`
@@ -130,60 +193,103 @@ struct ScanOutcome {
 
 /// Walk a projects root, partitioning its folders into derived session
 /// records and the folders that had no derivable cwd. Pure of logging policy
-/// so the skip set is unit-testable.
-fn scan_root(root: &Path) -> Result<ScanOutcome, ScanError> {
+/// so the skip set is unit-testable. `cache` carries the previous scan's
+/// digests (#133) and is replaced by this scan's generation.
+fn scan_root(root: &Path, cache: &mut ScanCache) -> Result<ScanOutcome, ScanError> {
     let folders = fs::read_dir(root)
         .map_err(|e| ScanError::Unreadable(format!("{}: {e}", root.display())))?;
 
     let mut records = Vec::new();
     let mut skipped = Vec::new();
+    let mut next = ScanCache::default();
     for folder in folders.flatten() {
         let dir = folder.path();
         if !dir.is_dir() {
             continue;
         }
-        match scan_folder(&dir) {
+        match scan_folder(&dir, cache, &mut next) {
             Some(mut found) => records.append(&mut found),
             None => skipped.push(dir),
         }
     }
+    *cache = next;
     Ok(ScanOutcome { records, skipped })
 }
 
 /// One project folder → its session records, or `None` when no project
-/// path can be derived.
-fn scan_folder(dir: &Path) -> Option<Vec<SessionRecord>> {
+/// path can be derived. Unchanged files reuse `old`'s digests; whatever this
+/// scan learns lands in `next` (#133).
+fn scan_folder(dir: &Path, old: &ScanCache, next: &mut ScanCache) -> Option<Vec<SessionRecord>> {
     let direct_jsonls = jsonl_files(dir);
 
-    // Pass 1 — derive the folder's project path (upstream order: direct
-    // files first, then session subdirectories, then their subagents/).
-    let cwd = direct_jsonls
-        .iter()
-        .find_map(|p| extract_cwd(&fs::read_to_string(p).ok()?))
-        .or_else(|| subdir_cwd(dir))?;
+    // Pass 1 — the folder's cwd: reused while the transcript it came from is
+    // unchanged, else re-derived (upstream order: direct files first, then
+    // session subdirectories, then their subagents/).
+    let (source, cwd) = cached_cwd(dir, old).or_else(|| derive_cwd(dir, &direct_jsonls))?;
+    if let Some(sig) = file_sig(&source) {
+        next.cwds.insert(
+            dir.to_owned(),
+            CachedCwd {
+                source,
+                sig,
+                cwd: cwd.clone(),
+            },
+        );
+    }
+    // The worktree collapse re-runs every scan: it depends on the parent
+    // existing on disk *now*, not on the transcript the cwd came from.
     let project_path = resolve_worktree(&cwd);
 
-    // Pass 2 — digest the direct session files.
+    // Pass 2 — digest the direct session files, re-reading only the ones
+    // whose signature changed since the previous scan.
     let mut records = Vec::new();
     for path in direct_jsonls {
-        let Ok(content) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Some(digest) = digest_session(&content) else {
-            continue;
-        };
         let Some(session_id) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
             continue;
         };
-        let modified = fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let sig = file_sig(&path);
+        let digest = match (sig, old.digests.get(&path)) {
+            (Some(sig), Some(hit)) if hit.sig == sig => hit.digest.clone(),
+            _ => fs::read_to_string(&path)
+                .ok()
+                .and_then(|c| digest_session(&c)),
+        };
+        if let Some(sig) = sig {
+            next.digests.insert(
+                path.clone(),
+                CachedDigest {
+                    sig,
+                    digest: digest.clone(),
+                },
+            );
+        }
+        let Some(digest) = digest else {
+            continue;
+        };
         records.push(SessionRecord {
             session_id,
             project_path: project_path.clone(),
             digest,
-            modified,
+            modified: sig.map(|s| s.mtime),
         });
     }
     Some(records)
+}
+
+/// The folder's previously derived cwd, if the transcript it came from still
+/// carries the same signature (#133).
+fn cached_cwd(dir: &Path, cache: &ScanCache) -> Option<(PathBuf, String)> {
+    let hit = cache.cwds.get(dir)?;
+    (file_sig(&hit.source)? == hit.sig).then(|| (hit.source.clone(), hit.cwd.clone()))
+}
+
+/// Derive the folder's cwd from scratch, returning the transcript it came
+/// from so the derivation can be cached against that file's signature.
+fn derive_cwd(dir: &Path, direct_jsonls: &[PathBuf]) -> Option<(PathBuf, String)> {
+    direct_jsonls
+        .iter()
+        .find_map(|p| Some((p.clone(), extract_cwd(&fs::read_to_string(p).ok()?)?)))
+        .or_else(|| subdir_cwd(dir))
 }
 
 /// Direct `*.jsonl` files of a folder, in directory order like upstream.
@@ -199,8 +305,9 @@ fn jsonl_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Fallback cwd source: session subdirectories (UUID folders) — their
-/// direct `*.jsonl`, or the first file under `subagents/`.
-fn subdir_cwd(dir: &Path) -> Option<String> {
+/// direct `*.jsonl`, or the first file under `subagents/`. Returns the file
+/// the cwd came from alongside it, for the derivation cache (#133).
+fn subdir_cwd(dir: &Path) -> Option<(PathBuf, String)> {
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let sub = entry.path();
@@ -213,7 +320,7 @@ fn subdir_cwd(dir: &Path) -> Option<String> {
             if let Ok(content) = fs::read_to_string(&candidate)
                 && let Some(cwd) = extract_cwd(&content)
             {
-                return Some(cwd);
+                return Some((candidate, cwd));
             }
         }
     }
@@ -358,7 +465,7 @@ mod tests {
             .unwrap();
         }
 
-        let outcome = scan_root(tmp.path()).unwrap();
+        let outcome = scan_root(tmp.path(), &mut ScanCache::default()).unwrap();
         assert_eq!(outcome.records.len(), 1);
         assert_eq!(outcome.skipped.len(), 2);
         assert!(
@@ -398,6 +505,91 @@ mod tests {
         let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
         let ghost = records.iter().find(|r| r.session_id == "xyz").unwrap();
         assert_eq!(ghost.project_path, "/ghost/.worktrees/feat");
+    }
+
+    /// Overwrite `path` with `content` but restore its original mtime, so the
+    /// cache signature (mtime+size) is unchanged if the length matches. This
+    /// is how the tests *prove* a cache hit: a re-read would see the new
+    /// content, a hit keeps serving the old digest.
+    fn rewrite_preserving_sig(path: &Path, content: &str) {
+        let mtime = fs::metadata(path).unwrap().modified().unwrap();
+        fs::write(path, content).unwrap();
+        let file = fs::File::options().write(true).open(path).unwrap();
+        file.set_times(fs::FileTimes::new().set_modified(mtime))
+            .unwrap();
+    }
+
+    #[test]
+    fn unchanged_files_are_served_from_the_digest_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("C--proj");
+        fs::create_dir(&folder).unwrap();
+        write_session(&folder, "abc.jsonl", "/real/proj", "hello");
+
+        let scanner = FsScanner::new(tmp.path().to_owned());
+        let first = scanner.scan().unwrap();
+        assert_eq!(first[0].digest.summary, "hello");
+
+        // Same signature (length preserved, mtime restored) but different
+        // content: a cache hit keeps the old digest — proof the file was
+        // not re-read (#133).
+        let line = "{\"type\":\"user\",\"cwd\":\"/real/proj\",\"message\":\"jello\"}\n";
+        rewrite_preserving_sig(&folder.join("abc.jsonl"), line);
+        let second = scanner.scan().unwrap();
+        assert_eq!(second[0].digest.summary, "hello", "cache hit expected");
+    }
+
+    #[test]
+    fn a_changed_signature_invalidates_the_cached_digest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("C--proj");
+        fs::create_dir(&folder).unwrap();
+        write_session(&folder, "abc.jsonl", "/real/proj", "hello");
+
+        let scanner = FsScanner::new(tmp.path().to_owned());
+        scanner.scan().unwrap();
+
+        // A longer transcript (size changes → signature changes) re-digests.
+        write_session(&folder, "abc.jsonl", "/real/proj", "hello and more");
+        let second = scanner.scan().unwrap();
+        assert_eq!(second[0].digest.summary, "hello and more");
+    }
+
+    #[test]
+    fn removed_files_leave_no_stale_record_or_cache_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("C--proj");
+        fs::create_dir(&folder).unwrap();
+        write_session(&folder, "abc.jsonl", "/real/proj", "hello");
+        write_session(&folder, "def.jsonl", "/real/proj", "world");
+
+        let scanner = FsScanner::new(tmp.path().to_owned());
+        assert_eq!(scanner.scan().unwrap().len(), 2);
+
+        fs::remove_file(folder.join("def.jsonl")).unwrap();
+        let after = scanner.scan().unwrap();
+        assert_eq!(after.len(), 1, "the removed session is gone");
+        // The cache generation was rebuilt without the removed file.
+        let cache = scanner
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(cache.digests.len(), 1);
+    }
+
+    #[test]
+    fn the_cwd_derivation_is_cached_but_follows_its_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("C--proj");
+        fs::create_dir(&folder).unwrap();
+        write_session(&folder, "abc.jsonl", "/real/proj", "hello");
+
+        let scanner = FsScanner::new(tmp.path().to_owned());
+        assert_eq!(scanner.scan().unwrap()[0].project_path, "/real/proj");
+
+        // The source transcript changes cwd (size differs → re-derived).
+        write_session(&folder, "abc.jsonl", "/moved/projects", "hello");
+        assert_eq!(scanner.scan().unwrap()[0].project_path, "/moved/projects");
     }
 
     #[test]
