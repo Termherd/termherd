@@ -6,6 +6,9 @@
     "MD033": false,
     "MD060": false
   },
+  // Lint every doc by default, so a bare `markdownlint-cli2` mirrors CI
+  // (whose action passes the same glob explicitly).
+  "globs": ["**/*.md"],
   // CLAUDE.md is only an `@AGENTS.md` import pointer, not prose.
   "ignores": ["target/**", "node_modules/**", "CLAUDE.md"]
 }
