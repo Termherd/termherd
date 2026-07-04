@@ -53,6 +53,13 @@ pub struct App {
     /// Project paths whose session list is folded shut in the sidebar (#22);
     /// persisted to `~/.termherd` so the fold survives a restart.
     pub collapsed: HashSet<String>,
+    /// Sidebar truncation (#131): sessions shown per project before the tail
+    /// folds behind an expander. `0` (the default) shows every session; the
+    /// user's setting arrives via [`Event::SessionLimitLoaded`].
+    pub session_limit: usize,
+    /// Projects whose truncated session tail is unfolded (#131). Ephemeral —
+    /// unlike `collapsed`, it resets each launch and is never persisted.
+    pub expanded: HashSet<String>,
     /// Monotonic source of `SessionId`s; never reused within a run. This is
     /// the structural fix for the `realSessionId` race (Q6) — ids are minted
     /// here, single-threaded, before any PTY exists.
@@ -65,6 +72,16 @@ pub struct App {
     /// frame timer and encoder live in the `app`; `core` only counts frames
     /// against the cap and decides capture/finish.
     recording: Option<Recording>,
+}
+
+/// What the expander row under a project's truncated session list should show
+/// (#131), from [`App::sidebar_sessions`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarFold {
+    /// The tail is folded: this many more sessions are hidden.
+    Truncated(usize),
+    /// The tail is unfolded and can be folded back.
+    Expanded,
 }
 
 /// How many closed tabs the reopen stack (#78) remembers. Walking back further
@@ -273,6 +290,11 @@ pub enum Event {
     CollapsedLoaded(HashSet<String>),
     /// Fold or unfold a project's session list in the sidebar, by path (#22).
     ToggleCollapsed(String),
+    /// The sidebar session limit from settings (#131): sessions shown per
+    /// project before the tail folds behind an expander; `0` shows all.
+    SessionLimitLoaded(usize),
+    /// Unfold (or refold) a project's truncated session tail (#131), by path.
+    ToggleExpanded(String),
     /// The user Ctrl/Cmd+clicked a detected link in a terminal (#28).
     OpenUrl(String),
     /// A session emitted an OSC 9 notification — Claude wants the user (#29).
@@ -495,6 +517,11 @@ impl App {
                 Vec::new()
             }
             Event::ToggleCollapsed(path) => self.toggle_collapsed(path),
+            Event::SessionLimitLoaded(limit) => {
+                self.session_limit = limit;
+                Vec::new()
+            }
+            Event::ToggleExpanded(path) => self.toggle_expanded(path),
             Event::OpenUrl(url) => {
                 let url = url.trim();
                 // Only well-formed schemes reach the OS handler; a blank or
@@ -622,6 +649,31 @@ impl App {
         groups
     }
 
+    /// The sessions a project row should list (#131): all of them while a
+    /// search is active (a hit in the folded tail must surface), when the
+    /// limit is unset, or when the group already fits; otherwise the first
+    /// `session_limit` (starred pins sort first in [`Self::visible_projects`],
+    /// so they stay visible) plus the expander state for the folded tail.
+    #[must_use]
+    pub fn sidebar_sessions<'a>(
+        &self,
+        group: &'a ProjectGroup,
+    ) -> (&'a [SessionRecord], Option<SidebarFold>) {
+        let all = group.sessions.as_slice();
+        let searching = !self.search.trim().is_empty();
+        if searching || self.session_limit == 0 || all.len() <= self.session_limit {
+            return (all, None);
+        }
+        if self.expanded.contains(&group.path) {
+            return (all, Some(SidebarFold::Expanded));
+        }
+        let hidden = all.len() - self.session_limit;
+        (
+            &all[..self.session_limit],
+            Some(SidebarFold::Truncated(hidden)),
+        )
+    }
+
     /// The located content hit for a session under the current search (#58),
     /// or `None` when the row is shown for a title hit (or titles-only mode):
     /// nothing in the content matched, so there is nothing to point at.
@@ -742,6 +794,15 @@ impl App {
             self.collapsed.insert(path);
         }
         vec![Effect::SaveCollapsed(self.collapsed.clone())]
+    }
+
+    /// Unfold (or refold) a project's truncated session tail (#131). Unlike
+    /// [`Self::toggle_collapsed`], the state is ephemeral — no save effect.
+    fn toggle_expanded(&mut self, path: String) -> Vec<Effect> {
+        if !self.expanded.remove(&path) {
+            self.expanded.insert(path);
+        }
+        Vec::new()
     }
 
     /// Edit a session's metadata, dropping it when it returns to defaults, and
@@ -986,6 +1047,99 @@ mod tests {
 
         app.apply(Event::SearchChanged(String::new()));
         assert_eq!(app.visible_projects().len(), 1);
+    }
+
+    /// `count` sessions in `/p`, freshest first, applied with a scan (#131).
+    fn scanned_group(app: &mut App, count: usize) {
+        let records = (0..count)
+            .map(|i| {
+                let mut r = record(&format!("s{i}"), "/p", "routine work");
+                r.modified = Some(
+                    std::time::SystemTime::UNIX_EPOCH
+                        + std::time::Duration::from_secs(1000 - i as u64),
+                );
+                r
+            })
+            .collect();
+        app.apply(Event::ScanCompleted(records));
+    }
+
+    #[test]
+    fn sidebar_truncates_to_the_limit_and_folds_the_tail() {
+        let mut app = App::new();
+        scanned_group(&mut app, 8);
+        app.apply(Event::SessionLimitLoaded(5));
+        let groups = app.visible_projects();
+        let (shown, fold) = app.sidebar_sessions(&groups[0]);
+        assert_eq!(shown.len(), 5);
+        assert_eq!(fold, Some(SidebarFold::Truncated(3)));
+        // The five kept are the freshest.
+        assert!(shown.iter().all(|s| s.session_id != "s7"));
+    }
+
+    #[test]
+    fn no_limit_or_a_fitting_group_shows_every_session() {
+        let mut app = App::new();
+        scanned_group(&mut app, 8);
+        // Default (0): truncation is off.
+        let groups = app.visible_projects();
+        assert_eq!(
+            app.sidebar_sessions(&groups[0]),
+            (&groups[0].sessions[..], None)
+        );
+        // A limit the group fits within changes nothing either.
+        app.apply(Event::SessionLimitLoaded(8));
+        assert_eq!(
+            app.sidebar_sessions(&groups[0]),
+            (&groups[0].sessions[..], None)
+        );
+    }
+
+    #[test]
+    fn toggle_expanded_unfolds_the_tail_and_refolds_without_persisting() {
+        let mut app = App::new();
+        scanned_group(&mut app, 8);
+        app.apply(Event::SessionLimitLoaded(5));
+        let effects = app.apply(Event::ToggleExpanded("/p".into()));
+        assert!(effects.is_empty(), "expanded state is ephemeral (#131)");
+        let groups = app.visible_projects();
+        let (shown, fold) = app.sidebar_sessions(&groups[0]);
+        assert_eq!(shown.len(), 8);
+        assert_eq!(fold, Some(SidebarFold::Expanded));
+        // Toggling again folds the tail back.
+        app.apply(Event::ToggleExpanded("/p".into()));
+        let (shown, fold) = app.sidebar_sessions(&groups[0]);
+        assert_eq!(shown.len(), 5);
+        assert_eq!(fold, Some(SidebarFold::Truncated(3)));
+    }
+
+    #[test]
+    fn search_surfaces_hits_from_the_folded_tail() {
+        let mut app = App::new();
+        let mut records: Vec<SessionRecord> = (0..7u64)
+            .map(|i| {
+                let mut r = record(&format!("s{i}"), "/p", "routine work");
+                r.modified = Some(
+                    std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1000 + i),
+                );
+                r
+            })
+            .collect();
+        // No mtime → sorts last: the needle lives in the folded tail.
+        records.push(record("needle", "/p", "the rare needle"));
+        app.apply(Event::ScanCompleted(records));
+        app.apply(Event::SessionLimitLoaded(5));
+
+        let groups = app.visible_projects();
+        let (shown, _) = app.sidebar_sessions(&groups[0]);
+        assert!(shown.iter().all(|s| s.session_id != "needle"));
+
+        // An active query disables truncation, so the tail hit surfaces.
+        app.apply(Event::SearchChanged("rare needle".into()));
+        let groups = app.visible_projects();
+        let (shown, fold) = app.sidebar_sessions(&groups[0]);
+        assert_eq!(fold, None);
+        assert!(shown.iter().any(|s| s.session_id == "needle"));
     }
 
     #[test]

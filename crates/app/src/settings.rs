@@ -29,6 +29,9 @@ pub struct Settings {
     /// GIF screencast budget (#124/#127): frames per second, the duration cap,
     /// and the frame scale. Absent → the built-in default.
     pub record: RecordSettings,
+    /// Sidebar behaviour (#131): how many sessions each project lists before
+    /// folding the tail behind an expander. Absent → the built-in default.
+    pub sidebar: SidebarSettings,
 }
 
 /// One or several chords bound to an action — a bare string for the common
@@ -124,6 +127,40 @@ impl RecordSettings {
     }
 }
 
+/// The on-disk sidebar settings (#131). Wide (`i64`) for the same reason as
+/// [`RecordSettings`]: an out-of-range typo must not fail serde for the whole
+/// file and silently reset the user's other settings.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SidebarSettings {
+    /// Sessions shown per project before the tail folds behind an expander;
+    /// `0` shows every session (the pre-#131 behaviour).
+    pub session_limit: i64,
+}
+
+/// Sessions shown per project by default (#131).
+const DEFAULT_SESSION_LIMIT: i64 = 5;
+/// Bound for the limit — anything above is effectively "show all", and the
+/// clamp absorbs out-of-range typos (a negative folds to 0 = show all).
+const SESSION_LIMIT_MAX: i64 = 10_000;
+
+impl Default for SidebarSettings {
+    fn default() -> Self {
+        Self {
+            session_limit: DEFAULT_SESSION_LIMIT,
+        }
+    }
+}
+
+impl SidebarSettings {
+    /// Sanitise the raw value into the runtime limit: clamp into range, so a
+    /// negative typo means "show all" rather than failing the file.
+    #[must_use]
+    pub fn limit(self) -> usize {
+        self.session_limit.clamp(0, SESSION_LIMIT_MAX) as usize
+    }
+}
+
 /// Which iced theme dresses the GUI chrome (sidebar, tab strip, buttons).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -151,6 +188,12 @@ impl Settings {
     #[must_use]
     pub fn record_config(&self) -> RecordConfig {
         self.record.into_config()
+    }
+
+    /// The sanitised sidebar session limit (#131); `0` shows every session.
+    #[must_use]
+    pub fn session_limit(&self) -> usize {
+        self.sidebar.limit()
     }
 
     /// The active keymap: platform defaults with the user's `keys` overrides
@@ -285,6 +328,29 @@ mod tests {
         let c = s.record_config();
         assert_eq!(c.max_seconds, 600, "an absurd cap clamps, not resets");
         assert_eq!(c.fps, 1, "a negative fps clamps to the floor");
+    }
+
+    #[test]
+    fn sidebar_limit_defaults_overrides_and_clamps() {
+        // Absent block → the built-in default of 5 (#131).
+        assert_eq!(Settings::default().session_limit(), 5);
+
+        // An explicit value is taken…
+        let s: Settings =
+            serde_json::from_str(r#"{ "sidebar": { "session_limit": 12 } }"#).expect("valid json");
+        assert_eq!(s.session_limit(), 12);
+
+        // …0 disables truncation…
+        let s: Settings =
+            serde_json::from_str(r#"{ "sidebar": { "session_limit": 0 } }"#).expect("valid json");
+        assert_eq!(s.session_limit(), 0);
+
+        // …and a negative typo folds to "show all" without failing the file.
+        let s: Settings =
+            serde_json::from_str(r#"{ "theme": "light", "sidebar": { "session_limit": -3 } }"#)
+                .expect("a bad sidebar value must not fail the whole parse");
+        assert_eq!(s.session_limit(), 0);
+        assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
     }
 
     #[test]

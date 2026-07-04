@@ -87,6 +87,8 @@ pub struct Startup {
     pub collapsed: HashSet<String>,
     /// GIF screencast budget from settings (#127).
     pub record: RecordConfig,
+    /// Sidebar session limit from settings (#131); `0` shows every session.
+    pub session_limit: usize,
 }
 
 pub fn run(
@@ -120,6 +122,7 @@ pub fn run(
                     metadata: startup.metadata.clone(),
                     collapsed: startup.collapsed.clone(),
                     record: startup.record,
+                    session_limit: startup.session_limit,
                 },
             );
             let initial_scan = shell.rescan();
@@ -320,6 +323,8 @@ enum Message {
     ProjectsChanged,
     /// A background plan/memory docs rediscovery finished (F-plans-memory).
     DocsDiscovered(Vec<DocEntry>),
+    /// Unfold (or refold) a project's truncated session tail (#131).
+    ToggleExpanded(String),
     SearchChanged(String),
     SearchTitlesOnly(bool),
     /// Open a fresh shell in the given project directory (FR4a, `$` button).
@@ -492,6 +497,7 @@ impl Message {
                 | Self::ToggleArchive(_)
                 | Self::RequestArchive(_)
                 | Self::ToggleCollapsed(_)
+                | Self::ToggleExpanded(_)
                 | Self::ToggleSidebar
                 | Self::OpenDoc { .. }
                 | Self::CloseDoc
@@ -511,6 +517,9 @@ impl Shell {
         let mut core = termherd_core::App::new();
         core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
         core.apply(termherd_core::Event::CollapsedLoaded(startup.collapsed));
+        core.apply(termherd_core::Event::SessionLimitLoaded(
+            startup.session_limit,
+        ));
         Self {
             core,
             bounds,
@@ -1278,6 +1287,10 @@ impl Shell {
                 let effects = self.core.apply(termherd_core::Event::ToggleCollapsed(path));
                 self.perform(effects)
             }
+            Message::ToggleExpanded(path) => {
+                let _ = self.core.apply(termherd_core::Event::ToggleExpanded(path));
+                Task::none()
+            }
             Message::ToggleSidebar => self.toggle_sidebar(),
             Message::StartRename { session, current } => {
                 self.renaming = Some((session, current));
@@ -1884,6 +1897,7 @@ mod key_routing {
                 metadata: HashMap::new(),
                 collapsed: HashSet::new(),
                 record: RecordConfig::default(),
+                session_limit: 0,
             },
         );
         let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
@@ -2456,6 +2470,7 @@ mod key_routing {
                 metadata: HashMap::new(),
                 collapsed: HashSet::new(),
                 record: RecordConfig::default(),
+                session_limit: 0,
             },
         );
         assert!(shell.core.workspace.focused_session().is_none());

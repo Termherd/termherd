@@ -15,7 +15,8 @@ pub mod record;
 pub mod workspace;
 
 pub use app::{
-    App, Effect, Event, Launch, LaunchSpec, LiveSession, ScrollTarget, SessionStatus, SpawnSpec,
+    App, Effect, Event, Launch, LaunchSpec, LiveSession, ScrollTarget, SessionStatus, SidebarFold,
+    SpawnSpec,
 };
 pub use browser::{ProjectGroup, SessionRecord};
 pub use capture::{CaptureDump, CaptureTab};

@@ -186,7 +186,10 @@ impl Shell {
             // last-activity age appended, so duplicates stay distinguishable
             // (#42). The unique case keeps the clean `{title} · {count}` line.
             let collisions = self.core.colliding_titles(group);
-            for s in &group.sessions {
+            // Long groups fold their tail behind an expander (#131); search
+            // and the user's unfold both surface it (`sidebar_sessions`).
+            let (sessions, fold) = self.core.sidebar_sessions(group);
+            for s in sessions {
                 let id = s.session_id.as_str();
                 let starred = self.core.is_starred(id);
                 let archived = self.core.is_archived(id);
@@ -304,6 +307,20 @@ impl Shell {
                     ),
                     None => g.push(entry),
                 };
+            }
+            // The expander row under a truncated list: unfold the hidden
+            // tail, or fold it back once expanded (#131).
+            if let Some(fold) = fold {
+                let label = match fold {
+                    termherd_core::SidebarFold::Truncated(hidden) => strings::sidebar_more(hidden),
+                    termherd_core::SidebarFold::Expanded => strings::SIDEBAR_SHOW_LESS.to_owned(),
+                };
+                g = g.push(
+                    button(text(label).size(11).style(sidebar_secondary_text))
+                        .on_press(Message::ToggleExpanded(group.path.clone()))
+                        .style(button::text)
+                        .padding(0),
+                );
             }
             list = list.push(g);
         }
