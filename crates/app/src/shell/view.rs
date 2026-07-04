@@ -19,7 +19,7 @@ use termherd_core::browser::{project_label, relative_age};
 use termherd_core::workspace::Tab;
 
 use super::ime::ime_area;
-use super::terminal::{CELL_H, CELL_W, TerminalView};
+use super::terminal::{TerminalView, cell_size};
 use super::{DocFeedback, Focus, HANDLE_W, Message, OpenDoc, Shell, rename_id, search_id};
 use crate::strings;
 
@@ -379,6 +379,7 @@ impl Shell {
                     screen,
                     session,
                     link_modifier: self.link_modifier,
+                    font_size: self.core.font_size(),
                 })
                 .width(Fill)
                 .height(Fill);
@@ -392,7 +393,10 @@ impl Shell {
                     canvas,
                     self.accepts_terminal_input(),
                     screen.cursor,
-                    Size::new(CELL_W, CELL_H),
+                    {
+                        let (cw, ch) = cell_size(self.core.font_size());
+                        Size::new(cw, ch)
+                    },
                     Message::ImeCommit,
                 );
                 mouse_area(composed).on_press(Message::FocusTerminal).into()

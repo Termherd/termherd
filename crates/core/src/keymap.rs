@@ -64,7 +64,8 @@ impl KeyChord {
 
     /// Parse a human chord like `"ctrl+shift+c"` or `"cmd+tab"`. Order does not
     /// matter and the parse is case-insensitive. Modifier aliases: `control`,
-    /// `option` (Alt), `cmd`/`super`/`win`/`meta` (Cmd).
+    /// `option` (Alt), `cmd`/`super`/`win`/`meta` (Cmd). A literal `+` key
+    /// cannot survive the `+` separator split, so it is spelled `plus` (#35).
     pub fn parse(s: &str) -> Result<KeyChord, ChordError> {
         let mut mods = 0u8;
         let mut key: Option<String> = None;
@@ -73,6 +74,11 @@ impl KeyChord {
             if token.is_empty() {
                 continue;
             }
+            let token = if token == "plus" {
+                "+".to_owned()
+            } else {
+                token
+            };
             match token.as_str() {
                 "ctrl" | "control" => mods |= MOD_CTRL,
                 "alt" | "option" => mods |= MOD_ALT,
@@ -128,6 +134,12 @@ pub enum Action {
     /// Start or stop the GIF screencast (#124): a toggle that records the window
     /// to `~/.termherd/captures/capture-<ts>.gif`.
     ToggleRecord,
+    /// Grow the terminal font one step (#35).
+    ZoomIn,
+    /// Shrink the terminal font one step (#35).
+    ZoomOut,
+    /// Restore the terminal font to its configured base size (#35).
+    ZoomReset,
     /// Jump straight to the tab at this zero-based index (issue #26). Bound to
     /// the platform's primary modifier and the number row — ⌘1…⌘9 on macOS,
     /// Ctrl+1…Ctrl+9 elsewhere — where the user-facing digit is 1-based.
@@ -248,6 +260,24 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::ToggleRecord,
         name: "toggle-record",
         default_chords: &["mod+shift+r"],
+    },
+    // Zoom (#35): `=` is the unshifted face of the `+` key on QWERTY and the
+    // unshifted key on AZERTY; the shifted `plus` spellings cover layouts
+    // where the produced character is `+` (with or without Shift reported).
+    ActionDef {
+        action: Action::ZoomIn,
+        name: "zoom-in",
+        default_chords: &["mod+=", "mod+plus", "mod+shift+plus"],
+    },
+    ActionDef {
+        action: Action::ZoomOut,
+        name: "zoom-out",
+        default_chords: &["mod+-"],
+    },
+    ActionDef {
+        action: Action::ZoomReset,
+        name: "zoom-reset",
+        default_chords: &["mod+0"],
     },
 ];
 
@@ -392,6 +422,20 @@ mod tests {
         assert_eq!(
             KeyChord::parse("cmd+tab"),
             Ok(KeyChord::new("tab", MOD_CMD))
+        );
+    }
+
+    #[test]
+    fn parse_spells_the_literal_plus_key_as_plus() {
+        // "+" the key collides with "+" the separator, so specs write `plus`
+        // (#35); the parsed chord carries the literal character.
+        assert_eq!(
+            KeyChord::parse("ctrl+plus"),
+            Ok(KeyChord::new("+", MOD_CTRL))
+        );
+        assert_eq!(
+            KeyChord::parse("cmd+shift+plus"),
+            Ok(KeyChord::new("+", MOD_CMD | MOD_SHIFT))
         );
     }
 
@@ -612,8 +656,12 @@ mod tests {
             map.lookup(&KeyChord::new("9", primary_mod())),
             Some(Action::ActivateTab(8))
         );
-        // The row stops at nine: there is no zero or tenth binding.
-        assert_eq!(map.lookup(&KeyChord::new("0", primary_mod())), None);
+        // The row stops at nine — zero belongs to zoom-reset (#35), not a
+        // tenth tab jump.
+        assert_eq!(
+            map.lookup(&KeyChord::new("0", primary_mod())),
+            Some(Action::ZoomReset)
+        );
         // A bare digit without the modifier is left for the terminal.
         assert_eq!(map.lookup(&KeyChord::new("1", 0)), None);
     }

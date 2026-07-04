@@ -37,13 +37,15 @@ pub(super) fn chord_of(
     Some(KeyChord::new(name, mods))
 }
 
-/// The digit `"1"`…`"9"` for a number-row key by physical position, or `None`
+/// The digit `"0"`…`"9"` for a number-row key by physical position, or `None`
 /// for any other key. Layout-independent: the same physical keys carry these
-/// names on QWERTY, AZERTY, QWERTZ, … so number-row shortcuts are universal
-/// (issue #26). `Digit0` is deliberately excluded — only 1–9 map to tabs.
+/// names on QWERTY, AZERTY, QWERTZ, … so number-row shortcuts are universal —
+/// 1–9 for the tab jumps (issue #26), 0 for zoom-reset (#35), which would
+/// otherwise need Shift on AZERTY (where unshifted 0 types `à`).
 fn physical_digit_name(physical: &keyboard::key::Physical) -> Option<String> {
     use keyboard::key::{Code, Physical};
     let digit = match physical {
+        Physical::Code(Code::Digit0) => '0',
         Physical::Code(Code::Digit1) => '1',
         Physical::Code(Code::Digit2) => '2',
         Physical::Code(Code::Digit3) => '3',
@@ -221,12 +223,13 @@ mod tests {
     }
 
     #[test]
-    fn physical_digit_names_cover_one_through_nine_only() {
+    fn physical_digit_names_cover_the_number_row() {
         for (code, expected) in [
             (Code::Digit1, Some("1".to_string())),
             (Code::Digit9, Some("9".to_string())),
-            // The number row binds 1–9; zero is not a tab shortcut.
-            (Code::Digit0, None),
+            // Zero is not a tab shortcut but carries zoom-reset (#35), so it
+            // is named too — layout-independently, like the tab digits.
+            (Code::Digit0, Some("0".to_string())),
             // A non-digit physical key falls through to the character path.
             (Code::KeyA, None),
         ] {

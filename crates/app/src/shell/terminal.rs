@@ -13,11 +13,18 @@ use termherd_pty::Screen;
 
 use super::Message;
 
-/// Terminal cell metrics for the monospace grid. Used both to draw and (in the
-/// parent) to translate the pane's pixel size into a PTY cell geometry (FR4).
-const FONT_SIZE: f32 = 14.0;
-pub(super) const CELL_W: f32 = 8.4;
-pub(super) const CELL_H: f32 = 18.0;
+/// Terminal cell metrics for the monospace grid, as ratios of the font size
+/// so a zoomed font scales the grid proportionally (#35). At the default
+/// 14 px font they give the historical 8.4 × 18.0 cell. Used both to draw
+/// and (in the parent) to translate the pane's pixel size into a PTY cell
+/// geometry (FR4).
+const CELL_W_RATIO: f32 = 8.4 / 14.0;
+const CELL_H_RATIO: f32 = 18.0 / 14.0;
+
+/// The cell box (width, height) for a terminal font size (#35).
+pub(super) fn cell_size(font_size: f32) -> (f32, f32) {
+    (font_size * CELL_W_RATIO, font_size * CELL_H_RATIO)
+}
 /// The terminal's default background (matches `termherd_pty`'s default).
 const BG: Color = Color::from_rgb(
     0x11 as f32 / 255.0,
@@ -36,6 +43,9 @@ pub(super) struct TerminalView<'a> {
     /// Whether the link-open modifier (Ctrl/Cmd) is held, so a hovered link
     /// highlights and a click opens it instead of selecting text (#28).
     pub(super) link_modifier: bool,
+    /// The effective terminal font size (#35), from `core::App::font_size` —
+    /// the glyph size, and (via [`cell_size`]) the wheel's line height.
+    pub(super) font_size: f32,
 }
 
 /// Per-canvas selection state: the drag in progress, the last range, and the
@@ -151,7 +161,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 // The selection is in viewport coordinates, so scrolling would
                 // leave it floating over the wrong text; drop it (#8).
                 state.clear_selection();
-                let lines = delta_to_lines(delta, CELL_H);
+                let lines = delta_to_lines(delta, cell_size(self.font_size).1);
                 let step = state.scroll.step(lines);
                 // The pointer cell rides along so a mouse-mode app (Claude's TUI)
                 // can be handed the wheel as input; the adapter falls back to our
@@ -264,7 +274,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
                         content: cell.c.to_string(),
                         position: Point::new(x, y),
                         color: rgb(cell.fg),
-                        size: Pixels(FONT_SIZE),
+                        size: Pixels(self.font_size),
                         font: Font::MONOSPACE,
                         shaping: Shaping::Advanced,
                         ..Text::default()
@@ -536,6 +546,9 @@ pub(super) fn notify(title: &str, body: &str) -> Result<(), termherd_core::ports
 mod tests {
     use super::*;
 
+    /// The cell height at the default font — the tests' historical metric.
+    const CELL_H: f32 = 18.0;
+
     fn sid(n: u64) -> SessionId {
         SessionId(std::num::NonZeroU64::new(n).expect("non-zero"))
     }
@@ -598,6 +611,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            font_size: 14.0,
         };
         // Pointer over the canvas → the scroll is published.
         let mut state = TermState::default();
@@ -622,6 +636,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            font_size: 14.0,
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
@@ -638,6 +653,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            font_size: 14.0,
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0)); // (0,0)
@@ -660,6 +676,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            font_size: 14.0,
         };
         let _ = s1.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         let _ = s1.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
@@ -670,6 +687,7 @@ mod tests {
             screen: &screen,
             session: sid(2),
             link_modifier: false,
+            font_size: 14.0,
         };
         let _ = s2.update(&mut state, &release(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(2)));
@@ -688,6 +706,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            font_size: 14.0,
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
@@ -747,6 +766,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: true,
+            font_size: 14.0,
         };
         let mut state = TermState::default();
         let action = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
@@ -764,6 +784,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: true,
+            font_size: 14.0,
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
@@ -780,6 +801,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: true,
+            font_size: 14.0,
         };
         let mut state = TermState::default();
         let _ = held.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
@@ -792,6 +814,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            font_size: 14.0,
         };
         let mut state = TermState::default();
         let _ = bare.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
@@ -822,6 +845,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            font_size: 14.0,
         };
         let mut state = TermState::default();
         let cursor = at_col(line.len(), 8); // inside `src/main.rs` (cols 4..=14)
@@ -847,6 +871,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            font_size: 14.0,
         };
         let mut state = TermState::default();
         let cursor = at_col(line.len(), 3);
@@ -867,6 +892,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            font_size: 14.0,
         };
         let state = TermState::default();
         assert_eq!(

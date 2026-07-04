@@ -32,6 +32,9 @@ pub struct Settings {
     /// Sidebar behaviour (#131): how many sessions each project lists before
     /// folding the tail behind an expander. Absent → the built-in default.
     pub sidebar: SidebarSettings,
+    /// Terminal appearance (#35): the base font size the zoom steps from.
+    /// Absent → the built-in default.
+    pub terminal: TerminalSettings,
 }
 
 /// One or several chords bound to an action — a bare string for the common
@@ -161,6 +164,44 @@ impl SidebarSettings {
     }
 }
 
+/// The on-disk terminal settings (#35). Wide (`f64`) for the same reason as
+/// [`RecordSettings`]: an out-of-range typo must not fail serde for the whole
+/// file and silently reset the user's other settings.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TerminalSettings {
+    /// Base terminal font size in pixels; the zoom shortcuts (#35) step from
+    /// here at runtime without touching this setting.
+    pub font_size: f64,
+}
+
+/// Mirrors `core`'s built-in default so an absent block changes nothing
+/// (asserted in a test) and the effective range core clamps into.
+const FONT_SIZE_RANGE: (f32, f32) = (6.0, 40.0);
+
+impl Default for TerminalSettings {
+    fn default() -> Self {
+        Self {
+            font_size: f64::from(termherd_core::DEFAULT_FONT_SIZE),
+        }
+    }
+}
+
+impl TerminalSettings {
+    /// Sanitise the raw value into the runtime base size: clamp into range,
+    /// and fall back to the default if it is not finite.
+    #[must_use]
+    pub fn font_size(self) -> f32 {
+        if self.font_size.is_finite() {
+            self.font_size
+                .clamp(f64::from(FONT_SIZE_RANGE.0), f64::from(FONT_SIZE_RANGE.1))
+                as f32
+        } else {
+            termherd_core::DEFAULT_FONT_SIZE
+        }
+    }
+}
+
 /// Which iced theme dresses the GUI chrome (sidebar, tab strip, buttons).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -194,6 +235,12 @@ impl Settings {
     #[must_use]
     pub fn session_limit(&self) -> usize {
         self.sidebar.limit()
+    }
+
+    /// The sanitised terminal base font size (#35), clamped into its range.
+    #[must_use]
+    pub fn font_size(&self) -> f32 {
+        self.terminal.font_size()
     }
 
     /// The active keymap: platform defaults with the user's `keys` overrides
@@ -351,6 +398,28 @@ mod tests {
                 .expect("a bad sidebar value must not fail the whole parse");
         assert_eq!(s.session_limit(), 0);
         assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
+    }
+
+    #[test]
+    fn terminal_font_size_defaults_overrides_and_clamps() {
+        // Absent block → core's built-in default, so nothing changes (#35).
+        let d = Settings::default().font_size();
+        assert!((d - termherd_core::DEFAULT_FONT_SIZE).abs() < f32::EPSILON);
+
+        // An explicit value is taken…
+        let s: Settings =
+            serde_json::from_str(r#"{ "terminal": { "font_size": 18 } }"#).expect("valid json");
+        assert!((s.font_size() - 18.0).abs() < f32::EPSILON);
+
+        // …and typos clamp instead of failing the whole file.
+        let s: Settings =
+            serde_json::from_str(r#"{ "theme": "light", "terminal": { "font_size": 400 } }"#)
+                .expect("a bad font size must not fail the whole parse");
+        assert!((s.font_size() - 40.0).abs() < f32::EPSILON);
+        assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
+        let s: Settings =
+            serde_json::from_str(r#"{ "terminal": { "font_size": -3 } }"#).expect("valid json");
+        assert!((s.font_size() - 6.0).abs() < f32::EPSILON);
     }
 
     #[test]

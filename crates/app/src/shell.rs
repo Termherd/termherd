@@ -43,10 +43,11 @@ mod view;
 use input::{chord_of, event_modifiers, key_mods, numpad_char, to_term_key};
 use streams::{PtyOutput, pty_stream, watch_stream};
 use termherd_core::browser::project_label;
-use terminal::{CELL_H, CELL_W, notify, open_url};
+use terminal::{cell_size, notify, open_url};
 
 /// Sidebar width and the chrome reserved around the terminal, in logical px.
-/// Combined with the cell metrics ([`terminal::CELL_W`]/[`CELL_H`]) to size the
+/// Combined with the zoom-derived cell metrics ([`terminal::cell_size`], #35)
+/// to size the
 /// PTY grid to the window (FR4 resize).
 const SIDEBAR_W: f32 = 300.0;
 /// Width the collapsed sidebar still occupies (#21): just the slim "▶" handle.
@@ -89,6 +90,8 @@ pub struct Startup {
     pub record: RecordConfig,
     /// Sidebar session limit from settings (#131); `0` shows every session.
     pub session_limit: usize,
+    /// Terminal base font size from settings (#35).
+    pub font_size: f32,
 }
 
 pub fn run(
@@ -123,6 +126,7 @@ pub fn run(
                     collapsed: startup.collapsed.clone(),
                     record: startup.record,
                     session_limit: startup.session_limit,
+                    font_size: startup.font_size,
                 },
             );
             let initial_scan = shell.rescan();
@@ -520,6 +524,7 @@ impl Shell {
         core.apply(termherd_core::Event::SessionLimitLoaded(
             startup.session_limit,
         ));
+        core.apply(termherd_core::Event::FontSizeLoaded(startup.font_size));
         Self {
             core,
             bounds,
@@ -1026,6 +1031,14 @@ impl Shell {
         self.resize_focused()
     }
 
+    /// Zoom the terminal font (#35), then resize the focused terminal so the
+    /// grid re-derives its cols/rows for the new cell box — the same pattern
+    /// as [`Self::toggle_sidebar`].
+    fn zoom(&mut self, zoom: termherd_core::Zoom) -> Task<Message> {
+        let _ = self.core.apply(termherd_core::Event::Zoom(zoom));
+        self.resize_focused()
+    }
+
     /// The terminal grid size (cols, rows) that fits the current window. The
     /// sidebar's width is only reserved while it's visible; collapsing it (#21)
     /// hands that space to the grid as extra columns instead of stretching the
@@ -1036,10 +1049,11 @@ impl Shell {
         } else {
             SIDEBAR_W
         };
-        let avail_w = (self.bounds.width - sidebar - H_CHROME).max(CELL_W);
-        let avail_h = (self.bounds.height - V_CHROME).max(CELL_H);
-        let cols = (avail_w / CELL_W).floor().clamp(20.0, 500.0) as u16;
-        let rows = (avail_h / CELL_H).floor().clamp(5.0, 200.0) as u16;
+        let (cell_w, cell_h) = cell_size(self.core.font_size());
+        let avail_w = (self.bounds.width - sidebar - H_CHROME).max(cell_w);
+        let avail_h = (self.bounds.height - V_CHROME).max(cell_h);
+        let cols = (avail_w / cell_w).floor().clamp(20.0, 500.0) as u16;
+        let rows = (avail_h / cell_h).floor().clamp(5.0, 200.0) as u16;
         (cols, rows)
     }
 
@@ -1528,6 +1542,12 @@ impl Shell {
             Action::Capture => self.capture(),
             // Start / stop the GIF screencast (#124).
             Action::ToggleRecord => self.toggle_record(),
+            // Zoom re-derives the grid geometry, so the focused terminal is
+            // resized like on a window resize (#35); other tabs catch up on
+            // focus, the existing convention.
+            Action::ZoomIn => self.zoom(termherd_core::Zoom::In),
+            Action::ZoomOut => self.zoom(termherd_core::Zoom::Out),
+            Action::ZoomReset => self.zoom(termherd_core::Zoom::Reset),
             // Number-row jump straight to a tab (issue #26). An index past the
             // open tabs is absorbed by `core` as a no-op.
             Action::ActivateTab(index) => self.activate_tab(index),
@@ -1898,6 +1918,7 @@ mod key_routing {
                 collapsed: HashSet::new(),
                 record: RecordConfig::default(),
                 session_limit: 0,
+                font_size: 14.0,
             },
         );
         let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
@@ -2471,6 +2492,7 @@ mod key_routing {
                 collapsed: HashSet::new(),
                 record: RecordConfig::default(),
                 session_limit: 0,
+                font_size: 14.0,
             },
         );
         assert!(shell.core.workspace.focused_session().is_none());

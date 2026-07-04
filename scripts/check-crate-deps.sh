@@ -31,9 +31,13 @@ declare -A allowed=(
 
 metadata="$(cargo metadata --no-deps --format-version 1)"
 
+# Windows jq emits CRLF; strip the CR everywhere or nothing matches the lists.
+cr=$'\r'
+
 # Every workspace crate must appear in the allow-list, else the map has drifted
 # from the workspace (a crate was added/renamed without updating this rule).
 mapfile -t crates < <(jq -r '.packages[].name' <<<"$metadata" | sort)
+crates=("${crates[@]%"$cr"}")
 violations=0
 for crate in "${crates[@]}"; do
     if [[ -z "${allowed[$crate]+set}" ]]; then
@@ -44,6 +48,8 @@ done
 
 # For each crate, every internal (termherd-*) dependency must be allow-listed.
 while IFS=$'\t' read -r crate dep; do
+    crate="${crate%"$cr"}"
+    dep="${dep%"$cr"}"
     case " ${allowed[$crate]:-} " in
         *" $dep "*) ;; # allowed
         *)

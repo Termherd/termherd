@@ -60,6 +60,14 @@ pub struct App {
     /// Projects whose truncated session tail is unfolded (#131). Ephemeral —
     /// unlike `collapsed`, it resets each launch and is never persisted.
     pub expanded: HashSet<String>,
+    /// The configured terminal base font size (#35), from settings via
+    /// [`Event::FontSizeLoaded`]; `None` until loaded (the built-in
+    /// [`DEFAULT_FONT_SIZE`] then applies).
+    font_base: Option<f32>,
+    /// Zoom steps on top of the base font (#35): ±1 px each, clamped at event
+    /// time so surplus presses at a bound don't accumulate as drift.
+    /// Ephemeral — resets each launch.
+    zoom_steps: i32,
     /// Monotonic source of `SessionId`s; never reused within a run. This is
     /// the structural fix for the `realSessionId` race (Q6) — ids are minted
     /// here, single-threaded, before any PTY exists.
@@ -83,6 +91,25 @@ pub enum SidebarFold {
     /// The tail is unfolded and can be folded back.
     Expanded,
 }
+
+/// A zoom request (#35), carried by [`Event::Zoom`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Zoom {
+    /// Grow the terminal font one step.
+    In,
+    /// Shrink the terminal font one step.
+    Out,
+    /// Back to the configured base size.
+    Reset,
+}
+
+/// The terminal font size before settings load or when none is configured
+/// (#35). Mirrors the historical `FONT_SIZE` constant.
+pub const DEFAULT_FONT_SIZE: f32 = 14.0;
+/// Bounds for the effective font size (#35) — small enough to overview a
+/// large scrollback, large enough for a presentation, and both far from
+/// degenerate cell geometry.
+const FONT_SIZE_RANGE: (f32, f32) = (6.0, 40.0);
 
 /// How many closed tabs the reopen stack (#78) remembers. Walking back further
 /// than this is rare enough that the unbounded-growth risk outweighs it.
@@ -295,6 +322,10 @@ pub enum Event {
     SessionLimitLoaded(usize),
     /// Unfold (or refold) a project's truncated session tail (#131), by path.
     ToggleExpanded(String),
+    /// The terminal base font size from settings (#35).
+    FontSizeLoaded(f32),
+    /// Zoom the terminal font in/out/back to base (#35).
+    Zoom(Zoom),
     /// The user Ctrl/Cmd+clicked a detected link in a terminal (#28).
     OpenUrl(String),
     /// A session emitted an OSC 9 notification — Claude wants the user (#29).
@@ -517,11 +548,10 @@ impl App {
                 Vec::new()
             }
             Event::ToggleCollapsed(path) => self.toggle_collapsed(path),
-            Event::SessionLimitLoaded(limit) => {
-                self.session_limit = limit;
-                Vec::new()
-            }
+            Event::SessionLimitLoaded(limit) => self.load_session_limit(limit),
             Event::ToggleExpanded(path) => self.toggle_expanded(path),
+            Event::FontSizeLoaded(size) => self.load_font_size(size),
+            Event::Zoom(zoom) => self.zoom(zoom),
             Event::OpenUrl(url) => {
                 let url = url.trim();
                 // Only well-formed schemes reach the OS handler; a blank or
@@ -801,6 +831,42 @@ impl App {
     fn toggle_expanded(&mut self, path: String) -> Vec<Effect> {
         if !self.expanded.remove(&path) {
             self.expanded.insert(path);
+        }
+        Vec::new()
+    }
+
+    /// Record the configured sidebar session limit (#131), from settings.
+    fn load_session_limit(&mut self, limit: usize) -> Vec<Effect> {
+        self.session_limit = limit;
+        Vec::new()
+    }
+
+    /// Record the configured terminal base font size (#35), from settings.
+    fn load_font_size(&mut self, size: f32) -> Vec<Effect> {
+        self.font_base = Some(size);
+        Vec::new()
+    }
+
+    /// The effective terminal font size (#35): the configured base (or the
+    /// built-in default before settings load) plus the zoom steps, clamped
+    /// into [`FONT_SIZE_RANGE`].
+    #[must_use]
+    pub fn font_size(&self) -> f32 {
+        let base = self.font_base.unwrap_or(DEFAULT_FONT_SIZE);
+        let (min, max) = FONT_SIZE_RANGE;
+        (base + self.zoom_steps as f32).clamp(min, max)
+    }
+
+    /// Apply a zoom step (#35). Steps are refused at the bounds rather than
+    /// clamped at read, so surplus presses never accumulate as drift — one
+    /// zoom-out after many zoom-ins at the cap shrinks immediately.
+    fn zoom(&mut self, zoom: Zoom) -> Vec<Effect> {
+        let (min, max) = FONT_SIZE_RANGE;
+        match zoom {
+            Zoom::In if self.font_size() < max => self.zoom_steps += 1,
+            Zoom::Out if self.font_size() > min => self.zoom_steps -= 1,
+            Zoom::Reset => self.zoom_steps = 0,
+            Zoom::In | Zoom::Out => {}
         }
         Vec::new()
     }
@@ -1140,6 +1206,51 @@ mod tests {
         let (shown, fold) = app.sidebar_sessions(&groups[0]);
         assert_eq!(fold, None);
         assert!(shown.iter().any(|s| s.session_id == "needle"));
+    }
+
+    #[test]
+    fn zoom_steps_the_font_from_the_loaded_base_and_resets() {
+        let mut app = App::new();
+        // Before settings load, the built-in default applies.
+        assert!((app.font_size() - DEFAULT_FONT_SIZE).abs() < f32::EPSILON);
+
+        app.apply(Event::FontSizeLoaded(16.0));
+        assert!((app.font_size() - 16.0).abs() < f32::EPSILON);
+
+        app.apply(Event::Zoom(Zoom::In));
+        app.apply(Event::Zoom(Zoom::In));
+        assert!((app.font_size() - 18.0).abs() < f32::EPSILON);
+
+        app.apply(Event::Zoom(Zoom::Out));
+        assert!((app.font_size() - 17.0).abs() < f32::EPSILON);
+
+        let effects = app.apply(Event::Zoom(Zoom::Reset));
+        assert!(effects.is_empty());
+        assert!((app.font_size() - 16.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn zoom_refuses_steps_at_the_bounds_without_accumulating_drift() {
+        let mut app = App::new();
+        app.apply(Event::FontSizeLoaded(38.0));
+        // Two steps reach the 40.0 cap; ten more must be refused, not banked.
+        for _ in 0..12 {
+            app.apply(Event::Zoom(Zoom::In));
+        }
+        assert!((app.font_size() - 40.0).abs() < f32::EPSILON);
+        // One zoom-out shrinks immediately — no surplus presses to unwind.
+        app.apply(Event::Zoom(Zoom::Out));
+        assert!((app.font_size() - 39.0).abs() < f32::EPSILON);
+
+        // Same at the floor.
+        app.apply(Event::FontSizeLoaded(7.0));
+        app.apply(Event::Zoom(Zoom::Reset));
+        for _ in 0..12 {
+            app.apply(Event::Zoom(Zoom::Out));
+        }
+        assert!((app.font_size() - 6.0).abs() < f32::EPSILON);
+        app.apply(Event::Zoom(Zoom::In));
+        assert!((app.font_size() - 7.0).abs() < f32::EPSILON);
     }
 
     #[test]

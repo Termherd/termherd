@@ -83,6 +83,7 @@ fn main() -> iced::Result {
         collapsed,
         record: settings.record_config(),
         session_limit: settings.session_limit(),
+        font_size: settings.font_size(),
     };
     let result = shell::run(scanner, watch_root, pty, pty_rx, startup);
     // Keep the single-instance guard alive until the GUI exits.
