@@ -78,7 +78,10 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   busy/idle titles plus an OSC 9 notification → a distinct `Attention` status
   (sticky over idle, cleared by work). Surfaced as a badge on the focused
   terminal, a per-session dot in the sidebar, and a dot on each tab (with
-  `F-session-tabs`); the bell is decoded but not treated as activity
+  `F-session-tabs`); the bell is decoded but not treated as activity. #86:
+  `core` now tracks OS window focus (`Event::WindowFocusChanged`) so a
+  background tab's notification still reaches the OS while termherd itself
+  is focused — only the active tab's focused pane skips the banner
 - [x] `F-settings` (thin) — shell select, theme, window prefs (M3):
   `~/.termherd/settings.json` (serde, defaults on missing/corrupt) carries a
   shell profile (program + args), injected into the `PtyManager` so each
