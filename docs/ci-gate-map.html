@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="termherd CI gate map: change-filtered gates, the single ci-success required check, and what runs when. Source of truth: docs/CI.md.">
+<title>termherd · CI gate map</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  img { max-width: 100%; }
+</style>
+<style>
+  :root {
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+    --bg: #eef2f5;
+    --surface: #ffffff;
+    --surface-2: #f6f9fb;
+    --ink: #182230;
+    --muted: #5a6a7d;
+    --faint: #8695a6;
+    --line: #d9e1e8;
+    --line-strong: #c2ccd6;
+    --accent: #0e7c86;
+    --accent-soft: #0e7c8618;
+
+    --pass: #1f8a4c;   --pass-bg: #1f8a4c16;
+    --signal: #b06d05; --signal-bg: #b06d0518;
+    --baseline: #6b46c9; --baseline-bg: #6b46c916;
+    --release: #4a6572; --release-bg: #4a657216;
+    --skip: #7d8b9a;   --skip-bg: #7d8b9a14;
+    --fail: #c0392b;
+
+    --radius: 12px;
+    --shadow: 0 1px 2px rgba(20,30,45,.05), 0 8px 24px -12px rgba(20,30,45,.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1319;
+      --surface: #151d26;
+      --surface-2: #111922;
+      --ink: #e7edf3;
+      --muted: #93a1b2;
+      --faint: #6d7d8f;
+      --line: #253140;
+      --line-strong: #32414f;
+      --accent: #40bac6;
+      --accent-soft: #40bac61f;
+
+      --pass: #45c07a;   --pass-bg: #45c07a1c;
+      --signal: #e0a334; --signal-bg: #e0a3341c;
+      --baseline: #a58bf0; --baseline-bg: #a58bf01c;
+      --release: #93a7b4; --release-bg: #93a7b418;
+      --skip: #7f8fa0;   --skip-bg: #7f8fa016;
+      --fail: #f0685a;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #eef2f5; --surface: #ffffff; --surface-2: #f6f9fb; --ink: #182230;
+    --muted: #5a6a7d; --faint: #8695a6; --line: #d9e1e8; --line-strong: #c2ccd6;
+    --accent: #0e7c86; --accent-soft: #0e7c8618;
+    --pass: #1f8a4c; --pass-bg: #1f8a4c16; --signal: #b06d05; --signal-bg: #b06d0518;
+    --baseline: #6b46c9; --baseline-bg: #6b46c916; --release: #4a6572; --release-bg: #4a657216;
+    --skip: #7d8b9a; --skip-bg: #7d8b9a14; --fail: #c0392b;
+    --shadow: 0 1px 2px rgba(20,30,45,.05), 0 8px 24px -12px rgba(20,30,45,.14);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1319; --surface: #151d26; --surface-2: #111922; --ink: #e7edf3;
+    --muted: #93a1b2; --faint: #6d7d8f; --line: #253140; --line-strong: #32414f;
+    --accent: #40bac6; --accent-soft: #40bac61f;
+    --pass: #45c07a; --pass-bg: #45c07a1c; --signal: #e0a334; --signal-bg: #e0a3341c;
+    --baseline: #a58bf0; --baseline-bg: #a58bf01c; --release: #93a7b4; --release-bg: #93a7b418;
+    --skip: #7f8fa0; --skip-bg: #7f8fa016; --fail: #f0685a;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: clamp(24px, 5vw, 64px) clamp(18px, 4vw, 40px) 72px; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--accent); font-weight: 600;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before { content: ""; width: 22px; height: 2px; background: var(--accent); border-radius: 2px; }
+
+  h1 {
+    font-family: var(--mono); font-weight: 700; letter-spacing: -.02em;
+    font-size: clamp(30px, 6vw, 50px); line-height: 1.04; margin: 18px 0 0;
+    text-wrap: balance;
+  }
+  .lede { font-size: clamp(16px, 2.2vw, 19px); color: var(--muted); max-width: 62ch; margin: 16px 0 0; }
+  .lede b { color: var(--ink); font-weight: 600; }
+  code, .mono { font-family: var(--mono); }
+  .lede code { color: var(--accent); font-size: .92em; background: var(--accent-soft); padding: 1px 6px; border-radius: 5px; }
+
+  /* stat strip */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 34px 0 8px; }
+  @media (max-width: 640px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
+  .stat .n { font-family: var(--mono); font-size: clamp(22px, 3vw, 28px); font-weight: 700; letter-spacing: -.02em; line-height: 1; }
+  .stat .n.accent { color: var(--accent); }
+  .stat .l { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+
+  section { margin-top: 52px; }
+  .h { font-size: 13px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .1em; color: var(--faint); margin: 0 0 18px; font-weight: 600; }
+
+  /* pipeline */
+  .pipe { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: clamp(20px, 3vw, 30px); box-shadow: var(--shadow); }
+  .node { border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); }
+  .node.classifier { padding: 16px 18px; max-width: 520px; margin: 0 auto; }
+  .node .title { font-family: var(--mono); font-weight: 600; font-size: 14.5px; display: flex; align-items: baseline; gap: 10px; }
+  .node .sub { color: var(--faint); font-size: 12px; font-weight: 400; }
+  .outs { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
+
+  .connector { display: flex; flex-direction: column; align-items: center; gap: 0; height: 30px; justify-content: center; }
+  .connector .line { width: 2px; height: 30px; background: linear-gradient(var(--line-strong), var(--accent)); }
+  .connector.up .line { background: linear-gradient(var(--accent), var(--line-strong)); }
+
+  .lanes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 720px) { .lanes { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 420px) { .lanes { grid-template-columns: 1fr; } }
+  .lane { padding: 14px; }
+  .lane .flt { font-family: var(--mono); font-size: 12px; color: var(--accent); font-weight: 600; }
+  .lane .flt .glob { color: var(--faint); font-weight: 400; display: block; margin-top: 3px; font-size: 11px; }
+  .lane .jobs { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+
+  .job { font-family: var(--mono); font-size: 12.5px; padding: 6px 9px; border-radius: 7px; background: var(--pass-bg); color: var(--ink); border: 1px solid transparent; display: flex; align-items: center; gap: 7px; }
+  .job::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--pass); flex: none; }
+
+  .merge-note { text-align: center; font-size: 12px; color: var(--faint); margin: 4px 0 2px; }
+  .success {
+    border: 1.5px solid var(--pass); background: var(--pass-bg); border-radius: 12px;
+    padding: 16px 20px; display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; text-align: center;
+  }
+  .success .name { font-family: var(--mono); font-weight: 700; font-size: clamp(16px, 2.4vw, 20px); color: var(--ink); }
+  .success .badge { font-family: var(--mono); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: var(--pass); border: 1px solid var(--pass); border-radius: 999px; padding: 3px 10px; }
+  .success .desc { color: var(--muted); font-size: 13.5px; }
+
+  /* bypass rail */
+  .rail { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  @media (max-width: 720px) { .rail { grid-template-columns: 1fr; } }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow); }
+  .card .ct { font-family: var(--mono); font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .card .cd { font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .card .cm { font-family: var(--mono); font-size: 11.5px; color: var(--faint); margin-top: 10px; }
+
+  .note { font-size: 12.5px; color: var(--muted); margin: 14px 2px 0; padding: 13px 15px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; }
+  .note b { color: var(--ink); font-weight: 600; }
+  .note code { font-family: var(--mono); color: var(--accent); font-size: .92em; }
+
+  .tag { font-family: var(--mono); font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .tag.pass { color: var(--pass); background: var(--pass-bg); }
+  .tag.signal { color: var(--signal); background: var(--signal-bg); }
+  .tag.baseline { color: var(--baseline); background: var(--baseline-bg); }
+  .tag.release { color: var(--release); background: var(--release-bg); }
+  .tag.skip { color: var(--skip); background: var(--skip-bg); }
+  .tag.filter { color: var(--accent); background: var(--accent-soft); }
+
+  /* table */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 13.5px; }
+  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  thead th { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); font-weight: 600; background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  td .jn { font-family: var(--mono); font-weight: 600; font-size: 13px; }
+  td.small { color: var(--muted); }
+  .os { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+  tbody tr.req { background: var(--pass-bg); }
+
+  /* when matrix */
+  .when { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  @media (max-width: 800px) { .when { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 460px) { .when { grid-template-columns: 1fr; } }
+  .wcol { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); }
+  .wcol h4 { margin: 0; font-family: var(--mono); font-size: 13px; letter-spacing: -.01em; display: flex; align-items: center; gap: 8px; }
+  .wcol h4 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .wcol ul { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  .wcol li { font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; align-items: flex-start; }
+  .wcol li code { font-family: var(--mono); color: var(--ink); font-size: 11.5px; }
+  .wcol li .m { margin-top: 1px; color: var(--faint); }
+
+  /* mirror */
+  .mirror { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .mirror .bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; color: var(--faint); }
+  .mirror .bar .dots { display: flex; gap: 6px; }
+  .mirror .bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--line-strong); display: block; }
+  .mirror pre { margin: 0; padding: 16px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.9; color: var(--ink); }
+  .mirror .c { color: var(--faint); }
+  .mirror .k { color: var(--accent); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 16px 2px 0; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .legend i { width: 9px; height: 9px; border-radius: 50%; }
+
+  footer { margin-top: 56px; padding-top: 22px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--faint); display: flex; flex-wrap: wrap; gap: 6px 18px; justify-content: space-between; }
+  footer code { color: var(--muted); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal { opacity: 0; transform: translateY(10px); animation: rise .6s cubic-bezier(.2,.7,.3,1) forwards; }
+    .pipe .reveal { animation-delay: .05s; }
+    @keyframes rise { to { opacity: 1; transform: none; } }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">termherd · continuous integration</div>
+    <h1>The CI gate map</h1>
+    <p class="lede">Every push runs only the checks its diff can affect, and they all fan into
+      <b>one required status check</b>, <code>ci-success</code>. That single check is what
+      <code>main</code> branch protection pins; everything else is a signal or a post-merge baseline.</p>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><div class="n accent">1</div><div class="l">required check on <code class="mono">main</code>: <code class="mono">ci-success</code></div></div>
+    <div class="stat"><div class="n">8</div><div class="l">gate jobs, each fired only on its file category</div></div>
+    <div class="stat"><div class="n">4</div><div class="l">change filters: <span class="mono">rust · cargo · markdown · workflows</span></div></div>
+    <div class="stat"><div class="n">0</div><div class="l">Rust jobs on a docs-only PR (reported as <span class="mono">skipped</span>)</div></div>
+  </div>
+
+  <section>
+    <p class="h">The PR merge gate</p>
+    <div class="pipe">
+      <div class="node classifier reveal">
+        <div class="title">changes <span class="sub">dorny/paths-filter · classifies the diff</span></div>
+        <div class="outs">
+          <span class="tag filter">rust</span>
+          <span class="tag filter">cargo</span>
+          <span class="tag filter">markdown</span>
+          <span class="tag filter">workflows</span>
+        </div>
+      </div>
+
+      <div class="connector"><span class="line"></span></div>
+
+      <div class="lanes">
+        <div class="node lane reveal">
+          <div class="flt">rust<span class="glob">**/*.rs · Cargo.toml · Cargo.lock · rust-toolchain · clippy.toml</span></div>
+          <div class="jobs">
+            <div class="job">rustfmt</div>
+            <div class="job">clippy</div>
+            <div class="job">test</div>
+          </div>
+        </div>
+        <div class="node lane reveal">
+          <div class="flt">cargo<span class="glob">manifests · Cargo.lock · deny.toml · dep script</span></div>
+          <div class="jobs">
+            <div class="job">cargo-deny</div>
+            <div class="job">cargo-machete</div>
+            <div class="job">dependency-rule</div>
+          </div>
+        </div>
+        <div class="node lane reveal">
+          <div class="flt">markdown<span class="glob">**/*.md · .markdownlint-cli2.jsonc</span></div>
+          <div class="jobs">
+            <div class="job">markdownlint</div>
+          </div>
+        </div>
+        <div class="node lane reveal">
+          <div class="flt">workflows<span class="glob">.github/workflows/**</span></div>
+          <div class="jobs">
+            <div class="job">actionlint</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="connector up"><span class="line"></span></div>
+      <p class="merge-note">all gates converge · skipped jobs count as pass</p>
+
+      <div class="success reveal">
+        <span class="name">ci-success</span>
+        <span class="badge">required check</span>
+        <span class="desc">runs always · fails if any gate failed or was cancelled</span>
+      </div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--pass)"></i> gate → <code class="mono">ci-success</code></span>
+      <span><i style="background:var(--accent)"></i> change filter</span>
+      <span><i style="background:var(--skip)"></i> skipped = passing</span>
+    </div>
+  </section>
+
+  <section>
+    <p class="h">Outside the PR gate</p>
+    <div class="rail">
+      <div class="card reveal">
+        <div class="ct">cross-os <span class="tag signal">signal</span></div>
+        <div class="cd">clippy + tests on macOS &amp; Windows. Skipped on PRs to keep the merge gate fast.</div>
+        <div class="cm">runs: push→main when rust changed · release tags. Not a merge blocker; a red run does not stop a release.</div>
+      </div>
+      <div class="card reveal">
+        <div class="ct">Analyze (Rust) <span class="tag baseline">baseline</span></div>
+        <div class="cd">CodeQL SAST. Traces a full <code class="mono">cargo build</code> (the iced-heavy app crate), so a run is minutes long.</div>
+        <div class="cm">runs: push→main + weekly, never on PRs. Not required; reaches the code seconds after merge.</div>
+      </div>
+      <div class="card reveal">
+        <div class="ct">release · package <span class="tag release">release</span></div>
+        <div class="cd">cargo-dist archives + installers and the GitHub Release; desktop bundles attached.</div>
+        <div class="cm">runs: tag push matching <code class="mono">**N.N.N*</code>. Validates in plan-mode on PRs.</div>
+      </div>
+    </div>
+    <p class="note"><b>CodeQL query suite:</b> stays on <code>security-and-quality</code> (the full pack).
+      Trimming to <code>security-extended</code>, which drops the maintainability / quality queries, was
+      weighed for speed. But with CodeQL <b>off the PR path</b> its runtime no longer blocks anyone, so
+      the fuller suite is kept for the coverage.</p>
+  </section>
+
+  <section>
+    <p class="h">Every gate at a glance</p>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>Job</th><th>Guards</th><th>Filter</th><th>OS</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr class="req"><td><span class="jn">rustfmt</span></td><td class="small">formatting (<code>cargo fmt</code>)</td><td><span class="tag filter">rust</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">clippy</span></td><td class="small"><code>-D warnings</code>, panic-free core, too_many_lines</td><td><span class="tag filter">rust</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">test</span></td><td class="small"><code>cargo nextest run --workspace</code></td><td><span class="tag filter">rust</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">cargo-deny</span></td><td class="small">licences · RUSTSEC · unknown sources</td><td><span class="tag filter">cargo</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">cargo-machete</span></td><td class="small">declared-but-unused deps</td><td><span class="tag filter">cargo</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">dependency-rule</span></td><td class="small">hexagonal crate dep rule (deps point inward)</td><td><span class="tag filter">cargo</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">actionlint</span></td><td class="small">valid, shellcheck-clean workflow YAML</td><td><span class="tag filter">workflows</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">markdownlint</span></td><td class="small">80-col Markdown prose</td><td><span class="tag filter">markdown</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr><td><span class="jn">ci-success</span></td><td class="small">aggregates the eight gates into one check</td><td class="small">always</td><td class="os">ubuntu</td><td><span class="tag pass">the check</span></td></tr>
+          <tr><td><span class="jn">cross-os</span></td><td class="small">clippy + tests on mac &amp; win</td><td class="small">non-PR · rust/tag</td><td class="os">mac · win</td><td><span class="tag signal">signal</span></td></tr>
+          <tr><td><span class="jn">Analyze (Rust)</span></td><td class="small">CodeQL taint / cross-function SAST</td><td class="small">push→main · weekly</td><td class="os">ubuntu</td><td><span class="tag baseline">baseline</span></td></tr>
+          <tr><td><span class="jn">release · package</span></td><td class="small">archives, installers, GitHub Release</td><td class="small">tag push</td><td class="os">mac · win · ubuntu</td><td><span class="tag release">release</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <p class="h">What runs when</p>
+    <div class="when">
+      <div class="wcol reveal">
+        <h4><span class="dot" style="background:var(--pass)"></span>Pull request → main</h4>
+        <ul>
+          <li><span class="m">→</span><span><code>changes</code> + only the gated ubuntu jobs → <code>ci-success</code></span></li>
+          <li><span class="m">–</span><span><code>cross-os</code> and CodeQL are skipped</span></li>
+          <li><span class="m">–</span><span>release runs plan-validation only</span></li>
+        </ul>
+      </div>
+      <div class="wcol reveal">
+        <h4><span class="dot" style="background:var(--accent)"></span>Merge / push → main</h4>
+        <ul>
+          <li><span class="m">→</span><span>the PR gates re-run on the merged commit</span></li>
+          <li><span class="m">+</span><span><code>cross-os</code> (mac · win) baseline</span></li>
+          <li><span class="m">+</span><span>CodeQL <code>Analyze (Rust)</code></span></li>
+        </ul>
+      </div>
+      <div class="wcol reveal">
+        <h4><span class="dot" style="background:var(--release)"></span>Release tag</h4>
+        <ul>
+          <li><span class="m">→</span><span><code>release</code> + <code>package</code> build &amp; publish</span></li>
+          <li><span class="m">+</span><span><code>cross-os</code> runs (forced on tags)</span></li>
+          <li><span class="m">–</span><span>CodeQL does not run on tags</span></li>
+        </ul>
+      </div>
+      <div class="wcol reveal">
+        <h4><span class="dot" style="background:var(--baseline)"></span>Weekly · Mon 07:00 UTC</h4>
+        <ul>
+          <li><span class="m">→</span><span>CodeQL only; catches query-pack drift</span></li>
+          <li><span class="m">–</span><span>flags new findings on code already on main</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="h">Mirror it locally before you push</p>
+    <div class="mirror">
+      <div class="bar"><span class="dots"><i></i><i></i><i></i></span> termherd · pre-push checks</div>
+<pre><span class="c"># the ubuntu merge gate, in seconds</span>
+cargo fmt --all --check
+cargo clippy --workspace --all-targets <span class="k">--</span> -D warnings
+cargo test --workspace           <span class="c"># CI uses cargo nextest run</span>
+cargo deny check
+cargo machete
+just check-deps                  <span class="c"># hexagonal dependency rule</span>
+markdownlint-cli2                <span class="c"># uses .markdownlint-cli2.jsonc</span></pre>
+    </div>
+  </section>
+
+  <footer>
+    <span>Full reference: <code>docs/CI.md</code> · workflows: <code>.github/workflows/ci.yml</code></span>
+    <span>Branch protection requires <code>ci-success</code>, not <code>Analyze (Rust)</code> or <code>cross-os</code>.</span>
+  </footer>
+</div>
+
+</body>
+</html>
