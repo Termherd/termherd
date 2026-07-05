@@ -78,7 +78,10 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   busy/idle titles plus an OSC 9 notification → a distinct `Attention` status
   (sticky over idle, cleared by work). Surfaced as a badge on the focused
   terminal, a per-session dot in the sidebar, and a dot on each tab (with
-  `F-session-tabs`); the bell is decoded but not treated as activity
+  `F-session-tabs`); the bell is decoded but not treated as activity. #86:
+  `core` now tracks OS window focus (`Event::WindowFocusChanged`) so a
+  background tab's notification still reaches the OS while termherd itself
+  is focused — only the active tab's focused pane skips the banner
 - [x] `F-settings` (thin) — shell select, theme, window prefs (M3):
   `~/.termherd/settings.json` (serde, defaults on missing/corrupt) carries a
   shell profile (program + args), injected into the `PtyManager` so each
@@ -196,6 +199,18 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   with drag-resize as fast-follow #55. Note: the keymap actions are currently
   dropped at `shell.rs:721` (`=> Task::none()`) — wiring them is step one
 - [ ] `F-jsonl-viewer`
+- [ ] `F-terminal-images` — render images inline in the terminal (iTerm2 OSC
+  1337 / Sixel / Kitty graphics), sibling to `F-jsonl-viewer` /
+  `F-file-diff-panel` in the rendering family. Filed as #85. **Parked**
+  (feature-torture ⏸ `F-terminal-images.md`): the issue's stated symptom
+  ("garbage escape text") doesn't reproduce — `vte`/`alacritty_terminal`
+  already discards unrecognised OSC/DCS/APC sequences cleanly; the real gap
+  is silence, not garbage. No slice is cheap: even a placeholder-only render
+  needs the same chunked-payload reassembly `crates/claude/src/osc.rs`
+  explicitly punts on today, across 3 mutually incompatible protocols (OSC/
+  DCS/APC). Zero demand signal beyond the filed issue. Revisit on a real
+  user report of the silent drop, or a free cycle after `F-terminal-split`
+  (#54/#55)
 - [ ] `F-auto-update`
 - [ ] `F-store-cache` — SQLite (WAL) digest cache + FTS5 index
   (lowest Should priority; an optimisation over the in-memory scan/search)

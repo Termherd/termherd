@@ -1751,6 +1751,18 @@ impl Shell {
                 self.bounds.save();
                 self.request_quit(id)
             }
+            window::Event::Focused => {
+                let _ = self
+                    .core
+                    .apply(termherd_core::Event::WindowFocusChanged(true));
+                Task::none()
+            }
+            window::Event::Unfocused => {
+                let _ = self
+                    .core
+                    .apply(termherd_core::Event::WindowFocusChanged(false));
+                Task::none()
+            }
             _ => Task::none(),
         }
     }

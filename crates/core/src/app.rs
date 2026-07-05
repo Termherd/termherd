@@ -80,6 +80,11 @@ pub struct App {
     /// frame timer and encoder live in the `app`; `core` only counts frames
     /// against the cap and decides capture/finish.
     recording: Option<Recording>,
+    /// Whether the OS says the window has focus, from
+    /// [`Event::WindowFocusChanged`]. Starts `false` (unknown) so a session
+    /// notification is forwarded to the OS until a real focus signal proves
+    /// the user is already looking at it — matching the earlier behaviour.
+    window_focused: bool,
 }
 
 /// What the expander row under a project's truncated session list should show
@@ -373,6 +378,12 @@ pub enum Event {
     /// One frame tick from the app's record timer: capture a frame, and
     /// auto-stop once the cap is reached. A no-op when not recording.
     RecordTick,
+    /// The window gained (`true`) or lost (`false`) OS focus. Lets
+    /// [`App::notify_session`] tell a background-tab notification (surface
+    /// it) from one on the tab/pane the user is already looking at (skip the
+    /// OS banner — the per-window suppression the OS itself applies when
+    /// unfocused already covers that case).
+    WindowFocusChanged(bool),
 }
 
 /// Side effects the runtime must perform. The iced shell turns these into
@@ -436,6 +447,7 @@ impl App {
 
     /// Apply an event, returning the effects the runtime must carry out.
     /// **Pure**: no I/O, no clock, no panic.
+    #[allow(clippy::too_many_lines)] // flat Event dispatcher; one match arm per variant
     pub fn apply(&mut self, event: Event) -> Vec<Effect> {
         match event {
             Event::ScanCompleted(records) => {
@@ -590,6 +602,10 @@ impl App {
             }
             Event::ToggleRecord { max_frames } => self.toggle_record(max_frames),
             Event::RecordTick => self.record_tick(),
+            Event::WindowFocusChanged(focused) => {
+                self.window_focused = focused;
+                Vec::new()
+            }
         }
     }
 
@@ -1063,8 +1079,19 @@ impl App {
     /// on — an unknown or exited session has nothing to return to, so it is
     /// dropped. The title is the session's tab label (what the user sees, and
     /// tracks OSC-24 renames); a blank body falls back to a default message.
+    ///
+    /// Also dropped: a session that is both the active tab's focused
+    /// pane *and* the window has OS focus — the user is already looking at
+    /// it, so no banner is needed. Any other live session still gets one,
+    /// including a background tab while the window is focused: the OS's own
+    /// per-window banner suppression only covers the focused-tab case, and a
+    /// background tab needs the effect to reach the OS (or an in-app cue) to
+    /// be seen at all.
     fn notify_session(&self, session: SessionId, body: String) -> Vec<Effect> {
         if !self.is_live(session) {
+            return Vec::new();
+        }
+        if self.window_focused && self.workspace.focused_session() == Some(session) {
             return Vec::new();
         }
         // A live session is always hosted by a tab, so `session_title` returns
@@ -2171,6 +2198,59 @@ mod tests {
         });
 
         assert_eq!(notify_effect(&effects), Some(("renamed", "ping")));
+    }
+
+    // ---- background-tab notifications while the window keeps focus ----
+
+    #[test]
+    fn a_notification_for_the_viewed_session_is_dropped_while_the_window_is_focused() {
+        let mut app = App::new();
+        let id = launch(&mut app, "myproj");
+        app.apply(Event::WindowFocusChanged(true));
+
+        // The user is looking straight at this session; no banner is needed.
+        let effects = app.apply(Event::SessionNotified {
+            session: id,
+            body: "ping".into(),
+        });
+
+        assert_eq!(notify_effect(&effects), None);
+    }
+
+    #[test]
+    fn a_notification_for_a_background_tab_still_posts_while_the_window_is_focused() {
+        let mut app = App::new();
+        let background = launch(&mut app, "a");
+        let _foreground = launch(&mut app, "b");
+        assert_eq!(app.workspace.focused_session(), Some(_foreground));
+        app.apply(Event::WindowFocusChanged(true));
+
+        // The active tab is "b"; a notification from "a" (a background tab) must
+        // still reach the OS — the OS's own per-window suppression only covers
+        // the tab the user is actually viewing.
+        let effects = app.apply(Event::SessionNotified {
+            session: background,
+            body: "ping".into(),
+        });
+
+        assert_eq!(notify_effect(&effects), Some(("a", "ping")));
+    }
+
+    #[test]
+    fn a_notification_for_the_viewed_session_still_posts_while_the_window_is_unfocused() {
+        let mut app = App::new();
+        let id = launch(&mut app, "myproj");
+        app.apply(Event::WindowFocusChanged(true));
+        app.apply(Event::WindowFocusChanged(false));
+
+        // Termherd itself is out of focus (another app is frontmost); today's
+        // OS-suppression behaviour still applies, so the effect must still fire.
+        let effects = app.apply(Event::SessionNotified {
+            session: id,
+            body: "ping".into(),
+        });
+
+        assert_eq!(notify_effect(&effects), Some(("myproj", "ping")));
     }
 
     // ---- capture snapshot for the AI dev loop ----
