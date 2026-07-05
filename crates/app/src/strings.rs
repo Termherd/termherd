@@ -82,12 +82,18 @@ pub fn archive_prompt(title: &str) -> String {
     format!("Archive “{title}”?")
 }
 
-/// Quit confirmation when live sessions would be hard-killed.
+/// Quit confirmation. With open sessions it names how many will be hard-killed
+/// (every non-exited session dies on quit, Claude or shell); with none (an
+/// `alwaysConfirm` quit of an idle app) it's a plain confirm.
 #[must_use]
 pub fn quit_prompt(live: usize) -> String {
-    format!(
-        "Quit TermHerd? {live} active session(s) will be force-stopped — Claude will be killed."
-    )
+    if live == 0 {
+        "Quit TermHerd?".to_string()
+    } else {
+        format!(
+            "Quit TermHerd? {live} open session(s) will be force-stopped — any running work is lost."
+        )
+    }
 }
 
 // --- Activity status (FR8) ---

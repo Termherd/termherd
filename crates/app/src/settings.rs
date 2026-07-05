@@ -35,6 +35,10 @@ pub struct Settings {
     /// Terminal appearance (#35): the base font size the zoom steps from.
     /// Absent → the built-in default.
     pub terminal: TerminalSettings,
+    /// Close-confirmation policy: whether closing a tab or quitting the app
+    /// prompts first. Absent → both confirm only while a session runs a
+    /// foreground process, and close/quit an all-idle target silently.
+    pub close: CloseSettings,
 }
 
 /// One or several chords bound to an action — a bare string for the common
@@ -211,6 +215,63 @@ pub enum ThemeChoice {
     Dark,
     /// A light chrome.
     Light,
+}
+
+/// When a close that would terminate running session(s) asks for confirmation
+/// first. Shared vocabulary for both the tab close and the app quit; each gets
+/// its own policy via [`CloseSettings`].
+///
+/// The variants serialise camel-cased — `"alwaysConfirm"`, `"confirmWhenActive"`,
+/// `"noConfirmation"` — so the value reads as its own sentence in the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfirmClose {
+    /// Always prompt before closing.
+    AlwaysConfirm,
+    /// Prompt only while the target is still *active* — running a foreground
+    /// process worth confirming (a working shell or any live Claude). An idle
+    /// target closes silently. The caller supplies what "active" means: a tab
+    /// close keys off its own sessions, a quit off every session.
+    ConfirmWhenActive,
+    /// Never prompt — close immediately.
+    NoConfirmation,
+}
+
+impl ConfirmClose {
+    /// Whether a close must be confirmed first, given whether the target is
+    /// still `active` (has work worth confirming — the caller decides what
+    /// counts). The single decision seam, kept pure so the tab and quit paths —
+    /// and their tests — share one truth table.
+    #[must_use]
+    pub fn confirms(self, active: bool) -> bool {
+        match self {
+            ConfirmClose::AlwaysConfirm => true,
+            ConfirmClose::ConfirmWhenActive => active,
+            ConfirmClose::NoConfirmation => false,
+        }
+    }
+}
+
+/// Per-action close-confirmation policy. Each field defaults to the behaviour
+/// already shipped, so an absent (or partial) `close` block changes nothing:
+/// both a tab close and a quit confirm only while a session runs a foreground
+/// process — an all-idle target closes / quits silently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CloseSettings {
+    /// Closing a tab (and hard-killing its session(s)).
+    pub tab: ConfirmClose,
+    /// Quitting the app (hard-killing every live session).
+    pub app: ConfirmClose,
+}
+
+impl Default for CloseSettings {
+    fn default() -> Self {
+        Self {
+            tab: ConfirmClose::ConfirmWhenActive,
+            app: ConfirmClose::ConfirmWhenActive,
+        }
+    }
 }
 
 impl ThemeChoice {
@@ -420,6 +481,53 @@ mod tests {
         let s: Settings =
             serde_json::from_str(r#"{ "terminal": { "font_size": -3 } }"#).expect("valid json");
         assert!((s.font_size() - 6.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn close_defaults_preserve_the_shipped_behaviour() {
+        // Absent `close` block: both a tab close and a quit confirm only while
+        // active — exactly what was hard-coded before the setting.
+        let c = Settings::default().close;
+        assert_eq!(c.tab, ConfirmClose::ConfirmWhenActive);
+        assert_eq!(c.app, ConfirmClose::ConfirmWhenActive);
+    }
+
+    #[test]
+    fn confirm_close_truth_table() {
+        use ConfirmClose::{AlwaysConfirm, ConfirmWhenActive, NoConfirmation};
+        // Always prompts, active or not.
+        assert!(AlwaysConfirm.confirms(true) && AlwaysConfirm.confirms(false));
+        // Prompts only while a session is live.
+        assert!(ConfirmWhenActive.confirms(true) && !ConfirmWhenActive.confirms(false));
+        // Never prompts.
+        assert!(!NoConfirmation.confirms(true) && !NoConfirmation.confirms(false));
+    }
+
+    #[test]
+    fn close_block_deserialises_camel_cased_values() {
+        let s: Settings = serde_json::from_str(
+            r#"{ "close": { "tab": "confirmWhenActive", "app": "noConfirmation" } }"#,
+        )
+        .expect("valid json");
+        assert_eq!(s.close.tab, ConfirmClose::ConfirmWhenActive);
+        assert_eq!(s.close.app, ConfirmClose::NoConfirmation);
+    }
+
+    #[test]
+    fn a_partial_close_block_keeps_the_other_field_at_its_default() {
+        // Only `app` given → `tab` keeps its confirm-when-active default.
+        let s: Settings =
+            serde_json::from_str(r#"{ "close": { "app": "alwaysConfirm" } }"#).expect("valid json");
+        assert_eq!(s.close.tab, ConfirmClose::ConfirmWhenActive);
+        assert_eq!(s.close.app, ConfirmClose::AlwaysConfirm);
+    }
+
+    #[test]
+    fn confirm_close_round_trips_camel_cased() {
+        let json = serde_json::to_string(&ConfirmClose::ConfirmWhenActive).expect("serialise");
+        assert_eq!(json, "\"confirmWhenActive\"");
+        let back: ConfirmClose = serde_json::from_str(&json).expect("deserialise");
+        assert_eq!(back, ConfirmClose::ConfirmWhenActive);
     }
 
     #[test]

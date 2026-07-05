@@ -77,6 +77,7 @@ start. There is no in-app settings panel yet — edit the file and restart.
 {
   "shell": { "program": "pwsh", "args": [] },
   "theme": "dark",
+  "close": { "tab": "confirmWhenActive", "app": "confirmWhenActive" },
   "keys": {
     "copy": "ctrl+c",
     "paste": ["ctrl+v", "ctrl+shift+v"],
@@ -90,6 +91,12 @@ start. There is no in-app settings panel yet — edit the file and restart.
   to use the platform default login shell; `args` is optional.
 - `theme` — `"dark"` (default) or `"light"`, for the GUI chrome (sidebar, tab
   strip, buttons). The terminal grid keeps its own colours.
+- `close` — whether closing prompts first, set per action. `tab` (closing a
+  tab) and `app` (quitting) each take one of: `"alwaysConfirm"` (always ask),
+  `"confirmWhenActive"` (ask only while a session is running a foreground
+  process — a working shell or any live Claude; an idle shell closes/quits
+  silently), or `"noConfirmation"` (close immediately). Both default to
+  `"confirmWhenActive"`; either field may be omitted to keep its default.
 - `keys` — keyboard overrides. Each entry binds an action to one chord or a
   list of chords (`"ctrl+shift+c"`, order/case-insensitive; modifiers `ctrl`,
   `shift`, `alt`, `cmd`). An entry replaces that action's default; unspecified
