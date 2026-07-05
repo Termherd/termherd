@@ -36,6 +36,13 @@ markdownlint-cli2                  # uses .markdownlint-cli2.jsonc
 Toolchain is pinned to **Rust 1.95.0 / edition 2024** via `rust-toolchain.toml`
 (Q10) — do not bump without updating the pin.
 
+CI runs each gate **only when its file category changed** (a `changes` job with
+`dorny/paths-filter`): a docs-only PR skips every Rust job, a pure-`.rs` change
+skips the dependency-metadata jobs. All gates fan into one required check,
+`ci-success`, which treats path-skipped jobs as passing — so `main` branch
+protection pins that single check. Gate any new job on its category; never make
+a path-filtered job a *required* check directly.
+
 Full CI reference — every gate, its goal, when it runs, how to mirror it, and
 the sanctioned exceptions — lives in [`docs/CI.md`](docs/CI.md).
 
