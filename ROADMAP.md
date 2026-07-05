@@ -10,31 +10,40 @@ gist `d1d02e5`).
 The MoSCoW buckets below stay tied to PRD §5; this block is just the order to
 pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 
-1. **Finish the Musts** (`v0.1.0` milestone) — release packaging is now: macOS
-   ships **unsigned** (`.dmg` + manual `xattr`) — the **Homebrew** path (#61)
-   is **parked P2** since Homebrew 5.1 removed `--no-quarantine` (all taps), so
-   an unsigned cask can no longer bypass Gatekeeper; **Linux** signed checksums
-   (#52); and the `F-plans-memory` editing slice (#53). Deferred to P2,
-   post-release: macOS Developer ID notarization (#51 — no free OSS path,
-   $99/yr, now the sole fluent macOS path) and **Windows** Authenticode via the
-   free **SignPath Foundation** (#62 — viable, not parked; gated only on a
-   policy page + MFA + their approval wait). See feature-torture
+> **Reprioritization (2026-07-05).** The board had flattened at P2; a fresh
+> pass differentiated it. Current **P1**: #102 (scroll-drift correctness bug),
+> #54 (split-pane UI — the release headline), #79 + #80 (confirm-on-running-
+> process guards), #119 (reflect Claude's own `/rename` in the tab), plus the
+> `F-quality-gates` slices #105/#106/#107. All three code-signing paths dropped
+> to **P3**. #90 stays P2 but is marked `needs-design`; #55 is blocked-by #54.
+> #110 closed — rung 2 shipped as #124/#126.
+
+1. **Finish the Musts** (`v0.1.0` milestone) — macOS ships **unsigned**
+   (`.dmg` + manual `xattr`); **Linux** signed checksums (#52, done) and the
+   `F-plans-memory` editing slice (#53, done) are in. All code signing is now
+   **P3**, deferred until GitHub traction / a sponsor: macOS Developer ID
+   notarization (#51 — no free OSS path, $99/yr), the **Homebrew** cask (#61 —
+   parked since Homebrew 5.1 removed `--no-quarantine`, so an unsigned cask
+   can't bypass Gatekeeper), and **Windows** Authenticode via **SignPath
+   Foundation** (#62 — viable, but not release-blocking). What's left in-bucket
+   is `F-quality-gates` (#105/#106/#107, P1). See feature-torture
    `F-packaging-ci.md`.
-2. **P0 — clear.** Both closed: #19 (Tab forwarding — a false negative; plain
-   Tab already sends `\t`, Shift+Tab `CSI Z`) and #18 (tab status stuck).
-3. **P1 — cheap, on-thesis wins:** #26 (Ctrl+Number tabs), #23 (sidebar launch
-   affordances: `$`/🤖 buttons + collapse-on-name; adds the missing fresh-Claude
-   launch mode — FR4a). (#21 hide pane / Ctrl+B and #20 archive confirm —
-   shipped.)
-4. **P2 — polish:** #25 drag-reorder tabs (FR5), #27 cursor +
-   double-click. (#24 tab titles, #28 link click, #29 OS
-   notifications — shipped.)
+2. **P1 — correctness + the headline feature:** #102 (scroll-drift property
+   failure — the one open correctness bug), #54 (fixed-ratio split-pane UI —
+   cheapest large/visible feature, core already landed), #79/#80 (don't kill a
+   running Claude by accident), #119 (live tab name), and `F-quality-gates`
+   #105/#106/#107.
+3. **P2 — polish:** #36 (copy-on-select), #55 (drag-resize, **blocked-by #54**),
+   #56/#57 (favorites), #59 (modifier bypass), #37 (settings template), #84
+   (OSC 8 links), #85 (inline images), #86 (bg notifications), #82 (link-cursor
+   bug), #90 (MCP control surface, **`needs-design`**), #114 (Cmd+M minimize).
+4. **P3 — parked / not actionable now:** code signing — #51, #61, #62.
 5. **Design-first backlog** — see below; don't code until scoped.
 
 `F-terminal-split` (Should) isn't in the feedback but its core already landed —
-the cheapest large/visible feature left on the board if a release needs a
-headline. The UI slice is now scoped as #54 (fixed-ratio split + focus +
-per-pane geometry) with drag-resize split out to #55 (feature-torture
+the cheapest large/visible feature left on the board and the release headline,
+now **P1**. The UI slice is scoped as #54 (fixed-ratio split + focus + per-pane
+geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
 `F-terminal-split.md`).
 
 > **Feature-torture pass (2026-06-20).** The seven open/backlog features were
@@ -84,18 +93,18 @@ per-pane geometry) with drag-resize split out to #55 (feature-torture
   and Linux `.deb`/`.AppImage`, attached to the release. macOS `.app`/`.dmg`
   verified locally. Only "signed" remains — bundles are unsigned pending
   certificates (OQ5). **Split by platform** (feature-torture 🧬). macOS: the
-  Homebrew path (#61) is **parked P2** — Homebrew 5.1 removed
+  Homebrew path (#61) is **parked P3** — Homebrew 5.1 removed
   `--no-quarantine` (all taps), so an unsigned cask can't bypass Gatekeeper
   and casks failing it are unsupported after 2026-09-01; v0.1.0 therefore
   ships macOS **unsigned** (`.dmg` + manual `xattr`), and Developer ID
-  notarization (#51, no free OSS path) is now the sole fluent macOS path,
-  deferred to GitHub traction / a sponsor ($99/yr). Linux ships **signed
+  notarization (#51, no free OSS path, now **P3**) is the sole fluent macOS
+  path, deferred to GitHub traction / a sponsor ($99/yr). Linux ships **signed
   checksums** (#52, done) — a `sign-release.yml` workflow attaches a
   `SHA256SUMS` over the Linux tarballs and a sigstore *keyless*
   (GitHub OIDC, no stored key) build-provenance attestation; verify with
   `gh attestation verify <artifact> --repo Termherd/termherd`. **Windows**
   Authenticode via free **SignPath
-  Foundation** (#62, P2)*
+  Foundation** (#62, now **P3** — viable, but not release-blocking)*
 - [ ] `F-quality-gates` — intrinsic-quality CI gates beyond the existing
   fmt/clippy/test/deny set, targeting the structural/maintainability axis
   (complexity, domain boundaries, merge-conflict risk). Scoped from a
