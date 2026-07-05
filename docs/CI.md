@@ -59,10 +59,13 @@ This is the cheapest place to catch a failure — do it before opening a PR.
 
 Everything fans out in parallel (no inter-job ordering):
 
-- **`ci`** — eight gate jobs (`fmt`, `clippy`, `test`, `cargo-deny`,
-  `cargo-machete`, `dependency-rule`, `actionlint`, `markdownlint`), fanned
-  into the `ci-success` aggregator. `cross-os` is **skipped** on PRs. Branch
-  protection requires only `ci-success` (+ `Analyze (Rust)`).
+- **`ci`** — a `changes` classifier plus eight gate jobs (`fmt`, `clippy`,
+  `test`, `cargo-deny`, `cargo-machete`, `dependency-rule`, `actionlint`,
+  `markdownlint`), each gated on its file category and fanned into the
+  `ci-success` aggregator. Jobs whose category didn't change report `skipped`
+  (a docs-only PR skips all the Rust jobs) and `ci-success` still passes.
+  `cross-os` is **skipped** on PRs. Branch protection requires only
+  `ci-success` (+ `Analyze (Rust)`).
 - **`codeql`** — `Analyze (Rust)`.
 - **`release`** — runs in *validation* mode (cargo-dist's `plan`; artifact
   builds are gated off unless configured), so a tag push won't be the first
@@ -115,23 +118,39 @@ before you tag.
 ### `ci.yml` — the quality wall
 
 Trigger: `push`→`main`, `push` release tag, `pull_request`→`main`,
-`workflow_dispatch`. Eight **independent** gate jobs (no `needs:` between them
-— they run concurrently) fan into one aggregator, plus a cross-OS signal:
+`workflow_dispatch`. A `changes` job classifies the diff (via
+`dorny/paths-filter`); the eight gate jobs each run **only when their category
+changed**, then fan into one aggregator, plus a cross-OS signal:
 
 ```text
-fmt   clippy   test   cargo-deny   cargo-machete   dependency-rule   actionlint   markdownlint
-  └──────┴───────┴──────────┴──────────────┴─────────────┴──────────────┴────────────┘
-                              ▼
-                         ci-success            ← the one required check for `main`
+changes  ── emits booleans: rust · cargo · markdown · workflows
+   │
+   ├─ rust     → fmt   clippy   test          (skipped on a docs-only PR)
+   ├─ cargo    → cargo-deny   cargo-machete   dependency-rule
+   ├─ markdown → markdownlint
+   └─ workflows→ actionlint
+                      └──────────────┬──────────────┘
+                                     ▼
+                                ci-success   ← the one required check for `main`
 
-cross-os (mac · win)   ← skipped on PR; runs on push→main and tags; signal only
+cross-os (mac · win)  ← non-PR only, when rust changed (or a tag); signal only
 ```
 
-The eight gate jobs run ubuntu-only. `ci-success` `needs:` all of them and is
-the single status check pinned in branch protection, so the required-checks
-list stays stable as jobs come and go. `cross-os` carries the macOS + Windows
-coverage that `clippy`/`test` used to via a 3-OS matrix — moved off the PR path
-so the merge gate stays fast and cheap.
+The eight gate jobs run ubuntu-only. `ci-success` (`if: always()`) `needs:`
+`changes` + all of them and is the single status check pinned in branch
+protection, so the required-checks list stays stable as jobs come and go.
+
+**Change-focused runs.** A path-filtered job that doesn't apply reports a
+`skipped` check — which is **not** `failure`/`cancelled`, so `ci-success` still
+goes green. A docs-only PR skips every Rust job; a pure-`.rs` change skips the
+dependency-metadata jobs (`cargo-*`, `dependency-rule`, gated on the narrower
+`cargo` filter: manifests, `Cargo.lock`, `deny.toml`, the dep script). This is
+why the aggregator matters: because protection pins only `ci-success` (which
+always runs), we never rely on GitHub counting a skipped *required* check as a
+pass, and `cross-os` may stay a matrix without wedging PRs.
+
+`cross-os` carries the macOS + Windows coverage that `clippy`/`test` used to via
+a 3-OS matrix — moved off the PR path so the merge gate stays fast and cheap.
 
 Workspace-wide knobs: `RUSTFLAGS: -D warnings` (so any `warn`-level lint —
 including `too_many_lines` — becomes a hard error in CI), and a strict
@@ -278,7 +297,11 @@ here so an exception is never a surprise:
    live in the `cross-os` job — off the PR path; the dependency graph,
    licences, formatting, etc. are platform-independent). If the new job must
    gate merges, add it to `ci-success`'s `needs:` list so branch protection
-   picks it up without editing the rule.
+   picks it up without editing the rule. **Gate it on a file category** too:
+   add `needs: changes` and `if: needs.changes.outputs.<cat> == 'true'`,
+   extending the `changes` job's `filters` if it reacts to a new kind of file.
+   Never make a path-filtered job a *required* check directly — a `skipped`
+   required check can wedge a PR; route it through `ci-success` instead.
 2. SHA-pin any new action (version in a trailing comment).
 3. Give it a **local mirror**: a `just` recipe or a one-line command, added
    to §5 here and to the `AGENTS.md` "CI gates" block.
