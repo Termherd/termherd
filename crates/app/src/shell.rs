@@ -1460,6 +1460,12 @@ impl Shell {
     /// so it closes immediately. No-op for an out-of-range index, so a stale
     /// request can never close the wrong tab.
     fn request_close(&mut self, index: usize) -> Task<Message> {
+        // A pending confirmation owns the interaction (like the keyboard in
+        // `on_key`): while one is up, ignore a close request for another tab so
+        // it can't silently close that tab and drop the unanswered prompt.
+        if self.closing.is_some() {
+            return Task::none();
+        }
         if index >= self.core.workspace.tabs.len() {
             return Task::none();
         }
@@ -2469,6 +2475,28 @@ mod key_routing {
         let _ = shell.update(Message::RequestCloseTab(claude_tab));
         assert_eq!(shell.closing, Some(claude_tab), "a Claude tab confirms");
         assert_eq!(pty.kill_count(), 0, "arming must not kill the session");
+    }
+
+    #[test]
+    fn an_armed_confirmation_ignores_a_close_request_for_another_tab() {
+        // While a close confirmation is up on the busy tab 0, clicking a *second*
+        // (idle) tab's × must not silently close it — and above all must not drop
+        // the pending confirmation. The prompt owns the interaction, like the
+        // keyboard does, until it is answered or cancelled.
+        let (mut shell, pty) = busy_shell_with_terminal();
+        let _ = shell.launch("/tmp/idle".to_string(), Launch::Shell);
+        assert_eq!(shell.core.workspace.tabs.len(), 2);
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert_eq!(shell.closing, Some(0), "the busy tab arms the confirmation");
+
+        let _ = shell.update(Message::RequestCloseTab(1));
+        assert_eq!(shell.closing, Some(0), "the armed confirmation stays put");
+        assert_eq!(shell.core.workspace.tabs.len(), 2, "no tab was closed");
+        assert_eq!(
+            pty.kill_count(),
+            0,
+            "nothing is killed while a prompt is up"
+        );
     }
 
     #[test]
