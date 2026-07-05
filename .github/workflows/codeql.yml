@@ -6,10 +6,15 @@ name: CodeQL
 # dependency-side) and Clippy (in-tree style + simple soundness) with taint
 # tracking and cross-function patterns those cannot see.
 
+# No `pull_request` trigger by design. CodeQL's Rust extractor traces a full
+# `cargo build` (the iced-heavy `app` crate is a cold compile), so it is minutes
+# long and the rust-cache can't shortcut a traced build. Running it on every PR
+# put that on each PR's critical path for no coverage a PR-time run adds over the
+# push→main run that fires seconds later. So: default branch + weekly only. The
+# consequence is `Analyze (Rust)` must NOT be a required check (it never reports
+# on a PR) — `main` protection pins only `ci-success`. See docs/CI.md.
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   schedule:
     # Weekly: catches drift in the query packs themselves (new queries may
@@ -17,11 +22,11 @@ on:
     - cron: '0 7 * * 1'
   workflow_dispatch:
 
-# Cancel superseded PR runs only. Pushes to main and the weekly schedule run
-# establish the default-branch security baseline — never cancel those.
+# Pushes to main and the weekly run establish the default-branch security
+# baseline — never cancel them. (No PR runs exist to supersede.)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

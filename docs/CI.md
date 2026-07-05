@@ -33,15 +33,18 @@ themselves) and `markdownlint` (the prose).
 | Workflow lint | `ci` · `actionlint` | Valid, shellcheck-clean workflow YAML | PR, push→main | ubuntu | yes |
 | Docs lint | `ci` · `markdownlint` | 80-col Markdown prose | PR, push→main | ubuntu | yes |
 | Merge gate | `ci` · `ci-success` | Aggregates every PR job into one required check | PR, push→main | ubuntu | yes (the one required check) |
-| SAST | `codeql` · `Analyze (Rust)` | Taint / cross-function security & quality | PR, push→main, weekly | ubuntu | yes |
+| SAST | `codeql` · `Analyze (Rust)` | Taint / cross-function security & quality | push→main, weekly | ubuntu | baseline |
 | CLI release | `release` · `plan…announce` | Build archives + curl\|sh / PowerShell installers, cut the GitHub Release | tag push (validates on PR) | mac · win · ubuntu | release-time |
 | Desktop installers | `package` · `package` | `.app`/`.dmg`, NSIS `.exe`, `.deb`/`.AppImage`, attached to the Release | tag push | mac · win · ubuntu | release-time |
 
 "Blocking" = a red run blocks merge (PR/CI gates) or blocks the release
 (release-time). "signal" = it runs and reports red/green but does **not** block
-merge (see `cross-os`). The `main` branch-protection rule requires exactly one
-check — `ci-success` — which fans in every per-PR job; the rest are still
-visible on the PR, and `codeql`'s `Analyze (Rust)` is required alongside it.
+merge (see `cross-os`). "baseline" = it doesn't run on PRs at all; it guards the
+default branch after merge (see `codeql`). The `main` branch-protection rule
+requires exactly **one** check — `ci-success` — which fans in every per-PR job.
+`codeql` is deliberately **not** required: its traced full compile is minutes
+long, so it runs on push→main + weekly, not per-PR (a required check that never
+runs on a PR would wedge the PR).
 
 ---
 
@@ -65,14 +68,15 @@ Everything fans out in parallel (no inter-job ordering):
   `ci-success` aggregator. Jobs whose category didn't change report `skipped`
   (a docs-only PR skips all the Rust jobs) and `ci-success` still passes.
   `cross-os` is **skipped** on PRs. Branch protection requires only
-  `ci-success` (+ `Analyze (Rust)`).
-- **`codeql`** — `Analyze (Rust)`.
+  `ci-success`.
+- **`codeql`** — does **not** run on PRs (push→main + weekly only); see the
+  Merge/Scheduled stages below. SAST reaches the code seconds after merge.
 - **`release`** — runs in *validation* mode (cargo-dist's `plan`; artifact
   builds are gated off unless configured), so a tag push won't be the first
   time the release pipeline is exercised. It does **not** publish on a PR.
 
 Superseded PR runs are auto-cancelled (a fresh push kills the stale run) for
-`ci` and `codeql` — see the `concurrency` block in each workflow.
+`ci` — see the `concurrency` block in the workflow.
 
 ### Merge / push to `main`
 
@@ -158,10 +162,14 @@ including `too_many_lines` — becomes a hard error in CI), and a strict
 
 ### `codeql.yml` — static application security testing
 
-Trigger: `push`→`main`, `pull_request`→`main`, weekly cron,
-`workflow_dispatch`. One job, `Analyze (Rust)`: CodeQL autobuilds the
-workspace, extracts a database, runs the `security-and-quality` suite, and
-uploads SARIF to the **Security → Code scanning** tab. It needs
+Trigger: `push`→`main`, weekly cron, `workflow_dispatch` — **not** on PRs. The
+Rust extractor traces a full `cargo build` (the `iced`-heavy `app` crate is a
+cold compile that the rust-cache can't shortcut, since CodeQL must observe
+compilation), so a run is minutes long; putting it on every PR bought no
+coverage over the push→main run that fires seconds after merge. One job,
+`Analyze (Rust)`: CodeQL autobuilds the workspace, extracts a database, runs the
+`security-and-quality` suite, and uploads SARIF to the **Security → Code
+scanning** tab. It needs
 `security-events: write` (the only `ci`/`codeql` job that escalates beyond
 `contents: read`). Complements `cargo-deny` (CVE/dependency-side) and
 `clippy` (in-tree style + simple soundness) with taint tracking and
