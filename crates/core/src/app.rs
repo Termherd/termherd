@@ -80,10 +80,10 @@ pub struct App {
     /// frame timer and encoder live in the `app`; `core` only counts frames
     /// against the cap and decides capture/finish.
     recording: Option<Recording>,
-    /// Whether the OS says the window has focus (#86), from
+    /// Whether the OS says the window has focus, from
     /// [`Event::WindowFocusChanged`]. Starts `false` (unknown) so a session
     /// notification is forwarded to the OS until a real focus signal proves
-    /// the user is already looking at it — matching the pre-#86 behaviour.
+    /// the user is already looking at it — matching the earlier behaviour.
     window_focused: bool,
 }
 
@@ -378,7 +378,7 @@ pub enum Event {
     /// One frame tick from the app's record timer: capture a frame, and
     /// auto-stop once the cap is reached. A no-op when not recording.
     RecordTick,
-    /// The window gained (`true`) or lost (`false`) OS focus (#86). Lets
+    /// The window gained (`true`) or lost (`false`) OS focus. Lets
     /// [`App::notify_session`] tell a background-tab notification (surface
     /// it) from one on the tab/pane the user is already looking at (skip the
     /// OS banner — the per-window suppression the OS itself applies when
@@ -1080,7 +1080,7 @@ impl App {
     /// dropped. The title is the session's tab label (what the user sees, and
     /// tracks OSC-24 renames); a blank body falls back to a default message.
     ///
-    /// Also dropped (#86): a session that is both the active tab's focused
+    /// Also dropped: a session that is both the active tab's focused
     /// pane *and* the window has OS focus — the user is already looking at
     /// it, so no banner is needed. Any other live session still gets one,
     /// including a background tab while the window is focused: the OS's own
@@ -2200,7 +2200,7 @@ mod tests {
         assert_eq!(notify_effect(&effects), Some(("renamed", "ping")));
     }
 
-    // ---- #86: background-tab notifications while the window keeps focus ----
+    // ---- background-tab notifications while the window keeps focus ----
 
     #[test]
     fn a_notification_for_the_viewed_session_is_dropped_while_the_window_is_focused() {
