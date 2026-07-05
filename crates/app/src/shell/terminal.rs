@@ -1,6 +1,6 @@
 //! The embedded terminal widget: a `canvas::Program` that draws the visible
 //! grid + cursor (FR4), handles wheel scrollback and drag-to-select, and
-//! resolves Ctrl/Cmd link hover/click (#28). Plus the OS link opener. The byte
+//! resolves Ctrl/Cmd link hover/click. Plus the OS link opener. The byte
 //! protocol and the grid model live in `termherd_pty`; this is pure rendering
 //! and pointer logic.
 
@@ -14,14 +14,14 @@ use termherd_pty::Screen;
 use super::Message;
 
 /// Terminal cell metrics for the monospace grid, as ratios of the font size
-/// so a zoomed font scales the grid proportionally (#35). At the default
+/// so a zoomed font scales the grid proportionally. At the default
 /// 14 px font they give the historical 8.4 × 18.0 cell. Used both to draw
 /// and (in the parent) to translate the pane's pixel size into a PTY cell
 /// geometry (FR4).
 const CELL_W_RATIO: f32 = 8.4 / 14.0;
 const CELL_H_RATIO: f32 = 18.0 / 14.0;
 
-/// The cell box (width, height) for a terminal font size (#35).
+/// The cell box (width, height) for a terminal font size.
 pub(super) fn cell_size(font_size: f32) -> (f32, f32) {
     (font_size * CELL_W_RATIO, font_size * CELL_H_RATIO)
 }
@@ -38,12 +38,12 @@ pub(super) struct TerminalView<'a> {
     pub(super) screen: &'a Screen,
     /// The session this canvas is currently showing. The canvas widget is
     /// reused across tabs, so the selection state is tagged with its owner to
-    /// keep a selection from bleeding onto another tab (#7).
+    /// keep a selection from bleeding onto another tab.
     pub(super) session: SessionId,
     /// Whether the link-open modifier (Ctrl/Cmd) is held, so a hovered link
-    /// highlights and a click opens it instead of selecting text (#28).
+    /// highlights and a click opens it instead of selecting text.
     pub(super) link_modifier: bool,
-    /// The effective terminal font size (#35), from `core::App::font_size` —
+    /// The effective terminal font size, from `core::App::font_size` —
     /// the glyph size, and (via [`cell_size`]) the wheel's line height.
     pub(super) font_size: f32,
 }
@@ -51,21 +51,21 @@ pub(super) struct TerminalView<'a> {
 /// Per-canvas selection state: the drag in progress, the last range, and the
 /// session it belongs to. The canvas widget is shared across tabs (iced keys
 /// program state by tree position), so `owner` scopes the selection to one
-/// session (#7).
+/// session.
 #[derive(Default)]
 pub(super) struct TermState {
     selecting: bool,
     anchor: Option<(u16, u16)>,
     head: Option<(u16, u16)>,
     owner: Option<SessionId>,
-    /// The link currently under the pointer while the modifier is held (#28):
+    /// The link currently under the pointer while the modifier is held:
     /// its row, column span `[start, end)`, and the URL to open on click.
     hover: Option<HoverLink>,
     /// The last left-button press, kept so iced's click tracker can tell a
-    /// double-click (select the word/filename under it) from a single one (#27).
+    /// double-click (select the word/filename under it) from a single one.
     last_click: Option<Click>,
     /// Banks fractional wheel deltas so fine-grained trackpad scrolls add up
-    /// instead of rounding to zero (#98).
+    /// instead of rounding to zero.
     scroll: ScrollAccumulator,
 }
 
@@ -83,7 +83,7 @@ fn delta_to_lines(delta: &mouse::ScrollDelta, cell_h: f32) -> f32 {
 /// Banks the fractional part of successive wheel deltas so that fine-grained
 /// trackpad scrolls aren't lost. macOS sends a stream of small pixel deltas
 /// (a few px each); each one alone is a fraction of a cell and would round to
-/// zero, so without banking the carry the terminal never scrolls (#98).
+/// zero, so without banking the carry the terminal never scrolls.
 #[derive(Default)]
 pub(super) struct ScrollAccumulator {
     residual: f32,
@@ -93,7 +93,7 @@ impl ScrollAccumulator {
     /// Add `lines` to the carry and return the whole lines to scroll now,
     /// keeping the leftover fraction for next time. Banking the carry is what
     /// lets a run of sub-line trackpad deltas add up instead of each rounding
-    /// to zero (#98). By construction the residual stays within one line, so
+    /// to zero. By construction the residual stays within one line, so
     /// the emitted total never drifts from the true input.
     fn step(&mut self, lines: f32) -> i32 {
         self.residual += lines;
@@ -104,7 +104,7 @@ impl ScrollAccumulator {
 }
 
 /// A link the pointer is hovering with Ctrl/Cmd held — what to highlight and,
-/// on click, what to open (#28).
+/// on click, what to open.
 #[derive(Clone, PartialEq, Eq)]
 struct HoverLink {
     row: u16,
@@ -122,7 +122,7 @@ impl TermState {
     }
 
     /// The current selection range, only when it spans more than one cell — a
-    /// bare click (anchor == head) is not a selection (#6).
+    /// bare click (anchor == head) is not a selection.
     fn range(&self) -> Option<((u16, u16), (u16, u16))> {
         match (self.anchor, self.head) {
             (Some(a), Some(b)) if a != b => Some((a, b)),
@@ -145,7 +145,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
             return None;
         };
         // The canvas is reused as tabs switch; if it now shows a different
-        // session, the previous tab's selection must not carry over (#7).
+        // session, the previous tab's selection must not carry over.
         if state.owner != Some(self.session) {
             *state = TermState {
                 owner: Some(self.session),
@@ -156,16 +156,16 @@ impl canvas::Program<Message> for TerminalView<'_> {
             // Wheel scrolls the viewport into scrollback history (FR4) — but
             // only when the pointer is actually over the terminal. The canvas
             // sees wheel events even while hovering the sidebar, so without
-            // this guard scrolling the session list also scrolls the PTY (#5).
+            // this guard scrolling the session list also scrolls the PTY.
             mouse::Event::WheelScrolled { delta } if cursor.position_in(bounds).is_some() => {
                 // The selection is in viewport coordinates, so scrolling would
-                // leave it floating over the wrong text; drop it (#8).
+                // leave it floating over the wrong text; drop it.
                 state.clear_selection();
                 let lines = delta_to_lines(delta, cell_size(self.font_size).1);
                 let step = state.scroll.step(lines);
                 // The pointer cell rides along so a mouse-mode app (Claude's TUI)
                 // can be handed the wheel as input; the adapter falls back to our
-                // scrollback when it isn't one (#98). Computed only once a whole
+                // scrollback when it isn't one. Computed only once a whole
                 // line is banked, so sub-line trackpad ticks stay cheap.
                 (step != 0).then(|| {
                     let (col, row) = cell_at(cursor, bounds, self.screen).unwrap_or((0, 0));
@@ -182,14 +182,14 @@ impl canvas::Program<Message> for TerminalView<'_> {
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 let position = cursor.position_in(bounds)?;
                 let (col, row) = cell_at(cursor, bounds, self.screen)?;
-                // Ctrl/Cmd+click on a link opens it rather than selecting (#28).
+                // Ctrl/Cmd+click on a link opens it rather than selecting.
                 if self.link_modifier
                     && let Some(link) = link_at(self.screen, col, row)
                 {
                     return Some(canvas::Action::publish(Message::OpenUrl(link.url)));
                 }
                 // A double-click selects the whole word / filename under the
-                // pointer and copies it, like a terminal (#27). iced's click
+                // pointer and copies it, like a terminal. iced's click
                 // tracker classifies the press from the previous one's time and
                 // distance.
                 let clicked = Click::new(position, mouse::Button::Left, state.last_click);
@@ -216,7 +216,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 })
             }
             // Track the link under the pointer while the modifier is held so the
-            // draw pass can highlight it and the pointer turns into a hand (#28).
+            // draw pass can highlight it and the pointer turns into a hand.
             mouse::Event::CursorMoved { .. } => {
                 let next = self
                     .link_modifier
@@ -231,7 +231,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
             mouse::Event::ButtonReleased(mouse::Button::Left) if state.selecting => {
                 state.selecting = false;
                 // Only a real drag is a selection; a bare click clears it so a
-                // single click can't leave an undismissable highlight (#6).
+                // single click can't leave an undismissable highlight.
                 match state.range() {
                     Some((a, b)) => Some(canvas::Action::publish(Message::CopySelection(
                         selection_text(self.screen, a, b),
@@ -285,7 +285,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
 
         // Translucent overlay over the selected range — only the owning
         // session's real (multi-cell) selection, so it neither bleeds across
-        // tabs (#7) nor paints a bare click (#6).
+        // tabs nor paints a bare click.
         if let (Some((a, b)), true) = (state.range(), state.owner == Some(self.session)) {
             let (start, end) = ordered(a, b);
             for r in start.1..=end.1 {
@@ -304,7 +304,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
         }
 
         // Underline the hovered link while the modifier is held, the classic
-        // clickable-link affordance (#28). Gated on the live modifier flag so
+        // clickable-link affordance. Gated on the live modifier flag so
         // releasing Ctrl/Cmd clears the highlight even without a mouse move.
         if self.link_modifier
             && state.owner == Some(self.session)
@@ -332,9 +332,9 @@ impl canvas::Program<Message> for TerminalView<'_> {
         vec![frame.into_geometry()]
     }
 
-    /// A hand pointer over a hovered link with the modifier held (#28), so the
+    /// A hand pointer over a hovered link with the modifier held, so the
     /// link is visibly clickable; otherwise the text/I-beam cursor while over
-    /// the grid, signalling that the text is selectable (#27); the default
+    /// the grid, signalling that the text is selectable; the default
     /// pointer when off the terminal entirely.
     fn mouse_interaction(
         &self,
@@ -371,7 +371,7 @@ fn cell_at(cursor: mouse::Cursor, bounds: Rectangle, screen: &Screen) -> Option<
     Some((c, r))
 }
 
-/// The link under grid cell `(col, row)`, if any (#28). Builds the row's text
+/// The link under grid cell `(col, row)`, if any. Builds the row's text
 /// from its cells — one char per cell, so a `core::links` char-index span maps
 /// straight onto columns — and returns the span containing `col`.
 fn link_at(screen: &Screen, col: u16, row: u16) -> Option<HoverLink> {
@@ -389,7 +389,7 @@ fn link_at(screen: &Screen, col: u16, row: u16) -> Option<HoverLink> {
     })
 }
 
-/// Whether a character belongs to a double-click "word" (#27). Alphanumerics
+/// Whether a character belongs to a double-click "word". Alphanumerics
 /// plus the punctuation that holds filenames and paths together, so a unit like
 /// `~/src/main.rs:42` selects whole; whitespace and bracketing punctuation
 /// (quotes, parens, commas) are boundaries.
@@ -400,7 +400,7 @@ fn is_word_char(c: char) -> bool {
 /// The word / filename under grid cell `(col, row)` as an inclusive cell range
 /// `(anchor, head)`, or `None` when the cell is not part of a word (e.g. blank).
 /// A word is the maximal run of [`is_word_char`] cells around `col` — this is
-/// what a double-click selects (#27).
+/// what a double-click selects.
 fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16), (u16, u16))> {
     let line = screen.lines.get(row as usize)?;
     let here = col as usize;
@@ -463,7 +463,7 @@ fn selection_text(screen: &Screen, a: (u16, u16), b: (u16, u16)) -> String {
     out
 }
 
-/// Hand a detected link to the OS default handler (#28). Fire-and-forget: the
+/// Hand a detected link to the OS default handler. Fire-and-forget: the
 /// child opener is spawned, not waited on. `url` has already been validated by
 /// `core` (a recognised scheme, trimmed), and is always passed as a single
 /// argument — never through a shell — so it can't be reinterpreted.
@@ -501,7 +501,7 @@ pub(super) fn open_url(url: &str) -> Result<(), termherd_core::ports::PtyError> 
 #[cfg(target_os = "macos")]
 const MACOS_BUNDLE_ID: &str = "dev.termherd";
 
-/// Post a desktop notification to the OS notification centre (#29). Like
+/// Post a desktop notification to the OS notification centre. Like
 /// `open_url`, this is an OS handoff, not a PTY call, and fire-and-forget: the
 /// send runs on a detached thread and the result is logged there, never fatal —
 /// a notification backend that's unavailable must not take a session down.
@@ -619,7 +619,7 @@ mod tests {
             view.update(&mut state, &wheel(), test_bounds(), at(50.0, 50.0))
                 .is_some()
         );
-        // Pointer outside (e.g. over the sidebar) → ignored (#5).
+        // Pointer outside (e.g. over the sidebar) → ignored.
         let mut state = TermState::default();
         assert!(
             view.update(&mut state, &wheel(), test_bounds(), at(250.0, 50.0))
@@ -629,7 +629,7 @@ mod tests {
 
     #[test]
     fn a_bare_click_leaves_no_selection() {
-        // #6: press and release on the same cell, no drag.
+        // press and release on the same cell, no drag.
         use canvas::Program;
         let screen = test_screen();
         let view = TerminalView {
@@ -668,7 +668,7 @@ mod tests {
 
     #[test]
     fn selection_does_not_bleed_across_sessions() {
-        // #7: a selection on one session must not show for another.
+        // a selection on one session must not show for another.
         use canvas::Program;
         let screen = test_screen();
         let mut state = TermState::default();
@@ -699,7 +699,7 @@ mod tests {
 
     #[test]
     fn scrolling_clears_the_selection() {
-        // #8: a viewport-relative selection is dropped on scroll.
+        // a viewport-relative selection is dropped on scroll.
         use canvas::Program;
         let screen = test_screen();
         let view = TerminalView {
@@ -716,7 +716,7 @@ mod tests {
         assert!(state.range().is_none(), "scroll must clear the selection");
     }
 
-    /// A single-row screen holding `line`, one char per cell (#28 link tests).
+    /// A single-row screen holding `line`, one char per cell (link tests).
     fn screen_from(line: &str) -> Screen {
         use termherd_pty::ScreenCell;
         let cells: Vec<ScreenCell> = line
@@ -747,7 +747,7 @@ mod tests {
 
     #[test]
     fn link_at_finds_the_url_under_a_column() {
-        // #28: the column maps onto the detected span and yields its URL.
+        // the column maps onto the detected span and yields its URL.
         let screen = screen_from("see https://ex.io now");
         let link = link_at(&screen, 6, 0).expect("column 6 is inside the URL");
         assert_eq!(link.url, "https://ex.io");
@@ -758,7 +758,7 @@ mod tests {
 
     #[test]
     fn modifier_click_on_a_link_opens_instead_of_selecting() {
-        // #28: Ctrl/Cmd+click publishes an open and starts no selection.
+        // Ctrl/Cmd+click publishes an open and starts no selection.
         use canvas::Program;
         let screen = screen_from("https://ex.io");
         let len = "https://ex.io".len();
@@ -776,7 +776,7 @@ mod tests {
 
     #[test]
     fn modifier_click_off_a_link_still_selects() {
-        // #28: holding the modifier away from any link falls back to selection.
+        // holding the modifier away from any link falls back to selection.
         use canvas::Program;
         let screen = screen_from("plain text only");
         let len = "plain text only".len();
@@ -823,7 +823,7 @@ mod tests {
 
     #[test]
     fn word_at_spans_a_filename_run() {
-        // #27: a path/filename is one word — letters, digits and the joining
+        // a path/filename is one word — letters, digits and the joining
         // punctuation (`/ . :`) all count, blanks bound it.
         let screen = screen_from("see src/main.rs:42 now");
         // Column 8 ('m') sits inside the `src/main.rs:42` run (cols 4..=17).
@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn double_click_selects_and_copies_the_word_under_the_pointer() {
-        // #27: two consecutive presses on the same cell select the whole
+        // two consecutive presses on the same cell select the whole
         // word/filename run and publish a copy — without leaving an active drag.
         use canvas::Program;
         let line = "see src/main.rs now";
@@ -862,7 +862,7 @@ mod tests {
 
     #[test]
     fn double_click_on_a_blank_starts_a_plain_selection() {
-        // #27: with no word under the pointer the double-click falls back to the
+        // with no word under the pointer the double-click falls back to the
         // ordinary press behaviour rather than selecting nothing oddly.
         use canvas::Program;
         let line = "ab   cd"; // cols 2,3,4 are blanks
@@ -884,7 +884,7 @@ mod tests {
 
     #[test]
     fn pointer_is_a_text_beam_over_the_grid_only() {
-        // #27: the I-beam signals selectable text while over the terminal; off
+        // the I-beam signals selectable text while over the terminal; off
         // it (e.g. the cursor sits over the sidebar) the default pointer returns.
         use canvas::Program;
         let screen = test_screen();
@@ -905,7 +905,7 @@ mod tests {
         );
     }
 
-    // --- #98: wheel scroll accumulation (macOS trackpad) ---------------------
+    // --- wheel scroll accumulation (macOS trackpad) ---------------------
 
     /// A pixel wheel delta of `px`, as macOS trackpads send.
     fn pixels(px: f32) -> mouse::ScrollDelta {
@@ -928,7 +928,7 @@ mod tests {
     #[test]
     fn small_trackpad_deltas_eventually_scroll_instead_of_vanishing() {
         // Each macOS pixel delta is a fraction of a cell (6/18 ≈ 0.33 line) and
-        // rounds to zero alone; banked, a few of them must move one line (#98).
+        // rounds to zero alone; banked, a few of them must move one line.
         let mut acc = ScrollAccumulator::default();
         let one = delta_to_lines(&pixels(6.0), CELL_H); // ≈ 0.333 line
         let total: i32 = (0..4).map(|_| acc.step(one)).sum();
@@ -963,7 +963,7 @@ mod tests {
     proptest::proptest! {
         /// Conservation: at every prefix of an arbitrary delta stream the lines
         /// emitted so far stay within one line of the true cumulative input —
-        /// nothing is lost, nothing is invented (#98).
+        /// nothing is lost, nothing is invented.
         #[test]
         fn emitted_lines_never_drift_more_than_one_line(
             deltas in proptest::collection::vec(-5.0f32..5.0, 0..200)

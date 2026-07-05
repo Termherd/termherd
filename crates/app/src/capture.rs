@@ -1,5 +1,5 @@
 //! Capture adapter — write the state dump + PNG screenshot for the AI dev loop
-//! (#108, G1). `core` builds the pure [`CaptureDump`]; this module owns the I/O
+//! (G1). `core` builds the pure [`CaptureDump`]; this module owns the I/O
 //! it deliberately keeps out: the clock, the JSON encoding, the PNG encoding,
 //! and the on-disk layout.
 //!

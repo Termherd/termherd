@@ -1,7 +1,7 @@
 //! Keyboard translation: iced key events → the framework-neutral types the
 //! rest of the app speaks. Two targets — keymap chords (FR9 shortcuts) and the
 //! PTY codec's [`TermKey`]/[`KeyMods`] — plus the held-modifier helper for the
-//! link-open gesture (#28). Pure functions, no `Shell` coupling.
+//! link-open gesture. Pure functions, no `Shell` coupling.
 
 use iced::keyboard;
 use termherd_core::{KeyChord, keymap};
@@ -10,7 +10,7 @@ use termherd_pty::{KeyMods, TermKey};
 /// The keymap chord for a key press (FR9): the key's normalised name plus the
 /// modifier bits. `None` for keys we do not bind (so they reach the terminal).
 ///
-/// The number row is matched by **physical position**, so ⌘1…⌘9 (issue #26)
+/// The number row is matched by **physical position**, so ⌘1…⌘9
 /// land on the same keys on every layout — on AZERTY the top-left key reports
 /// the character `&` yet the physical code `Digit1`, so it still binds tab 1.
 /// Every other key stays character-based (⌘C follows the letter C, not its
@@ -40,7 +40,7 @@ pub(super) fn chord_of(
 /// The digit `"0"`…`"9"` for a number-row key by physical position, or `None`
 /// for any other key. Layout-independent: the same physical keys carry these
 /// names on QWERTY, AZERTY, QWERTZ, … so number-row shortcuts are universal —
-/// 1–9 for the tab jumps (issue #26), 0 for zoom-reset (#35), which would
+/// 1–9 for the tab jumps, 0 for zoom-reset, which would
 /// otherwise need Shift on AZERTY (where unshifted 0 types `à`).
 fn physical_digit_name(physical: &keyboard::key::Physical) -> Option<String> {
     use keyboard::key::{Code, Physical};
@@ -128,7 +128,7 @@ pub(super) fn key_mods(m: keyboard::Modifiers) -> KeyMods {
 }
 
 /// The modifier state carried by a keyboard event, if it carries one. Used to
-/// keep the link-open modifier tracked across press / release / change (#28).
+/// keep the link-open modifier tracked across press / release / change.
 pub(super) fn event_modifiers(event: &keyboard::Event) -> keyboard::Modifiers {
     match event {
         keyboard::Event::KeyPressed { modifiers, .. }
@@ -201,7 +201,7 @@ mod tests {
     #[test]
     fn number_row_chords_follow_the_physical_key_across_layouts() {
         // AZERTY: the top-left key reports the character `&` but the physical
-        // code `Digit1`. ⌘+& must still bind tab 1 (issue #26), so the physical
+        // code `Digit1`. ⌘+& must still bind tab 1, so the physical
         // position — not the character — decides the digit.
         assert_eq!(
             chord_of(
@@ -227,7 +227,7 @@ mod tests {
         for (code, expected) in [
             (Code::Digit1, Some("1".to_string())),
             (Code::Digit9, Some("9".to_string())),
-            // Zero is not a tab shortcut but carries zoom-reset (#35), so it
+            // Zero is not a tab shortcut but carries zoom-reset, so it
             // is named too — layout-independently, like the tab digits.
             (Code::Digit0, Some("0".to_string())),
             // A non-digit physical key falls through to the character path.

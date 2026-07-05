@@ -46,7 +46,7 @@ pub trait PtyHost: Send + Sync {
     /// Resize a session's PTY to the given cell geometry.
     fn resize(&self, session: SessionId, cols: u16, rows: u16) -> Result<(), PtyError>;
     /// Move a session's viewport: a relative line delta or an absolute jump to
-    /// the top/bottom of the scrollback (#44).
+    /// the top/bottom of the scrollback.
     fn scroll(&self, session: SessionId, target: ScrollTarget) -> Result<(), PtyError>;
     /// Terminate a session's process and drop its task.
     fn kill(&self, session: SessionId) -> Result<(), PtyError>;

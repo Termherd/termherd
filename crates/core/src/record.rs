@@ -1,4 +1,4 @@
-//! Record — the pure state machine for the GIF screencast (#124, F-capture
+//! Record — the pure state machine for the GIF screencast (F-capture
 //! rung 2).
 //!
 //! Clock-free by construction: the `app` runs the frame timer and feeds a

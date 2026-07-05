@@ -1,4 +1,4 @@
-//! Record adapter — the GIF encoder side of the screencast (#124, F-capture
+//! Record adapter — the GIF encoder side of the screencast (F-capture
 //! rung 2). `core` owns the idle→recording state machine; this module owns the
 //! I/O it keeps out: the frame buffer, the resample, the `gif` encoder, and the
 //! file.
@@ -8,7 +8,7 @@
 //! off raw frames. Keeping the GUI free also keeps the *recording* smooth, since
 //! a stalled UI would be captured in its own frames.
 //!
-//! Output: `~/.termherd/captures/capture-<ts>.gif`, the #108 capture dir.
+//! Output: `~/.termherd/captures/capture-<ts>.gif`, the capture dir.
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -21,7 +21,7 @@ use tracing::{info, warn};
 /// Recording budget — frames per second, hard duration cap, and the scale the
 /// captured frames are downsampled to. The default (8 fps / 30 s / 0.5×) keeps
 /// GIFs manageable while smooth enough for a bug repro; making it configurable
-/// via `settings.json` is a follow-up (#124).
+/// via `settings.json` is a follow-up.
 #[derive(Debug, Clone, Copy)]
 pub struct RecordConfig {
     pub fps: u32,
@@ -59,7 +59,7 @@ impl RecordConfig {
 enum RecordMsg {
     /// One captured frame: raw RGBA, its physical pixel size, and the wall-clock
     /// gap since the previous frame — the time this frame should stay on screen,
-    /// so playback is real-time (#128).
+    /// so playback is real-time.
     Frame {
         rgba: Vec<u8>,
         width: u32,
@@ -92,7 +92,7 @@ impl Recorder {
 
     /// Hand one captured frame to the encoder thread: raw RGBA, its physical
     /// size, and `gap` — the wall-clock time since the previous frame, which
-    /// becomes this frame's on-screen duration (#128).
+    /// becomes this frame's on-screen duration.
     pub fn frame(&self, rgba: Vec<u8>, width: u32, height: u32, gap: Duration) {
         let _ = self.tx.send(RecordMsg::Frame {
             rgba,
@@ -161,7 +161,7 @@ fn run(rx: &mpsc::Receiver<RecordMsg>, path: &PathBuf, config: RecordConfig) {
 
 /// An open GIF being written: the encoder plus the locked output dimensions
 /// (set from the first frame, so a mid-record window resize is resampled to
-/// fit, not corrupted). Each frame carries its own delay (#128), so none is
+/// fit, not corrupted). Each frame carries its own delay, so none is
 /// stored here.
 struct Session {
     encoder: gif::Encoder<BufWriter<File>>,
@@ -194,7 +194,7 @@ impl Session {
         // exactly `tw*th*4`, so this holds. speed 10 balances quality/CPU.
         let mut frame = gif::Frame::from_rgba_speed(tw as u16, th as u16, &mut pixels, 10);
         // Real-time playback: this frame stays on screen for the wall-clock gap
-        // since the previous one (#128).
+        // since the previous one.
         frame.delay = gap_to_delay_cs(gap);
         self.encoder
             .write_frame(&frame)
@@ -236,7 +236,7 @@ fn resample_nearest(src: &[u8], sw: u32, sh: u32, tw: u32, th: u32) -> Vec<u8> {
 
 /// Throttles a high-frequency frame source — the window's *present* clock,
 /// delivered via `window::frames()` — down to the recording's target cadence
-/// (#128). Driving the screencast off real presents (rather than a wall-clock
+/// cadence. Driving the screencast off real presents (rather than a wall-clock
 /// thread timer) is what keeps an idle window's screenshots resolving in real
 /// time; this throttle then keeps only one frame per `interval`, so the GIF
 /// plays back in real time instead of capturing every refresh.
@@ -278,7 +278,7 @@ impl FrameThrottle {
 }
 
 /// Inter-arrival statistics for captured frames — the measurement harness for
-/// the present-gating bug (#128). On an idle window the gap between a screenshot
+/// the present-gating bug. On an idle window the gap between a screenshot
 /// request and its result balloons far past the frame interval (the time-lapse
 /// the issue reports); once presents are driven the gaps sit at ~the interval.
 /// Logging this summary at stop turns "feels slow" into numbers, before and
@@ -329,7 +329,7 @@ impl FrameStats {
     }
 }
 
-/// The GIF per-frame delay for a real-time gap (#128): the wall-clock time the
+/// The GIF per-frame delay for a real-time gap: the wall-clock time the
 /// frame was on screen, in centiseconds (the GIF time unit), floored at 1cs so
 /// no frame is zero-duration and clamped to the `u16` ceiling. Using the *real*
 /// gap — not a fixed `100/fps` — keeps playback real-time even when capture
@@ -379,7 +379,7 @@ mod tests {
         assert_eq!(out.len(), 3 * 2 * 4);
     }
 
-    // ---- #128: real-time cadence — throttle the present clock to fps ----
+    // ---- real-time cadence — throttle the present clock to fps ----
 
     // Fake-timer helper: a logical millisecond offset since recording start. No
     // `Instant::now()` anywhere in these tests, so they are deterministic.
@@ -454,7 +454,7 @@ mod tests {
         }
     }
 
-    // ---- #128: the measurement harness (benchmark of the present-gating) ----
+    // ---- the measurement harness (benchmark of the present-gating) ----
 
     #[test]
     fn frame_stats_has_no_summary_before_any_gap() {
@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(summary.mean, Duration::from_millis(200));
     }
 
-    // ---- #128: real-time GIF playback — per-frame delay from the real gap ----
+    // ---- real-time GIF playback — per-frame delay from the real gap ----
 
     #[test]
     fn gap_delay_rounds_to_centiseconds() {

@@ -1,4 +1,4 @@
-//! `termherd-mcp` — the control-surface MCP server binary (#90).
+//! `termherd-mcp` — the control-surface MCP server binary.
 //!
 //! A standalone stdio process an in-app Claude session launches via its
 //! `mcpServers` config. It speaks newline-delimited JSON-RPC: one message per

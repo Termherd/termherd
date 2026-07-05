@@ -1,4 +1,4 @@
-//! Capture — a pure snapshot of the workspace for the AI dev loop (#108, G1).
+//! Capture — a pure snapshot of the workspace for the AI dev loop (G1).
 //!
 //! Rung 0 of the `F-capture` fidelity ladder: a deterministic, diffable model
 //! of the current state — tabs, focus, per-tab activity, pane membership — plus

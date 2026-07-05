@@ -1,4 +1,4 @@
-//! Integration: the number-row chord drives a tab jump end to end (issue #26).
+//! Integration: the number-row chord drives a tab jump end to end.
 //!
 //! This stitches the two pure halves the GUI sits between — the [`Keymap`]
 //! (chord → [`Action`]) and the [`App`] state machine ([`Event`] → active tab)

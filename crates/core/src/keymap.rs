@@ -17,7 +17,7 @@ pub const MOD_SHIFT: u8 = 4;
 /// Modifier bit for the Cmd / Super / logo key.
 pub const MOD_CMD: u8 = 8;
 
-/// Tabs reachable from the number row: ⌘1…⌘9 / Ctrl+1…Ctrl+9 (issue #26). The
+/// Tabs reachable from the number row: ⌘1…⌘9 / Ctrl+1…Ctrl+9. The
 /// digit is 1-based for the user; the tab index it carries is 0-based.
 pub const NUMBER_ROW_TABS: usize = 9;
 
@@ -65,7 +65,7 @@ impl KeyChord {
     /// Parse a human chord like `"ctrl+shift+c"` or `"cmd+tab"`. Order does not
     /// matter and the parse is case-insensitive. Modifier aliases: `control`,
     /// `option` (Alt), `cmd`/`super`/`win`/`meta` (Cmd). A literal `+` key
-    /// cannot survive the `+` separator split, so it is spelled `plus` (#35).
+    /// cannot survive the `+` separator split, so it is spelled `plus`.
     pub fn parse(s: &str) -> Result<KeyChord, ChordError> {
         let mut mods = 0u8;
         let mut key: Option<String> = None;
@@ -115,32 +115,32 @@ pub enum Action {
     ToggleSidebar,
     Copy,
     Paste,
-    /// Jump the focused terminal's viewport to the top of its scrollback (#44).
+    /// Jump the focused terminal's viewport to the top of its scrollback.
     ScrollTop,
-    /// Jump the focused terminal's viewport back to the live bottom (#44).
+    /// Jump the focused terminal's viewport back to the live bottom.
     ScrollBottom,
     /// Open a fresh shell in the focused session's working directory, or the
-    /// home directory when nothing is open (#77).
+    /// home directory when nothing is open.
     NewShellHere,
-    /// Open a fresh Claude session in the repo containing the focused session
-    /// (#77). Inert when there is no focused session to derive a repo from.
+    /// Open a fresh Claude session in the repo containing the focused session.
+    /// Inert when there is no focused session to derive a repo from.
     NewClaudeSessionHere,
-    /// Reopen the most recently closed tab, restoring its mode and directory
-    /// (#78). A no-op when no tab has been closed yet.
+    /// Reopen the most recently closed tab, restoring its mode and directory.
+    /// A no-op when no tab has been closed yet.
     ReopenClosedTab,
-    /// Capture the current state for the AI dev loop (#108): a JSON state dump
+    /// Capture the current state for the AI dev loop: a JSON state dump
     /// plus a PNG screenshot, written to `~/.termherd/captures/`.
     Capture,
-    /// Start or stop the GIF screencast (#124): a toggle that records the window
+    /// Start or stop the GIF screencast: a toggle that records the window
     /// to `~/.termherd/captures/capture-<ts>.gif`.
     ToggleRecord,
-    /// Grow the terminal font one step (#35).
+    /// Grow the terminal font one step.
     ZoomIn,
-    /// Shrink the terminal font one step (#35).
+    /// Shrink the terminal font one step.
     ZoomOut,
-    /// Restore the terminal font to its configured base size (#35).
+    /// Restore the terminal font to its configured base size.
     ZoomReset,
-    /// Jump straight to the tab at this zero-based index (issue #26). Bound to
+    /// Jump straight to the tab at this zero-based index. Bound to
     /// the platform's primary modifier and the number row — ⌘1…⌘9 on macOS,
     /// Ctrl+1…Ctrl+9 elsewhere — where the user-facing digit is 1-based.
     ActivateTab(usize),
@@ -159,7 +159,7 @@ struct ActionDef {
 }
 
 /// The single source of truth for the simple action vocabulary *and* its
-/// defaults (#71): `from_config_name`, `config_name`, [`Keymap::defaults`] and
+/// defaults: `from_config_name`, `config_name`, [`Keymap::defaults`] and
 /// the tests all derive from this one table, so adding a regular action is a
 /// single line here. The parameterized [`Action::ActivateTab`] family is named
 /// by [`activate_tab_from_config_name`] (its name carries an index); copy/paste
@@ -261,7 +261,7 @@ const ACTIONS: &[ActionDef] = &[
         name: "toggle-record",
         default_chords: &["mod+shift+r"],
     },
-    // Zoom (#35): `=` is the unshifted face of the `+` key on QWERTY and the
+    // Zoom: `=` is the unshifted face of the `+` key on QWERTY and the
     // unshifted key on AZERTY; the shifted `plus` spellings cover layouts
     // where the produced character is `+` (with or without Shift reported).
     ActionDef {
@@ -377,7 +377,7 @@ impl Keymap {
                 ],
             );
         }
-        // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9 (issue #26). The
+        // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9. The
         // digit is 1-based for the user; the action carries the 0-based index.
         for n in 1..=NUMBER_ROW_TABS {
             map.set(
@@ -427,8 +427,8 @@ mod tests {
 
     #[test]
     fn parse_spells_the_literal_plus_key_as_plus() {
-        // "+" the key collides with "+" the separator, so specs write `plus`
-        // (#35); the parsed chord carries the literal character.
+        // "+" the key collides with "+" the separator, so specs write `plus`;
+        // the parsed chord carries the literal character.
         assert_eq!(
             KeyChord::parse("ctrl+plus"),
             Ok(KeyChord::new("+", MOD_CTRL))
@@ -517,7 +517,7 @@ mod tests {
     #[test]
     fn the_action_vocabulary_round_trips_both_ways() {
         // Every entry in the single-source table resolves by name and back to
-        // the same name, so name↔action can never drift (#71).
+        // the same name, so name↔action can never drift.
         for def in ACTIONS {
             assert_eq!(
                 Action::from_config_name(def.name),
@@ -560,7 +560,7 @@ mod tests {
         let map = Keymap::defaults();
         for action in map.bindings.values() {
             let named = action.config_name().is_some() || matches!(action, Action::ActivateTab(_));
-            assert!(named, "default-bound {action:?} has no config name (#71)");
+            assert!(named, "default-bound {action:?} has no config name");
         }
     }
 
@@ -587,7 +587,7 @@ mod tests {
 
     #[test]
     fn defaults_bind_the_context_tab_chords_to_the_primary_modifier_t() {
-        // #77/#78: new shell (mod+T), new Claude session (mod+Alt+T) and reopen
+        // New shell (mod+T), new Claude session (mod+Alt+T) and reopen
         // closed tab (mod+Shift+T) all hang off T with the platform primary mod.
         let map = Keymap::defaults();
         assert_eq!(
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn defaults_bind_capture_to_the_primary_modifier_shift_s() {
-        // #108: ⌘⇧S (macOS) / Ctrl+Shift+S triggers the state+PNG capture, and
+        // ⌘⇧S (macOS) / Ctrl+Shift+S triggers the state+PNG capture, and
         // the action answers to `capture` in the config vocabulary.
         let map = Keymap::defaults();
         assert_eq!(
@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn defaults_bind_toggle_record_to_the_primary_modifier_shift_r() {
-        // #124: ⌘⇧R (macOS) / Ctrl+Shift+R toggles the GIF screencast, and the
+        // ⌘⇧R (macOS) / Ctrl+Shift+R toggles the GIF screencast, and the
         // action answers to `toggle-record` in the config vocabulary.
         let map = Keymap::defaults();
         assert_eq!(
@@ -656,7 +656,7 @@ mod tests {
             map.lookup(&KeyChord::new("9", primary_mod())),
             Some(Action::ActivateTab(8))
         );
-        // The row stops at nine — zero belongs to zoom-reset (#35), not a
+        // The row stops at nine — zero belongs to zoom-reset, not a
         // tenth tab jump.
         assert_eq!(
             map.lookup(&KeyChord::new("0", primary_mod())),
