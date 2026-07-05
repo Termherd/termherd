@@ -6,10 +6,14 @@ name: CodeQL
 # dependency-side) and Clippy (in-tree style + simple soundness) with taint
 # tracking and cross-function patterns those cannot see.
 
+# CodeQL runs on push→main and weekly, NOT on pull requests. Its Rust extractor
+# must trace a full `cargo build` (the iced-heavy `app` crate has no compile-free
+# extraction — Rust has no `build-mode: none`), so a PR-time run is minutes of
+# cold compile on every change's critical path. Post-merge + weekly keeps a
+# complete security baseline while catching a regression within minutes of merge
+# instead of blocking the PR. It is therefore NOT a required check.
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   schedule:
     # Weekly: catches drift in the query packs themselves (new queries may
@@ -17,11 +21,11 @@ on:
     - cron: '0 7 * * 1'
   workflow_dispatch:
 
-# Cancel superseded PR runs only. Pushes to main and the weekly schedule run
-# establish the default-branch security baseline — never cancel those.
+# Never cancel: every push→main and the weekly run establishes the
+# default-branch security baseline. (No PR runs, so nothing to auto-cancel.)
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
