@@ -134,6 +134,20 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   resumed session, a title + cwd card otherwise (#76, `App::tab_record` resolves
   the record so the two surfaces stay single-sourced). Drag-reorder (FR5) and
   keyboard switching (deferred to `F-keyboard-shortcuts`) still to come
+- [x] `F-close-confirm-policy` — configurable close confirmation for tab close
+  and app quit (`close.tab` / `close.app` in `settings.json`, each
+  `alwaysConfirm` / `confirmWhenActive` / `noConfirmation`). One pure decision
+  seam (`ConfirmClose::confirms(active)`) backs both paths; `confirmWhenActive`
+  reuses #140's `has_running_process` predicate — a tab keys off
+  `App::tab_has_running_process`, a quit off the app-wide `any_running_process`
+  (both over `LiveSession::has_running_process`), so an idle shell closes/quits
+  silently while a working shell or live Claude confirms. Both default to
+  `confirmWhenActive`, preserving #140's shipped tab behaviour and extending the
+  same predicate to quit — which is #80 (an all-idle app now quits without a
+  prompt). Built on #79/#140 (closed); the config surface is the new part.
+  Known gap: the predicate reads a plain shell running a non-Claude foreground
+  program (vim, a long `make`) as idle, so it can be closed/quit silently —
+  better foreground-process detection is tracked in #143
 - [x] `F-keyboard-shortcuts` — configurable keymap → actions (M3): pure
   `KeyChord -> Action` map in `core::keymap` with a chord-string parser and
   platform-aware defaults; the `keys` section of `settings.json` overrides any

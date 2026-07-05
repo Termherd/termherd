@@ -1048,6 +1048,16 @@ impl App {
         })
     }
 
+    /// Whether any session anywhere still runs a foreground process, so a quit
+    /// must confirm before hard-killing them all. The app-wide counterpart to
+    /// [`Self::tab_has_running_process`] over the same
+    /// [`LiveSession::has_running_process`] predicate, so a close and a quit
+    /// never disagree on "is a process running?".
+    #[must_use]
+    pub fn any_running_process(&self) -> bool {
+        self.sessions.values().any(LiveSession::has_running_process)
+    }
+
     /// Decide whether an OSC 9 notification (#29) reaches the OS notification
     /// centre, and with what title/body. Only live sessions are worth alerting
     /// on — an unknown or exited session has nothing to return to, so it is
@@ -2008,6 +2018,35 @@ mod tests {
         assert!(
             !app.tab_has_running_process(9),
             "a stale index must never claim a running process"
+        );
+    }
+
+    #[test]
+    fn any_running_process_spans_every_tab() {
+        // The app-wide predicate is true iff some session anywhere is running,
+        // regardless of which tab hosts it.
+        let mut app = App::new();
+        assert!(
+            !app.any_running_process(),
+            "an empty app has nothing running"
+        );
+
+        let idle = launch(&mut app, "idle");
+        launch(&mut app, "other"); // a second, unrelated tab
+        assert!(
+            !app.any_running_process(),
+            "two idle plain shells: nothing worth confirming a quit over"
+        );
+
+        // Promote the first shell to Busy — now the app as a whole is running,
+        // even though it lives in a background tab.
+        app.apply(Event::StatusChanged {
+            session: idle,
+            status: SessionStatus::Busy,
+        });
+        assert!(
+            app.any_running_process(),
+            "one busy session anywhere makes the app a running app"
         );
     }
 

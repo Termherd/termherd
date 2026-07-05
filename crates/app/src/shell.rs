@@ -31,7 +31,7 @@ use termherd_pty::{PtyEvent, Screen, TermKey};
 
 use crate::docs::DocEntry;
 use crate::record::{FrameStats, FrameThrottle, RecordConfig, Recorder};
-use crate::settings::ThemeChoice;
+use crate::settings::{CloseSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
 mod ime;
@@ -92,6 +92,8 @@ pub struct Startup {
     pub session_limit: usize,
     /// Terminal base font size from settings (#35).
     pub font_size: f32,
+    /// Close-confirmation policy for tab close and app quit.
+    pub close: CloseSettings,
 }
 
 pub fn run(
@@ -127,6 +129,7 @@ pub fn run(
                     record: startup.record,
                     session_limit: startup.session_limit,
                     font_size: startup.font_size,
+                    close: startup.close,
                 },
             );
             let initial_scan = shell.rescan();
@@ -237,10 +240,13 @@ struct Shell {
     rescan_pending: bool,
     /// The doc currently open in the main pane for viewing/editing, if any.
     open_doc: Option<OpenDoc>,
-    /// A close awaiting confirmation: the tab index to kill, or `None` (#9).
+    /// A close awaiting confirmation: the tab index to kill, or `None`.
     /// Killing a session is destructive, so the close button arms this and a
-    /// confirmation bar must be accepted before the PTY is actually killed.
+    /// confirmation bar must be accepted before the PTY is actually killed —
+    /// unless [`Self::close_confirm`] waives the prompt for this close.
     closing: Option<usize>,
+    /// Whether tab close and app quit prompt first (from `settings.json`).
+    close_confirm: CloseSettings,
     /// An archive awaiting confirmation: the session id to archive, or `None`
     /// (#20). Archiving is easy to trigger by accident, so the archive button
     /// arms this and a confirmation bar must be accepted first. Un-archiving is
@@ -296,27 +302,6 @@ struct Shell {
 struct TabDrag {
     from: usize,
     over: usize,
-}
-
-/// What a quit request should do, decided purely from session state so the
-/// branch is unit-testable without an iced runtime — the resulting `Task` is
-/// opaque, but this decision is not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QuitIntent {
-    /// No live sessions to hard-kill — terminate the runtime straight away.
-    Exit,
-    /// Live sessions would be hard-killed on quit — confirm before exiting.
-    Confirm,
-}
-
-/// Decide whether a quit can proceed immediately or must be confirmed first,
-/// from the count of sessions whose PTY is still running (#75, #80).
-fn quit_intent(live_sessions: usize) -> QuitIntent {
-    if live_sessions == 0 {
-        QuitIntent::Exit
-    } else {
-        QuitIntent::Confirm
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -546,6 +531,7 @@ impl Shell {
             rescan_pending: false,
             open_doc: None,
             closing: None,
+            close_confirm: startup.close,
             archiving: None,
             closing_window: None,
             link_modifier: false,
@@ -1455,10 +1441,13 @@ impl Shell {
             .any(|group| group.sessions.iter().any(|s| s.session_id == session))
     }
 
-    /// Arm the confirmation bar for the tab at `index` (#9), but only when a
-    /// process is actually running in it (#79): an idle tab has nothing to lose,
-    /// so it closes immediately. No-op for an out-of-range index, so a stale
-    /// request can never close the wrong tab.
+    /// Handle a request to close the tab at `index`. The configured `close.tab`
+    /// policy decides: arm the confirmation bar or close straight away.
+    /// `confirmWhenActive` (the default) keys off the core
+    /// `tab_has_running_process` predicate — an idle tab has nothing to lose and
+    /// closes silently, a running one confirms; `alwaysConfirm` / `noConfirmation`
+    /// override that. No-op for an out-of-range index, so a stale request can
+    /// never close the wrong tab.
     fn request_close(&mut self, index: usize) -> Task<Message> {
         // A pending confirmation owns the interaction (like the keyboard in
         // `on_key`): while one is up, ignore a close request for another tab so
@@ -1469,7 +1458,11 @@ impl Shell {
         if index >= self.core.workspace.tabs.len() {
             return Task::none();
         }
-        if self.core.tab_has_running_process(index) {
+        if self
+            .close_confirm
+            .tab
+            .confirms(self.core.tab_has_running_process(index))
+        {
             self.closing = Some(index);
             Task::none()
         } else {
@@ -1771,23 +1764,27 @@ impl Shell {
     /// process out from under us. Keeping one seam is the structural fix — a
     /// second, unguarded quit path is exactly the defect this prevents.
     ///
-    /// A quit hard-kills every live session's Claude process, so with sessions
-    /// running we confirm first; otherwise we terminate the runtime straight
-    /// away. `iced::exit` (not `window::close`) is what actually ends the
-    /// process: on macOS winit cancels the OS terminate and
+    /// A quit hard-kills every live session's foreground process. Whether it
+    /// confirms first is the configured app policy: `confirmWhenActive` (the
+    /// default) confirms only while some session is still running work — the
+    /// core `any_running_process` predicate, the app-wide sibling of the one the
+    /// tab close uses — so an all-idle app quits silently; `alwaysConfirm` /
+    /// `noConfirmation` override that. `iced::exit` (not `window::close`) is what
+    /// actually ends the process: on macOS winit cancels the OS terminate and
     /// `exit_on_close_request(false)` keeps the runtime alive, so a mere window
     /// close would survive.
     fn request_quit(&mut self, id: window::Id) -> Task<Message> {
-        match quit_intent(self.live_session_count()) {
-            QuitIntent::Exit => {
-                tracing::info!("no live sessions; exiting");
-                self.exiting = true;
-                iced::exit()
-            }
-            QuitIntent::Confirm => {
-                self.closing_window = Some(id);
-                Task::none()
-            }
+        if self
+            .close_confirm
+            .app
+            .confirms(self.core.any_running_process())
+        {
+            self.closing_window = Some(id);
+            Task::none()
+        } else {
+            tracing::info!("quit needs no confirmation; exiting");
+            self.exiting = true;
+            iced::exit()
         }
     }
 
@@ -1834,6 +1831,7 @@ impl Shell {
 #[cfg(test)]
 mod key_routing {
     use super::*;
+    use crate::settings::ConfirmClose;
     use iced::keyboard::key::{Named, NativeCode, Physical};
     use iced::keyboard::{Key, Location, Modifiers};
     use std::sync::Mutex as StdMutex;
@@ -1932,6 +1930,7 @@ mod key_routing {
                 record: RecordConfig::default(),
                 session_limit: 0,
                 font_size: 14.0,
+                close: CloseSettings::default(),
             },
         );
         let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
@@ -2341,6 +2340,38 @@ mod key_routing {
         assert_eq!(pty.kill_count(), 0);
     }
 
+    #[test]
+    fn a_no_confirmation_tab_policy_closes_without_arming() {
+        let (mut shell, pty) = shell_with_terminal();
+        shell.close_confirm.tab = ConfirmClose::NoConfirmation;
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert!(shell.closing.is_none(), "noConfirmation never arms the bar");
+        assert_eq!(pty.kill_count(), 1, "the session is killed straight away");
+    }
+
+    #[test]
+    fn a_confirm_when_active_tab_prompts_while_running_then_skips_once_exited() {
+        // Under `confirmWhenActive` (the default), the prompt keys off the core
+        // `tab_has_running_process` predicate: a working shell confirms…
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        shell.close_confirm.tab = ConfirmClose::ConfirmWhenActive;
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert_eq!(shell.closing, Some(0), "a running tab confirms");
+        let _ = shell.update(Message::CancelClose);
+        // …but once its session has exited, the close needs no prompt.
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited(session));
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert!(
+            shell.closing.is_none(),
+            "an exited tab closes without a prompt"
+        );
+        assert!(
+            shell.core.workspace.tabs.is_empty(),
+            "the tab is gone after the unprompted close"
+        );
+    }
+
     /// The first session id hosted by each tab, in tab order — a stable handle
     /// to assert reordering against.
     fn tab_order(shell: &Shell) -> Vec<SessionId> {
@@ -2581,6 +2612,7 @@ mod key_routing {
                 record: RecordConfig::default(),
                 session_limit: 0,
                 font_size: 14.0,
+                close: CloseSettings::default(),
             },
         );
         assert!(shell.core.workspace.focused_session().is_none());
@@ -2766,25 +2798,89 @@ mod key_routing {
     }
 
     #[test]
-    fn closing_with_live_sessions_confirms_before_exiting() {
-        // A live session would be hard-killed, so the first CloseRequested arms
-        // the modal instead of exiting — the runtime stays up until confirmed.
-        let (mut shell, _pty) = shell_with_terminal();
-        assert_eq!(
-            shell.live_session_count(),
-            1,
-            "precondition: one live session"
+    fn closing_with_running_sessions_confirms_before_exiting() {
+        // A running session would be hard-killed, so the first CloseRequested
+        // arms the modal instead of exiting — the runtime stays up until
+        // confirmed. Under the default `confirmWhenActive` an idle shell would
+        // quit silently, so this needs a session that is actually working.
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        assert!(
+            shell.core.any_running_process(),
+            "precondition: a session is running"
         );
 
         let _ = shell.update(Message::Window(
             window::Id::unique(),
             window::Event::CloseRequested,
         ));
-        assert!(shell.quit_pending(), "a live session arms the quit modal");
+        assert!(
+            shell.quit_pending(),
+            "a running session arms the quit modal"
+        );
         assert!(
             !shell.exiting,
             "the runtime must not terminate before the quit is confirmed"
         );
+    }
+
+    #[test]
+    fn an_idle_but_live_session_quits_silently_under_the_default() {
+        // The headline of the running-process quit gate: a session parked at
+        // its prompt (live, but not running foreground work) does *not* arm the
+        // modal under the default `confirmWhenActive` — the app quits straight
+        // away. Guards against a regression that re-nags on every open session.
+        let (mut shell, _pty) = shell_with_terminal();
+        assert!(
+            !shell.core.any_running_process(),
+            "precondition: the launched shell is idle, nothing running"
+        );
+        assert_eq!(
+            shell.live_session_count(),
+            1,
+            "…but it is still a live session"
+        );
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::CloseRequested,
+        ));
+        assert!(shell.exiting, "an all-idle app quits without a prompt");
+        assert!(!shell.quit_pending(), "no modal when nothing is running");
+    }
+
+    #[test]
+    fn an_always_confirm_app_policy_prompts_even_with_nothing_running() {
+        let (mut shell, _pty) = shell_with_terminal();
+        shell.close_confirm.app = ConfirmClose::AlwaysConfirm;
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited(session));
+        assert_eq!(shell.live_session_count(), 0, "precondition: nothing live");
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::CloseRequested,
+        ));
+        assert!(
+            shell.quit_pending(),
+            "alwaysConfirm prompts even with nothing to hard-kill"
+        );
+        assert!(!shell.exiting, "the prompt holds the runtime up");
+    }
+
+    #[test]
+    fn a_no_confirmation_app_policy_quits_past_running_sessions() {
+        // A running session would confirm under the default; `noConfirmation`
+        // quits straight through it — so use a busy shell to prove the override.
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        shell.close_confirm.app = ConfirmClose::NoConfirmation;
+        assert!(
+            shell.core.any_running_process(),
+            "precondition: a session is running"
+        );
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::CloseRequested,
+        ));
+        assert!(shell.exiting, "noConfirmation quits without a modal");
+        assert!(!shell.quit_pending());
     }
 
     #[test]
@@ -2816,11 +2912,10 @@ mod key_routing {
         // routes into it — it does not, and cannot, prove some *other* future
         // code path won't bypass `request_quit`; keeping that single seam is a
         // design rule, not something this test enforces.
-        let (mut shell, _pty) = shell_with_terminal();
-        assert_eq!(
-            shell.live_session_count(),
-            1,
-            "precondition: one live session"
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        assert!(
+            shell.core.any_running_process(),
+            "precondition: a session is running"
         );
 
         let close_button = shell.update(Message::Window(
