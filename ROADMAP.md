@@ -196,6 +196,18 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   with drag-resize as fast-follow #55. Note: the keymap actions are currently
   dropped at `shell.rs:721` (`=> Task::none()`) — wiring them is step one
 - [ ] `F-jsonl-viewer`
+- [ ] `F-terminal-images` — render images inline in the terminal (iTerm2 OSC
+  1337 / Sixel / Kitty graphics), sibling to `F-jsonl-viewer` /
+  `F-file-diff-panel` in the rendering family. Filed as #85. **Parked**
+  (feature-torture ⏸ `F-terminal-images.md`): the issue's stated symptom
+  ("garbage escape text") doesn't reproduce — `vte`/`alacritty_terminal`
+  already discards unrecognised OSC/DCS/APC sequences cleanly; the real gap
+  is silence, not garbage. No slice is cheap: even a placeholder-only render
+  needs the same chunked-payload reassembly `crates/claude/src/osc.rs`
+  explicitly punts on today, across 3 mutually incompatible protocols (OSC/
+  DCS/APC). Zero demand signal beyond the filed issue. Revisit on a real
+  user report of the silent drop, or a free cycle after `F-terminal-split`
+  (#54/#55)
 - [ ] `F-auto-update`
 - [ ] `F-store-cache` — SQLite (WAL) digest cache + FTS5 index
   (lowest Should priority; an optimisation over the in-memory scan/search)
