@@ -24,20 +24,24 @@ themselves) and `markdownlint` (the prose).
 | Gate | Workflow · job | Protects | Runs on | OS | Blocking |
 | --- | --- | --- | --- | --- | --- |
 | Formatting | `ci` · `rustfmt` | Consistent layout (`cargo fmt`) | PR, push→main | ubuntu | yes |
-| Lint + complexity | `ci` · `clippy` | Clippy `-D warnings`; `unwrap`/`expect`/`panic` (core/claude), `too_many_lines`, `todo`/`unimplemented` | PR, push→main | mac · win · ubuntu | yes |
-| Tests | `ci` · `test` | `cargo nextest run --workspace` | PR, push→main | mac · win · ubuntu | yes |
+| Lint + complexity | `ci` · `clippy` | Clippy `-D warnings`; `unwrap`/`expect`/`panic` (core/claude), `too_many_lines`, `todo`/`unimplemented` | PR, push→main | ubuntu | yes |
+| Tests | `ci` · `test` | `cargo nextest run --workspace` | PR, push→main | ubuntu | yes |
+| Cross-OS clippy + tests | `ci` · `cross-os` | Same clippy + `nextest` on macOS & Windows | push→main, tag (skipped on PR) | mac · win | signal |
 | Licenses / CVEs / sources | `ci` · `cargo-deny` | Disallowed licences, RUSTSEC advisories, unknown registries | PR, push→main | ubuntu | yes |
 | Unused deps | `ci` · `cargo-machete` | Declared-but-unused dependencies | PR, push→main | ubuntu | yes |
 | Architecture | `ci` · `dependency-rule` | Hexagonal crate dep rule (deps point inward) | PR, push→main | ubuntu | yes |
 | Workflow lint | `ci` · `actionlint` | Valid, shellcheck-clean workflow YAML | PR, push→main | ubuntu | yes |
 | Docs lint | `ci` · `markdownlint` | 80-col Markdown prose | PR, push→main | ubuntu | yes |
+| Merge gate | `ci` · `ci-success` | Aggregates every PR job into one required check | PR, push→main | ubuntu | yes (the one required check) |
 | SAST | `codeql` · `Analyze (Rust)` | Taint / cross-function security & quality | PR, push→main, weekly | ubuntu | yes |
 | CLI release | `release` · `plan…announce` | Build archives + curl\|sh / PowerShell installers, cut the GitHub Release | tag push (validates on PR) | mac · win · ubuntu | release-time |
 | Desktop installers | `package` · `package` | `.app`/`.dmg`, NSIS `.exe`, `.deb`/`.AppImage`, attached to the Release | tag push | mac · win · ubuntu | release-time |
 
 "Blocking" = a red run blocks merge (PR/CI gates) or blocks the release
-(release-time). Everything in `ci.yml` and `codeql.yml` is a required signal
-on every change to `main`.
+(release-time). "signal" = it runs and reports red/green but does **not** block
+merge (see `cross-os`). The `main` branch-protection rule requires exactly one
+check — `ci-success` — which fans in every per-PR job; the rest are still
+visible on the PR, and `codeql`'s `Analyze (Rust)` is required alongside it.
 
 ---
 
@@ -55,8 +59,10 @@ This is the cheapest place to catch a failure — do it before opening a PR.
 
 Everything fans out in parallel (no inter-job ordering):
 
-- **`ci`** — all eight jobs (`fmt`, `clippy`, `test`, `cargo-deny`,
-  `cargo-machete`, `dependency-rule`, `actionlint`, `markdownlint`).
+- **`ci`** — eight gate jobs (`fmt`, `clippy`, `test`, `cargo-deny`,
+  `cargo-machete`, `dependency-rule`, `actionlint`, `markdownlint`), fanned
+  into the `ci-success` aggregator. `cross-os` is **skipped** on PRs. Branch
+  protection requires only `ci-success` (+ `Analyze (Rust)`).
 - **`codeql`** — `Analyze (Rust)`.
 - **`release`** — runs in *validation* mode (cargo-dist's `plan`; artifact
   builds are gated off unless configured), so a tag push won't be the first
@@ -67,9 +73,11 @@ Superseded PR runs are auto-cancelled (a fresh push kills the stale run) for
 
 ### Merge / push to `main`
 
-`ci` and `codeql` run again on the merged commit. These runs are **never
-cancelled**: they establish the default-branch baseline (CI status badge,
-the CodeQL security baseline in the Security tab).
+`ci` and `codeql` run again on the merged commit — and here `cross-os` also
+runs (clippy + `nextest` on macOS & Windows), giving the post-merge baseline
+its cross-platform check. These runs are **never cancelled**: they establish
+the default-branch baseline (CI status badge, the CodeQL security baseline in
+the Security tab).
 
 ### Scheduled (weekly)
 
@@ -93,19 +101,37 @@ Pushing a tag matching `**[0-9]+.[0-9]+.[0-9]+*` (e.g. `v0.1.0`,
 A version with a `-prerelease.N` suffix is published as a GitHub
 *prerelease*.
 
+`ci` also fires on the tag (its `push.tags` glob mirrors `release.yml`), so
+`cross-os` exercises macOS + Windows as the release is cut. It is a **signal**,
+not a hard gate: it runs in parallel with `release.yml` and a red `cross-os`
+does not stop cargo-dist from publishing (the two are separate workflows and
+GitHub has no cross-workflow `needs:`). Catch platform breakage on `main`
+before you tag.
+
 ---
 
 ## 3. By pipeline (workflow groups)
 
 ### `ci.yml` — the quality wall
 
-Trigger: `push`→`main`, `pull_request`→`main`, `workflow_dispatch`.
-Eight **independent** jobs (no `needs:` — they run concurrently and each
-gates on its own):
+Trigger: `push`→`main`, `push` release tag, `pull_request`→`main`,
+`workflow_dispatch`. Eight **independent** gate jobs (no `needs:` between them
+— they run concurrently) fan into one aggregator, plus a cross-OS signal:
 
 ```text
-fmt   clippy[3 OS]   test[3 OS]   cargo-deny   cargo-machete   dependency-rule   actionlint   markdownlint
+fmt   clippy   test   cargo-deny   cargo-machete   dependency-rule   actionlint   markdownlint
+  └──────┴───────┴──────────┴──────────────┴─────────────┴──────────────┴────────────┘
+                              ▼
+                         ci-success            ← the one required check for `main`
+
+cross-os (mac · win)   ← skipped on PR; runs on push→main and tags; signal only
 ```
+
+The eight gate jobs run ubuntu-only. `ci-success` `needs:` all of them and is
+the single status check pinned in branch protection, so the required-checks
+list stays stable as jobs come and go. `cross-os` carries the macOS + Windows
+coverage that `clippy`/`test` used to via a 3-OS matrix — moved off the PR path
+so the merge gate stays fast and cheap.
 
 Workspace-wide knobs: `RUSTFLAGS: -D warnings` (so any `warn`-level lint —
 including `too_many_lines` — becomes a hard error in CI), and a strict
@@ -156,8 +182,9 @@ Bundles are unsigned for now (signing/notarization pending certs, OQ5).
 ## 4. By goal (what each gate is really for)
 
 - **"Does it build and pass?"** → `clippy` (`-D warnings`) and `test`
-  (`nextest`), both on macOS + Windows + Linux so platform-specific breakage
-  surfaces before merge.
+  (`nextest`) on Linux gate every PR; the `cross-os` job re-runs both on macOS
+  and Windows on push→main and release tags, so platform-specific breakage
+  surfaces on the default branch (and before a release) without slowing merge.
 - **"Is it formatted and readable?"** → `rustfmt`, `markdownlint`.
 - **"Is a function getting too complex?"** → `clippy::too_many_lines`
   (threshold 150 in `clippy.toml`), enforced inside the `clippy` job.
@@ -247,9 +274,11 @@ here so an exception is never a surprise:
 
 1. Add the job to `.github/workflows/ci.yml` (most gates) or a new workflow
    if it has a distinct trigger. Keep it `ubuntu-latest` unless the check is
-   genuinely platform-dependent (only `clippy` and `test` need the 3-OS
-   matrix; the dependency graph, licences, formatting, etc. are
-   platform-independent).
+   genuinely platform-dependent (only clippy + tests run cross-OS, and those
+   live in the `cross-os` job — off the PR path; the dependency graph,
+   licences, formatting, etc. are platform-independent). If the new job must
+   gate merges, add it to `ci-success`'s `needs:` list so branch protection
+   picks it up without editing the rule.
 2. SHA-pin any new action (version in a trailing comment).
 3. Give it a **local mirror**: a `just` recipe or a one-line command, added
    to §5 here and to the `AGENTS.md` "CI gates" block.
