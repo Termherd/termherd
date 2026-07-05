@@ -3,6 +3,11 @@
 How TermHerd's continuous integration is wired: every automated gate, what
 it protects, when it runs, and how to reproduce it locally before you push.
 
+> **See it visually:** [`ci-gate-map.md`](ci-gate-map.md) is a diagram-first
+> companion (the pipeline flow, filter lanes, and what-runs-when at a glance);
+> [`ci-gate-map.html`](ci-gate-map.html) is the same in full colour for a
+> browser. This file stays the source of truth.
+
 TermHerd exists to fix four quality gaps (god-object, races, silent catches,
 untestable design) **by construction** (see `AGENTS.md`, `docs/PRD.md` §4).
 CI is half of "by construction": the rules below are enforced by a machine on
