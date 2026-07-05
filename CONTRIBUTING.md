@@ -16,8 +16,8 @@ Why:
 
 - **Git never rots.** `git blame → commit → PR → issue` always resolves to the
   live discussion. An in-code `#42` is a dead string: it breaks silently when
-  issues are renumbered, migrated between trackers, or closed, and a reader
-  can't click it.
+  issues are renumbered or migrated between trackers, and a reader can't click
+  it.
 - **It's noise at the wrong altitude.** A comment should say *what the code
   does and why*, in terms that outlive any one ticket. The ticket number is
   provenance — and provenance is git's job.
@@ -33,8 +33,8 @@ Where they **don't**:
 
 - Code comments (`//`, `///`, `//!`) and any string that reads as
   documentation (e.g. an `assert!` message).
-- Test names. Name a test for the behaviour it pins (`an_idle_tab_quits_silently`),
-  not the ticket that prompted it.
+- Test names. Name a test for the behaviour it pins — say
+  `an_idle_session_quits_silently` — not for the ticket that prompted it.
 
 Requirement tags the codebase already uses — `FR5`, `G1`, feature slugs like
 `F-capture` — are fine; they name stable design artifacts, not tickets.
@@ -45,7 +45,9 @@ Requirement tags the codebase already uses — `FR5`, `G1`, feature slugs like
 - *Boy-scout:* when you rewrite an existing comment for another reason, drop
   its `#NN` while you're there.
 - *No retroactive crusade:* don't mass-strip `#NN` from code you aren't
-  otherwise touching — it churns `git blame` for no functional gain.
+  otherwise touching — it churns `git blame` for no functional gain. (A
+  single deliberate sweep to establish this baseline is the exception, not
+  the pattern to repeat.)
 
 ## Before you push
 
