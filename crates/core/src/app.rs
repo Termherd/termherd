@@ -140,6 +140,28 @@ pub struct LiveSession {
     pub status: SessionStatus,
 }
 
+impl LiveSession {
+    /// Whether this session still holds a **running foreground process** whose
+    /// loss is worth confirming before a close. A Claude session *is* that
+    /// process — the `claude` CLI runs in the shell's foreground until it
+    /// exits, so any non-exited Claude counts, an idle prompt included. A plain
+    /// shell only counts while it is actively working (`Busy`) or flagged for
+    /// the user (`Attention`); parked at its prompt (`Idle`/`Starting`) there is
+    /// nothing to lose, so it can be closed silently.
+    #[must_use]
+    pub fn has_running_process(&self) -> bool {
+        match self.status {
+            SessionStatus::Exited => false,
+            _ => match self.launch {
+                Launch::Claude { .. } => true,
+                Launch::Shell => {
+                    matches!(self.status, SessionStatus::Busy | SessionStatus::Attention)
+                }
+            },
+        }
+    }
+}
+
 /// Per-session activity surfaced in the sidebar and on tabs (FR8). Derived
 /// from the terminal OSC stream by `termherd_claude::osc`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1009,6 +1031,23 @@ impl App {
             .max_by_key(|status| status.urgency())
     }
 
+    /// Whether closing the tab at `index` would kill a running foreground
+    /// process, so the GUI must confirm the close first. `false` for a tab
+    /// sitting idle (close it silently) and for an unknown index. This single
+    /// running-state check is meant to back both the close-tab confirmation and
+    /// the quit confirmation, so neither has to re-derive "is a process
+    /// running?" for itself.
+    #[must_use]
+    pub fn tab_has_running_process(&self, index: usize) -> bool {
+        self.workspace.tabs.get(index).is_some_and(|tab| {
+            tab.sessions().iter().any(|id| {
+                self.sessions
+                    .get(id)
+                    .is_some_and(LiveSession::has_running_process)
+            })
+        })
+    }
+
     /// Decide whether an OSC 9 notification (#29) reaches the OS notification
     /// centre, and with what title/body. Only live sessions are worth alerting
     /// on — an unknown or exited session has nothing to return to, so it is
@@ -1855,6 +1894,121 @@ mod tests {
         assert_eq!(app.tab_status(0), Some(SessionStatus::Attention));
         // Unknown tab index has no status.
         assert_eq!(app.tab_status(7), None);
+    }
+
+    // ---- close-tab confirmation: is a foreground process running? ----
+
+    /// Launch a Claude session and return its id — companion to `launch`, which
+    /// spawns a plain shell.
+    fn launch_claude(app: &mut App) -> SessionId {
+        match app
+            .apply(Event::LaunchSession(LaunchSpec {
+                cwd: None,
+                launch: Launch::Claude { resume: None },
+                title: "claude".into(),
+            }))
+            .as_slice()
+        {
+            [Effect::Spawn(spec)] => spec.session,
+            other => panic!("expected Spawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_idle_plain_shell_tab_has_no_running_process() {
+        let mut app = App::new();
+        let id = launch(&mut app, "shell");
+        // Freshly launched it is `Starting`, then settles to `Idle`; in neither
+        // state is there foreground work a close would lose.
+        assert!(!app.tab_has_running_process(0));
+        app.apply(Event::StatusChanged {
+            session: id,
+            status: SessionStatus::Idle,
+        });
+        assert!(!app.tab_has_running_process(0));
+    }
+
+    #[test]
+    fn a_working_or_blocked_shell_tab_has_a_running_process() {
+        for status in [SessionStatus::Busy, SessionStatus::Attention] {
+            let mut app = App::new();
+            let id = launch(&mut app, "shell");
+            app.apply(Event::StatusChanged {
+                session: id,
+                status,
+            });
+            assert!(
+                app.tab_has_running_process(0),
+                "a {status:?} shell has foreground work to lose"
+            );
+        }
+    }
+
+    #[test]
+    fn a_claude_tab_has_a_running_process_across_every_live_status() {
+        let mut app = App::new();
+        let id = launch_claude(&mut app);
+        // The `claude` process runs in the shell's foreground until it exits, so
+        // every live status counts — an idle prompt included.
+        for status in [
+            SessionStatus::Starting,
+            SessionStatus::Idle,
+            SessionStatus::Busy,
+            SessionStatus::Attention,
+        ] {
+            app.apply(Event::StatusChanged {
+                session: id,
+                status,
+            });
+            assert!(
+                app.tab_has_running_process(0),
+                "a live Claude ({status:?}) is a running process"
+            );
+        }
+    }
+
+    #[test]
+    fn an_exited_tab_has_no_running_process() {
+        let mut app = App::new();
+        let id = launch_claude(&mut app);
+        assert!(app.tab_has_running_process(0));
+        app.apply(Event::PtyExited(id));
+        assert!(
+            !app.tab_has_running_process(0),
+            "nothing is left to kill once the PTY has exited"
+        );
+    }
+
+    #[test]
+    fn a_split_tab_is_running_when_any_pane_is() {
+        // Two plain shells split into one tab: idle throughout, the tab closes
+        // silently; promote either pane to Busy and the whole tab now hosts
+        // running work.
+        let mut app = App::new();
+        let left = launch(&mut app, "left");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        assert!(
+            !app.tab_has_running_process(0),
+            "two idle shells have nothing to lose"
+        );
+        app.apply(Event::StatusChanged {
+            session: left,
+            status: SessionStatus::Busy,
+        });
+        assert!(
+            app.tab_has_running_process(0),
+            "one busy pane makes the whole tab a running tab"
+        );
+    }
+
+    #[test]
+    fn an_unknown_tab_index_has_no_running_process() {
+        let mut app = App::new();
+        launch_claude(&mut app);
+        assert!(
+            !app.tab_has_running_process(9),
+            "a stale index must never claim a running process"
+        );
     }
 
     #[test]
