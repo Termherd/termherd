@@ -27,6 +27,22 @@ ignore = [
     # `fxhash` is unmaintained (no vulnerability), pulled in transitively by
     # `display-info` (monitor geometry for the off-screen window guard).
     { id = "RUSTSEC-2025-0057", reason = "unmaintained, transitive via display-info" },
+    # `ttf-parser` is unmaintained (no vulnerability), reached only
+    # transitively through iced's font stack: iced → cosmic-text → fontdb →
+    # ttf-parser, and sctk-adwaita → ab_glyph → owned_ttf_parser. No safe bump
+    # exists — the suggested successor (skrifa, a separate Google Fonts crate)
+    # is a rewrite, not a drop-in; drops out whenever iced's tree moves off it.
+    { id = "RUSTSEC-2026-0192", reason = "unmaintained, transitive via iced font stack (ttf-parser); no drop-in replacement" },
+    # `quick-xml` DoS advisories (< 0.41). Reached only through platform
+    # scaffolding that never parses untrusted XML: `wayland-scanner` (^0.39)
+    # and `xcb` (^0.30) generate Rust from *build-time* protocol definitions,
+    # and `tauri-winrt-notification` (~0.37) builds Windows toast XML from
+    # termherd's own notification strings. No network/attacker-controlled input
+    # reaches any of them, so the DoS is not exploitable here. No fix available:
+    # the latest `xcb`/`wayland-scanner`/`tauri-winrt-notification` still pin
+    # quick-xml < 0.41. TODO: drop these once the parents reach quick-xml >=0.41.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml DoS; unreachable — build-time/self-generated XML only, no upgrade path yet" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml DoS; unreachable — build-time/self-generated XML only, no upgrade path yet" },
 ]
 
 [bans]

@@ -3,6 +3,10 @@ name: CI
 on:
   push:
     branches: [main]
+    tags:
+      # Release tags also run CI so the cross-OS gate (below) exercises
+      # mac/Windows before a release is cut. Same glob as release.yml.
+      - '**[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -38,13 +42,12 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
+  # clippy + test run ubuntu-only on every PR (the fast merge gate). mac +
+  # Windows are covered by the `cross-os` job below, which is skipped on PRs
+  # and runs on push→main and release tags. See docs/CI.md §3.
   clippy:
-    name: clippy (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+    name: clippy
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
@@ -55,12 +58,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+    name: test
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
@@ -70,6 +69,32 @@ jobs:
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
         with:
           tool: nextest
+      - run: cargo nextest run --workspace
+
+  # Cross-OS coverage: clippy + tests on macOS and Windows. Skipped on PRs to
+  # keep the merge gate fast/cheap; runs on push→main (post-merge baseline) and
+  # on release tags so platform-specific breakage surfaces before a release. A
+  # red run here does NOT block cargo-dist's release.yml (separate workflow) —
+  # it is a signal, not a hard gate. See docs/CI.md §3.
+  cross-os:
+    name: cross-os (${{ matrix.os }})
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
+        with:
+          tool: nextest
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo nextest run --workspace
 
   deny:
@@ -147,3 +172,21 @@ jobs:
         with:
           globs: '**/*.md'
           config: '.markdownlint-cli2.jsonc'
+
+  # Single required status check for the `main` branch-protection rule. It
+  # `needs:` every per-PR gate, so protection pins one stable name
+  # (`ci-success`) that never changes as jobs are added or removed. `cross-os`
+  # is intentionally excluded — it is skipped on PRs and is a signal, not a
+  # merge gate. `if: always()` so this job still runs (and fails) when a
+  # dependency fails rather than being skipped. See docs/CI.md §2.
+  ci-success:
+    name: ci-success
+    if: always()
+    needs: [fmt, clippy, test, deny, machete, deps, actionlint, markdown]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any required job did not succeed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "One or more required CI jobs failed or were cancelled."
+          exit 1
