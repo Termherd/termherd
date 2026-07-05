@@ -26,13 +26,13 @@ pub struct Settings {
     /// chords. Each entry replaces that action's platform default (FR9). Same
     /// table on every OS; unspecified actions keep their per-platform default.
     pub keys: HashMap<String, ChordList>,
-    /// GIF screencast budget (#124/#127): frames per second, the duration cap,
+    /// GIF screencast budget: frames per second, the duration cap,
     /// and the frame scale. Absent → the built-in default.
     pub record: RecordSettings,
-    /// Sidebar behaviour (#131): how many sessions each project lists before
+    /// Sidebar behaviour: how many sessions each project lists before
     /// folding the tail behind an expander. Absent → the built-in default.
     pub sidebar: SidebarSettings,
-    /// Terminal appearance (#35): the base font size the zoom steps from.
+    /// Terminal appearance: the base font size the zoom steps from.
     /// Absent → the built-in default.
     pub terminal: TerminalSettings,
     /// Close-confirmation policy: whether closing a tab or quitting the app
@@ -70,7 +70,7 @@ pub struct ShellProfile {
     pub args: Vec<String>,
 }
 
-/// The on-disk GIF screencast budget (#127). Each field defaults to the
+/// The on-disk GIF screencast budget. Each field defaults to the
 /// built-in [`RecordConfig::default`], so a missing or partial `record` block
 /// keeps current behaviour. Raw values are sanitised into a [`RecordConfig`] by
 /// [`RecordSettings::into_config`].
@@ -134,18 +134,18 @@ impl RecordSettings {
     }
 }
 
-/// The on-disk sidebar settings (#131). Wide (`i64`) for the same reason as
+/// The on-disk sidebar settings. Wide (`i64`) for the same reason as
 /// [`RecordSettings`]: an out-of-range typo must not fail serde for the whole
 /// file and silently reset the user's other settings.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SidebarSettings {
     /// Sessions shown per project before the tail folds behind an expander;
-    /// `0` shows every session (the pre-#131 behaviour).
+    /// `0` shows every session (the earlier behaviour).
     pub session_limit: i64,
 }
 
-/// Sessions shown per project by default (#131).
+/// Sessions shown per project by default.
 const DEFAULT_SESSION_LIMIT: i64 = 5;
 /// Bound for the limit — anything above is effectively "show all", and the
 /// clamp absorbs out-of-range typos (a negative folds to 0 = show all).
@@ -168,13 +168,13 @@ impl SidebarSettings {
     }
 }
 
-/// The on-disk terminal settings (#35). Wide (`f64`) for the same reason as
+/// The on-disk terminal settings. Wide (`f64`) for the same reason as
 /// [`RecordSettings`]: an out-of-range typo must not fail serde for the whole
 /// file and silently reset the user's other settings.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TerminalSettings {
-    /// Base terminal font size in pixels; the zoom shortcuts (#35) step from
+    /// Base terminal font size in pixels; the zoom shortcuts step from
     /// here at runtime without touching this setting.
     pub font_size: f64,
 }
@@ -286,19 +286,19 @@ impl ThemeChoice {
 }
 
 impl Settings {
-    /// The sanitised GIF screencast budget (#127), clamped into its ranges.
+    /// The sanitised GIF screencast budget, clamped into its ranges.
     #[must_use]
     pub fn record_config(&self) -> RecordConfig {
         self.record.into_config()
     }
 
-    /// The sanitised sidebar session limit (#131); `0` shows every session.
+    /// The sanitised sidebar session limit; `0` shows every session.
     #[must_use]
     pub fn session_limit(&self) -> usize {
         self.sidebar.limit()
     }
 
-    /// The sanitised terminal base font size (#35), clamped into its range.
+    /// The sanitised terminal base font size, clamped into its range.
     #[must_use]
     pub fn font_size(&self) -> f32 {
         self.terminal.font_size()
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn record_defaults_match_the_built_in_record_config() {
         // The settings default must mirror RecordConfig::default so an absent
-        // `record` block changes nothing (#127).
+        // `record` block changes nothing.
         let from_settings = Settings::default().record_config();
         let built_in = RecordConfig::default();
         assert_eq!(from_settings.fps, built_in.fps);
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn record_values_are_clamped_into_range() {
         // A typo can't wedge the encoder: 0 fps, an absurd cap, and an
-        // out-of-range scale all clamp instead of taking effect (#127).
+        // out-of-range scale all clamp instead of taking effect.
         let s: Settings = serde_json::from_str(
             r#"{ "record": { "fps": 0, "max_seconds": 99999, "scale": 5.0 } }"#,
         )
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn sidebar_limit_defaults_overrides_and_clamps() {
-        // Absent block → the built-in default of 5 (#131).
+        // Absent block → the built-in default of 5.
         assert_eq!(Settings::default().session_limit(), 5);
 
         // An explicit value is taken…
@@ -463,7 +463,7 @@ mod tests {
 
     #[test]
     fn terminal_font_size_defaults_overrides_and_clamps() {
-        // Absent block → core's built-in default, so nothing changes (#35).
+        // Absent block → core's built-in default, so nothing changes.
         let d = Settings::default().font_size();
         assert!((d - termherd_core::DEFAULT_FONT_SIZE).abs() < f32::EPSILON);
 
@@ -558,7 +558,7 @@ mod tests {
 
     #[test]
     fn keys_can_bind_a_number_row_tab_jump() {
-        // A user remaps the third-tab jump to a non-default chord (issue #26).
+        // A user remaps the third-tab jump to a non-default chord.
         use termherd_core::{Action, KeyChord};
         let s: Settings = serde_json::from_str(r#"{ "keys": { "activate-tab-3": "alt+3" } }"#)
             .expect("valid json");

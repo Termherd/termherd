@@ -1,4 +1,4 @@
-//! Pure URL detection over a line of terminal text (#28).
+//! Pure URL detection over a line of terminal text.
 //!
 //! Given one rendered grid row as a string, [`detect`] returns the spans that
 //! are clickable URLs, as **character-index ranges** (start inclusive, end

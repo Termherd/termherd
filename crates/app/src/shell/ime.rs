@@ -1,6 +1,6 @@
 //! A thin wrapper widget that turns the platform input method on over the
 //! embedded terminal and forwards composed text — dead/accent keys, CJK, any
-//! sequence the OS resolves through composition — as a message (#34).
+//! sequence the OS resolves through composition — as a message.
 //!
 //! The terminal is an [`iced::widget::Canvas`], whose `Program` API can't reach
 //! the [`Shell`] to request an input method. Without that request macOS (and the

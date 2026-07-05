@@ -1,4 +1,4 @@
-//! termherd-mcp — the control-surface MCP server (`F-mcp-control-surface`, #90).
+//! termherd-mcp — the control-surface MCP server (`F-mcp-control-surface`).
 //!
 //! First, limited draft: a **read-only** view of termherd's configuration,
 //! spoken as MCP over stdio so an in-app Claude session can ask "what can I

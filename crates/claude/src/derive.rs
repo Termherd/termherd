@@ -4,7 +4,7 @@
 //! Folder names under `~/.claude/projects/` cannot be decoded (every
 //! non-alphanumeric becomes `-`, so `/a-b` and `/a/b` collide). The real
 //! path is recovered from the `cwd` field Claude CLI writes into each JSONL
-//! line — the trick behind the duplicate-sidebar bug class (#41/#44).
+//! line — the trick behind the duplicate-sidebar bug class.
 //!
 //! Ported from `derive-project-path.js` (upstream Electron app,
 //! `doctly/switchboard`). Only the pure parts live here: walking a project

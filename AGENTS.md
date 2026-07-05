@@ -181,6 +181,11 @@ exists). Do not relax them locally.
 - Markdown prose: 80-col wrap (tables / code blocks exempt, see
   `.markdownlint-cli2.jsonc`).
 - Commit messages: no "Claude" signature (per global user instruction).
+- No issue numbers (`#NN`) in code comments, doc-comments, or test names —
+  git history already links code to its issue, and an in-code `#NN` rots when
+  issues are renumbered or migrated. Cite issues in commit/PR bodies and
+  `ROADMAP.md`/PRD prose instead. Full rationale in
+  [`CONTRIBUTING.md`](CONTRIBUTING.md).
 - Status of every feature is tracked in `ROADMAP.md` (MoSCoW from PRD §5).
   Check the ticked/unticked state there before assuming something is built.
 

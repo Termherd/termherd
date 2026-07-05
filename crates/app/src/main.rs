@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn default_filter_parses_cleanly() {
         // A typo would make `EnvFilter` silently drop the bad directive and
-        // re-enable the dependency flood (#11); fail the build instead.
+        // re-enable the dependency flood; fail the build instead.
         let filter = EnvFilter::builder().parse(DEFAULT_FILTER);
         assert!(filter.is_ok(), "DEFAULT_FILTER must be valid: {filter:?}");
     }

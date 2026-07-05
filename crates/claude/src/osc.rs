@@ -27,7 +27,7 @@ pub enum OscSignal {
     Busy,
     /// Claude is idle and waiting for input (`✳` title).
     Idle,
-    /// The session title Claude reports in its OSC 0 sequence (#24), with the
+    /// The session title Claude reports in its OSC 0 sequence, with the
     /// leading busy/idle status glyph stripped. Empty titles are not reported.
     /// Only glyph-prefixed titles qualify — that filter is load-bearing: the
     /// shell emits junk titles first (`C:\…\cmd.exe …`, then `claude`) before
@@ -52,7 +52,7 @@ pub fn decode_chunk(chunk: &str) -> Vec<OscSignal> {
     if chunk.contains("\u{1b}]") {
         let sequences = osc_sequences(chunk);
         // Pass 1 — OSC 0 titles (busy spinner / idle marker), in order. Each
-        // status glyph also carries the human title text after it (#24).
+        // status glyph also carries the human title text after it.
         for (code, payload) in &sequences {
             if *code != 0 {
                 continue;
@@ -101,7 +101,7 @@ pub fn decode_chunk(chunk: &str) -> Vec<OscSignal> {
 }
 
 /// The human title carried by an OSC 0 payload whose first char is a status
-/// glyph (Braille spinner or `✳`): the text after that glyph, trimmed (#24).
+/// glyph (Braille spinner or `✳`): the text after that glyph, trimmed.
 /// `None` when nothing meaningful remains — Claude's bare-glyph titles.
 fn title_after_glyph(payload: &str) -> Option<&str> {
     let mut chars = payload.chars();
@@ -163,7 +163,7 @@ mod tests {
 
     #[test]
     fn braille_spinner_title_means_busy_and_carries_its_text() {
-        // ⠋ U+280B — a spinner frame; the text after it is the live title (#24).
+        // ⠋ U+280B — a spinner frame; the text after it is the live title.
         let chunk = "\u{1b}]0;\u{280B} Thinking…\u{07}";
         assert_eq!(
             decode_chunk(chunk),
@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn a_bare_status_glyph_carries_no_title() {
-        // The spinner alone (no text after it) is a status with no title (#24).
+        // The spinner alone (no text after it) is a status with no title.
         assert_eq!(
             decode_chunk("\u{1b}]0;\u{280B}\u{07}"),
             vec![OscSignal::Busy]
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn osc9_notification_keeps_semicolons_in_its_payload() {
-        // Permission prompts carry `;` inside the human text (#29). Only a
+        // Permission prompts carry `;` inside the human text. Only a
         // leading `4;` is the progress marker — inner semicolons must not split
         // the notification body.
         let chunk = "\u{1b}]9;allow Bash(rm -rf); proceed?\u{07}";
@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn osc9_with_an_empty_payload_is_still_a_notification() {
-        // A bare OSC 9 (no text) is a real attention ping (#29); the empty body
+        // A bare OSC 9 (no text) is a real attention ping; the empty body
         // is the core's to default, not the decoder's to drop.
         assert_eq!(
             decode_chunk("\u{1b}]9;\u{07}"),

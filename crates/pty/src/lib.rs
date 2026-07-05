@@ -45,9 +45,9 @@ pub enum PtyEvent {
         session: SessionId,
         status: SessionStatus,
     },
-    /// The session's reported title changed (#24); drives the tab label.
+    /// The session's reported title changed; drives the tab label.
     Title { session: SessionId, title: String },
-    /// An OSC 9 notification fired (#29): Claude wants the user. Carries the
+    /// An OSC 9 notification fired: Claude wants the user. Carries the
     /// raw payload text, forwarded to the OS notification centre on top of the
     /// in-app `Attention` status (which `Status` already conveys).
     Notification { session: SessionId, body: String },
@@ -189,7 +189,7 @@ fn named_rgb(named: NamedColor) -> [u8; 3] {
 
 /// Darken a colour for the faint/dim attribute (SGR 2): ~60% intensity, so
 /// dim text reads as grey rather than the near-white it had when the flag was
-/// ignored (#10).
+/// ignored.
 fn dim([r, g, b]: [u8; 3]) -> [u8; 3] {
     [
         (r as u16 * 3 / 5) as u8,
@@ -222,7 +222,7 @@ fn fold_status(current: SessionStatus, signals: &[OscSignal]) -> SessionStatus {
             OscSignal::Idle if status == SessionStatus::Attention => SessionStatus::Attention,
             OscSignal::Idle => SessionStatus::Idle,
             OscSignal::Notification(_) => SessionStatus::Attention,
-            // The title text drives the tab label (#24), not the status.
+            // The title text drives the tab label, not the status.
             OscSignal::Title(_) | OscSignal::AltScreen(_) | OscSignal::Bell => status,
         };
     }
@@ -524,14 +524,14 @@ fn reconcile_kill(result: std::io::Result<()>) -> Result<(), PtyError> {
 /// emits its status / notification OSC sequences (the busy / idle / attention
 /// signals [`crate::osc`] decodes, FR8) when it believes it is running under
 /// iTerm2 — it sniffs `TERM_PROGRAM`. Without this the status stays on whatever
-/// it was at launch (`Starting`), which is the "tab status stuck" bug (#18).
+/// it was at launch (`Starting`), which is the "tab status stuck" bug.
 const TERM_PROGRAM: &str = "iTerm.app";
 /// A recent iTerm2 version, so any minimum-version gating on the CLI side also
 /// passes. The exact value only has to read as "new enough".
 const TERM_PROGRAM_VERSION: &str = "3.5.0";
 
 /// Set the environment a Claude session expects: a colour-capable `TERM`, and
-/// the iTerm2 identity that unlocks its OSC status stream (#18). Kept separate
+/// the iTerm2 identity that unlocks its OSC status stream. Kept separate
 /// from [`PtyManager::spawn`] so the env contract is unit-testable without a
 /// real PTY.
 fn apply_terminal_env(cmd: &mut CommandBuilder) {
@@ -597,7 +597,7 @@ fn spawn_term(
         .name(format!("pty-tm-{}", session.0.get()))
         .spawn(move || {
             // The responder writes cursor-report replies; the loop keeps its own
-            // handle to forward wheel input to mouse-mode apps (#98).
+            // handle to forward wheel input to mouse-mode apps.
             let input = writer.clone();
             let mut term = Term::new(
                 Config::default(),
@@ -624,7 +624,7 @@ fn spawn_term(
                             status = next;
                             term_sink(PtyEvent::Status { session, status });
                         }
-                        // Forward each OSC 9 notification's text to the OS (#29),
+                        // Forward each OSC 9 notification's text to the OS,
                         // independent of the status fold above — the in-app
                         // `Attention` badge and the desktop alert are two
                         // surfaces of the same ping.
@@ -636,7 +636,7 @@ fn spawn_term(
                                 });
                             }
                         }
-                        // Follow Claude's reported title (#24); the last title in
+                        // Follow Claude's reported title; the last title in
                         // the chunk wins, and only a change is forwarded.
                         if let Some(next) = signals.iter().rev().find_map(|s| match s {
                             OscSignal::Title(t) => Some(t),
@@ -657,7 +657,7 @@ fn spawn_term(
                     TermCmd::Scroll(target) => {
                         // A wheel turn over a mouse-mode / alt-scroll app is
                         // forwarded as input bytes; otherwise (and for the
-                        // absolute jumps) it moves our own scrollback (#98).
+                        // absolute jumps) it moves our own scrollback.
                         match target {
                             ScrollTarget::Wheel { col, row, lines } => {
                                 match wheel_bytes(*term.mode(), col, row, lines) {
@@ -823,7 +823,7 @@ pub fn key_bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<
 /// Translate a wheel scroll into the bytes a full-screen application expects,
 /// or `None` when the terminal isn't asking for wheel input — a normal screen
 /// with no mouse mode, where the caller scrolls its own scrollback instead
-/// (#98). This is why scrolling a Claude/vim/less TUI did nothing: those run in
+/// This is why scrolling a Claude/vim/less TUI did nothing: those run in
 /// the alternate screen with mouse reporting on, so the wheel must be *forwarded
 /// to the app*, not applied to a (non-existent) scrollback.
 ///
@@ -938,7 +938,7 @@ fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
         let mut fg = resolve(cell.fg);
         // The faint/dim attribute (SGR 2) darkens the foreground. Without this
         // dim default-fg text — like Claude's greyed suggestions — rendered at
-        // full intensity, i.e. near-white (#10).
+        // full intensity, i.e. near-white.
         if cell.flags.contains(Flags::DIM) {
             fg = dim(fg);
         }
@@ -995,7 +995,7 @@ mod tests {
 
     #[test]
     fn terminal_env_advertises_iterm2_for_status_osc() {
-        // #18: Claude only emits its status OSC stream under iTerm2, so the
+        // Claude only emits its status OSC stream under iTerm2, so the
         // spawned command must claim that identity — otherwise every activity
         // indicator stays frozen on the launch status.
         let mut cmd = CommandBuilder::new("/bin/sh");
@@ -1021,7 +1021,7 @@ mod tests {
 
     #[test]
     fn a_fresh_claude_launch_types_bare_claude() {
-        // The point of #23: the 🤖 button must start Claude *fresh*, never with
+        // The 🤖 button must start Claude *fresh*, never with
         // a stray `--resume`.
         assert_eq!(
             launch_command(&Launch::Claude { resume: None }),
@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn notification_still_means_attention_alongside_the_osc9_body_forwarding() {
         use SessionStatus::*;
-        // #29 forwards the notification *text* to the OS on a separate channel;
+        // The notification *text* is forwarded to the OS on a separate channel;
         // the status fold must be untouched — an OSC 9 among other signals
         // still resolves to Attention, and its body never leaks into the title.
         let signals = [
@@ -1364,7 +1364,7 @@ mod tests {
         assert_eq!(resolve(Color::Named(NamedColor::Background)), DEFAULT_BG);
     }
 
-    // --- #98: wheel forwarding for mouse-mode / alt-screen TUIs --------------
+    // --- wheel forwarding for mouse-mode / alt-screen TUIs --------------
 
     const MOUSE: TermMode = TermMode::MOUSE_REPORT_CLICK;
 
@@ -1382,7 +1382,7 @@ mod tests {
 
     #[test]
     fn sgr_mouse_wheel_up_is_button_64_at_the_pointer_cell() {
-        // SGR: ESC[<b;col;row M, 1-based cell, wheel-up = button 64 (#98).
+        // SGR: ESC[<b;col;row M, 1-based cell, wheel-up = button 64.
         let mode = MOUSE | TermMode::SGR_MOUSE;
         assert_eq!(wheel_bytes(mode, 4, 2, 1), Some(b"\x1b[<64;5;3M".to_vec()));
     }
@@ -1395,7 +1395,7 @@ mod tests {
 
     #[test]
     fn sgr_mouse_emits_one_event_per_line() {
-        // A 3-line notch is three wheel events, not one (#98).
+        // A 3-line notch is three wheel events, not one.
         let mode = MOUSE | TermMode::SGR_MOUSE;
         assert_eq!(
             wheel_bytes(mode, 0, 0, 3),
@@ -1415,7 +1415,7 @@ mod tests {
 
     #[test]
     fn alternate_scroll_sends_cursor_arrows_in_the_alt_screen() {
-        // 1007 without mouse reporting: one cursor key per line, up = Up (#98).
+        // 1007 without mouse reporting: one cursor key per line, up = Up.
         let mode = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
         assert_eq!(wheel_bytes(mode, 9, 9, 2), Some(b"\x1b[A\x1b[A".to_vec()));
         assert_eq!(wheel_bytes(mode, 9, 9, -1), Some(b"\x1b[B".to_vec()));

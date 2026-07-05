@@ -15,7 +15,7 @@
 //! [`watch_changes`] provides the debounced fs watch behind live sidebar
 //! updates (FR2). Still to come: `rayon` parallel parsing for large trees.
 //!
-//! Rescans are incremental (#133): the walk (`read_dir` + one stat per file)
+//! Rescans are incremental: the walk (`read_dir` + one stat per file)
 //! always runs in full — it is what detects adds and removes — but a session
 //! file is only re-read and re-digested when its mtime or size changed since
 //! the previous scan. A live Claude session appending to one transcript costs
@@ -38,8 +38,8 @@ use tracing::{debug, warn};
 /// Scanner over a projects root (normally `~/.claude/projects`).
 pub struct FsScanner {
     root: PathBuf,
-    /// Digest/cwd results of the previous scan, keyed by file signature
-    /// (#133). Interior mutability because [`ProjectScanner::scan`] takes
+    /// Digest/cwd results of the previous scan, keyed by file signature.
+    /// Interior mutability because [`ProjectScanner::scan`] takes
     /// `&self`; the shell serialises scans, so the lock is uncontended.
     cache: Mutex<ScanCache>,
 }
@@ -112,7 +112,7 @@ pub fn watch_changes(
     Ok(WatchHandle { _watcher: watcher })
 }
 
-/// A file's cache-invalidation signature (#133): mtime + size. Either
+/// A file's cache-invalidation signature: mtime + size. Either
 /// changing marks the cached derivation stale; requiring both to match
 /// mitigates coarse mtime granularity on some filesystems.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,7 +147,7 @@ struct CachedCwd {
     cwd: String,
 }
 
-/// What the previous scan learned (#133). Each scan builds a fresh
+/// What the previous scan learned. Each scan builds a fresh
 /// generation and replaces the old wholesale, so entries for files and
 /// folders that vanished are pruned by never being carried over.
 #[derive(Default)]
@@ -194,7 +194,7 @@ struct ScanOutcome {
 /// Walk a projects root, partitioning its folders into derived session
 /// records and the folders that had no derivable cwd. Pure of logging policy
 /// so the skip set is unit-testable. `cache` carries the previous scan's
-/// digests (#133) and is replaced by this scan's generation.
+/// digests and is replaced by this scan's generation.
 fn scan_root(root: &Path, cache: &mut ScanCache) -> Result<ScanOutcome, ScanError> {
     let folders = fs::read_dir(root)
         .map_err(|e| ScanError::Unreadable(format!("{}: {e}", root.display())))?;
@@ -218,7 +218,7 @@ fn scan_root(root: &Path, cache: &mut ScanCache) -> Result<ScanOutcome, ScanErro
 
 /// One project folder → its session records, or `None` when no project
 /// path can be derived. Unchanged files reuse `old`'s digests; whatever this
-/// scan learns lands in `next` (#133).
+/// scan learns lands in `next`.
 fn scan_folder(dir: &Path, old: &ScanCache, next: &mut ScanCache) -> Option<Vec<SessionRecord>> {
     let direct_jsonls = jsonl_files(dir);
 
@@ -277,7 +277,7 @@ fn scan_folder(dir: &Path, old: &ScanCache, next: &mut ScanCache) -> Option<Vec<
 }
 
 /// The folder's previously derived cwd, if the transcript it came from still
-/// carries the same signature (#133).
+/// carries the same signature.
 fn cached_cwd(dir: &Path, cache: &ScanCache) -> Option<(PathBuf, String)> {
     let hit = cache.cwds.get(dir)?;
     (file_sig(&hit.source)? == hit.sig).then(|| (hit.source.clone(), hit.cwd.clone()))
@@ -306,7 +306,7 @@ fn jsonl_files(dir: &Path) -> Vec<PathBuf> {
 
 /// Fallback cwd source: session subdirectories (UUID folders) — their
 /// direct `*.jsonl`, or the first file under `subagents/`. Returns the file
-/// the cwd came from alongside it, for the derivation cache (#133).
+/// the cwd came from alongside it, for the derivation cache.
 fn subdir_cwd(dir: &Path) -> Option<(PathBuf, String)> {
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
@@ -332,7 +332,7 @@ fn subdir_cwd(dir: &Path) -> Option<(PathBuf, String)> {
 /// a directory (a normal clone) or a file (a submodule or linked worktree
 /// `.git` pointer), so both count.
 ///
-/// Used by the "new Claude session in the same repo" shortcut (#77): a session
+/// Used by the "new Claude session in the same repo" shortcut: a session
 /// may be running in a subdirectory, so the launch walks up to the repo root
 /// rather than reusing the literal cwd.
 #[must_use]
@@ -532,7 +532,7 @@ mod tests {
 
         // Same signature (length preserved, mtime restored) but different
         // content: a cache hit keeps the old digest — proof the file was
-        // not re-read (#133).
+        // not re-read.
         let line = "{\"type\":\"user\",\"cwd\":\"/real/proj\",\"message\":\"jello\"}\n";
         rewrite_preserving_sig(&folder.join("abc.jsonl"), line);
         let second = scanner.scan().unwrap();

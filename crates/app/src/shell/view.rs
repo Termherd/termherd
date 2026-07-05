@@ -1,6 +1,6 @@
 //! The `view` half of the shell: how `Shell` state is rendered (ARCHITECTURE
 //! §8). The session browser sidebar (FR1/FR3), the focused-terminal main pane
-//! with its tab strip (FR5) and close-confirmation bar (#9), plus the small
+//! with its tab strip (FR5) and close-confirmation bar, plus the small
 //! status-dot and text helpers shared across them. No state transitions live
 //! here — those are in the parent module.
 
@@ -25,10 +25,10 @@ use crate::strings;
 
 impl Shell {
     pub(super) fn view(&self) -> Element<'_, Message> {
-        // Hiding the sidebar (#21) hands its width to the terminal; a slim
+        // Hiding the sidebar hands its width to the terminal; a slim
         // always-present handle brings it back without needing the shortcut.
         // The handle is pinned to `HANDLE_W` so the grid reserves exactly what
-        // it occupies — keeping `grid_size` honest rather than estimating (#64).
+        // it occupies — keeping `grid_size` honest rather than estimating.
         let base: Element<'_, Message> = if self.core.sidebar_hidden {
             let handle = container(
                 button(text("▶").size(12))
@@ -138,7 +138,7 @@ impl Shell {
             list = list.push(text(label).size(12));
         }
         // Plans & memory docs (F-plans-memory), above the project list. Its
-        // header folds shut too (#22), keyed like a project group.
+        // header folds shut too, keyed like a project group.
         if !self.docs.is_empty() {
             let collapsed = self.core.is_collapsed(PLANS_SECTION_KEY);
             let header = row![
@@ -165,8 +165,8 @@ impl Shell {
         }
         for group in &visible {
             let collapsed = self.core.is_collapsed(&group.path);
-            // The disclosure triangle and the name both fold the session list
-            // (#22/#23) — a tree header should fold, not launch. Launching moved
+            // The disclosure triangle and the name both fold the session list —
+            // a tree header should fold, not launch. Launching moved
             // to two explicit buttons beside it: `$` opens a plain shell, 🤖 a
             // fresh Claude session, both in the repo dir (FR4a).
             let fold = fold_toggle(&group.path, collapsed);
@@ -196,9 +196,9 @@ impl Shell {
             }
             // Rows whose title repeats within this project get a relative
             // last-activity age appended, so duplicates stay distinguishable
-            // (#42). The unique case keeps the clean `{title} · {count}` line.
+            // The unique case keeps the clean `{title} · {count}` line.
             let collisions = self.core.colliding_titles(group);
-            // Long groups fold their tail behind an expander (#131); search
+            // Long groups fold their tail behind an expander; search
             // and the user's unfold both surface it (`sidebar_sessions`).
             let (sessions, fold) = self.core.sidebar_sessions(group);
             for s in sessions {
@@ -235,9 +235,9 @@ impl Shell {
                         .into()
                 } else {
                     // Colliding rows carry a disambiguator so duplicate titles
-                    // stay distinguishable (#42). When a custom/AI title masks a
-                    // different real conversation (the /clear title-carryover,
-                    // #93) the divergent summary tells them apart by content;
+                    // stay distinguishable. When a custom/AI title masks a
+                    // different real conversation (the /clear title-carryover)
+                    // the divergent summary tells them apart by content;
                     // otherwise we fall back to the last-activity age.
                     let mut label = format!("{}  ·  {}", clip(&title, 26), s.digest.message_count);
                     if collisions.contains(id) {
@@ -288,7 +288,7 @@ impl Shell {
                         .padding(0)
                 };
 
-                // Archiving is deliberate (#20): arm the confirmation bar.
+                // Archiving is deliberate: arm the confirmation bar.
                 // Un-archiving is a harmless restore, so it stays one-click.
                 let archive_msg = if archived {
                     Message::ToggleArchive(s.session_id.clone())
@@ -304,8 +304,8 @@ impl Shell {
                     .spacing(6)
                     .align_y(iced::Center);
                 // A content hit shows its matched line in muted text beneath the
-                // row, so search reveals *what* matched, not merely *that* it did
-                // (#58). Title-only hits return `None` and stay single-line. The
+                // row, so search reveals *what* matched, not merely *that* it did.
+                // Title-only hits return `None` and stay single-line. The
                 // core windows the line around the hit; we clip to the sidebar.
                 g = match self.core.search_snippet(s) {
                     Some(snip) => g.push(
@@ -321,7 +321,7 @@ impl Shell {
                 };
             }
             // The expander row under a truncated list: unfold the hidden
-            // tail, or fold it back once expanded (#131).
+            // tail, or fold it back once expanded.
             if let Some(fold) = fold {
                 let label = match fold {
                     termherd_core::SidebarFold::Truncated(hidden) => strings::sidebar_more(hidden),
@@ -336,7 +336,7 @@ impl Shell {
             }
             list = list.push(g);
         }
-        // A handle to collapse the sidebar (#21), mirroring the one that
+        // A handle to collapse the sidebar, mirroring the one that
         // restores it from the main pane.
         let hide = button(text("◀ Masquer le panneau").size(11))
             .on_press(Message::ToggleSidebar)
@@ -352,7 +352,7 @@ impl Shell {
             .into()
     }
 
-    /// The archive-confirmation bar (#20), shown in the sidebar when an archive
+    /// The archive-confirmation bar, shown in the sidebar when an archive
     /// is armed: it names the session about to be hidden and offers Archiver
     /// (confirm) / Annuler. `None` when nothing is pending.
     fn archive_confirmation(&self) -> Option<Element<'_, Message>> {
@@ -396,7 +396,7 @@ impl Shell {
                 .width(Fill)
                 .height(Fill);
                 // Wrap the grid so the platform IME is on while the terminal is
-                // focused — without it dead/accent keys never compose (#34). Off
+                // focused — without it dead/accent keys never compose. Off
                 // while an overlay (inline rename / close confirmation) is up, so
                 // its own field owns composition and a dead key can't leak to the
                 // PTY; focus stays `Terminal` underneath those, so they must be
@@ -446,7 +446,7 @@ impl Shell {
         container(pane.push(body)).width(Fill).height(Fill).into()
     }
 
-    /// The close-confirmation bar (#9), shown when a close is armed: it names
+    /// The close-confirmation bar, shown when a close is armed: it names
     /// the session about to die and offers Fermer (confirm) / Annuler. `None`
     /// when nothing is pending or the armed index has since gone away.
     fn close_confirmation(&self) -> Option<Element<'_, Message>> {
@@ -461,7 +461,7 @@ impl Shell {
         ))
     }
 
-    /// A confirmation bar shared by the close (#9) and archive (#20) prompts:
+    /// A confirmation bar shared by the close and archive prompts:
     /// the question, a styled confirm button, and an Annuler cancel, in the
     /// rounded container both use. Keeping one builder stops the two bars
     /// drifting apart.
@@ -546,8 +546,8 @@ impl Shell {
             let chip = mouse_area(chip)
                 .on_press(Message::TabDragStart(index))
                 .on_enter(Message::TabDragOver(index));
-            // The chip clips the title; hovering reveals the fuller description
-            // (#76) — the very session card the sidebar shows when the tab
+            // The chip clips the title; hovering reveals the fuller description —
+            // the very session card the sidebar shows when the tab
             // resumes a browsed session, else a minimal title + cwd card.
             let chip = tooltip(
                 chip,
@@ -573,7 +573,7 @@ impl Shell {
         )
     }
 
-    /// The `● REC n/cap` indicator shown while a GIF screencast records (#124),
+    /// The `● REC n/cap` indicator shown while a GIF screencast records,
     /// so the recording state — and how close it is to the auto-stop cap — is
     /// unmistakable. `None` when not recording. Independent of the tab strip, so
     /// it shows even on an empty workspace.
@@ -593,7 +593,7 @@ impl Shell {
         )
     }
 
-    /// The hover card for a tab (#76). A tab that resumes a browsed session
+    /// The hover card for a tab. A tab that resumes a browsed session
     /// shows the *same* [`session_card`] the sidebar does — one derive (the core
     /// resolves the record via [`termherd_core::App::tab_record`]), no divergent
     /// formatting. A shell or a fresh, not-yet-scanned session has no record, so
@@ -704,12 +704,12 @@ fn status_badge(status: SessionStatus) -> Element<'static, Message> {
     .into()
 }
 
-/// Fold key for the Plans & mémoire section (#22). Project groups key their
+/// Fold key for the Plans & mémoire section. Project groups key their
 /// fold by real (always absolute) path; this reserved, non-path key shares the
 /// same persisted set without ever colliding with a project.
 const PLANS_SECTION_KEY: &str = "plans-memory";
 
-/// The disclosure triangle that folds a sidebar section (#22): ▾ when open, ▸
+/// The disclosure triangle that folds a sidebar section: ▾ when open, ▸
 /// when folded, toggling the fold for `key`. Shared by the project headers and
 /// the Plans & mémoire section so the two can't drift apart.
 fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
@@ -721,7 +721,7 @@ fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
 }
 
 /// An icon button beside a project header that launches a session in the repo
-/// dir (#23, FR4a): the glyph is the affordance, the tooltip spells it out.
+/// dir (FR4a): the glyph is the affordance, the tooltip spells it out.
 /// Built once so the `$` (shell) and 🤖 (Claude) buttons can't drift in style.
 fn launch_button(
     icon: &'static str,
@@ -806,7 +806,7 @@ fn tab_chip_text(theme: &iced::Theme, active: bool) -> Color {
     }
 }
 
-/// A tab chip's look (#25), now a styled container rather than a button (the
+/// A tab chip's look, now a styled container rather than a button (the
 /// drag needs `mouse_area` to see press *and* release, which a button would
 /// capture). `active` paints the primary fill; `dragging` fades the tab being
 /// carried to a ghost. All colours come from the theme palette — never
@@ -827,7 +827,7 @@ fn tab_chip_style(theme: &iced::Theme, active: bool, dragging: bool) -> containe
     }
 }
 
-/// The vertical insertion bar shown between chips during a drag (#25) — the
+/// The vertical insertion bar shown between chips during a drag — the
 /// legible "it drops here" marker, painted in the theme accent.
 fn insertion_caret<'a>() -> Element<'a, Message> {
     container(text(""))
@@ -844,7 +844,7 @@ fn insertion_caret<'a>() -> Element<'a, Message> {
         .into()
 }
 
-/// Dimmed secondary text for the sidebar — search-match snippets (#58). Mixes
+/// Dimmed secondary text for the sidebar — search-match snippets. Mixes
 /// the normal text toward the background so it reads muted, theme-aware rather
 /// than a hardcoded grey.
 fn sidebar_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
@@ -920,7 +920,7 @@ fn session_card(
 }
 
 /// The minimal hover card for a tab with no browsed record — a shell or a fresh
-/// session (#76): the full, untruncated title and the working directory it runs
+/// session: the full, untruncated title and the working directory it runs
 /// in. Styled like [`session_card`] so the two hover surfaces read alike.
 fn tab_card(title: String, cwd: Option<String>) -> Element<'static, Message> {
     let mut card = column![text(title).size(12)].spacing(4);

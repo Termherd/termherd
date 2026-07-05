@@ -2,7 +2,7 @@
 //! Pure data + pure grouping; the scan adapter produces [`SessionRecord`]s.
 //!
 //! FR1: one group per distinct real project path — the duplicate-sidebar
-//! bug class (#41/#44) is pinned here by construction and by tests.
+//! bug class is pinned here by construction and by tests.
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -40,7 +40,7 @@ impl ProjectGroup {
 
 /// A compact, language-neutral relative age — `now`, `5m`, `3h`, `2d`, `4w`,
 /// `1y` — used to disambiguate sidebar rows whose titles collide within a
-/// project (#42). The caller supplies the elapsed `Duration`: core stays pure
+/// project. The caller supplies the elapsed `Duration`: core stays pure
 /// (no clock), the adapter owns the wall clock.
 #[must_use]
 pub fn relative_age(elapsed: Duration) -> String {
@@ -155,7 +155,7 @@ fn session_matches(session: &SessionRecord, needle_lower: &str, titles_only: boo
     content_snippet(&session.digest, needle_lower).is_some()
 }
 
-/// A located content match (#58): the line that matched, truncated around the
+/// A located content match: the line that matched, truncated around the
 /// hit when long, plus the byte range within [`Self::line`] the needle covers.
 /// Shown in muted text under a session row so a content hit reveals *what*
 /// matched, not merely *that* something did.

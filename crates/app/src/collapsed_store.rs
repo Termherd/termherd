@@ -1,4 +1,4 @@
-//! Sidebar fold-state persistence (#22) — load/save the set of folded project
+//! Sidebar fold-state persistence — load/save the set of folded project
 //! paths at `~/.termherd/collapsed.json`. A file adapter owned by the shell,
 //! like [`crate::metadata_store`]; `core` holds the domain set and never does
 //! I/O.

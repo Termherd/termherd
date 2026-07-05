@@ -8,7 +8,7 @@
 //!
 //! - [`view`] — how state is rendered (sidebar, main pane, tabs).
 //! - [`terminal`] — the embedded terminal `canvas::Program` + link opener.
-//! - [`ime`] — the input-method wrapper that composes dead/accent keys (#34).
+//! - [`ime`] — the input-method wrapper that composes dead/accent keys.
 //! - [`input`] — keyboard translation (chords / `TermKey` / modifiers).
 //! - [`streams`] — the PTY-output and fs-watch subscription sources.
 
@@ -46,13 +46,13 @@ use termherd_core::browser::project_label;
 use terminal::{cell_size, notify, open_url};
 
 /// Sidebar width and the chrome reserved around the terminal, in logical px.
-/// Combined with the zoom-derived cell metrics ([`terminal::cell_size`], #35)
+/// Combined with the zoom-derived cell metrics ([`terminal::cell_size`])
 /// to size the
 /// PTY grid to the window (FR4 resize).
 const SIDEBAR_W: f32 = 300.0;
-/// Width the collapsed sidebar still occupies (#21): just the slim "▶" handle.
+/// Width the collapsed sidebar still occupies: just the slim "▶" handle.
 /// The grid reserves this instead of `SIDEBAR_W` when hidden, so the reclaimed
-/// space becomes columns rather than stretched cells (#64). The view pins the
+/// space becomes columns rather than stretched cells. The view pins the
 /// handle to exactly this width (`view::view`), so it is a contract the layout
 /// honours, not an estimate that can silently drift.
 pub(super) const HANDLE_W: f32 = 28.0;
@@ -68,7 +68,7 @@ fn rename_id() -> widget::Id {
 }
 
 /// The user's home directory, the fallback cwd for "new shell here" when no
-/// session is open to inherit one from (#77). Falls back to "." if neither
+/// session is open to inherit one from. Falls back to "." if neither
 /// `USERPROFILE` (Windows) nor `HOME` (Unix) is set, so a launch always has a
 /// directory to start in.
 fn home_dir() -> String {
@@ -84,13 +84,13 @@ pub struct Startup {
     pub theme: ThemeChoice,
     pub keymap: Keymap,
     pub metadata: HashMap<String, SessionMeta>,
-    /// Folded project paths restored from disk (#22).
+    /// Folded project paths restored from disk.
     pub collapsed: HashSet<String>,
-    /// GIF screencast budget from settings (#127).
+    /// GIF screencast budget from settings.
     pub record: RecordConfig,
-    /// Sidebar session limit from settings (#131); `0` shows every session.
+    /// Sidebar session limit from settings; `0` shows every session.
     pub session_limit: usize,
-    /// Terminal base font size from settings (#35).
+    /// Terminal base font size from settings.
     pub font_size: f32,
     /// Close-confirmation policy for tab close and app quit.
     pub close: CloseSettings,
@@ -247,8 +247,8 @@ struct Shell {
     closing: Option<usize>,
     /// Whether tab close and app quit prompt first (from `settings.json`).
     close_confirm: CloseSettings,
-    /// An archive awaiting confirmation: the session id to archive, or `None`
-    /// (#20). Archiving is easy to trigger by accident, so the archive button
+    /// An archive awaiting confirmation: the session id to archive, or `None`.
+    /// Archiving is easy to trigger by accident, so the archive button
     /// arms this and a confirmation bar must be accepted first. Un-archiving is
     /// harmless and stays a one-click action.
     archiving: Option<String>,
@@ -257,46 +257,46 @@ struct Shell {
     /// process (TerminateProcess / SIGKILL, no graceful shutdown), so a quit
     /// with sessions still running arms this modal first.
     closing_window: Option<window::Id>,
-    /// Whether Ctrl (or Cmd) is currently held — the link-open modifier (#28).
+    /// Whether Ctrl (or Cmd) is currently held — the link-open modifier.
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
     link_modifier: bool,
-    /// An in-progress tab drag (FR5 reorder, #25): the tab being dragged and
+    /// An in-progress tab drag (FR5 reorder): the tab being dragged and
     /// the slot the pointer is currently over. `None` when no drag is active.
     /// Transient pointer state only — the tab order itself lives in `core`.
     tab_drag: Option<TabDrag>,
-    /// Set once the quit path has asked the iced runtime to terminate (#75).
+    /// Set once the quit path has asked the iced runtime to terminate.
     /// The observable proof that quitting reached `iced::exit` — closing the
     /// only window is *not* enough on macOS (winit cancels the OS terminate and
     /// `exit_on_close_request(false)` keeps the runtime alive), so the process
     /// would otherwise survive Cmd+Q and hold the single-instance lock.
     exiting: bool,
-    /// The GIF screencast budget (#124): fps / duration cap / frame scale.
+    /// The GIF screencast budget: fps / duration cap / frame scale.
     /// Default for now; `settings.json` configurability is a follow-up.
     record_config: RecordConfig,
-    /// The recorder thread for an in-progress screencast (#124), or `None`. The
+    /// The recorder thread for an in-progress screencast, or `None`. The
     /// encoder lives off the UI thread; the shell only feeds it frames.
     recorder: Option<Recorder>,
-    /// Frame screenshots requested but not yet handed to the recorder (#124).
+    /// Frame screenshots requested but not yet handed to the recorder.
     /// A stop waits for this to drain so the final frames aren't lost.
     record_inflight: u32,
-    /// A finish is pending until the last in-flight frame is handed off (#124).
+    /// A finish is pending until the last in-flight frame is handed off.
     record_finish_pending: bool,
-    /// When the in-progress recording started (#128) — the origin for the
+    /// When the in-progress recording started — the origin for the
     /// throttle's logical timeline. `None` when not recording.
     record_started: Option<Instant>,
     /// Throttles the window's present-rate frame source down to the configured
-    /// fps (#128). `None` when not recording.
+    /// fps. `None` when not recording.
     record_throttle: Option<FrameThrottle>,
-    /// When the previous frame was handed to the encoder (#128), so each frame's
+    /// When the previous frame was handed to the encoder, so each frame's
     /// on-screen duration is the real wall-clock gap since the last one.
     record_last_frame: Option<Instant>,
-    /// Per-frame gap statistics for the in-progress recording (#128) — logged at
+    /// Per-frame gap statistics for the in-progress recording — logged at
     /// stop to evidence real-time capture (vs the idle-window time-lapse).
     record_stats: FrameStats,
 }
 
-/// A tab drag in flight (#25): the index the drag started on and the slot the
+/// A tab drag in flight: the index the drag started on and the slot the
 /// pointer is hovering now. The reorder is committed once, on release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TabDrag {
@@ -312,7 +312,7 @@ enum Message {
     ProjectsChanged,
     /// A background plan/memory docs rediscovery finished (F-plans-memory).
     DocsDiscovered(Vec<DocEntry>),
-    /// Unfold (or refold) a project's truncated session tail (#131).
+    /// Unfold (or refold) a project's truncated session tail.
     ToggleExpanded(String),
     SearchChanged(String),
     SearchTitlesOnly(bool),
@@ -336,12 +336,12 @@ enum Message {
         session: SessionId,
         status: SessionStatus,
     },
-    /// A session reported a new title over OSC (#24); relabel its tab.
+    /// A session reported a new title over OSC; relabel its tab.
     PtyTitle {
         session: SessionId,
         title: String,
     },
-    /// A session fired an OSC 9 notification (#29); forward it to the OS.
+    /// A session fired an OSC 9 notification; forward it to the OS.
     PtyNotify {
         session: SessionId,
         body: String,
@@ -350,7 +350,7 @@ enum Message {
     PtyExited(SessionId),
     /// A raw key press; routed to the focused terminal when it has focus.
     Key(keyboard::Event),
-    /// IME-composed text (dead/accent keys, CJK) for the focused terminal (#34).
+    /// IME-composed text (dead/accent keys, CJK) for the focused terminal.
     ImeCommit(String),
     /// Give keyboard focus to the terminal / the search box.
     FocusTerminal,
@@ -358,7 +358,7 @@ enum Message {
     /// The mouse wheel turned over a terminal: the session under the pointer
     /// (not necessarily the focused one — splits), the pointer cell, and a line
     /// delta, so a mouse-mode app gets the wheel as input and a plain shell gets
-    /// scrollback (FR4, #98).
+    /// scrollback (FR4).
     TermScroll {
         session: SessionId,
         col: u16,
@@ -369,20 +369,20 @@ enum Message {
     CopySelection(String),
     /// Clipboard contents read back for a paste into the focused terminal (FR4).
     Paste(Option<String>),
-    /// Ask to close the tab at this index — arms the confirmation bar (#9).
+    /// Ask to close the tab at this index — arms the confirmation bar.
     RequestCloseTab(usize),
-    /// Confirm the pending close, killing the tab's session(s) (FR5, #9).
+    /// Confirm the pending close, killing the tab's session(s) (FR5).
     CloseTab(usize),
-    /// Dismiss the close confirmation without killing anything (#9).
+    /// Dismiss the close confirmation without killing anything.
     CancelClose,
-    /// A tab drag began on this index — the pointer pressed it (FR5, #25).
+    /// A tab drag began on this index — the pointer pressed it (FR5).
     TabDragStart(usize),
-    /// During a drag, the pointer entered the tab at this index (#25).
+    /// During a drag, the pointer entered the tab at this index.
     TabDragOver(usize),
     /// The drag's pointer was released: commit the reorder, else it was a
-    /// plain click that activates the pressed tab (#25).
+    /// plain click that activates the pressed tab.
     TabDragEnd,
-    /// The drag left the tab strip without a drop — abandon it (#25).
+    /// The drag left the tab strip without a drop — abandon it.
     TabDragCancel,
     /// Confirm quitting TermHerd, closing the window (and hard-killing every
     /// live session). Reached only after the quit modal is accepted.
@@ -393,19 +393,19 @@ enum Message {
     ToggleStar(String),
     /// Toggle a browsed session's archived flag (F-session-metadata). Used
     /// directly only to un-archive (a harmless one-click restore); archiving
-    /// goes through the confirmation flow below (#20).
+    /// goes through the confirmation flow below.
     ToggleArchive(String),
-    /// Ask to archive a session — arms the confirmation bar (#20).
+    /// Ask to archive a session — arms the confirmation bar.
     RequestArchive(String),
-    /// Confirm the pending archive, hiding the session (#20).
+    /// Confirm the pending archive, hiding the session.
     ConfirmArchive,
-    /// Dismiss the archive confirmation without archiving (#20).
+    /// Dismiss the archive confirmation without archiving.
     CancelArchive,
     /// Show or hide archived sessions in the browser (F-session-metadata).
     ShowArchived(bool),
-    /// Fold or unfold a project's session list in the sidebar, by path (#22).
+    /// Fold or unfold a project's session list in the sidebar, by path.
     ToggleCollapsed(String),
-    /// Collapse or restore the whole session-browser sidebar (#21).
+    /// Collapse or restore the whole session-browser sidebar.
     ToggleSidebar,
     /// Begin renaming a session inline, seeded with its current title.
     StartRename {
@@ -436,25 +436,25 @@ enum Message {
     DocSaved(Result<SystemTime, crate::docs::SaveError>),
     /// Close the doc viewer, returning to the terminal.
     CloseDoc,
-    /// Open a Ctrl/Cmd+clicked terminal link in the OS default handler (#28).
+    /// Open a Ctrl/Cmd+clicked terminal link in the OS default handler.
     OpenUrl(String),
-    /// The window screenshot for a capture finished (#108); encode it to PNG at
+    /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
     /// runs off the UI thread, so this only spawns it.
     CaptureScreenshot {
         screenshot: window::Screenshot,
         png_path: PathBuf,
     },
-    /// The capture PNG finished encoding off-thread (#108): the path written, or
+    /// The capture PNG finished encoding off-thread: the path written, or
     /// the error to log.
     CaptureWritten(Result<PathBuf, String>),
-    /// The window presented a frame while recording (#128): the present clock
+    /// The window presented a frame while recording: the present clock
     /// from `window::frames()`. Throttled down to the configured fps, each kept
     /// tick asks `core` for the next frame / auto-stop decision. Driving capture
     /// off real presents (not a wall-clock timer) is what keeps an idle window's
     /// screenshots resolving in real time.
     RecordFrameTick(Instant),
-    /// A recorded window screenshot is ready (#124); hand it to the encoder
+    /// A recorded window screenshot is ready; hand it to the encoder
     /// thread.
     RecordFrame(window::Screenshot),
 }
@@ -557,7 +557,7 @@ impl Shell {
     /// one scan runs at a time: changes seen while one is in flight coalesce
     /// into a single follow-up (`rescan_pending`), so a busy projects tree —
     /// a live Claude session appends to its JSONL continuously — can't stack
-    /// overlapping scans (#132).
+    /// overlapping scans.
     fn rescan(&mut self) -> Task<Message> {
         if self.scan_in_flight {
             self.rescan_pending = true;
@@ -587,7 +587,7 @@ impl Shell {
     /// Rediscover the plan/memory docs off the UI thread (F-plans-memory).
     /// `discover` stats a `CLAUDE.md` per project path; on a dead path (an
     /// unplugged network mount, a removed directory) that stat can block for
-    /// tens of seconds, so it must never run on the UI thread (#132).
+    /// tens of seconds, so it must never run on the UI thread.
     fn refresh_docs(&self) -> Task<Message> {
         let paths: Vec<String> = self.core.projects.iter().map(|g| g.path.clone()).collect();
         Task::perform(
@@ -616,14 +616,14 @@ impl Shell {
                     crate::metadata_store::save(&metadata);
                     Ok(())
                 }
-                // Fold state is a file write too (#22).
+                // Fold state is a file write too.
                 Effect::SaveCollapsed(collapsed) => {
                     crate::collapsed_store::save(&collapsed);
                     Ok(())
                 }
-                // Opening a link is an OS handoff, not a PTY call (#28).
+                // Opening a link is an OS handoff, not a PTY call.
                 Effect::OpenUrl(url) => open_url(&url),
-                // A desktop notification is an OS handoff too (#29).
+                // A desktop notification is an OS handoff too.
                 Effect::Notify { title, body } => notify(&title, &body),
                 // Capture is performed by `Shell::capture`, not here: the JSON
                 // dump and the PNG must share one timestamp, and the PNG needs
@@ -656,9 +656,9 @@ impl Shell {
     /// and size its PTY to the current pane (FR4).
     fn launch(&mut self, cwd: String, launch: Launch) -> Task<Message> {
         // The kind is shown as a suffix so a shell tab and a Claude tab for the
-        // same repo stay distinct (#23). Resuming a known session takes its real
-        // name from the scanned digest (#109) — current Claude renders status
-        // in-band and emits no OSC title, so the live override (#24) never fires;
+        // same repo stay distinct. Resuming a known session takes its real
+        // name from the scanned digest — current Claude renders status
+        // in-band and emits no OSC title, so the live override never fires;
         // without this every resumed tab in a repo would read alike. A fresh or
         // unscanned session keeps the kind label; an OSC title still wins later.
         let label = project_label(&cwd);
@@ -683,7 +683,7 @@ impl Shell {
             }));
         let spawn = self.perform(effects);
         self.focus = Focus::Terminal;
-        // Opening another session drops any pending confirmation (#9, #20): a
+        // Opening another session drops any pending confirmation: a
         // stray Enter in the terminal must not confirm a sidebar prompt that's
         // no longer in view.
         self.closing = None;
@@ -692,13 +692,13 @@ impl Shell {
     }
 
     /// The working directory of the focused session, if one is open and its cwd
-    /// is known. The anchor for the "new in context" shortcuts (#77).
+    /// is known. The anchor for the "new in context" shortcuts.
     fn focused_cwd(&self) -> Option<String> {
         let id = self.core.workspace.focused_session()?;
         self.core.sessions.get(&id)?.cwd.clone()
     }
 
-    /// Open a fresh shell in the focused session's directory (#77), or in the
+    /// Open a fresh shell in the focused session's directory, or in the
     /// home directory when nothing is open — so the shortcut still works from an
     /// empty workspace.
     fn new_shell_here(&mut self) -> Task<Message> {
@@ -706,8 +706,8 @@ impl Shell {
         self.launch(cwd, Launch::Shell)
     }
 
-    /// Open a fresh Claude session in the repo containing the focused session
-    /// (#77). Walks up to the repo root so a session running in a subdirectory
+    /// Open a fresh Claude session in the repo containing the focused session.
+    /// Walks up to the repo root so a session running in a subdirectory
     /// still lands at the repo. Inert when nothing is open — there is no context
     /// to derive a repo from.
     fn new_claude_here(&mut self) -> Task<Message> {
@@ -720,7 +720,7 @@ impl Shell {
         self.launch(root, Launch::Claude { resume: None })
     }
 
-    /// Reopen the most recently closed tab (#78), restoring its mode and
+    /// Reopen the most recently closed tab, restoring its mode and
     /// directory. The reopen lives in `core`; here we just perform the spawn and
     /// focus the restored terminal, mirroring [`Self::launch`]. A no-op when the
     /// close stack is empty (`core` yields no effects).
@@ -736,7 +736,7 @@ impl Shell {
         Task::batch([spawn, self.resize_focused()])
     }
 
-    /// The focused terminal's visible grid as text, for a capture (#108). `None`
+    /// The focused terminal's visible grid as text, for a capture. `None`
     /// when nothing is focused or its screen has not rendered yet — `core` then
     /// records a focus-less dump.
     fn focused_pty_text(&self) -> Option<String> {
@@ -744,7 +744,7 @@ impl Shell {
         self.screens.get(&id).map(Screen::text)
     }
 
-    /// Capture the current state for the AI dev loop (#108): hand `core` the
+    /// Capture the current state for the AI dev loop: hand `core` the
     /// focused terminal's text, then write the JSON dump and take the PNG into
     /// `~/.termherd/captures/`. A no-op when no home directory is set.
     fn capture(&mut self) -> Task<Message> {
@@ -792,9 +792,9 @@ impl Shell {
             })
     }
 
-    /// Start or stop the GIF screencast (#124): hand `core` the frame cap from
+    /// Start or stop the GIF screencast: hand `core` the frame cap from
     /// the record budget and perform whatever effects it returns. Ignored while a
-    /// previous recording is still draining (#128), so a back-to-back ⌘⇧R can't
+    /// previous recording is still draining, so a back-to-back ⌘⇧R can't
     /// replace the recorder mid-finish.
     fn toggle_record(&mut self) -> Task<Message> {
         if self.record_toggle_blocked() {
@@ -809,7 +809,7 @@ impl Shell {
     }
 
     /// Whether a ⌘⇧R press must be ignored because the previous recording is
-    /// still draining its in-flight frames (#128 problem 2). `core` has already
+    /// still draining its in-flight frames (problem 2). `core` has already
     /// returned to idle by the time a finish is pending, so without this guard a
     /// back-to-back start replaces `self.recorder` mid-finish — orphaning the
     /// first GIF (it finalises via `Drop`, but logs no `screencast written` and
@@ -818,7 +818,7 @@ impl Shell {
         self.record_finish_pending
     }
 
-    /// Perform the record effects `core` returned (#124): open/feed/finish the
+    /// Perform the record effects `core` returned: open/feed/finish the
     /// encoder thread. `CaptureFrame` is the only one with an async follow-up —
     /// it screenshots the window, the result arriving as [`Message::RecordFrame`].
     fn run_record_effects(&mut self, effects: Vec<Effect>) -> Task<Message> {
@@ -850,8 +850,8 @@ impl Shell {
         task
     }
 
-    /// Open the recorder thread for a new screencast (#124), writing to
-    /// `capture-<ts>.gif` in the #108 capture dir. A missing home dir or an
+    /// Open the recorder thread for a new screencast, writing to
+    /// `capture-<ts>.gif` in the capture dir. A missing home dir or an
     /// uncreatable dir aborts the start — logged, never fatal.
     fn start_recording(&mut self) {
         self.record_inflight = 0;
@@ -879,7 +879,7 @@ impl Shell {
         );
     }
 
-    /// A window present arrived while recording (#128): throttle the present rate
+    /// A window present arrived while recording: throttle the present rate
     /// down to the configured fps and, on a kept tick, ask `core` for the next
     /// frame / auto-stop decision. Skipped ticks are dropped — they only served
     /// to keep the window presenting so the screenshot pipeline stays real-time.
@@ -896,7 +896,7 @@ impl Shell {
     }
 
     /// Finish the screencast once every in-flight frame screenshot has been
-    /// handed to the encoder (#124), so a stop never drops the final frames. If
+    /// handed to the encoder, so a stop never drops the final frames. If
     /// none are in flight (a manual stop), finish straight away.
     fn request_finish_recording(&mut self) {
         if self.record_inflight == 0 {
@@ -906,8 +906,8 @@ impl Shell {
         }
     }
 
-    /// Flush and close the encoder thread (#124), logging the frame-gap spread
-    /// (#128) — the evidence that capture ran in real time (gaps ≈ the interval)
+    /// Flush and close the encoder thread, logging the frame-gap spread
+    /// — the evidence that capture ran in real time (gaps ≈ the interval)
     /// rather than time-lapsed (gaps ballooning past it).
     fn finish_recorder(&mut self) {
         if let Some(recorder) = self.recorder.take() {
@@ -925,7 +925,7 @@ impl Shell {
         self.reset_record_state();
     }
 
-    /// Abandon the screencast, deleting any partial file (#124) — the zero-frame
+    /// Abandon the screencast, deleting any partial file — the zero-frame
     /// stop.
     fn cancel_recording(&mut self) {
         if let Some(recorder) = self.recorder.take() {
@@ -934,8 +934,8 @@ impl Shell {
         self.reset_record_state();
     }
 
-    /// Clear the per-recording runtime state once the encoder is done (#124,
-    /// #128), returning the shell to idle.
+    /// Clear the per-recording runtime state once the encoder is done,
+    /// returning the shell to idle.
     fn reset_record_state(&mut self) {
         self.record_inflight = 0;
         self.record_finish_pending = false;
@@ -945,9 +945,9 @@ impl Shell {
         self.record_stats = FrameStats::default();
     }
 
-    /// Hand one recorded window screenshot to the encoder thread (#124), then
+    /// Hand one recorded window screenshot to the encoder thread, then
     /// finish if this was the last frame a stop was waiting on. The gap since the
-    /// previous handed frame becomes this frame's on-screen duration (#128), and
+    /// previous handed frame becomes this frame's on-screen duration, and
     /// is folded into the stats — the gaps are the present-gating measurement.
     fn on_record_frame(&mut self, screenshot: window::Screenshot) -> Task<Message> {
         let now = Instant::now();
@@ -975,7 +975,7 @@ impl Shell {
         Task::none()
     }
 
-    /// Move the focused terminal's viewport (#44): the mouse wheel sends a
+    /// Move the focused terminal's viewport: the mouse wheel sends a
     /// relative delta, the scroll-top/bottom shortcuts an absolute jump. Shared
     /// so both paths go through the one `Event::ScrollViewport`.
     fn scroll_focused(&mut self, target: ScrollTarget) -> Task<Message> {
@@ -986,7 +986,7 @@ impl Shell {
     }
 
     /// Move a specific session's viewport. The wheel targets the pane under the
-    /// pointer, which need not be the focused one in a split layout (#98).
+    /// pointer, which need not be the focused one in a split layout.
     fn scroll_session(&mut self, session: SessionId, target: ScrollTarget) -> Task<Message> {
         let effects = self
             .core
@@ -1008,16 +1008,16 @@ impl Shell {
         self.perform(effects)
     }
 
-    /// Collapse or restore the sidebar (#21), then resize the focused terminal
+    /// Collapse or restore the sidebar, then resize the focused terminal
     /// so the grid re-derives its column count for the new width — without this
-    /// the cells just stretch to fill the reclaimed space (#64). Shared by the
+    /// the cells just stretch to fill the reclaimed space. Shared by the
     /// button (`Message::ToggleSidebar`) and the keymap (`Action::ToggleSidebar`).
     fn toggle_sidebar(&mut self) -> Task<Message> {
         let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
         self.resize_focused()
     }
 
-    /// Zoom the terminal font (#35), then resize the focused terminal so the
+    /// Zoom the terminal font, then resize the focused terminal so the
     /// grid re-derives its cols/rows for the new cell box — the same pattern
     /// as [`Self::toggle_sidebar`].
     fn zoom(&mut self, zoom: termherd_core::Zoom) -> Task<Message> {
@@ -1026,9 +1026,9 @@ impl Shell {
     }
 
     /// The terminal grid size (cols, rows) that fits the current window. The
-    /// sidebar's width is only reserved while it's visible; collapsing it (#21)
+    /// sidebar's width is only reserved while it's visible; collapsing it
     /// hands that space to the grid as extra columns instead of stretching the
-    /// existing cells (#64).
+    /// existing cells.
     fn grid_size(&self) -> (u16, u16) {
         let sidebar = if self.core.sidebar_hidden {
             HANDLE_W
@@ -1152,7 +1152,7 @@ impl Shell {
             Message::Key(event) => {
                 // Keep the link-open modifier state current regardless of focus,
                 // so a Ctrl/Cmd+hover highlights links even before the first key
-                // reaches the terminal (#28).
+                // reaches the terminal.
                 let modifiers = event_modifiers(&event);
                 self.link_modifier = modifiers.control() || modifiers.logo();
                 self.on_key(event)
@@ -1264,7 +1264,7 @@ impl Shell {
             Message::ConfirmArchive => match self.archiving.take() {
                 // Only archive a session still on the scanned list: a rescan
                 // could have dropped it while the prompt was up, and toggling a
-                // vanished id would persist phantom metadata for it (#20).
+                // vanished id would persist phantom metadata for it.
                 Some(session) if self.is_browsable(&session) => {
                     let effects = self
                         .core
@@ -1433,7 +1433,7 @@ impl Shell {
 
     /// Whether a session id is still on the scanned project list — used to
     /// guard the archive confirmation against a session a rescan removed while
-    /// the prompt was up (#20).
+    /// the prompt was up.
     fn is_browsable(&self, session: &str) -> bool {
         self.core
             .projects
@@ -1471,7 +1471,7 @@ impl Shell {
     }
 
     /// Close the tab at `index`, killing its session(s) (FR5). Reached only
-    /// after the confirmation is accepted (#9): the close button and the
+    /// after the confirmation is accepted: the close button and the
     /// `CloseFocused` keymap action both arm `closing` first.
     fn close_tab(&mut self, index: usize) -> Task<Message> {
         self.closing = None;
@@ -1501,9 +1501,9 @@ impl Shell {
     }
 
     /// Switch to the tab at `index` and return focus to the terminal. Switching
-    /// drops any pending confirmation (#9, #20). An out-of-range index is a
+    /// drops any pending confirmation. An out-of-range index is a
     /// silent no-op in `core`, so a number key with no matching tab does
-    /// nothing (issue #26).
+    /// nothing.
     fn activate_tab(&mut self, index: usize) -> Task<Message> {
         let _ = self.core.apply(termherd_core::Event::ActivateTab(index));
         self.focus = Focus::Terminal;
@@ -1539,22 +1539,22 @@ impl Shell {
             Action::ToggleSidebar => self.toggle_sidebar(),
             Action::ScrollTop => self.scroll_focused(ScrollTarget::Top),
             Action::ScrollBottom => self.scroll_focused(ScrollTarget::Bottom),
-            // New shell / Claude session in the focused context (#77), and
-            // reopen the last closed tab (#78).
+            // New shell / Claude session in the focused context, and
+            // reopen the last closed tab.
             Action::NewShellHere => self.new_shell_here(),
             Action::NewClaudeSessionHere => self.new_claude_here(),
             Action::ReopenClosedTab => self.reopen_closed_tab(),
-            // Capture the current state for the AI dev loop (#108).
+            // Capture the current state for the AI dev loop.
             Action::Capture => self.capture(),
-            // Start / stop the GIF screencast (#124).
+            // Start / stop the GIF screencast.
             Action::ToggleRecord => self.toggle_record(),
             // Zoom re-derives the grid geometry, so the focused terminal is
-            // resized like on a window resize (#35); other tabs catch up on
+            // resized like on a window resize; other tabs catch up on
             // focus, the existing convention.
             Action::ZoomIn => self.zoom(termherd_core::Zoom::In),
             Action::ZoomOut => self.zoom(termherd_core::Zoom::Out),
             Action::ZoomReset => self.zoom(termherd_core::Zoom::Reset),
-            // Number-row jump straight to a tab (issue #26). An index past the
+            // Number-row jump straight to a tab. An index past the
             // open tabs is absorbed by `core` as a no-op.
             Action::ActivateTab(index) => self.activate_tab(index),
             Action::OpenNewSession
@@ -1589,7 +1589,7 @@ impl Shell {
             }
             return Task::none();
         }
-        // A pending close confirmation captures the keyboard (#9): Enter
+        // A pending close confirmation captures the keyboard: Enter
         // confirms, Escape cancels, and every other key is swallowed so a
         // keystroke can't slip past to the terminal while the prompt is up.
         if let Some(index) = self.closing {
@@ -1606,7 +1606,7 @@ impl Shell {
             }
             return Task::none();
         }
-        // A pending archive confirmation likewise owns the keyboard (#20):
+        // A pending archive confirmation likewise owns the keyboard:
         // Enter archives, Escape cancels, other keys are swallowed.
         if self.archiving.is_some() {
             if let keyboard::Event::KeyPressed { key, .. } = &event {
@@ -1648,8 +1648,8 @@ impl Shell {
         // A configured shortcut wins over raw terminal input: build the chord
         // and run its action if the keymap binds one (FR9). Resolved before the
         // terminal-focus guard so command chords are global — `mod+T` opens the
-        // first shell even from an empty workspace with the search box focused
-        // (#77). Run-action handlers that need a session guard for one
+        // first shell even from an empty workspace with the search box focused.
+        // Run-action handlers that need a session guard for one
         // themselves. Unbound keys fall through to the terminal, so plain Ctrl+C
         // stays the interrupt signal.
         if let Some(chord) = chord_of(&key, &physical_key, modifiers)
@@ -1687,7 +1687,7 @@ impl Shell {
     /// holds focus and no overlay (inline rename, close confirmation) is up.
     /// Focus stays `Terminal` while those overlays are open, so they have to be
     /// excluded explicitly — this is the predicate [`Shell::on_key`] enforces
-    /// step by step, shared so the IME path can't drift from it (#34).
+    /// step by step, shared so the IME path can't drift from it.
     fn accepts_terminal_input(&self) -> bool {
         self.focus == Focus::Terminal
             && self.renaming.is_none()
@@ -1697,7 +1697,7 @@ impl Shell {
     }
 
     /// Route IME-composed text (dead/accent keys, CJK) to the focused terminal
-    /// as typed bytes (#34). A commit only fires while the terminal accepts
+    /// as typed bytes. A commit only fires while the terminal accepts
     /// input (see [`Shell::accepts_terminal_input`]), but guard anyway so a
     /// composing overlay (rename / close confirmation) keeps its own typing.
     fn on_ime_commit(&mut self, text: String) -> Task<Message> {
@@ -1812,8 +1812,8 @@ impl Shell {
             subs.push(Subscription::run_with(root.clone(), watch_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
-        // The screencast is driven by the window's present clock while recording
-        // (#128): `window::frames()` yields one tick per present (self-sustaining,
+        // The screencast is driven by the window's present clock while recording:
+        // `window::frames()` yields one tick per present (self-sustaining,
         // since each tick requests the next redraw), which keeps an idle window
         // presenting so screenshots resolve in real time. `on_record_frame_tick`
         // throttles these down to the configured fps.
@@ -1943,8 +1943,8 @@ mod key_routing {
 
     /// A shell whose one terminal is actively working, so a close request arms
     /// the confirmation bar rather than closing outright — the setup for tests
-    /// about the confirmation machinery itself (#9), now that an idle shell
-    /// closes silently (#79).
+    /// about the confirmation machinery itself, now that an idle shell
+    /// closes silently.
     fn busy_shell_with_terminal() -> (Shell, Arc<RecordingPty>) {
         let (mut shell, pty) = shell_with_terminal();
         let session = shell.core.workspace.focused_session().expect("focused");
@@ -1972,7 +1972,7 @@ mod key_routing {
     #[test]
     fn launch_buttons_title_tabs_by_kind() {
         // The initial tab label distinguishes a shell ($) from a Claude (🤖)
-        // tab for the same repo (#23); OSC retitling (#24) takes over later.
+        // tab for the same repo; OSC retitling takes over later.
         let (mut shell, _pty) = shell_with_terminal();
         let _ = shell.update(Message::LaunchProject("/tmp/faceto".to_string()));
         let shell_tab = shell.core.workspace.focused_session().expect("focused");
@@ -1989,7 +1989,7 @@ mod key_routing {
     }
 
     /// Feed one browsable Claude session with a chosen name into the core, so a
-    /// later resume can pick its digest title up (#109).
+    /// later resume can pick its digest title up.
     fn browse_named(shell: &mut Shell, id: &str, path: &str, summary: &str, custom: Option<&str>) {
         let record = SessionRecord {
             session_id: id.to_string(),
@@ -2012,8 +2012,8 @@ mod key_routing {
 
     #[test]
     fn resuming_a_known_session_titles_the_tab_with_its_session_name() {
-        // #109: Claude (2.1.195) emits no OSC title, so the live-title override
-        // (#24) never fires here — the tab must take the session's name from the
+        // Claude (2.1.195) emits no OSC title, so the live-title override
+        // never fires here — the tab must take the session's name from the
         // scanned digest instead of the generic `project 🤖` kind label.
         let (mut shell, _pty) = shell_with_terminal();
         browse_named(
@@ -2037,7 +2037,7 @@ mod key_routing {
 
     #[test]
     fn resuming_prefers_a_custom_title_over_the_summary() {
-        // The #46 title precedence (custom > summary) must carry into the tab.
+        // The title precedence (custom > summary) must carry into the tab.
         let (mut shell, _pty) = shell_with_terminal();
         browse_named(
             &mut shell,
@@ -2060,8 +2060,8 @@ mod key_routing {
     #[test]
     fn an_osc_title_still_overrides_the_resumed_digest_name() {
         // The digest name is only the *initial* label. On any Claude/platform
-        // that does emit an OSC title (#24), that live title must still win —
-        // guards the path #109 deliberately leaves intact.
+        // that does emit an OSC title, that live title must still win —
+        // guards the path deliberately left intact.
         let (mut shell, _pty) = shell_with_terminal();
         browse_named(
             &mut shell,
@@ -2178,7 +2178,7 @@ mod key_routing {
 
     #[test]
     fn ime_commit_writes_composed_text_to_the_focused_pty() {
-        // #34: a dead-key composition (e.g. `^` then `e`) reaches the terminal
+        // a dead-key composition (e.g. `^` then `e`) reaches the terminal
         // as the resolved character's UTF-8 bytes.
         let (mut shell, pty) = shell_with_terminal();
         let _ = shell.update(Message::ImeCommit("ê".to_string()));
@@ -2188,7 +2188,7 @@ mod key_routing {
     #[test]
     fn ime_commit_is_ignored_without_terminal_focus() {
         // The composing overlay (search / rename) owns its own input, so a stray
-        // commit must not leak into the terminal when it is not focused (#34).
+        // commit must not leak into the terminal when it is not focused.
         let (mut shell, pty) = shell_with_terminal();
         shell.focus = Focus::Search;
         let _ = shell.update(Message::ImeCommit("ê".to_string()));
@@ -2219,7 +2219,7 @@ mod key_routing {
 
     #[test]
     fn capture_writes_a_json_dump_with_the_focused_pty_text() {
-        // #108: a capture writes capture-<ts>.json with the focused tab, its
+        // a capture writes capture-<ts>.json with the focused tab, its
         // status, and the focused terminal's visible text. Driven through the
         // `perform_capture` dir seam so it lands in a tempdir, not the real home;
         // the PNG is an async iced screenshot and is not exercised here.
@@ -2256,7 +2256,7 @@ mod key_routing {
     #[test]
     fn ime_commit_does_not_leak_into_an_inline_rename() {
         // Focus stays on the terminal while renaming inline, so a dead-key
-        // composition must not reach the PTY — the rename field owns it (#34).
+        // composition must not reach the PTY — the rename field owns it.
         let (mut shell, pty) = shell_with_terminal();
         shell.renaming = Some(("sid".to_string(), "café".to_string()));
         let _ = shell.update(Message::ImeCommit("é".to_string()));
@@ -2298,8 +2298,8 @@ mod key_routing {
 
     #[test]
     fn ime_commit_is_swallowed_by_a_pending_close_confirmation() {
-        // A close confirmation captures input (#9); an IME commit must not slip
-        // past it to the terminal even though focus is still on it (#34).
+        // A close confirmation captures input; an IME commit must not slip
+        // past it to the terminal even though focus is still on it.
         let (mut shell, pty) = busy_shell_with_terminal();
         let _ = shell.update(Message::RequestCloseTab(0));
         let _ = shell.update(Message::ImeCommit("ê".to_string()));
@@ -2532,7 +2532,7 @@ mod key_routing {
 
     #[test]
     fn collapsing_the_sidebar_widens_the_grid_and_resizes_the_pty() {
-        // #64: hiding the sidebar must grow the column count (the reclaimed
+        // hiding the sidebar must grow the column count (the reclaimed
         // width becomes columns), and the toggle must push that wider size to
         // the PTY rather than leaving cols stale (which stretched the cells).
         let (mut shell, pty) = shell_with_terminal();
@@ -2561,13 +2561,13 @@ mod key_routing {
 
     #[test]
     fn scroll_top_and_bottom_actions_jump_the_focused_viewport() {
-        // #44: the scroll-top/bottom shortcuts send an absolute jump to the
+        // the scroll-top/bottom shortcuts send an absolute jump to the
         // focused session's PTY, through the same path as the mouse wheel.
         let (mut shell, pty) = shell_with_terminal();
         let _ = shell.run_action(Action::ScrollTop);
         let _ = shell.run_action(Action::ScrollBottom);
         // The wheel shares the path and lands a wheel turn at the pointer cell,
-        // routed to the session under the pointer (#98).
+        // routed to the session under the pointer.
         let session = shell
             .core
             .workspace
@@ -2594,7 +2594,7 @@ mod key_routing {
     }
 
     /// A `Shell` with no terminal open (empty workspace), plus its recording
-    /// PTY — for the "new shell here" empty-workspace path (#77).
+    /// PTY — for the "new shell here" empty-workspace path.
     fn empty_shell() -> (Shell, Arc<RecordingPty>) {
         let pty = Arc::new(RecordingPty::default());
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
@@ -2620,7 +2620,7 @@ mod key_routing {
     }
 
     /// The cwd registered for the currently focused session, for asserting which
-    /// directory a context launch (#77) landed in.
+    /// directory a context launch landed in.
     fn focused_cwd(shell: &Shell) -> Option<String> {
         let id = shell.core.workspace.focused_session()?;
         shell.core.sessions.get(&id)?.cwd.clone()
@@ -2628,7 +2628,7 @@ mod key_routing {
 
     #[test]
     fn new_shell_here_inherits_the_focused_directory() {
-        // #77: mod+T opens a shell in the focused session's cwd.
+        // mod+T opens a shell in the focused session's cwd.
         let (mut shell, pty) = shell_with_terminal();
         let before = pty.spawn_count();
         let _ = shell.run_action(Action::NewShellHere);
@@ -2639,7 +2639,7 @@ mod key_routing {
 
     #[test]
     fn new_shell_here_falls_back_to_home_on_an_empty_workspace() {
-        // #77: with nothing open, mod+T still opens a shell — in the home dir.
+        // with nothing open, mod+T still opens a shell — in the home dir.
         let (mut shell, pty) = empty_shell();
         let _ = shell.run_action(Action::NewShellHere);
         assert_eq!(pty.spawn_count(), 1, "a shell opens even with no context");
@@ -2653,7 +2653,7 @@ mod key_routing {
 
     #[test]
     fn new_claude_here_launches_claude_in_the_focused_context() {
-        // #77: mod+Alt+T starts a fresh Claude session anchored on the focused
+        // mod+Alt+T starts a fresh Claude session anchored on the focused
         // context. With no `.git` above the cwd, repo_root falls back to it.
         let (mut shell, pty) = shell_with_terminal();
         let before = pty.spawn_count();
@@ -2668,7 +2668,7 @@ mod key_routing {
 
     #[test]
     fn new_claude_here_is_inert_without_a_context() {
-        // #77: the Claude variant has nothing to anchor on in an empty
+        // the Claude variant has nothing to anchor on in an empty
         // workspace, so it does nothing (unlike the shell variant).
         let (mut shell, pty) = empty_shell();
         let _ = shell.run_action(Action::NewClaudeSessionHere);
@@ -2677,7 +2677,7 @@ mod key_routing {
 
     #[test]
     fn reopen_closed_tab_restores_the_last_close_and_then_drains() {
-        // #78: close a tab, mod+Shift+T brings it back; a second reopen with an
+        // close a tab, mod+Shift+T brings it back; a second reopen with an
         // empty stack does nothing.
         let (mut shell, pty) = shell_with_terminal();
         let _ = shell.update(Message::CloseTab(0));
@@ -2700,7 +2700,7 @@ mod key_routing {
 
     #[test]
     fn command_chords_fire_without_terminal_focus() {
-        // #77: the chord dispatch runs before the terminal-focus guard, so the
+        // the chord dispatch runs before the terminal-focus guard, so the
         // very first shell can be opened by keyboard from the empty, search-
         // focused workspace. mod+T = Cmd+T on macOS, Ctrl+T elsewhere.
         let primary = if cfg!(target_os = "macos") {
@@ -2775,7 +2775,7 @@ mod key_routing {
 
     #[test]
     fn closing_with_no_live_sessions_terminates_the_runtime() {
-        // #75: with nothing running, Cmd+Q (a CloseRequested on macOS) must
+        // with nothing running, Cmd+Q (a CloseRequested on macOS) must
         // actually terminate the iced runtime — not merely close the window and
         // leave the process, holding the single-instance lock, behind.
         let (mut shell, _pty) = shell_with_terminal();
@@ -2886,7 +2886,7 @@ mod key_routing {
     #[test]
     fn confirming_the_quit_terminates_the_runtime() {
         // Accepting the modal must reach `iced::exit`, not just `window::close`
-        // — that distinction is the whole of #75.
+        // — that distinction is the whole point.
         let (mut shell, _pty) = shell_with_terminal();
         shell.closing_window = Some(window::Id::unique());
         let _ = shell.update(Message::ConfirmCloseWindow);
@@ -3091,7 +3091,7 @@ mod key_routing {
     #[test]
     fn toggling_collapse_folds_and_unfolds_a_project() {
         // The sidebar's disclosure triangle routes through this message; one
-        // click folds the project, a second unfolds it (#22).
+        // click folds the project, a second unfolds it.
         let (mut shell, _pty) = shell_with_terminal();
         browse_one(&mut shell, "sess");
         assert!(!shell.core.is_collapsed("/tmp/project"));
@@ -3116,7 +3116,7 @@ mod key_routing {
         assert_eq!(shell.archiving, None);
     }
 
-    // ---- #128: a back-to-back ⌘⇧R must not orphan a draining recorder ----
+    // ---- a back-to-back ⌘⇧R must not orphan a draining recorder ----
 
     #[test]
     fn a_toggle_is_blocked_while_the_previous_recording_drains() {

@@ -24,10 +24,10 @@ const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
 /// Shown as the desktop notification body when Claude fires a bare OSC 9 with
-/// no text of its own (#29).
+/// no text of its own.
 const DEFAULT_NOTIFICATION_BODY: &str = "Claude needs your attention";
 
-/// Notification title fallback when a session somehow has no hosting tab (#29);
+/// Notification title fallback when a session somehow has no hosting tab;
 /// a broken invariant in practice, never the normal path.
 const APP_NAME: &str = "TermHerd";
 
@@ -48,23 +48,23 @@ pub struct App {
     /// Whether archived sessions show in the browser.
     pub show_archived: bool,
     /// Whether the session-browser sidebar is collapsed to give the terminal
-    /// the full width (#21). Ephemeral — resets to visible each launch.
+    /// the full width. Ephemeral — resets to visible each launch.
     pub sidebar_hidden: bool,
-    /// Project paths whose session list is folded shut in the sidebar (#22);
+    /// Project paths whose session list is folded shut in the sidebar;
     /// persisted to `~/.termherd` so the fold survives a restart.
     pub collapsed: HashSet<String>,
-    /// Sidebar truncation (#131): sessions shown per project before the tail
+    /// Sidebar truncation: sessions shown per project before the tail
     /// folds behind an expander. `0` (the default) shows every session; the
     /// user's setting arrives via [`Event::SessionLimitLoaded`].
     pub session_limit: usize,
-    /// Projects whose truncated session tail is unfolded (#131). Ephemeral —
+    /// Projects whose truncated session tail is unfolded. Ephemeral —
     /// unlike `collapsed`, it resets each launch and is never persisted.
     pub expanded: HashSet<String>,
-    /// The configured terminal base font size (#35), from settings via
+    /// The configured terminal base font size, from settings via
     /// [`Event::FontSizeLoaded`]; `None` until loaded (the built-in
     /// [`DEFAULT_FONT_SIZE`] then applies).
     font_base: Option<f32>,
-    /// Zoom steps on top of the base font (#35): ±1 px each, clamped at event
+    /// Zoom steps on top of the base font: ±1 px each, clamped at event
     /// time so surplus presses at a bound don't accumulate as drift.
     /// Ephemeral — resets each launch.
     zoom_steps: i32,
@@ -72,18 +72,18 @@ pub struct App {
     /// the structural fix for the `realSessionId` race (Q6) — ids are minted
     /// here, single-threaded, before any PTY exists.
     next_session: u64,
-    /// LIFO stack of recently closed tabs, for reopen (#78). Capped at
+    /// LIFO stack of recently closed tabs, for reopen. Capped at
     /// [`MAX_CLOSED_TABS`] so a long session can't grow it without bound;
     /// closing past the cap drops the oldest entry.
     closed_tabs: Vec<ClosedTab>,
-    /// The in-progress GIF screencast (#124), or `None` when not recording. The
+    /// The in-progress GIF screencast, or `None` when not recording. The
     /// frame timer and encoder live in the `app`; `core` only counts frames
     /// against the cap and decides capture/finish.
     recording: Option<Recording>,
 }
 
 /// What the expander row under a project's truncated session list should show
-/// (#131), from [`App::sidebar_sessions`].
+/// from [`App::sidebar_sessions`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarFold {
     /// The tail is folded: this many more sessions are hidden.
@@ -92,7 +92,7 @@ pub enum SidebarFold {
     Expanded,
 }
 
-/// A zoom request (#35), carried by [`Event::Zoom`].
+/// A zoom request, carried by [`Event::Zoom`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Zoom {
     /// Grow the terminal font one step.
@@ -103,19 +103,19 @@ pub enum Zoom {
     Reset,
 }
 
-/// The terminal font size before settings load or when none is configured
-/// (#35). Mirrors the historical `FONT_SIZE` constant.
+/// The terminal font size before settings load or when none is configured.
+/// Mirrors the historical `FONT_SIZE` constant.
 pub const DEFAULT_FONT_SIZE: f32 = 14.0;
-/// Bounds for the effective font size (#35) — small enough to overview a
+/// Bounds for the effective font size — small enough to overview a
 /// large scrollback, large enough for a presentation, and both far from
 /// degenerate cell geometry.
 const FONT_SIZE_RANGE: (f32, f32) = (6.0, 40.0);
 
-/// How many closed tabs the reopen stack (#78) remembers. Walking back further
+/// How many closed tabs the reopen stack remembers. Walking back further
 /// than this is rare enough that the unbounded-growth risk outweighs it.
 const MAX_CLOSED_TABS: usize = 16;
 
-/// Enough of a closed tab to recreate it on reopen (#78): the kind it ran, the
+/// Enough of a closed tab to recreate it on reopen: the kind it ran, the
 /// directory it ran in, and the label it carried. A split tab is reduced to its
 /// first pane — reopen restores a single terminal, not the whole pane tree.
 #[derive(Debug, Clone)]
@@ -245,7 +245,7 @@ pub struct SpawnSpec {
     pub rows: u16,
 }
 
-/// Where to move a terminal's viewport (#44). One scroll concept covers the
+/// Where to move a terminal's viewport. One scroll concept covers the
 /// mouse wheel's relative nudge and the absolute top/bottom jumps, so the event,
 /// effect and `PtyHost::scroll` port all speak it instead of special-casing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,7 +257,7 @@ pub enum ScrollTarget {
     /// A mouse-wheel turn over a pointer cell (`col`/`row`, 0-based) of `lines`
     /// (positive = up). Carrying the pointer lets a full-screen app with mouse
     /// reporting be handed the wheel as input; the adapter falls back to a
-    /// relative scrollback nudge when it isn't one (#98).
+    /// relative scrollback nudge when it isn't one.
     Wheel { col: u16, row: u16, lines: i32 },
 }
 
@@ -283,7 +283,7 @@ pub enum Event {
         rows: u16,
     },
     /// The user moved a terminal's viewport (FR4 scrollback): a relative wheel
-    /// delta, or an absolute jump to the top/bottom of the history (#44).
+    /// delta, or an absolute jump to the top/bottom of the history.
     ScrollViewport {
         session: SessionId,
         target: ScrollTarget,
@@ -295,7 +295,7 @@ pub enum Event {
     },
     /// A session's PTY process exited.
     PtyExited(SessionId),
-    /// The session reported a new title over OSC (#24); relabel its tab.
+    /// The session reported a new title over OSC; relabel its tab.
     SessionTitleChanged {
         session: SessionId,
         title: String,
@@ -304,13 +304,13 @@ pub enum Event {
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.
     CloseTab(usize),
-    /// The user dragged the tab at `from` to rest at index `to` (FR5, #25). A
+    /// The user dragged the tab at `from` to rest at index `to` (FR5). A
     /// pure reorder: no PTY is touched, so it yields no effects.
     MoveTab {
         from: usize,
         to: usize,
     },
-    /// Reopen the most recently closed tab (#78), restoring its mode and
+    /// Reopen the most recently closed tab, restoring its mode and
     /// directory. A no-op when nothing has been closed.
     ReopenClosedTab,
     /// Split the focused pane, opening a fresh session beside it (FR6).
@@ -333,24 +333,24 @@ pub enum Event {
     },
     /// Show or hide archived sessions in the browser.
     ShowArchivedToggled(bool),
-    /// Collapse or restore the session-browser sidebar (#21).
+    /// Collapse or restore the session-browser sidebar.
     ToggleSidebar,
-    /// Persisted fold state loaded at startup (#22): the folded project paths.
+    /// Persisted fold state loaded at startup: the folded project paths.
     CollapsedLoaded(HashSet<String>),
-    /// Fold or unfold a project's session list in the sidebar, by path (#22).
+    /// Fold or unfold a project's session list in the sidebar, by path.
     ToggleCollapsed(String),
-    /// The sidebar session limit from settings (#131): sessions shown per
+    /// The sidebar session limit from settings: sessions shown per
     /// project before the tail folds behind an expander; `0` shows all.
     SessionLimitLoaded(usize),
-    /// Unfold (or refold) a project's truncated session tail (#131), by path.
+    /// Unfold (or refold) a project's truncated session tail, by path.
     ToggleExpanded(String),
-    /// The terminal base font size from settings (#35).
+    /// The terminal base font size from settings.
     FontSizeLoaded(f32),
-    /// Zoom the terminal font in/out/back to base (#35).
+    /// Zoom the terminal font in/out/back to base.
     Zoom(Zoom),
-    /// The user Ctrl/Cmd+clicked a detected link in a terminal (#28).
+    /// The user Ctrl/Cmd+clicked a detected link in a terminal.
     OpenUrl(String),
-    /// A session emitted an OSC 9 notification — Claude wants the user (#29).
+    /// A session emitted an OSC 9 notification — Claude wants the user.
     /// `body` is the raw payload Claude sent ("needs your attention", a
     /// permission prompt, …). Routed to the OS notification centre on top of
     /// the in-app `Attention` status.
@@ -358,19 +358,19 @@ pub enum Event {
         session: SessionId,
         body: String,
     },
-    /// Capture the current state for the AI dev loop (#108, G1). The shell
+    /// Capture the current state for the AI dev loop (G1). The shell
     /// injects the focused terminal's visible text (the grid lives in the `pty`
     /// adapter, not here); `core` assembles the rest of the dump.
     Capture {
         focused_pty_text: Option<String>,
     },
-    /// Start or stop the GIF screencast (#124). Starting carries the frame cap
+    /// Start or stop the GIF screencast. Starting carries the frame cap
     /// (`fps × max_seconds`) the app derives from settings; a no-op when the cap
     /// is zero.
     ToggleRecord {
         max_frames: u32,
     },
-    /// One frame tick from the app's record timer (#124): capture a frame, and
+    /// One frame tick from the app's record timer: capture a frame, and
     /// auto-stop once the cap is reached. A no-op when not recording.
     RecordTick,
 }
@@ -390,7 +390,7 @@ pub enum Effect {
         rows: u16,
     },
     /// Move a session's viewport: a relative line delta or an absolute jump to
-    /// the top/bottom of the scrollback (#44).
+    /// the top/bottom of the scrollback.
     Scroll {
         session: SessionId,
         target: ScrollTarget,
@@ -399,30 +399,30 @@ pub enum Effect {
     Kill(SessionId),
     /// Persist the session metadata overlay (`F-session-metadata`).
     SaveMetadata(HashMap<String, SessionMeta>),
-    /// Persist the folded-project set (#22).
+    /// Persist the folded-project set.
     SaveCollapsed(HashSet<String>),
-    /// Open a URL in the OS default handler (#28); the shell performs it.
+    /// Open a URL in the OS default handler; the shell performs it.
     OpenUrl(String),
-    /// Post a desktop notification to the OS notification centre (#29). The
+    /// Post a desktop notification to the OS notification centre. The
     /// shell performs it; `title` names the session/project that wants the
     /// user, `body` is Claude's message.
     Notify { title: String, body: String },
-    /// Write a captured state snapshot for the AI dev loop (#108, G1). The shell
+    /// Write a captured state snapshot for the AI dev loop (G1). The shell
     /// encodes it to `capture-<ts>.json` and takes the companion PNG; `core`
     /// only builds the pure, diffable payload.
     Capture(CaptureDump),
-    /// Begin a GIF screencast (#124): the app opens the encoder and starts its
+    /// Begin a GIF screencast: the app opens the encoder and starts its
     /// frame timer. `core` has already entered the recording state.
     StartRecording,
-    /// Capture one screencast frame (#124): the app screenshots the window and
+    /// Capture one screencast frame: the app screenshots the window and
     /// appends it to the open encoder.
     CaptureFrame,
-    /// Finalise the GIF screencast (#124): the app flushes the encoder and writes
+    /// Finalise the GIF screencast: the app flushes the encoder and writes
     /// `capture-<ts>.gif`. `capped` names *why* it stopped — `true` when the frame
     /// cap auto-stopped it, `false` on a manual ⌘⇧R stop — so the app logs the
     /// reason from `core`'s decision rather than re-deriving it from the effect mix.
     FinishRecording { capped: bool },
-    /// Abandon a screencast that captured no frames (#124): the app drops the
+    /// Abandon a screencast that captured no frames: the app drops the
     /// encoder without writing a file. Emitted when a recording is stopped before
     /// the first frame.
     CancelRecording,
@@ -539,7 +539,7 @@ impl App {
                 let effects = self.update_meta(session.clone(), |meta| {
                     meta.title = (!trimmed.is_empty()).then(|| trimmed.clone());
                 });
-                // Keep a live tab in step with the sidebar (#109 follow-up): an
+                // Keep a live tab in step with the sidebar (follow-up): an
                 // open session resuming this id is retitled too. A non-empty
                 // rename wins directly; clearing restores the digest-derived name
                 // when the session is still in the last scan.
@@ -593,7 +593,7 @@ impl App {
         }
     }
 
-    /// Start or stop the GIF screencast (#124). Starting from idle enters the
+    /// Start or stop the GIF screencast. Starting from idle enters the
     /// recording state and asks the app to open its encoder; a zero `max_frames`
     /// is a no-op (nothing to record). Stopping finalises the GIF when frames
     /// were captured, or cancels it outright when none were (the zero-frame
@@ -617,7 +617,7 @@ impl App {
         }
     }
 
-    /// One frame of the screencast (#124): count it and ask the app to capture
+    /// One frame of the screencast: count it and ask the app to capture
     /// it, then auto-stop once the cap is reached. A tick while not recording is
     /// a silent no-op (a stray timer beat after a stop).
     fn record_tick(&mut self) -> Vec<Effect> {
@@ -633,7 +633,7 @@ impl App {
         effects
     }
 
-    /// Whether a GIF screencast is in progress (#124) — the app gates its frame
+    /// Whether a GIF screencast is in progress — the app gates its frame
     /// timer subscription on this.
     #[must_use]
     pub fn is_recording(&self) -> bool {
@@ -641,7 +641,7 @@ impl App {
     }
 
     /// Screencast progress as `(frames captured, frame cap)` while recording, or
-    /// `None` when idle (#124). The shell renders it as the `● REC n/cap`
+    /// `None` when idle. The shell renders it as the `● REC n/cap`
     /// indicator so the recording state — and how close it is to auto-stop — is
     /// visible at a glance.
     #[must_use]
@@ -649,7 +649,7 @@ impl App {
         self.recording.map(|r| (r.frames, r.max_frames))
     }
 
-    /// Assemble the capture snapshot for the AI dev loop (#108). Pure: it reads
+    /// Assemble the capture snapshot for the AI dev loop. Pure: it reads
     /// the workspace and live-session state and folds in the focused terminal's
     /// text the shell supplied (the grid lives in the `pty` adapter). The result
     /// is the diffable rung-0 payload; the shell adds the rung-1 PNG.
@@ -701,7 +701,7 @@ impl App {
         groups
     }
 
-    /// The sessions a project row should list (#131): all of them while a
+    /// The sessions a project row should list: all of them while a
     /// search is active (a hit in the folded tail must surface), when the
     /// limit is unset, or when the group already fits; otherwise the first
     /// `session_limit` (starred pins sort first in [`Self::visible_projects`],
@@ -726,7 +726,7 @@ impl App {
         )
     }
 
-    /// The located content hit for a session under the current search (#58),
+    /// The located content hit for a session under the current search,
     /// or `None` when the row is shown for a title hit (or titles-only mode):
     /// nothing in the content matched, so there is nothing to point at.
     #[must_use]
@@ -750,7 +750,7 @@ impl App {
 
     /// Session ids in `group` whose resolved [`Self::session_title`] is shared
     /// by another session in the same group — the rows that need a
-    /// disambiguator in the sidebar (#42). Collision is checked on the *final*
+    /// disambiguator in the sidebar. Collision is checked on the *final*
     /// title (rename/metadata included), so two rows renamed alike still count.
     /// The common, unique case returns an empty set, so callers leave it clean.
     #[must_use]
@@ -772,10 +772,10 @@ impl App {
     }
 
     /// The content disambiguator for a row whose title collides with another
-    /// in its group (#42): the session's real first-prompt `summary` when it
+    /// in its group: the session's real first-prompt `summary` when it
     /// *diverges* from the shown title. A custom/AI title or rename can mask a
     /// completely different conversation — Claude Code carries a custom title
-    /// across `/clear` into a fresh, unrelated session (#93), so two rows read
+    /// across `/clear` into a fresh, unrelated session, so two rows read
     /// identically while their summaries differ. Surfacing the summary tells
     /// them apart by content, where the last-activity age only tells them apart
     /// by time. `None` when the title *is* the summary (no masking), so the
@@ -812,7 +812,7 @@ impl App {
     /// The browsed record for the Claude session `claude_id`, if the last scan
     /// found it. The inverse of [`Self::open_session_for`]: it maps a live tab
     /// back to the sidebar entry it resumes, so the tab hover can reuse the same
-    /// session card the sidebar shows (#76) instead of a second derive. `None`
+    /// session card the sidebar shows instead of a second derive. `None`
     /// for a shell or a fresh, not-yet-scanned session.
     #[must_use]
     pub fn record_for(&self, claude_id: &str) -> Option<&SessionRecord> {
@@ -823,7 +823,7 @@ impl App {
     }
 
     /// The browsed record for the tab at `index` — the sidebar entry its first
-    /// pane resumes (#76), so a tab hover can show the same session card. `None`
+    /// pane resumes, so a tab hover can show the same session card. `None`
     /// for an out-of-range index, or a tab whose first pane is a shell or a
     /// fresh, not-yet-scanned session (no resume id / no record).
     #[must_use]
@@ -834,13 +834,13 @@ impl App {
         self.record_for(claude_id)
     }
 
-    /// Whether a project's session list is folded shut in the sidebar (#22).
+    /// Whether a project's session list is folded shut in the sidebar.
     #[must_use]
     pub fn is_collapsed(&self, path: &str) -> bool {
         self.collapsed.contains(path)
     }
 
-    /// Flip a project's fold state and emit the persistence effect (#22).
+    /// Flip a project's fold state and emit the persistence effect.
     fn toggle_collapsed(&mut self, path: String) -> Vec<Effect> {
         if !self.collapsed.remove(&path) {
             self.collapsed.insert(path);
@@ -848,7 +848,7 @@ impl App {
         vec![Effect::SaveCollapsed(self.collapsed.clone())]
     }
 
-    /// Unfold (or refold) a project's truncated session tail (#131). Unlike
+    /// Unfold (or refold) a project's truncated session tail. Unlike
     /// [`Self::toggle_collapsed`], the state is ephemeral — no save effect.
     fn toggle_expanded(&mut self, path: String) -> Vec<Effect> {
         if !self.expanded.remove(&path) {
@@ -857,19 +857,19 @@ impl App {
         Vec::new()
     }
 
-    /// Record the configured sidebar session limit (#131), from settings.
+    /// Record the configured sidebar session limit, from settings.
     fn load_session_limit(&mut self, limit: usize) -> Vec<Effect> {
         self.session_limit = limit;
         Vec::new()
     }
 
-    /// Record the configured terminal base font size (#35), from settings.
+    /// Record the configured terminal base font size, from settings.
     fn load_font_size(&mut self, size: f32) -> Vec<Effect> {
         self.font_base = Some(size);
         Vec::new()
     }
 
-    /// The effective terminal font size (#35): the configured base (or the
+    /// The effective terminal font size: the configured base (or the
     /// built-in default before settings load) plus the zoom steps, clamped
     /// into [`FONT_SIZE_RANGE`].
     #[must_use]
@@ -879,7 +879,7 @@ impl App {
         (base + self.zoom_steps as f32).clamp(min, max)
     }
 
-    /// Apply a zoom step (#35). Steps are refused at the bounds rather than
+    /// Apply a zoom step. Steps are refused at the bounds rather than
     /// clamped at read, so surplus presses never accumulate as drift — one
     /// zoom-out after many zoom-ins at the cap shrinks immediately.
     fn zoom(&mut self, zoom: Zoom) -> Vec<Effect> {
@@ -968,7 +968,7 @@ impl App {
 
     /// Close a tab (FR5): drop its sessions from the live registry and ask the
     /// runtime to kill each PTY. An out-of-range index yields no effects.
-    /// Snapshots the tab onto the reopen stack first (#78), so the close can be
+    /// Snapshots the tab onto the reopen stack first, so the close can be
     /// undone before its sessions are forgotten.
     fn close_tab(&mut self, index: usize) -> Vec<Effect> {
         self.remember_closed_tab(index);
@@ -979,7 +979,7 @@ impl App {
         sessions.into_iter().map(Effect::Kill).collect()
     }
 
-    /// Push the tab at `index` onto the reopen stack (#78), capturing the kind,
+    /// Push the tab at `index` onto the reopen stack, capturing the kind,
     /// directory and label needed to recreate it. Reduced to the tab's first
     /// pane — reopen restores one terminal, not a whole split. A no-op for an
     /// out-of-range index or a tab whose first session is no longer live.
@@ -1005,7 +1005,7 @@ impl App {
         }
     }
 
-    /// Reopen the most recently closed tab (#78), relaunching it in the mode and
+    /// Reopen the most recently closed tab, relaunching it in the mode and
     /// directory it was closed in. Re-closing then reopening walks the stack in
     /// LIFO order. No effects when the stack is empty.
     fn reopen_closed_tab(&mut self) -> Vec<Effect> {
@@ -1058,7 +1058,7 @@ impl App {
         self.sessions.values().any(LiveSession::has_running_process)
     }
 
-    /// Decide whether an OSC 9 notification (#29) reaches the OS notification
+    /// Decide whether an OSC 9 notification reaches the OS notification
     /// centre, and with what title/body. Only live sessions are worth alerting
     /// on — an unknown or exited session has nothing to return to, so it is
     /// dropped. The title is the session's tab label (what the user sees, and
@@ -1164,7 +1164,7 @@ mod tests {
         assert_eq!(app.visible_projects().len(), 1);
     }
 
-    /// `count` sessions in `/p`, freshest first, applied with a scan (#131).
+    /// `count` sessions in `/p`, freshest first, applied with a scan.
     fn scanned_group(app: &mut App, count: usize) {
         let records = (0..count)
             .map(|i| {
@@ -1216,7 +1216,7 @@ mod tests {
         scanned_group(&mut app, 8);
         app.apply(Event::SessionLimitLoaded(5));
         let effects = app.apply(Event::ToggleExpanded("/p".into()));
-        assert!(effects.is_empty(), "expanded state is ephemeral (#131)");
+        assert!(effects.is_empty(), "expanded state is ephemeral");
         let groups = app.visible_projects();
         let (shown, fold) = app.sidebar_sessions(&groups[0]);
         assert_eq!(shown.len(), 8);
@@ -1358,7 +1358,7 @@ mod tests {
 
     #[test]
     fn record_for_maps_a_claude_id_back_to_its_browsed_record() {
-        // #76: a live tab's resume id resolves to the sidebar record, so the
+        // A live tab's resume id resolves to the sidebar record, so the
         // tab hover can reuse the same session card.
         let mut app = App::new();
         app.apply(Event::ScanCompleted(vec![
@@ -1379,7 +1379,7 @@ mod tests {
 
     #[test]
     fn tab_record_resolves_a_resumed_tab_and_skips_shells_and_unknowns() {
-        // #76: a tab resuming a scanned session maps back to its record; a shell
+        // A tab resuming a scanned session maps back to its record; a shell
         // tab (no resume id) and an out-of-range index map to nothing.
         let mut app = App::new();
         app.apply(Event::ScanCompleted(vec![record(
@@ -1497,7 +1497,7 @@ mod tests {
 
     #[test]
     fn activate_tab_out_of_range_leaves_the_active_tab_untouched() {
-        // Regression guard for the number-row jump (issue #26): pressing ⌘5
+        // Regression guard for the number-row jump: pressing ⌘5
         // with only two tabs open resolves to an out-of-range index, which
         // must be a silent no-op rather than a panic or a focus change.
         let mut app = App::new();
@@ -1528,7 +1528,7 @@ mod tests {
 
     #[test]
     fn reopen_restores_a_closed_tab_in_its_mode_and_directory() {
-        // #78: closing a Claude tab then reopening relaunches the same kind in
+        // Closing a Claude tab then reopening relaunches the same kind in
         // the same directory, with its label.
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
@@ -1570,7 +1570,7 @@ mod tests {
 
     #[test]
     fn reopen_walks_the_close_stack_in_lifo_order() {
-        // #78: closing A then B and reopening twice restores B first, then A.
+        // Closing A then B and reopening twice restores B first, then A.
         let mut app = App::new();
         let open = |app: &mut App, dir: &str| {
             app.apply(Event::LaunchSession(LaunchSpec {
@@ -1711,7 +1711,7 @@ mod tests {
 
     #[test]
     fn renaming_a_session_retitles_its_open_tab_and_clearing_restores_the_name() {
-        // #109 follow-up: a sidebar rename must retitle the live tab too, not
+        // Follow-up: a sidebar rename must retitle the live tab too, not
         // just the sidebar row — and clearing it restores the digest name.
         let mut app = App::new();
         app.apply(Event::ScanCompleted(vec![record(
@@ -1778,7 +1778,7 @@ mod tests {
     fn collision_subtitle_surfaces_a_masked_summary_but_not_a_plain_one() {
         let mut app = App::new();
         // Two sessions Claude Code gave the same custom title (the /clear
-        // title-carryover, #93), masking two different real first prompts.
+        // title-carryover), masking two different real first prompts.
         let mut carried = record("clr", "/p", "regardons les soucis du ROR");
         carried.digest.custom_title = Some("login/logout petit souci".into());
         let mut original = record("orig", "/p", "ouvre un worktree auth/login");
@@ -2077,7 +2077,7 @@ mod tests {
         assert_eq!(app.sessions[&id].status, SessionStatus::Exited);
     }
 
-    // ---- #29: OSC 9 notifications forwarded to the OS notification centre ----
+    // ---- OSC 9 notifications forwarded to the OS notification centre ----
 
     /// The single `Effect::Notify` a `SessionNotified` event should produce, or
     /// `None` if the policy dropped it. Panics on any other effect shape so a
@@ -2101,7 +2101,7 @@ mod tests {
         });
 
         // The body is Claude's own message; the title names which session wants
-        // the user, taken from the tab the user sees (#29).
+        // the user, taken from the tab the user sees.
         assert_eq!(
             notify_effect(&effects),
             Some(("myproj", "Claude needs your attention"))
@@ -2158,7 +2158,7 @@ mod tests {
     fn a_notification_follows_the_sessions_latest_tab_title() {
         let mut app = App::new();
         let id = launch(&mut app, "old name");
-        // Claude relabels the tab over OSC (#24); the notification title must
+        // Claude relabels the tab over OSC; the notification title must
         // track that, not the launch label.
         app.apply(Event::SessionTitleChanged {
             session: id,
@@ -2173,7 +2173,7 @@ mod tests {
         assert_eq!(notify_effect(&effects), Some(("renamed", "ping")));
     }
 
-    // ---- #108: capture snapshot for the AI dev loop ----
+    // ---- capture snapshot for the AI dev loop ----
 
     /// The single `Effect::Capture` payload a `Capture` event should produce.
     /// Panics on any other effect shape so a regression fails loudly.
@@ -2237,7 +2237,7 @@ mod tests {
     #[test]
     fn capture_lists_split_pane_membership_in_order() {
         // A split tab hosts several sessions; the dump records them in pane
-        // order and points focus at the newest pane (#108 — layout/state proxy).
+        // order and points focus at the newest pane (layout/state proxy).
         let mut app = App::new();
         let base = launch(&mut app, "proj");
         app.apply(Event::SplitFocused(SplitDir::Vertical));
@@ -2252,7 +2252,7 @@ mod tests {
         assert_eq!(tab.focus_session, Some(split.0.get()));
     }
 
-    // ---- #124: GIF screencast record state machine ----
+    // ---- GIF screencast record state machine ----
 
     #[test]
     fn toggle_record_starts_then_a_manual_toggle_finishes() {
@@ -2313,7 +2313,7 @@ mod tests {
 
     #[test]
     fn stopping_before_any_frame_cancels_without_writing() {
-        // The zero-frame guard: start then immediately stop → no file (#124).
+        // The zero-frame guard: start then immediately stop → no file.
         let mut app = App::new();
         app.apply(Event::ToggleRecord { max_frames: 10 });
         let stop = app.apply(Event::ToggleRecord { max_frames: 10 });

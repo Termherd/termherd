@@ -120,7 +120,7 @@ impl Workspace {
     }
 
     /// Set the title of the tab hosting `session`, to follow the title Claude
-    /// reports over OSC (#24). Returns `None` if no tab hosts the session,
+    /// reports over OSC. Returns `None` if no tab hosts the session,
     /// leaving every title unchanged.
     pub fn set_session_title(
         &mut self,
@@ -135,7 +135,7 @@ impl Workspace {
         Some(())
     }
 
-    /// Title of the tab hosting `session` (#29) — what the user sees for that
+    /// Title of the tab hosting `session` — what the user sees for that
     /// session, used to name its desktop notification. `None` if no tab hosts
     /// it.
     #[must_use]
@@ -157,8 +157,8 @@ impl Workspace {
         }
     }
 
-    /// Move the tab at `from` so it lands at index `to` (FR5 drag-reorder,
-    /// #25), shifting the tabs in between. The active tab is kept pointing at
+    /// Move the tab at `from` so it lands at index `to` (FR5 drag-reorder),
+    /// shifting the tabs in between. The active tab is kept pointing at
     /// the *same* tab, whether it was the moved one or merely shifted by it.
     /// Returns `None` (no change) if either index is out of range; `from == to`
     /// is a successful no-op.
@@ -443,8 +443,8 @@ mod tests {
     }
 
     proptest::proptest! {
-        /// Regression guard for the method the number-row jump leans on
-        /// (issue #26): `activate` selects an in-range index, rejects anything
+        /// Regression guard for the method the number-row jump leans on:
+        /// `activate` selects an in-range index, rejects anything
         /// beyond the last tab without moving, and never panics.
         #[test]
         fn activate_selects_within_range_and_rejects_beyond(

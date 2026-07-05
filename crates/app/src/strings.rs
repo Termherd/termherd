@@ -1,4 +1,4 @@
-//! All user-facing UI strings, in one place (#60).
+//! All user-facing UI strings, in one place.
 //!
 //! English is the canonical UI language. Centralising every literal here means a
 //! future i18n layer is "swap this catalogue", not "find every string": no
@@ -19,7 +19,7 @@ pub const SIDEBAR_LAUNCH_SHELL: &str = "Open a shell here";
 pub const SIDEBAR_LAUNCH_CLAUDE: &str = "Start a fresh Claude session";
 pub const SIDEBAR_SHOW_LESS: &str = "show less";
 
-/// Expander under a truncated session list (#131): how many more are folded.
+/// Expander under a truncated session list: how many more are folded.
 #[must_use]
 pub fn sidebar_more(hidden: usize) -> String {
     format!("… {hidden} more")
@@ -70,13 +70,13 @@ pub const CLOSE: &str = "Close";
 pub const ARCHIVE: &str = "Archive";
 pub const QUIT: &str = "Quit";
 
-/// Close-a-tab confirmation prompt (#9).
+/// Close-a-tab confirmation prompt.
 #[must_use]
 pub fn close_tab_prompt(title: &str) -> String {
     format!("Close “{title}”? The session will be terminated.")
 }
 
-/// Archive-a-session confirmation prompt (#20).
+/// Archive-a-session confirmation prompt.
 #[must_use]
 pub fn archive_prompt(title: &str) -> String {
     format!("Archive “{title}”?")

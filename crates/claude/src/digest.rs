@@ -32,7 +32,7 @@ pub struct SessionDigest {
 }
 
 impl SessionDigest {
-    /// Title precedence — the #46 contract, pinned here so no caller can
+    /// Title precedence — the contract, pinned here so no caller can
     /// re-derive it differently: user rename > custom title > AI title >
     /// summary. Empty strings count as absent (JS `||` semantics).
     #[must_use]
