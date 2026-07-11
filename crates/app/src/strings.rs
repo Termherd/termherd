@@ -14,6 +14,7 @@ pub const SHOW_ARCHIVED: &str = "Show archived";
 pub const NO_SESSIONS: &str = "No sessions found.";
 pub const NO_RESULTS: &str = "No results.";
 pub const PLANS_AND_MEMORY: &str = "Plans & memory";
+pub const FAVORITES: &str = "★ Favorites";
 pub const RENAME_PLACEHOLDER: &str = "title…";
 pub const SIDEBAR_LAUNCH_SHELL: &str = "Open a shell here";
 pub const SIDEBAR_LAUNCH_CLAUDE: &str = "Start a fresh Claude session";
