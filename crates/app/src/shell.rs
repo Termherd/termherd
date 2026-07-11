@@ -24,8 +24,8 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Action, CaptureDump, Effect, Keymap, Launch, LaunchSpec, ScrollTarget, SessionMeta,
-    SessionRecord, SessionStatus,
+    Action, CaptureDump, Effect, Keymap, Launch, LaunchSpec, Overlay, ScrollTarget, SessionRecord,
+    SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen, TermKey};
 
@@ -83,7 +83,7 @@ fn home_dir() -> String {
 pub struct Startup {
     pub theme: ThemeChoice,
     pub keymap: Keymap,
-    pub metadata: HashMap<String, SessionMeta>,
+    pub metadata: Overlay,
     /// Folded project paths restored from disk.
     pub collapsed: HashSet<String>,
     /// GIF screencast budget from settings.
@@ -391,6 +391,8 @@ enum Message {
     CancelCloseWindow,
     /// Toggle a browsed session's star (F-session-metadata).
     ToggleStar(String),
+    /// Toggle a project's star, by real path (F-favorites, repo-level).
+    ToggleRepoStar(String),
     /// Toggle a browsed session's archived flag (F-session-metadata). Used
     /// directly only to un-archive (a harmless one-click restore); archiving
     /// goes through the confirmation flow below.
@@ -483,6 +485,7 @@ impl Message {
                 | Self::RequestCloseTab(_)
                 | Self::CloseTab(_)
                 | Self::ToggleStar(_)
+                | Self::ToggleRepoStar(_)
                 | Self::ToggleArchive(_)
                 | Self::RequestArchive(_)
                 | Self::ToggleCollapsed(_)
@@ -1251,6 +1254,10 @@ impl Shell {
                 let effects = self.core.apply(termherd_core::Event::ToggleStar(session));
                 self.perform(effects)
             }
+            Message::ToggleRepoStar(path) => {
+                let effects = self.core.apply(termherd_core::Event::ToggleRepoStar(path));
+                self.perform(effects)
+            }
             Message::ToggleArchive(session) => {
                 let effects = self
                     .core
@@ -1937,7 +1944,7 @@ mod key_routing {
             Startup {
                 theme: ThemeChoice::default(),
                 keymap: Keymap::defaults(),
-                metadata: HashMap::new(),
+                metadata: Overlay::default(),
                 collapsed: HashSet::new(),
                 record: RecordConfig::default(),
                 session_limit: 0,
@@ -2619,7 +2626,7 @@ mod key_routing {
             Startup {
                 theme: ThemeChoice::default(),
                 keymap: Keymap::defaults(),
-                metadata: HashMap::new(),
+                metadata: Overlay::default(),
                 collapsed: HashSet::new(),
                 record: RecordConfig::default(),
                 session_limit: 0,

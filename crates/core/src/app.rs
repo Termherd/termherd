@@ -14,7 +14,7 @@ use crate::browser::{
     MatchSnippet, ProjectGroup, SessionRecord, content_snippet, filter_projects, group_projects,
 };
 use crate::capture::{CaptureDump, CaptureTab};
-use crate::metadata::SessionMeta;
+use crate::metadata::{Overlay, RepoMeta, SessionMeta};
 use crate::record::Recording;
 use crate::workspace::{SessionId, SplitDir, Workspace};
 
@@ -45,6 +45,9 @@ pub struct App {
     /// User overlay (star / archive / title) per Claude session id
     /// (`F-session-metadata`); persisted to `~/.termherd`.
     pub metadata: HashMap<String, SessionMeta>,
+    /// User overlay (star) per real project path (`F-favorites`, repo-level);
+    /// shares `~/.termherd/metadata.json` with [`Self::metadata`].
+    pub repos: HashMap<String, RepoMeta>,
     /// Whether archived sessions show in the browser.
     pub show_archived: bool,
     /// Whether the session-browser sidebar is collapsed to give the terminal
@@ -325,10 +328,12 @@ pub enum Event {
     /// Move focus to the next / previous pane in the active tab (FR6).
     FocusNextPane,
     FocusPrevPane,
-    /// Persisted metadata loaded at startup (`F-session-metadata`).
-    MetadataLoaded(HashMap<String, SessionMeta>),
+    /// Persisted metadata loaded at startup (sessions + repos).
+    MetadataLoaded(Overlay),
     /// Toggle a session's star, by Claude session id.
     ToggleStar(String),
+    /// Toggle a repo's star, by real project path (`F-favorites`, repo-level).
+    ToggleRepoStar(String),
     /// Toggle a session's archived flag, by Claude session id.
     ToggleArchive(String),
     /// Set (or clear, when empty) a session's custom title.
@@ -408,8 +413,8 @@ pub enum Effect {
     },
     /// Terminate a session's PTY process.
     Kill(SessionId),
-    /// Persist the session metadata overlay (`F-session-metadata`).
-    SaveMetadata(HashMap<String, SessionMeta>),
+    /// Persist the whole metadata overlay (sessions + repos) as one file.
+    SaveMetadata(Overlay),
     /// Persist the folded-project set.
     SaveCollapsed(HashSet<String>),
     /// Open a URL in the OS default handler; the shell performs it.
@@ -536,12 +541,16 @@ impl App {
                 self.workspace.focus_prev();
                 Vec::new()
             }
-            Event::MetadataLoaded(metadata) => {
-                self.metadata = metadata;
+            Event::MetadataLoaded(overlay) => {
+                self.metadata = overlay.sessions;
+                self.repos = overlay.repos;
                 Vec::new()
             }
             Event::ToggleStar(session) => {
                 self.update_meta(session, |meta| meta.starred = !meta.starred)
+            }
+            Event::ToggleRepoStar(path) => {
+                self.update_repo_meta(path, |meta| meta.starred = !meta.starred)
             }
             Event::ToggleArchive(session) => {
                 self.update_meta(session, |meta| meta.archived = !meta.archived)
@@ -700,7 +709,8 @@ impl App {
     /// The sidebar's view of the projects: search matches (FR3) with the
     /// metadata overlay applied (`F-session-metadata`) — archived sessions
     /// hidden unless [`Self::show_archived`], starred sessions pinned to the
-    /// top of their group, and emptied groups dropped.
+    /// top of their group, starred repos pinned to the top of the sidebar
+    /// (`F-favorites`), and emptied groups dropped.
     #[must_use]
     pub fn visible_projects(&self) -> Vec<ProjectGroup> {
         let mut groups = filter_projects(&self.projects, &self.search, self.search_titles_only);
@@ -714,6 +724,8 @@ impl App {
                 .sort_by_key(|s| !self.is_starred(&s.session_id));
         }
         groups.retain(|group| !group.sessions.is_empty());
+        // Stable sort keeps activity order within each repo-star bucket.
+        groups.sort_by_key(|group| !self.is_repo_starred(&group.path));
         groups
     }
 
@@ -814,6 +826,12 @@ impl App {
         self.metadata.get(session_id).is_some_and(|m| m.archived)
     }
 
+    /// Whether a project (by real path) is starred (`F-favorites`, repo-level).
+    #[must_use]
+    pub fn is_repo_starred(&self, path: &str) -> bool {
+        self.repos.get(path).is_some_and(|m| m.starred)
+    }
+
     /// The live session currently resuming the Claude session `claude_id`, if
     /// one is open. Lets the shell re-focus an existing terminal when its
     /// sidebar row is clicked again, rather than spawning a duplicate (FR4).
@@ -909,6 +927,15 @@ impl App {
         Vec::new()
     }
 
+    /// The full overlay to persist — both keyings, cloned as one unit so a save
+    /// never drops the other map.
+    fn overlay(&self) -> Overlay {
+        Overlay {
+            sessions: self.metadata.clone(),
+            repos: self.repos.clone(),
+        }
+    }
+
     /// Edit a session's metadata, dropping it when it returns to defaults, and
     /// emit the persistence effect.
     fn update_meta(&mut self, session: String, edit: impl FnOnce(&mut SessionMeta)) -> Vec<Effect> {
@@ -919,7 +946,20 @@ impl App {
         } else {
             self.metadata.insert(session, meta);
         }
-        vec![Effect::SaveMetadata(self.metadata.clone())]
+        vec![Effect::SaveMetadata(self.overlay())]
+    }
+
+    /// Edit a repo's metadata, dropping it when it returns to defaults, and
+    /// emit the persistence effect. Mirrors [`Self::update_meta`].
+    fn update_repo_meta(&mut self, path: String, edit: impl FnOnce(&mut RepoMeta)) -> Vec<Effect> {
+        let mut meta = self.repos.get(&path).cloned().unwrap_or_default();
+        edit(&mut meta);
+        if meta.is_default() {
+            self.repos.remove(&path);
+        } else {
+            self.repos.insert(path, meta);
+        }
+        vec![Effect::SaveMetadata(self.overlay())]
     }
 
     /// Register a launched session, open it as a tab, and ask the runtime to
@@ -1663,11 +1703,49 @@ mod tests {
         ]));
         // "b" is most-recent-first by mtime equal → group order; star "a".
         let effects = app.apply(Event::ToggleStar("a".into()));
-        assert!(matches!(effects.as_slice(), [Effect::SaveMetadata(m)] if m["a"].starred));
+        assert!(matches!(effects.as_slice(), [Effect::SaveMetadata(m)] if m.sessions["a"].starred));
         // Starred session now leads its group.
         let group = &app.visible_projects()[0];
         assert_eq!(group.sessions[0].session_id, "a");
         assert!(app.is_starred("a"));
+    }
+
+    #[test]
+    fn star_pins_a_repo_to_the_top_and_persists() {
+        let mut app = App::new();
+        // Equal (missing) mtimes → groups fall back to path order: `/busy` first.
+        app.apply(Event::ScanCompleted(vec![
+            record("q", "/quiet", "q1"),
+            record("b", "/busy", "b1"),
+        ]));
+        assert_eq!(app.visible_projects()[0].path, "/busy");
+
+        // Starring the second repo pins it to the top of the sidebar.
+        let effects = app.apply(Event::ToggleRepoStar("/quiet".into()));
+        assert!(
+            matches!(effects.as_slice(), [Effect::SaveMetadata(m)] if m.repos["/quiet"].starred)
+        );
+        assert!(app.is_repo_starred("/quiet"));
+        let paths: Vec<_> = app
+            .visible_projects()
+            .iter()
+            .map(|g| g.path.clone())
+            .collect();
+        assert_eq!(paths, vec!["/quiet", "/busy"]);
+    }
+
+    #[test]
+    fn unstarring_a_repo_drops_its_entry() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record("a", "/p", "only")]));
+        app.apply(Event::ToggleRepoStar("/p".into()));
+        assert!(app.is_repo_starred("/p"));
+        // Toggling back to the default drops the entry rather than persisting it.
+        let effects = app.apply(Event::ToggleRepoStar("/p".into()));
+        assert!(
+            matches!(effects.as_slice(), [Effect::SaveMetadata(m)] if !m.repos.contains_key("/p"))
+        );
+        assert!(!app.is_repo_starred("/p"));
     }
 
     #[test]
@@ -1729,7 +1807,9 @@ mod tests {
             session: "a".into(),
             title: "   ".into(),
         });
-        assert!(matches!(effects.as_slice(), [Effect::SaveMetadata(m)] if !m.contains_key("a")));
+        assert!(
+            matches!(effects.as_slice(), [Effect::SaveMetadata(m)] if !m.sessions.contains_key("a"))
+        );
         assert_eq!(
             app.session_title(&app.projects[0].sessions[0].clone()),
             derived
