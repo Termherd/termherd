@@ -67,6 +67,11 @@ pub struct Screen {
     pub cursor: Option<(u16, u16)>,
     /// True while the viewport is scrolled up into scrollback history.
     pub scrolled: bool,
+    /// How many lines the viewport is scrolled up into scrollback history
+    /// (0 at the bottom / live tail). Lets the GUI anchor a selection to an
+    /// absolute scrollback line so the highlight follows the text through
+    /// scroll, rather than floating over whatever now occupies the row.
+    pub display_offset: usize,
     /// True when the application has enabled bracketed paste (DECSET 2004), so
     /// the shell wraps a paste in `ESC[200~`…`ESC[201~` and a multi-line paste
     /// lands as one block instead of submitting line by line (FR4).
@@ -968,6 +973,7 @@ fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
         lines,
         cursor,
         scrolled: content.display_offset > 0,
+        display_offset: content.display_offset,
         bracketed_paste: term.mode().contains(TermMode::BRACKETED_PASTE),
     }
 }

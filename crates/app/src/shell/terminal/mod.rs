@@ -16,7 +16,7 @@ use super::Message;
 
 mod selection;
 
-use selection::{HoverLink, cell_at, link_at, ordered, selection_span, selection_text, word_at};
+use selection::{HoverLink, abs_line, cell_at, link_at, selection_text, visible_spans, word_at};
 
 /// Terminal cell metrics for the monospace grid, as ratios of the font size
 /// so a zoomed font scales the grid proportionally. At the default
@@ -60,8 +60,11 @@ pub(super) struct TerminalView<'a> {
 #[derive(Default)]
 pub(super) struct TermState {
     selecting: bool,
-    anchor: Option<(u16, u16)>,
-    head: Option<(u16, u16)>,
+    /// Selection endpoints as `(col, absolute scrollback line)` — see
+    /// [`selection::abs_line`]. Anchoring to the absolute line (not a viewport
+    /// row) lets the highlight follow the text through scroll.
+    anchor: Option<(u16, i32)>,
+    head: Option<(u16, i32)>,
     owner: Option<SessionId>,
     /// The link currently under the pointer while the modifier is held:
     /// its row, column span `[start, end)`, and the URL to open on click.
@@ -118,11 +121,34 @@ impl TermState {
 
     /// The current selection range, only when it spans more than one cell — a
     /// bare click (anchor == head) is not a selection.
-    fn range(&self) -> Option<((u16, u16), (u16, u16))> {
+    fn range(&self) -> Option<((u16, i32), (u16, i32))> {
         match (self.anchor, self.head) {
             (Some(a), Some(b)) if a != b => Some((a, b)),
             _ => None,
         }
+    }
+}
+
+impl TerminalView<'_> {
+    /// The highlighted spans to paint for the current selection: `(row, c0, c1)`
+    /// with inclusive columns, one per visible row the selection covers. Empty
+    /// unless this canvas owns a real (multi-cell) selection, so the highlight
+    /// neither bleeds across tabs nor paints a bare click. This is the seam the
+    /// draw pass and the selection tests share.
+    fn visible_selection(&self, state: &TermState) -> Vec<(u16, u16, u16)> {
+        if state.owner != Some(self.session) {
+            return Vec::new();
+        }
+        let Some((a, b)) = state.range() else {
+            return Vec::new();
+        };
+        visible_spans(
+            a,
+            b,
+            self.screen.display_offset,
+            self.screen.cols,
+            self.screen.rows,
+        )
     }
 }
 
@@ -153,9 +179,8 @@ impl canvas::Program<Message> for TerminalView<'_> {
             // sees wheel events even while hovering the sidebar, so without
             // this guard scrolling the session list also scrolls the PTY.
             mouse::Event::WheelScrolled { delta } if cursor.position_in(bounds).is_some() => {
-                // The selection is in viewport coordinates, so scrolling would
-                // leave it floating over the wrong text; drop it.
-                state.clear_selection();
+                // The selection is anchored to absolute scrollback lines, so it
+                // rides with the text as the viewport moves — no need to drop it.
                 let lines = delta_to_lines(delta, cell_size(self.font_size).1);
                 let step = state.scroll.step(lines);
                 // The pointer cell rides along so a mouse-mode app (Claude's TUI)
@@ -189,9 +214,14 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 // distance.
                 let clicked = Click::new(position, mouse::Button::Left, state.last_click);
                 state.last_click = Some(clicked);
+                let offset = self.screen.display_offset;
                 if clicked.kind() == click::Kind::Double
                     && let Some((anchor, head)) = word_at(self.screen, col, row)
                 {
+                    let (anchor, head) = (
+                        (anchor.0, abs_line(anchor.1, offset)),
+                        (head.0, abs_line(head.1, offset)),
+                    );
                     state.selecting = false;
                     state.anchor = Some(anchor);
                     state.head = Some(head);
@@ -200,13 +230,14 @@ impl canvas::Program<Message> for TerminalView<'_> {
                     )));
                 }
                 state.selecting = true;
-                state.anchor = Some((col, row));
-                state.head = Some((col, row));
+                let cell = (col, abs_line(row, offset));
+                state.anchor = Some(cell);
+                state.head = Some(cell);
                 Some(canvas::Action::request_redraw())
             }
             mouse::Event::CursorMoved { .. } if state.selecting => {
-                cell_at(cursor, bounds, self.screen).map(|cell| {
-                    state.head = Some(cell);
+                cell_at(cursor, bounds, self.screen).map(|(col, row)| {
+                    state.head = Some((col, abs_line(row, self.screen.display_offset)));
                     canvas::Action::request_redraw()
                 })
             }
@@ -278,24 +309,19 @@ impl canvas::Program<Message> for TerminalView<'_> {
             }
         }
 
-        // Translucent overlay over the selected range — only the owning
-        // session's real (multi-cell) selection, so it neither bleeds across
-        // tabs nor paints a bare click.
-        if let (Some((a, b)), true) = (state.range(), state.owner == Some(self.session)) {
-            let (start, end) = ordered(a, b);
-            for r in start.1..=end.1 {
-                let (c0, c1) = selection_span(start, end, r, self.screen.cols);
-                let x = c0 as f32 * cell_w;
-                let w = (c1.saturating_sub(c0) + 1) as f32 * cell_w;
-                frame.fill_rectangle(
-                    Point::new(x, r as f32 * cell_h),
-                    Size::new(w, cell_h),
-                    Color {
-                        a: 0.3,
-                        ..rgb([0x55, 0x88, 0xff])
-                    },
-                );
-            }
+        // Translucent overlay over the selected range, one rectangle per
+        // visible row (the owner/real-selection gating lives in the seam).
+        for (r, c0, c1) in self.visible_selection(state) {
+            let x = c0 as f32 * cell_w;
+            let w = (c1.saturating_sub(c0) + 1) as f32 * cell_w;
+            frame.fill_rectangle(
+                Point::new(x, r as f32 * cell_h),
+                Size::new(w, cell_h),
+                Color {
+                    a: 0.3,
+                    ..rgb([0x55, 0x88, 0xff])
+                },
+            );
         }
 
         // Underline the hovered link while the modifier is held, the classic
@@ -457,6 +483,7 @@ mod tests {
             lines: vec![vec![cell; 4]; 2],
             cursor: None,
             scrolled: false,
+            display_offset: 0,
             bracketed_paste: false,
         }
     }
@@ -585,23 +612,118 @@ mod tests {
         );
     }
 
-    #[test]
-    fn scrolling_clears_the_selection() {
-        // a viewport-relative selection is dropped on scroll.
-        use canvas::Program;
-        let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
+    // --- the selection follows the text through scroll ---------------------
+
+    /// A blank 4×`rows` screen scrolled up `offset` lines into scrollback.
+    fn screen_rows(rows: u16, offset: usize) -> Screen {
+        use termherd_pty::ScreenCell;
+        let cell = ScreenCell {
+            c: ' ',
+            fg: [0, 0, 0],
+            bg: [0, 0, 0],
+            bold: false,
+        };
+        Screen {
+            cols: 4,
+            rows,
+            lines: vec![vec![cell; 4]; rows as usize],
+            cursor: None,
+            scrolled: offset > 0,
+            display_offset: offset,
+            bracketed_paste: false,
+        }
+    }
+
+    /// A cursor over the centre of grid cell `(col, row)` on a 4×`rows` grid
+    /// filling the 100×100 test bounds.
+    fn at_cell(col: u16, row: u16, rows: u16) -> mouse::Cursor {
+        let cw = 100.0 / 4.0;
+        let ch = 100.0 / rows as f32;
+        at((col as f32 + 0.5) * cw, (row as f32 + 0.5) * ch)
+    }
+
+    /// The viewport rows a set of highlighted spans covers.
+    fn rows_of(spans: &[(u16, u16, u16)]) -> Vec<u16> {
+        spans.iter().map(|s| s.0).collect()
+    }
+
+    fn view_of(screen: &Screen) -> TerminalView<'_> {
+        TerminalView {
+            screen,
             session: sid(1),
             link_modifier: false,
             font_size: 14.0,
-        };
+        }
+    }
+
+    #[test]
+    fn selection_survives_a_wheel_scroll() {
+        // A wheel scroll must keep the selection, re-anchored to the text,
+        // rather than dropping it (the old viewport-coordinate behaviour).
+        use canvas::Program;
+        let screen = test_screen();
+        let view = view_of(&screen);
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
         assert!(state.range().is_some());
-        let _ = view.update(&mut state, &wheel(), test_bounds(), at(50.0, 50.0));
-        assert!(state.range().is_none(), "scroll must clear the selection");
+        let action = view.update(&mut state, &wheel(), test_bounds(), at(50.0, 50.0));
+        assert!(
+            state.range().is_some(),
+            "a wheel scroll must keep the selection anchored to the text"
+        );
+        assert!(
+            action.is_some(),
+            "the wheel still drives the terminal scroll"
+        );
+    }
+
+    #[test]
+    fn the_highlight_follows_the_text_through_scroll() {
+        // Select viewport row 1 at the live tail, then scroll up one line: the
+        // same text is now one row lower, so the highlight must ride down to it.
+        use canvas::Program;
+        let screen0 = screen_rows(3, 0);
+        let view0 = view_of(&screen0);
+        let mut state = TermState::default();
+        let _ = view0.update(&mut state, &press(), test_bounds(), at_cell(0, 1, 3));
+        let _ = view0.update(&mut state, &moved(), test_bounds(), at_cell(3, 1, 3));
+        assert_eq!(
+            rows_of(&view0.visible_selection(&state)),
+            vec![1],
+            "highlighted at row 1 before scroll"
+        );
+        let screen1 = screen_rows(3, 1);
+        let view1 = view_of(&screen1);
+        assert_eq!(
+            rows_of(&view1.visible_selection(&state)),
+            vec![2],
+            "the highlight rides down to row 2 with the text after scrolling up one line"
+        );
+    }
+
+    #[test]
+    fn a_selection_scrolled_off_the_top_is_clipped() {
+        // Select while already scrolled up two lines, then return to the live
+        // tail: the selected text is now above the viewport and its highlight
+        // must clip out entirely rather than staying pinned to a row.
+        use canvas::Program;
+        let scrolled = screen_rows(3, 2);
+        let view = view_of(&scrolled);
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &press(), test_bounds(), at_cell(0, 0, 3));
+        let _ = view.update(&mut state, &moved(), test_bounds(), at_cell(3, 0, 3));
+        assert_eq!(
+            rows_of(&view.visible_selection(&state)),
+            vec![0],
+            "highlighted at row 0 while scrolled"
+        );
+        let tail = screen_rows(3, 0);
+        let view_tail = view_of(&tail);
+        assert!(
+            view_tail.visible_selection(&state).is_empty(),
+            "a selection scrolled off the top is clipped out of the viewport"
+        );
     }
 
     /// A single-row screen holding `line`, one char per cell (link tests).
@@ -622,6 +744,7 @@ mod tests {
             lines: vec![cells],
             cursor: None,
             scrolled: false,
+            display_offset: 0,
             bracketed_paste: false,
         }
     }
