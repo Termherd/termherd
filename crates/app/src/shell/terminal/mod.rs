@@ -2,7 +2,8 @@
 //! grid + cursor (FR4), handles wheel scrollback and drag-to-select, and
 //! resolves Ctrl/Cmd link hover/click. Plus the OS link opener. The byte
 //! protocol and the grid model live in `termherd_pty`; this is pure rendering
-//! and pointer logic.
+//! and pointer logic. The pure pointer/selection geometry lives in
+//! [`selection`].
 
 use iced::advanced::mouse::{Click, click};
 use iced::advanced::text::Shaping;
@@ -12,6 +13,10 @@ use termherd_core::workspace::SessionId;
 use termherd_pty::Screen;
 
 use super::Message;
+
+mod selection;
+
+use selection::{HoverLink, cell_at, link_at, ordered, selection_span, selection_text, word_at};
 
 /// Terminal cell metrics for the monospace grid, as ratios of the font size
 /// so a zoomed font scales the grid proportionally. At the default
@@ -101,16 +106,6 @@ impl ScrollAccumulator {
         self.residual -= whole;
         whole as i32
     }
-}
-
-/// A link the pointer is hovering with Ctrl/Cmd held — what to highlight and,
-/// on click, what to open.
-#[derive(Clone, PartialEq, Eq)]
-struct HoverLink {
-    row: u16,
-    start: u16,
-    end: u16,
-    url: String,
 }
 
 impl TermState {
@@ -354,113 +349,6 @@ impl canvas::Program<Message> for TerminalView<'_> {
 
 fn rgb([r, g, b]: [u8; 3]) -> Color {
     Color::from_rgb8(r, g, b)
-}
-
-/// The grid cell under the cursor, if any.
-fn cell_at(cursor: mouse::Cursor, bounds: Rectangle, screen: &Screen) -> Option<(u16, u16)> {
-    let p = cursor.position_in(bounds)?;
-    let cols = screen.cols.max(1);
-    let rows = screen.rows.max(1);
-    let cw = bounds.width / cols as f32;
-    let ch = bounds.height / rows as f32;
-    if cw <= 0.0 || ch <= 0.0 {
-        return None;
-    }
-    let c = (p.x / cw).floor().clamp(0.0, (cols - 1) as f32) as u16;
-    let r = (p.y / ch).floor().clamp(0.0, (rows - 1) as f32) as u16;
-    Some((c, r))
-}
-
-/// The link under grid cell `(col, row)`, if any. Builds the row's text
-/// from its cells — one char per cell, so a `core::links` char-index span maps
-/// straight onto columns — and returns the span containing `col`.
-fn link_at(screen: &Screen, col: u16, row: u16) -> Option<HoverLink> {
-    let line = screen.lines.get(row as usize)?;
-    let text: String = line.iter().map(|cell| cell.c).collect();
-    let span = termherd_core::links::detect(&text)
-        .into_iter()
-        .find(|span| span.contains(&(col as usize)))?;
-    let url: String = line[span.clone()].iter().map(|cell| cell.c).collect();
-    Some(HoverLink {
-        row,
-        start: span.start as u16,
-        end: span.end as u16,
-        url,
-    })
-}
-
-/// Whether a character belongs to a double-click "word". Alphanumerics
-/// plus the punctuation that holds filenames and paths together, so a unit like
-/// `~/src/main.rs:42` selects whole; whitespace and bracketing punctuation
-/// (quotes, parens, commas) are boundaries.
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '\\' | '~' | ':' | '@' | '+')
-}
-
-/// The word / filename under grid cell `(col, row)` as an inclusive cell range
-/// `(anchor, head)`, or `None` when the cell is not part of a word (e.g. blank).
-/// A word is the maximal run of [`is_word_char`] cells around `col` — this is
-/// what a double-click selects.
-fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16), (u16, u16))> {
-    let line = screen.lines.get(row as usize)?;
-    let here = col as usize;
-    if !line.get(here).is_some_and(|cell| is_word_char(cell.c)) {
-        return None;
-    }
-    let mut start = here;
-    while start > 0 && is_word_char(line[start - 1].c) {
-        start -= 1;
-    }
-    let mut end = here;
-    while end + 1 < line.len() && is_word_char(line[end + 1].c) {
-        end += 1;
-    }
-    Some(((start as u16, row), (end as u16, row)))
-}
-
-/// Order two cells in reading order (row, then column).
-fn ordered(a: (u16, u16), b: (u16, u16)) -> ((u16, u16), (u16, u16)) {
-    if (a.1, a.0) <= (b.1, b.0) {
-        (a, b)
-    } else {
-        (b, a)
-    }
-}
-
-/// The selected column span `[c0, c1]` on row `r` of an ordered selection.
-fn selection_span(start: (u16, u16), end: (u16, u16), r: u16, cols: u16) -> (u16, u16) {
-    let last = cols.saturating_sub(1);
-    if start.1 == end.1 {
-        (start.0.min(end.0), start.0.max(end.0))
-    } else if r == start.1 {
-        (start.0, last)
-    } else if r == end.1 {
-        (0, end.0)
-    } else {
-        (0, last)
-    }
-}
-
-/// Extract the selected text from the visible grid, trimming trailing blanks.
-fn selection_text(screen: &Screen, a: (u16, u16), b: (u16, u16)) -> String {
-    let (start, end) = ordered(a, b);
-    let mut out = String::new();
-    for r in start.1..=end.1 {
-        let Some(line) = screen.lines.get(r as usize) else {
-            continue;
-        };
-        let (c0, c1) = selection_span(start, end, r, screen.cols);
-        let c0 = c0 as usize;
-        let c1 = (c1 as usize).min(line.len().saturating_sub(1));
-        if c0 <= c1 {
-            let row: String = line[c0..=c1].iter().map(|cell| cell.c).collect();
-            out.push_str(row.trim_end());
-        }
-        if r != end.1 {
-            out.push('\n');
-        }
-    }
-    out
 }
 
 /// Hand a detected link to the OS default handler. Fire-and-forget: the
@@ -746,17 +634,6 @@ mod tests {
     }
 
     #[test]
-    fn link_at_finds_the_url_under_a_column() {
-        // the column maps onto the detected span and yields its URL.
-        let screen = screen_from("see https://ex.io now");
-        let link = link_at(&screen, 6, 0).expect("column 6 is inside the URL");
-        assert_eq!(link.url, "https://ex.io");
-        assert_eq!((link.start, link.end), (4, 17));
-        // A column off the URL has no link.
-        assert!(link_at(&screen, 0, 0).is_none());
-    }
-
-    #[test]
     fn modifier_click_on_a_link_opens_instead_of_selecting() {
         // Ctrl/Cmd+click publishes an open and starts no selection.
         use canvas::Program;
@@ -819,19 +696,6 @@ mod tests {
         let mut state = TermState::default();
         let _ = bare.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
         assert!(state.hover.is_none());
-    }
-
-    #[test]
-    fn word_at_spans_a_filename_run() {
-        // a path/filename is one word — letters, digits and the joining
-        // punctuation (`/ . :`) all count, blanks bound it.
-        let screen = screen_from("see src/main.rs:42 now");
-        // Column 8 ('m') sits inside the `src/main.rs:42` run (cols 4..=17).
-        assert_eq!(word_at(&screen, 8, 0), Some(((4, 0), (17, 0))));
-        // A blank cell is not part of any word.
-        assert_eq!(word_at(&screen, 3, 0), None);
-        // A column past the line has no word.
-        assert_eq!(word_at(&screen, 99, 0), None);
     }
 
     #[test]
