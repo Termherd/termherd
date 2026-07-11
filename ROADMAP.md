@@ -286,7 +286,7 @@ Routed here (not to GH issues) because each needs design before it can be
 scoped. Source: feedback gist `d1d02e5`.
 The well-defined items from the same gist are tracked as issues #18–#29.
 
-- [ ] `F-favorites` — favorites in the sidebar. **Designed (🧬 split,
+- [x] `F-favorites` — favorites in the sidebar. **Designed (🧬 split,
   feature-torture `F-favorites.md`)**: "star" == "favorite" is one concept.
   Graduated to #56 (cross-project Favorites section, reusing the shipped
   session star) and #57 (repo-level favoriting, a `project_path`-keyed overlay
@@ -295,8 +295,8 @@ The well-defined items from the same gist are tracked as issues #18–#29.
   each project header that pins the group to the top, and a flat→wrapped JSON
   migration; **#56** — a cross-project "★ Favorites" section at the top of the
   sidebar aggregating every starred session (coexists with the in-group pin —
-  the favourite is a shortcut, not a move). Epic ticks once both PRs merge and
-  the issues close. **Decision — repos in the Favorites section: 👎 killed.**
+  the favourite is a shortcut, not a move). Both merged (#163, #165); the
+  issues are closed. **Decision — repos in the Favorites section: 👎 killed.**
   #57's repo star already surfaces a favourited repo by pinning its group to the
   top of the sidebar; a repo row in the section would only duplicate the shipped
   🤖/`$` launch buttons (#23) or navigate to an already-top group, and mixing
