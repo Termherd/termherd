@@ -170,6 +170,13 @@ impl Shell {
             // to two explicit buttons beside it: `$` opens a plain shell, 🤖 a
             // fresh Claude session, both in the repo dir (FR4a).
             let fold = fold_toggle(&group.path, collapsed);
+            // A repo star pins the whole project group to the top of the sidebar
+            // (F-favorites), mirroring the per-session star below.
+            let repo_starred = self.core.is_repo_starred(&group.path);
+            let repo_star = button(text(if repo_starred { "★" } else { "☆" }).size(12))
+                .on_press(Message::ToggleRepoStar(group.path.clone()))
+                .style(button::text)
+                .padding(0);
             let name = button(text(project_label(&group.path).to_owned()).size(14))
                 .on_press(Message::ToggleCollapsed(group.path.clone()))
                 .style(button::text)
@@ -185,7 +192,7 @@ impl Shell {
                 strings::SIDEBAR_LAUNCH_CLAUDE,
                 Message::LaunchClaude(group.path.clone()),
             );
-            let header = row![fold, name, launch_shell, launch_claude]
+            let header = row![fold, repo_star, name, launch_shell, launch_claude]
                 .spacing(6)
                 .align_y(iced::Center);
             let mut g = column![header].spacing(4);
