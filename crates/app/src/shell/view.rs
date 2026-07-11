@@ -137,6 +137,49 @@ impl Shell {
             };
             list = list.push(text(label).size(12));
         }
+        // Cross-project Favorites (F-favorites): every starred session in one
+        // place, most-recent-first. Coexists with the in-group star pin — a
+        // favourite is a shortcut, not a move. Folds like the other sections.
+        let favorites = self.core.favorite_sessions(&visible);
+        if !favorites.is_empty() {
+            let collapsed = self.core.is_collapsed(FAVORITES_SECTION_KEY);
+            let header = row![
+                fold_toggle(FAVORITES_SECTION_KEY, collapsed),
+                text(strings::FAVORITES).size(12)
+            ]
+            .spacing(6)
+            .align_y(iced::Center);
+            let mut fav_col = column![header].spacing(4);
+            if !collapsed {
+                for (path, s) in &favorites {
+                    let id = s.session_id.as_str();
+                    // ★ (filled) unstars — which also removes it from here.
+                    let star = button(text("★").size(12))
+                        .on_press(Message::ToggleStar(s.session_id.clone()))
+                        .style(button::text)
+                        .padding(0);
+                    let mut label_row = row![].spacing(6).align_y(iced::Center);
+                    if let Some(status) = live.get(id) {
+                        label_row = label_row.push(text("●").size(9).color(status_color(*status)));
+                    }
+                    let title = self.core.session_title(s);
+                    // The project label tells cross-project favourites apart.
+                    label_row = label_row.push(
+                        text(format!("{}  ·  {}", clip(&title, 22), project_label(path))).size(11),
+                    );
+                    let open = button(label_row)
+                        .on_press(Message::LaunchSession {
+                            cwd: (*path).to_owned(),
+                            resume: s.session_id.clone(),
+                        })
+                        .style(button::text)
+                        .padding(0)
+                        .width(Fill);
+                    fav_col = fav_col.push(row![star, open].spacing(6).align_y(iced::Center));
+                }
+            }
+            list = list.push(fav_col);
+        }
         // Plans & memory docs (F-plans-memory), above the project list. Its
         // header folds shut too, keyed like a project group.
         if !self.docs.is_empty() {
@@ -715,6 +758,11 @@ fn status_badge(status: SessionStatus) -> Element<'static, Message> {
 /// fold by real (always absolute) path; this reserved, non-path key shares the
 /// same persisted set without ever colliding with a project.
 const PLANS_SECTION_KEY: &str = "plans-memory";
+
+/// Fold key for the cross-project Favorites section. Like [`PLANS_SECTION_KEY`],
+/// a reserved non-path key sharing the persisted fold set without colliding with
+/// a real project path.
+const FAVORITES_SECTION_KEY: &str = "favorites";
 
 /// The disclosure triangle that folds a sidebar section: ▾ when open, ▸
 /// when folded, toggling the fold for `key`. Shared by the project headers and

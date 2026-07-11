@@ -729,6 +729,30 @@ impl App {
         groups
     }
 
+    /// Starred sessions across all `groups`, most-recent-first — the source for
+    /// the cross-project "★ Favorites" section (`F-favorites`). Each carries its
+    /// project path so a row can resume it. Derived from `groups` (already
+    /// search- and archive-filtered by [`Self::visible_projects`]) so favorites
+    /// stay consistent with the list; missing mtimes sort last.
+    #[must_use]
+    pub fn favorite_sessions<'a>(
+        &self,
+        groups: &'a [ProjectGroup],
+    ) -> Vec<(&'a str, &'a SessionRecord)> {
+        let mut favourites: Vec<(&str, &SessionRecord)> = groups
+            .iter()
+            .flat_map(|group| {
+                group
+                    .sessions
+                    .iter()
+                    .map(move |session| (group.path.as_str(), session))
+            })
+            .filter(|(_, session)| self.is_starred(&session.session_id))
+            .collect();
+        favourites.sort_by_key(|(_, session)| std::cmp::Reverse(session.modified));
+        favourites
+    }
+
     /// The sessions a project row should list: all of them while a
     /// search is active (a hit in the folded tail must surface), when the
     /// limit is unset, or when the group already fits; otherwise the first
@@ -1746,6 +1770,53 @@ mod tests {
             matches!(effects.as_slice(), [Effect::SaveMetadata(m)] if !m.repos.contains_key("/p"))
         );
         assert!(!app.is_repo_starred("/p"));
+    }
+
+    #[test]
+    fn favorites_aggregate_starred_sessions_across_projects_most_recent_first() {
+        let mut app = App::new();
+        let mut newer = record("new", "/a", "recent");
+        newer.modified = Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(100));
+        let mut older = record("old", "/b", "stale");
+        older.modified = Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(10));
+        app.apply(Event::ScanCompleted(vec![
+            newer,
+            older,
+            record("plain", "/a", "unstarred"),
+        ]));
+        app.apply(Event::ToggleStar("new".into()));
+        app.apply(Event::ToggleStar("old".into()));
+
+        let groups = app.visible_projects();
+        let favs = app.favorite_sessions(&groups);
+        let ids: Vec<_> = favs.iter().map(|(_, s)| s.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["new", "old"], "cross-project, most-recent-first");
+        // Each favourite carries its project path so the row can resume it.
+        assert_eq!(favs[0].0, "/a");
+        assert_eq!(favs[1].0, "/b");
+    }
+
+    #[test]
+    fn favorites_are_empty_without_stars() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record("a", "/p", "x")]));
+        let groups = app.visible_projects();
+        assert!(app.favorite_sessions(&groups).is_empty());
+    }
+
+    #[test]
+    fn an_archived_starred_session_is_not_a_visible_favorite() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record("a", "/p", "x")]));
+        app.apply(Event::ToggleStar("a".into()));
+        app.apply(Event::ToggleArchive("a".into()));
+        // Hidden by default, so it drops out of the visible groups favorites read.
+        let groups = app.visible_projects();
+        assert!(app.favorite_sessions(&groups).is_empty());
+        // …but it returns once archived sessions are shown.
+        app.apply(Event::ShowArchivedToggled(true));
+        let groups = app.visible_projects();
+        assert_eq!(app.favorite_sessions(&groups).len(), 1);
     }
 
     #[test]
