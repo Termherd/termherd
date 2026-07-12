@@ -16,7 +16,7 @@ use iced::{Element, Fill};
 use termherd_core::browser::{ProjectGroup, project_label, relative_age};
 use termherd_core::{SessionRecord, SessionStatus, SidebarFold};
 
-use super::{clip, mix, session_card, status_color};
+use super::{clip, session_card, sidebar_secondary_text, status_color};
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
 use crate::strings;
 
@@ -494,18 +494,4 @@ fn launch_button(
         tooltip::Position::Bottom,
     )
     .into()
-}
-
-/// Dimmed secondary text for the sidebar — search-match snippets. Mixes
-/// the normal text toward the background so it reads muted, theme-aware rather
-/// than a hardcoded grey.
-fn sidebar_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
-    let palette = theme.extended_palette();
-    iced::widget::text::Style {
-        color: Some(mix(
-            palette.background.base.text,
-            palette.background.base.color,
-            0.4,
-        )),
-    }
 }

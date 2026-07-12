@@ -8,22 +8,26 @@
 use std::time::SystemTime;
 
 use iced::widget::canvas::Canvas;
-use iced::widget::{button, column, container, mouse_area, row, text, text_editor};
-use iced::{Color, Element, Fill, Font, Size};
+use iced::widget::{button, column, container, mouse_area, row, text};
+use iced::{Color, Element, Fill, Size};
 use termherd_core::SessionRecord;
 use termherd_core::SessionStatus;
 use termherd_core::browser::relative_age;
 
 use super::ime::ime_area;
 use super::terminal::{TerminalView, cell_size};
-use super::{DocFeedback, HANDLE_W, Message, OpenDoc, Shell};
+use super::{HANDLE_W, Message, Shell};
 use crate::strings;
 
+mod doc_editor;
 mod modals;
 mod sidebar;
+mod style;
 mod tabs;
 
+use doc_editor::doc_editor;
 use modals::modal;
+use style::{card_secondary_text, card_style, clip, mix, sidebar_secondary_text, status_color};
 
 impl Shell {
     pub(super) fn view(&self) -> Element<'_, Message> {
@@ -145,78 +149,6 @@ impl Shell {
     }
 }
 
-/// Render an open plan/memory doc: a header (label, save state, actions) above
-/// the editable text area (F-plans-memory). A read-only doc omits the Save
-/// control; the header always carries a close button.
-fn doc_editor(doc: &OpenDoc) -> Element<'_, Message> {
-    let mut header = row![text(&doc.label).size(13)]
-        .spacing(12)
-        .align_y(iced::Center);
-
-    if doc.writable {
-        // A disabled button (no `on_press`) reads as "nothing to save".
-        let mut save = button(text(strings::DOC_SAVE).size(12))
-            .style(button::text)
-            .padding(0);
-        if doc.dirty {
-            save = save.on_press(Message::SaveDoc);
-        }
-        header = header.push(save);
-    }
-
-    if let Some(note) = save_note(doc) {
-        header = header.push(note);
-    }
-
-    header = header.push(
-        button(text(strings::DOC_CLOSE).size(12))
-            .on_press(Message::CloseDoc)
-            .style(button::text)
-            .padding(0),
-    );
-
-    let editor = text_editor(&doc.content)
-        .on_action(Message::DocEdit)
-        .font(Font::MONOSPACE)
-        .size(12)
-        .height(Fill);
-
-    container(column![header, editor].spacing(8).padding(8))
-        .width(Fill)
-        .height(Fill)
-        .into()
-}
-
-/// The save-state note for the editor header: the last save outcome if there is
-/// one, else a "modified" hint while there are unsaved edits, else nothing.
-fn save_note(doc: &OpenDoc) -> Option<Element<'_, Message>> {
-    const SAVED: Color = Color::from_rgb(0.3, 0.8, 0.4);
-    const ERROR: Color = Color::from_rgb(0.95, 0.35, 0.35);
-    const DIRTY: Color = Color::from_rgb(0.6, 0.6, 0.6);
-
-    match &doc.feedback {
-        Some(DocFeedback::Saved) => Some(text(strings::DOC_SAVED).size(11).color(SAVED).into()),
-        Some(DocFeedback::Error(message)) => {
-            Some(text(message.clone()).size(11).color(ERROR).into())
-        }
-        None if doc.dirty => Some(text(strings::DOC_MODIFIED).size(11).color(DIRTY).into()),
-        None => None,
-    }
-}
-
-/// The dot colour for an activity status (FR8). Shared by the focused-terminal
-/// badge and the sidebar's per-session dot so both stay in sync; the matching
-/// label lives in [`strings::status_label`].
-pub(super) fn status_color(status: SessionStatus) -> Color {
-    match status {
-        SessionStatus::Starting => Color::from_rgb(0.55, 0.55, 0.6),
-        SessionStatus::Busy => Color::from_rgb(0.95, 0.7, 0.2),
-        SessionStatus::Idle => Color::from_rgb(0.3, 0.8, 0.4),
-        SessionStatus::Attention => Color::from_rgb(0.95, 0.35, 0.35),
-        SessionStatus::Exited => Color::from_rgb(0.5, 0.5, 0.5),
-    }
-}
-
 /// A small per-session activity badge (FR8): a coloured dot + label for the
 /// focused terminal. The same dot annotates live rows in the sidebar and each
 /// tab in the tab strip.
@@ -228,49 +160,6 @@ fn status_badge(status: SessionStatus) -> Element<'static, Message> {
     .spacing(6)
     .align_y(iced::Center)
     .into()
-}
-
-/// Background for the session hover card — a step away from the surrounding
-/// surface (the `strong` palette tier rather than the default `weak`) so the
-/// card reads as a distinct floating layer, with a thin border to seal it.
-/// Everything is pulled from the theme palette, so it tracks the theme system
-/// once that lands rather than baking in a colour.
-pub(super) fn card_style(theme: &iced::Theme) -> container::Style {
-    let surface = card_surface(theme);
-    container::Style {
-        background: Some(surface.color.into()),
-        text_color: Some(surface.text),
-        border: iced::Border {
-            color: theme.extended_palette().background.weak.color,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..container::Style::default()
-    }
-}
-
-pub(super) fn card_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
-    let surface = card_surface(theme);
-    iced::widget::text::Style {
-        color: Some(mix(surface.text, surface.color, 0.35)),
-    }
-}
-
-/// The palette tier the hover card paints on — its surface colour and the text
-/// colour meant to sit on it. Single-sourced so the "which tier" choice (and
-/// the eventual theme-system wiring) lives in one place.
-fn card_surface(theme: &iced::Theme) -> iced::theme::palette::Pair {
-    theme.extended_palette().background.strong
-}
-
-/// Linear blend from `a` to `b` by `t` in `[0, 1]`.
-pub(super) fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color::from_rgba(
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-        a.a + (b.a - a.a) * t,
-    )
 }
 
 /// The hover card for a session row: full title, a muted line with relative
@@ -308,16 +197,4 @@ pub(super) fn session_card(
         .max_width(360.0)
         .style(card_style)
         .into()
-}
-
-/// Collapse newlines to spaces and truncate to `max` characters with an ellipsis.
-pub(super) fn clip(s: &str, max: usize) -> String {
-    let cleaned: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
-    if cleaned.chars().count() <= max {
-        cleaned
-    } else {
-        let mut out: String = cleaned.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
-    }
 }
