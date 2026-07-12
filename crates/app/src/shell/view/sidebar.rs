@@ -74,6 +74,10 @@ impl Shell {
         // age in the sidebar (row disambiguator + tooltip). The app layer owns
         // the clock; core stays pure.
         let now = SystemTime::now();
+        // A leading status line (scan error, or "no sessions / no results")
+        // stands in for the whole list, so a rule beneath it would read as its
+        // own stray divider: it suppresses the first section's top rule below.
+        let has_status = self.scan_error.is_some() || visible.is_empty();
         let mut list = column![].spacing(16).padding(12);
         if let Some(error) = &self.scan_error {
             list = list.push(text(strings::scan_failed(error)).size(12));
@@ -85,22 +89,30 @@ impl Shell {
             };
             list = list.push(text(label).size(12));
         }
-        // A thin rule precedes each present section, so the Favorites / Plans /
-        // Projects grouping reads at a glance and the first rule sets the list
-        // apart from the search chrome above. Absent sections leave no rule.
+        // The present sections, in order. The projects are one block so a single
+        // rule precedes them rather than one before every group.
+        let mut sections: Vec<Element<'_, Message>> = Vec::new();
         if let Some(section) = self.favorites_section(&visible, &live) {
-            list = list.push(section_divider());
-            list = list.push(section);
+            sections.push(section);
         }
         if let Some(section) = self.plans_section() {
-            list = list.push(section_divider());
-            list = list.push(section);
+            sections.push(section);
         }
         if !visible.is_empty() {
-            list = list.push(section_divider());
+            let mut projects = column![].spacing(16);
             for group in &visible {
-                list = list.push(self.project_group(group, &live, now));
+                projects = projects.push(self.project_group(group, &live, now));
             }
+            sections.push(projects.into());
+        }
+        // A thin rule separates adjacent sections; the first section also earns a
+        // top rule to set the list apart from the search chrome — unless a status
+        // line already sits above it.
+        for (i, section) in sections.into_iter().enumerate() {
+            if i > 0 || !has_status {
+                list = list.push(section_divider());
+            }
+            list = list.push(section);
         }
         // A handle to collapse the sidebar, mirroring the one that
         // restores it from the main pane.
@@ -426,20 +438,17 @@ fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
         .into()
 }
 
-/// A thin, low-contrast horizontal rule between sidebar sections (Favorites,
-/// Plans & mémoire, Projects), so the grouping reads at a glance. Theme-aware —
-/// the line is the text colour mixed most of the way to the background, never a
+/// A thin horizontal rule between sidebar sections (Favorites, Plans & mémoire,
+/// Projects), so the grouping reads at a glance. Painted in the theme's
+/// `background.strong` tier — the calibrated "separator" colour iced's own
+/// default rule uses: visible against the surface yet still subtle, never a
 /// hardcoded grey.
 fn section_divider() -> Element<'static, Message> {
     rule::horizontal(1)
         .style(|theme: &iced::Theme| {
             let palette = theme.extended_palette();
             rule::Style {
-                color: mix(
-                    palette.background.base.text,
-                    palette.background.base.color,
-                    0.85,
-                ),
+                color: palette.background.strong.color,
                 radius: 0.0.into(),
                 fill_mode: rule::FillMode::Full,
                 snap: true,
