@@ -153,17 +153,30 @@ impl Workspace {
 
     /// Give the tab at `index` a manual name that overrides its derived title.
     /// A blank name (empty or whitespace) clears the override, reverting to the
-    /// derived title. Returns `None` (changing nothing) when `index` is out of
-    /// range.
+    /// derived title. So does a name that, once trimmed, equals the derived
+    /// title: an override identical to the derived value is redundant, and
+    /// storing it would silently *freeze* the title against later OSC/digest
+    /// relabels — so the tab keeps tracking its derived title instead. Returns
+    /// `None` (changing nothing) when `index` is out of range.
     pub fn rename_tab(&mut self, index: usize, name: &str) -> Option<()> {
         let tab = self.tabs.get_mut(index)?;
         let trimmed = name.trim();
-        tab.custom_title = if trimmed.is_empty() {
+        tab.custom_title = if trimmed.is_empty() || trimmed == tab.title.trim() {
             None
         } else {
             Some(trimmed.to_owned())
         };
         Some(())
+    }
+
+    /// Index of the tab hosting `session`, if any — a stable handle for state
+    /// that must survive tab reordering (an inline rename anchors on it rather
+    /// than a positional index, which a reorder or a sibling close would shift).
+    #[must_use]
+    pub fn tab_of_session(&self, session: SessionId) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|tab| tab.sessions().contains(&session))
     }
 
     /// Title of the tab hosting `session` — what the user sees for that
@@ -433,6 +446,27 @@ mod tests {
         assert_eq!(ws.rename_tab(0, "   "), Some(()));
         assert_eq!(ws.tabs[0].custom_title, None);
         assert_eq!(ws.tabs[0].display_title(), "derived");
+    }
+
+    #[test]
+    fn renaming_to_the_derived_title_stores_no_override() {
+        // An override equal to the derived title is redundant: storing it would
+        // freeze the title against later relabels. Even with stray whitespace,
+        // the tab must keep tracking its derived title.
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "derived");
+        assert_eq!(ws.rename_tab(0, "  derived  "), Some(()));
+        assert_eq!(ws.tabs[0].custom_title, None);
+        assert_eq!(ws.tabs[0].display_title(), "derived");
+    }
+
+    #[test]
+    fn tab_of_session_locates_the_hosting_tab() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.open(sid(2), "b");
+        assert_eq!(ws.tab_of_session(sid(2)), Some(1));
+        assert_eq!(ws.tab_of_session(sid(9)), None);
     }
 
     #[test]

@@ -233,10 +233,13 @@ struct Shell {
     keymap: Keymap,
     /// In-progress inline rename: `(session id, edit buffer)` (F-session-metadata).
     renaming: Option<(String, String)>,
-    /// In-progress inline tab rename: `(tab index, edit buffer)`. Distinct from
-    /// [`Self::renaming`] (a browsed session's title) — this overrides a tab's
-    /// *display* title, and its dismissal commits on blur rather than cancelling.
-    tab_rename: Option<(usize, String)>,
+    /// In-progress inline tab rename: `(anchor session, edit buffer)`. Distinct
+    /// from [`Self::renaming`] (a browsed session's title) — this overrides a
+    /// tab's *display* title, and its dismissal commits on blur rather than
+    /// cancelling. Anchored on the tab's first session (a stable handle) rather
+    /// than a positional index, so a reorder or a sibling close can't retarget
+    /// the pending edit at the wrong tab.
+    tab_rename: Option<(SessionId, String)>,
     /// Browsable plan / memory docs (F-plans-memory), refreshed on scan.
     docs: Vec<DocEntry>,
     /// Whether a scan is currently in flight. At most one runs at a time;
@@ -1104,11 +1107,18 @@ impl Shell {
         // A tab rename blurs the other way: a genuine interaction elsewhere
         // *commits* the pending name (the double-click's own drag noise on the
         // same tab is excluded by `commits_tab_rename`), then the message itself
-        // still dispatches below.
-        if let Some((index, _)) = self.tab_rename
-            && message.commits_tab_rename(index)
-        {
-            self.commit_tab_rename();
+        // still dispatches below. The anchored tab's current index feeds that
+        // drag-noise discrimination; `usize::MAX` (the tab is gone) never
+        // matches a real `TabDragStart`, so any interaction just commits.
+        if let Some(anchor) = self.tab_rename.as_ref().map(|(a, _)| *a) {
+            let active = self
+                .core
+                .workspace
+                .tab_of_session(anchor)
+                .unwrap_or(usize::MAX);
+            if message.commits_tab_rename(active) {
+                self.commit_tab_rename();
+            }
         }
         match message {
             Message::Window(id, event) => self.on_window_event(id, event),
@@ -1290,8 +1300,17 @@ impl Shell {
                 Task::none()
             }
             Message::StartTabRename { index, current } => {
-                if index < self.core.workspace.tabs.len() {
-                    self.tab_rename = Some((index, current));
+                // Anchor on the tab's first session so the edit survives a
+                // reorder; every tab hosts at least one, so this is `Some` for a
+                // valid index.
+                if let Some(anchor) = self
+                    .core
+                    .workspace
+                    .tabs
+                    .get(index)
+                    .and_then(|tab| tab.sessions().first().copied())
+                {
+                    self.tab_rename = Some((anchor, current));
                     return operate(focusable::focus(tab_rename_id()));
                 }
                 Task::none()
@@ -1590,27 +1609,22 @@ impl Shell {
         self.resize_focused()
     }
 
-    /// Apply the pending tab rename to the core and clear the edit. A blank name
-    /// reverts to the derived title — the core's [`rename_tab`] owns that rule.
-    /// No-op when nothing is pending, or when the trimmed name still matches what
-    /// the tab already shows: committing an *unchanged* name would freeze a
-    /// derived title as a custom override, silently blocking future OSC/digest
-    /// relabels (an accidental double-click + Enter must leave the tab dynamic).
+    /// Apply the pending tab rename to the core and clear the edit. The core's
+    /// [`rename_tab`] owns the naming rules — a blank name (or one equal to the
+    /// derived title) reverts to the derived title rather than freezing it, so
+    /// an accidental double-click + Enter leaves the tab dynamic. The index is
+    /// resolved *fresh* from the anchor session, since it may have shifted (or
+    /// the tab vanished) since the edit began. No-op when nothing is pending or
+    /// the anchored tab is gone.
     ///
     /// [`rename_tab`]: termherd_core::workspace::Workspace::rename_tab
     fn commit_tab_rename(&mut self) {
-        let Some((index, title)) = self.tab_rename.take() else {
+        let Some((anchor, title)) = self.tab_rename.take() else {
             return;
         };
-        let unchanged = self
-            .core
-            .workspace
-            .tabs
-            .get(index)
-            .is_some_and(|tab| tab.display_title() == title.trim());
-        if unchanged {
+        let Some(index) = self.core.workspace.tab_of_session(anchor) else {
             return;
-        }
+        };
         let _ = self
             .core
             .apply(termherd_core::Event::RenameTab { index, title });
@@ -2583,7 +2597,13 @@ mod key_routing {
             index: 1,
             current: derived.clone(),
         });
-        assert_eq!(shell.tab_rename.as_ref().map(|(i, _)| *i), Some(1));
+        // The edit anchors on tab 1's session, so it resolves back to index 1.
+        let anchor = shell
+            .tab_rename
+            .as_ref()
+            .map(|(a, _)| *a)
+            .expect("renaming");
+        assert_eq!(shell.core.workspace.tab_of_session(anchor), Some(1));
 
         let _ = shell.update(Message::TabRenameInput("My work".to_string()));
         let _ = shell.update(Message::CommitTabRename);
@@ -2696,6 +2716,45 @@ mod key_routing {
 
         assert!(shell.tab_rename.is_none(), "an elsewhere-click commits");
         assert_eq!(shell.core.workspace.tabs[1].display_title(), "Renamed");
+    }
+
+    #[test]
+    fn a_pending_tab_rename_follows_its_tab_across_a_reorder() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[2].display_title().to_owned();
+        let _ = shell.update(Message::StartTabRename {
+            index: 2,
+            current: derived,
+        });
+        let _ = shell.update(Message::TabRenameInput("Pinned".to_string()));
+        let anchor = shell
+            .tab_rename
+            .as_ref()
+            .map(|(a, _)| *a)
+            .expect("renaming");
+
+        // A reorder shifts the anchored tab to a new index without committing.
+        // Because the edit anchors on the session, not the position, the commit
+        // must still land on the right tab.
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::MoveTab { from: 0, to: 2 });
+        let _ = shell.update(Message::CommitTabRename);
+
+        let idx = shell
+            .core
+            .workspace
+            .tab_of_session(anchor)
+            .expect("the anchored tab still exists");
+        assert_eq!(shell.core.workspace.tabs[idx].display_title(), "Pinned");
+        let renamed = shell
+            .core
+            .workspace
+            .tabs
+            .iter()
+            .filter(|t| t.display_title() == "Pinned")
+            .count();
+        assert_eq!(renamed, 1, "only the anchored tab is renamed");
     }
 
     #[test]

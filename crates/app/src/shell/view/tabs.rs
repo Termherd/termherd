@@ -45,7 +45,10 @@ impl Shell {
             // Double-clicking a chip opens an inline field over it; while that
             // field is up the chip is the editor, not a draggable button — so it
             // emits no drag messages that could dismiss its own edit.
-            let renaming_this = self.tab_rename.as_ref().is_some_and(|(ri, _)| *ri == index);
+            let renaming_this = self
+                .tab_rename
+                .as_ref()
+                .is_some_and(|(anchor, _)| tab.sessions().contains(anchor));
             let chip: Element<'_, Message> = if renaming_this {
                 let buffer = self.tab_rename.as_ref().map_or("", |(_, b)| b.as_str());
                 let mut inner = row![].spacing(6).align_y(iced::Center);
