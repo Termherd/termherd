@@ -189,6 +189,8 @@ mod tests {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            default_bg: [0x11, 0x13, 0x18],
+            cursor_color: [0xd0, 0xd0, 0xd0],
         }
     }
 
@@ -217,6 +219,8 @@ mod tests {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            default_bg: [0x11, 0x13, 0x18],
+            cursor_color: [0xd0, 0xd0, 0xd0],
         }
     }
 

@@ -74,7 +74,7 @@ fn main() -> iced::Result {
     let sink: EventSink = Arc::new(move |event| {
         let _ = tx.unbounded_send(event);
     });
-    let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink, shell));
+    let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink, shell, settings.palette()));
 
     let startup = shell::Startup {
         theme: settings.theme,

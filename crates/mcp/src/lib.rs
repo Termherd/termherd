@@ -62,6 +62,46 @@ pub const OPTIONS: &[OptionSpec] = &[
         kind: "array",
         choices: &[],
     },
+    OptionSpec {
+        id: "terminal.colors.scheme",
+        pointer: "/terminal/colors/scheme",
+        description: "Built-in terminal colour scheme the overrides start from; unset means the built-in default.",
+        kind: "enum",
+        choices: &[
+            "solarized-dark",
+            "solarized-light",
+            "gruvbox-dark",
+            "gruvbox-light",
+        ],
+    },
+    OptionSpec {
+        id: "terminal.colors.foreground",
+        pointer: "/terminal/colors/foreground",
+        description: "Terminal default text colour, \"#rrggbb\"; unset means the built-in scheme.",
+        kind: "string",
+        choices: &[],
+    },
+    OptionSpec {
+        id: "terminal.colors.background",
+        pointer: "/terminal/colors/background",
+        description: "Terminal background colour, \"#rrggbb\"; unset means the built-in scheme.",
+        kind: "string",
+        choices: &[],
+    },
+    OptionSpec {
+        id: "terminal.colors.cursor",
+        pointer: "/terminal/colors/cursor",
+        description: "Terminal cursor block colour, \"#rrggbb\"; unset means the built-in scheme.",
+        kind: "string",
+        choices: &[],
+    },
+    OptionSpec {
+        id: "terminal.colors.palette",
+        pointer: "/terminal/colors/palette",
+        description: "The 16 ANSI terminal colours (normal 0-7, bright 8-15), each \"#rrggbb\".",
+        kind: "array",
+        choices: &[],
+    },
 ];
 
 /// Resolve every option against a parsed `settings.json`, pairing each spec with
