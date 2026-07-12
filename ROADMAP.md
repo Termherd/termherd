@@ -62,7 +62,14 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   updates (debounced `notify`, FR2); a per-project disclosure triangle folds
   its session list, persisted to `~/.termherd/collapsed.json` (#22); long
   groups list only the N most recent sessions with a "… N more" expander
-  (`sidebar.session_limit` in `settings.json`, default 5, 0 = all; #131)
+  (`sidebar.session_limit` in `settings.json`, default 5, 0 = all; #131).
+  Section headers fold on a title click, not only the disclosure triangle —
+  the Favorites and Plans & mémoire titles gained the parity a project header
+  already had, via a shared `section_header` builder (#146). Thin theme-aware
+  rules separate the sidebar sections (Favorites / Plans & mémoire / Projects)
+  so the grouping reads at a glance (#150). The sidebar view was extracted to
+  its own `shell/view/sidebar.rs` with per-section row builders, dropping the
+  `too_many_lines` allow (C2 of the intra-crate refactor, #168)
 - [x] `F-builtin-terminal` — PTY + native terminal widget (M2):
   `termherd-pty` adapter (`portable-pty` + `alacritty_terminal`,
   reader + terminal thread per session, cursor-report reply for ConPTY);

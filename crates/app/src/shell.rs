@@ -2155,6 +2155,74 @@ mod key_routing {
             .apply(termherd_core::Event::ScanCompleted(vec![record]));
     }
 
+    /// The sidebar was split into per-section row builders; render it with every
+    /// section live — a starred favorite (so its section and leading divider
+    /// appear), the Plans & mémoire docs, and a project group whose two rows
+    /// collide on title — to prove the split assembles a valid tree across all
+    /// branches without dropping or panicking on one.
+    #[test]
+    fn the_split_sidebar_renders_every_section() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let row = |id: &str| SessionRecord {
+            session_id: id.to_string(),
+            project_path: "/tmp/alpha".to_string(),
+            digest: termherd_claude::digest::SessionDigest {
+                summary: "shared title".to_string(),
+                message_count: 1,
+                text_content: String::new(),
+                slug: None,
+                custom_title: None,
+                ai_title: None,
+                tail: Vec::new(),
+            },
+            modified: None,
+        };
+        let _ = shell.core.apply(termherd_core::Event::ScanCompleted(vec![
+            row("sess-a"),
+            row("sess-b"),
+        ]));
+        // Star one so the Favorites section — and the divider before it — shows.
+        let _ = shell.update(Message::ToggleStar("sess-a".to_string()));
+        assert!(
+            !shell
+                .core
+                .favorite_sessions(&shell.core.visible_projects())
+                .is_empty(),
+            "a starred session should surface as a favorite",
+        );
+        // Populate the Plans & mémoire section.
+        shell.docs = vec![DocEntry {
+            kind: crate::docs::DocKind::Plan,
+            label: "PRD.md".to_string(),
+            path: std::path::PathBuf::from("/tmp/PRD.md"),
+        }];
+        // Building the whole tree must not panic across favorites + plans +
+        // projects and their dividers.
+        let _ = shell.view();
+    }
+
+    /// With no browsable projects the sidebar shows a status line, then the
+    /// Plans & mémoire section — the branch where the first section's leading
+    /// divider is suppressed so it does not underline the status. Render it to
+    /// prove that path assembles without panicking.
+    #[test]
+    fn the_sidebar_renders_a_status_line_above_a_lone_section() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(Vec::new()));
+        shell.docs = vec![DocEntry {
+            kind: crate::docs::DocKind::Plan,
+            label: "PRD.md".to_string(),
+            path: std::path::PathBuf::from("/tmp/PRD.md"),
+        }];
+        assert!(
+            shell.core.visible_projects().is_empty(),
+            "no scanned sessions should leave the project list empty",
+        );
+        let _ = shell.view();
+    }
+
     #[test]
     fn resuming_a_known_session_titles_the_tab_with_its_session_name() {
         // Claude (2.1.195) emits no OSC title, so the live-title override
