@@ -2201,6 +2201,28 @@ mod key_routing {
         let _ = shell.view();
     }
 
+    /// With no browsable projects the sidebar shows a status line, then the
+    /// Plans & mémoire section — the branch where the first section's leading
+    /// divider is suppressed so it does not underline the status. Render it to
+    /// prove that path assembles without panicking.
+    #[test]
+    fn the_sidebar_renders_a_status_line_above_a_lone_section() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(Vec::new()));
+        shell.docs = vec![DocEntry {
+            kind: crate::docs::DocKind::Plan,
+            label: "PRD.md".to_string(),
+            path: std::path::PathBuf::from("/tmp/PRD.md"),
+        }];
+        assert!(
+            shell.core.visible_projects().is_empty(),
+            "no scanned sessions should leave the project list empty",
+        );
+        let _ = shell.view();
+    }
+
     #[test]
     fn resuming_a_known_session_titles_the_tab_with_its_session_name() {
         // Claude (2.1.195) emits no OSC title, so the live-title override
