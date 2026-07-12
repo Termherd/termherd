@@ -17,7 +17,6 @@ use iced::{Color, Element, Fill, Font, Size};
 use termherd_core::SessionRecord;
 use termherd_core::SessionStatus;
 use termherd_core::browser::{project_label, relative_age};
-use termherd_core::workspace::Tab;
 
 use super::ime::ime_area;
 use super::terminal::{TerminalView, cell_size};
@@ -25,6 +24,7 @@ use super::{DocFeedback, Focus, HANDLE_W, Message, OpenDoc, Shell, rename_id, se
 use crate::strings;
 
 mod modals;
+mod tabs;
 
 use modals::modal;
 
@@ -460,88 +460,6 @@ impl Shell {
         container(pane.push(body)).width(Fill).height(Fill).into()
     }
 
-    /// The tab strip (FR5): one chip per open session, the active one
-    /// highlighted, each carrying its activity dot (FR8) and a close button.
-    /// `None` when nothing is open, so the welcome view keeps the full pane.
-    fn tab_bar(&self) -> Option<Element<'_, Message>> {
-        let tabs = &self.core.workspace.tabs;
-        if tabs.is_empty() {
-            return None;
-        }
-        // One wall-clock read per render feeds every tab's relative "last
-        // activity" age, matching the sidebar; the app layer owns the clock.
-        let now = SystemTime::now();
-        let drag = self.tab_drag.map(|d| (d.from, d.over));
-        // Where a release would drop the carried tab: `move_tab` lands it *at*
-        // index `over`, so the insertion bar sits before `over` when dragging
-        // left and after it when dragging right. `None` until the pointer has
-        // actually crossed onto another slot.
-        let caret_at = drag.and_then(|(from, over)| match over.cmp(&from) {
-            std::cmp::Ordering::Greater => Some(over + 1),
-            std::cmp::Ordering::Less => Some(over),
-            std::cmp::Ordering::Equal => None,
-        });
-        let mut bar = row![].spacing(4).align_y(iced::Center);
-        for (index, tab) in tabs.iter().enumerate() {
-            let active = index == self.core.workspace.active;
-            // The carried tab fades to a ghost; the drop point is shown by the
-            // insertion bar between chips, not on the chip itself.
-            let dragging_this = drag.is_some_and(|(from, _)| from == index);
-
-            let mut inner = row![].spacing(6).align_y(iced::Center);
-            if let Some(status) = self.core.tab_status(index) {
-                inner = inner.push(text("●").size(9).color(status_color(status)));
-            }
-            inner = inner.push(text(clip(&tab.title, 24)).size(12));
-            // The × lives inside the chip so it sits on the active tab's fill,
-            // and its colour follows the chip's text so it stays legible there.
-            inner = inner.push(
-                button(text("×").size(14))
-                    .on_press(Message::RequestCloseTab(index))
-                    .style(move |theme: &iced::Theme, _status| button::Style {
-                        background: None,
-                        text_color: tab_chip_text(theme, active),
-                        ..button::Style::default()
-                    })
-                    .padding(0),
-            );
-            let chip = container(inner)
-                .padding(6)
-                .style(move |theme: &iced::Theme| tab_chip_style(theme, active, dragging_this));
-            // A press starts a drag; entering another chip moves the drop slot.
-            // Release/cancel are handled by the strip below, so a plain click
-            // (press and release on the same chip) still just activates it. The
-            // × button captures its own click, so it never starts a drag.
-            let chip = mouse_area(chip)
-                .on_press(Message::TabDragStart(index))
-                .on_enter(Message::TabDragOver(index));
-            // The chip clips the title; hovering reveals the fuller description —
-            // the very session card the sidebar shows when the tab
-            // resumes a browsed session, else a minimal title + cwd card.
-            let chip = tooltip(
-                chip,
-                self.tab_hover_card(index, tab, now),
-                tooltip::Position::Bottom,
-            );
-            if caret_at == Some(index) {
-                bar = bar.push(insertion_caret());
-            }
-            bar = bar.push(chip);
-        }
-        // A drop past the last tab parks the bar at the strip's end.
-        if caret_at == Some(tabs.len()) {
-            bar = bar.push(insertion_caret());
-        }
-        // One release anywhere over the strip ends the drag (committing the
-        // reorder at the last-hovered slot); leaving the strip abandons it.
-        Some(
-            mouse_area(bar)
-                .on_release(Message::TabDragEnd)
-                .on_exit(Message::TabDragCancel)
-                .into(),
-        )
-    }
-
     /// The `● REC n/cap` indicator shown while a GIF screencast records,
     /// so the recording state — and how close it is to the auto-stop cap — is
     /// unmistakable. `None` when not recording. Independent of the tab strip, so
@@ -560,31 +478,6 @@ impl Shell {
                 .padding([2, 8])
                 .into(),
         )
-    }
-
-    /// The hover card for a tab. A tab that resumes a browsed session
-    /// shows the *same* [`session_card`] the sidebar does — one derive (the core
-    /// resolves the record via [`termherd_core::App::tab_record`]), no divergent
-    /// formatting. A shell or a fresh, not-yet-scanned session has no record, so
-    /// it falls back to a minimal card with the full title and the working
-    /// directory it runs in.
-    fn tab_hover_card(
-        &self,
-        index: usize,
-        tab: &Tab,
-        now: SystemTime,
-    ) -> Element<'static, Message> {
-        match self.core.tab_record(index) {
-            Some(record) => session_card(self.core.session_title(record), record, now),
-            None => {
-                let cwd = tab
-                    .sessions()
-                    .first()
-                    .and_then(|id| self.core.sessions.get(id))
-                    .and_then(|s| s.cwd.clone());
-                tab_card(tab.title.clone(), cwd)
-            }
-        }
     }
 }
 
@@ -650,7 +543,7 @@ fn save_note(doc: &OpenDoc) -> Option<Element<'_, Message>> {
 /// The dot colour for an activity status (FR8). Shared by the focused-terminal
 /// badge and the sidebar's per-session dot so both stay in sync; the matching
 /// label lives in [`strings::status_label`].
-fn status_color(status: SessionStatus) -> Color {
+pub(super) fn status_color(status: SessionStatus) -> Color {
     match status {
         SessionStatus::Starting => Color::from_rgb(0.55, 0.55, 0.6),
         SessionStatus::Busy => Color::from_rgb(0.95, 0.7, 0.2),
@@ -720,7 +613,7 @@ fn launch_button(
 /// card reads as a distinct floating layer, with a thin border to seal it.
 /// Everything is pulled from the theme palette, so it tracks the theme system
 /// once that lands rather than baking in a colour.
-fn card_style(theme: &iced::Theme) -> container::Style {
+pub(super) fn card_style(theme: &iced::Theme) -> container::Style {
     let surface = card_surface(theme);
     container::Style {
         background: Some(surface.color.into()),
@@ -732,59 +625,6 @@ fn card_style(theme: &iced::Theme) -> container::Style {
         },
         ..container::Style::default()
     }
-}
-
-/// Dimmed text for the card's secondary lines (meta + transcript tail): the
-/// card's text colour mixed toward its background, so it stays legible and
-/// theme-derived on both light and dark palettes.
-/// The text colour for a tab chip — the contrasting colour on the active tab's
-/// primary fill, the normal foreground otherwise. Shared by the title and the
-/// × so they always match.
-fn tab_chip_text(theme: &iced::Theme, active: bool) -> Color {
-    let palette = theme.extended_palette();
-    if active {
-        palette.primary.base.text
-    } else {
-        palette.background.base.text
-    }
-}
-
-/// A tab chip's look, now a styled container rather than a button (the
-/// drag needs `mouse_area` to see press *and* release, which a button would
-/// capture). `active` paints the primary fill; `dragging` fades the tab being
-/// carried to a ghost. All colours come from the theme palette — never
-/// hardcoded.
-fn tab_chip_style(theme: &iced::Theme, active: bool, dragging: bool) -> container::Style {
-    let palette = theme.extended_palette();
-    let bg = active.then_some(palette.primary.base.color);
-    let fg = tab_chip_text(theme, active);
-    let fade = |c: Color| mix(c, palette.background.base.color, 0.55);
-    container::Style {
-        background: bg.map(|c| iced::Background::Color(if dragging { fade(c) } else { c })),
-        text_color: Some(if dragging { fade(fg) } else { fg }),
-        border: iced::Border {
-            radius: 4.0.into(),
-            ..iced::Border::default()
-        },
-        ..container::Style::default()
-    }
-}
-
-/// The vertical insertion bar shown between chips during a drag — the
-/// legible "it drops here" marker, painted in the theme accent.
-fn insertion_caret<'a>() -> Element<'a, Message> {
-    container(text(""))
-        .width(3)
-        .height(24)
-        .style(|theme: &iced::Theme| container::Style {
-            background: Some(theme.extended_palette().primary.strong.color.into()),
-            border: iced::Border {
-                radius: 2.0.into(),
-                ..iced::Border::default()
-            },
-            ..container::Style::default()
-        })
-        .into()
 }
 
 /// Dimmed secondary text for the sidebar — search-match snippets. Mixes
@@ -801,7 +641,7 @@ fn sidebar_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
     }
 }
 
-fn card_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
+pub(super) fn card_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
     let surface = card_surface(theme);
     iced::widget::text::Style {
         color: Some(mix(surface.text, surface.color, 0.35)),
@@ -816,7 +656,7 @@ fn card_surface(theme: &iced::Theme) -> iced::theme::palette::Pair {
 }
 
 /// Linear blend from `a` to `b` by `t` in `[0, 1]`.
-fn mix(a: Color, b: Color, t: f32) -> Color {
+pub(super) fn mix(a: Color, b: Color, t: f32) -> Color {
     Color::from_rgba(
         a.r + (b.r - a.r) * t,
         a.g + (b.g - a.g) * t,
@@ -828,7 +668,7 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
 /// The hover card for a session row: full title, a muted line with relative
 /// last activity and message count, then the last few transcript lines so a
 /// duplicate-looking session is recognisable without opening it.
-fn session_card(
+pub(super) fn session_card(
     title: String,
     session: &SessionRecord,
     now: SystemTime,
@@ -854,21 +694,6 @@ fn session_card(
                 .size(10)
                 .style(card_secondary_text),
         );
-    }
-    container(card)
-        .padding(8)
-        .max_width(360.0)
-        .style(card_style)
-        .into()
-}
-
-/// The minimal hover card for a tab with no browsed record — a shell or a fresh
-/// session: the full, untruncated title and the working directory it runs
-/// in. Styled like [`session_card`] so the two hover surfaces read alike.
-fn tab_card(title: String, cwd: Option<String>) -> Element<'static, Message> {
-    let mut card = column![text(title).size(12)].spacing(4);
-    if let Some(cwd) = cwd {
-        card = card.push(text(cwd).size(10).style(card_secondary_text));
     }
     container(card)
         .padding(8)

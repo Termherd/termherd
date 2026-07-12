@@ -67,6 +67,10 @@ fn rename_id() -> widget::Id {
     widget::Id::new("termherd-rename")
 }
 
+fn tab_rename_id() -> widget::Id {
+    widget::Id::new("termherd-tab-rename")
+}
+
 /// The user's home directory, the fallback cwd for "new shell here" when no
 /// session is open to inherit one from. Falls back to "." if neither
 /// `USERPROFILE` (Windows) nor `HOME` (Unix) is set, so a launch always has a
@@ -229,6 +233,13 @@ struct Shell {
     keymap: Keymap,
     /// In-progress inline rename: `(session id, edit buffer)` (F-session-metadata).
     renaming: Option<(String, String)>,
+    /// In-progress inline tab rename: `(anchor session, edit buffer)`. Distinct
+    /// from [`Self::renaming`] (a browsed session's title) — this overrides a
+    /// tab's *display* title, and its dismissal commits on blur rather than
+    /// cancelling. Anchored on the tab's first session (a stable handle) rather
+    /// than a positional index, so a reorder or a sibling close can't retarget
+    /// the pending edit at the wrong tab.
+    tab_rename: Option<(SessionId, String)>,
     /// Browsable plan / memory docs (F-plans-memory), refreshed on scan.
     docs: Vec<DocEntry>,
     /// Whether a scan is currently in flight. At most one runs at a time;
@@ -384,6 +395,18 @@ enum Message {
     TabDragEnd,
     /// The drag left the tab strip without a drop — abandon it.
     TabDragCancel,
+    /// Begin renaming a tab inline (double-click its chip), seeded with the
+    /// title currently shown.
+    StartTabRename {
+        index: usize,
+        current: String,
+    },
+    /// The inline tab-rename field's text changed.
+    TabRenameInput(String),
+    /// Commit the tab rename (Enter, or a blur onto another interaction).
+    CommitTabRename,
+    /// Abandon the tab rename (Escape), keeping the previous display title.
+    CancelTabRename,
     /// Confirm quitting TermHerd, closing the window (and hard-killing every
     /// live session). Reached only after the quit modal is accepted.
     ConfirmCloseWindow,
@@ -495,6 +518,26 @@ impl Message {
                 | Self::CloseDoc
         )
     }
+
+    /// Whether this message is a deliberate interaction *elsewhere* that should
+    /// commit an in-progress tab rename — the blur-commits convention (unlike a
+    /// session rename, which blur cancels). `active` is the tab being renamed:
+    /// the double-click that opened the edit emits `TabDragStart(active)` /
+    /// `TabDragEnd` around it, and those must not commit; a press on a *different*
+    /// tab, or focusing the terminal / search / launching, does.
+    fn commits_tab_rename(&self, active: usize) -> bool {
+        match self {
+            // The double-click that opened the edit emits `TabDragStart(active)`
+            // then `TabDragEnd` around it — its own drag noise must not commit. A
+            // press on a *different* tab is a genuine blur.
+            Self::TabDragStart(index) => *index != active,
+            Self::TabDragEnd => false,
+            // Every other deliberate interaction elsewhere that would dismiss a
+            // session rename also commits a tab rename (the blur-commits
+            // convention) — one shared allowlist, so the two can't drift.
+            other => other.dismisses_rename(),
+        }
+    }
 }
 
 impl Shell {
@@ -527,6 +570,7 @@ impl Shell {
             theme: startup.theme.to_iced(),
             keymap: startup.keymap,
             renaming: None,
+            tab_rename: None,
             // Populated by the first scan's `refresh_docs` — `discover` does
             // blocking fs I/O, which must stay off the UI thread.
             docs: Vec::new(),
@@ -1060,6 +1104,22 @@ impl Shell {
         if self.renaming.is_some() && message.dismisses_rename() {
             self.renaming = None;
         }
+        // A tab rename blurs the other way: a genuine interaction elsewhere
+        // *commits* the pending name (the double-click's own drag noise on the
+        // same tab is excluded by `commits_tab_rename`), then the message itself
+        // still dispatches below. The anchored tab's current index feeds that
+        // drag-noise discrimination; `usize::MAX` (the tab is gone) never
+        // matches a real `TabDragStart`, so any interaction just commits.
+        if let Some(anchor) = self.tab_rename.as_ref().map(|(a, _)| *a) {
+            let active = self
+                .core
+                .workspace
+                .tab_of_session(anchor)
+                .unwrap_or(usize::MAX);
+            if message.commits_tab_rename(active) {
+                self.commit_tab_rename();
+            }
+        }
         match message {
             Message::Window(id, event) => self.on_window_event(id, event),
             Message::ScanCompleted(Ok(records)) => {
@@ -1237,6 +1297,36 @@ impl Shell {
             },
             Message::TabDragCancel => {
                 self.tab_drag = None;
+                Task::none()
+            }
+            Message::StartTabRename { index, current } => {
+                // Anchor on the tab's first session so the edit survives a
+                // reorder; every tab hosts at least one, so this is `Some` for a
+                // valid index.
+                if let Some(anchor) = self
+                    .core
+                    .workspace
+                    .tabs
+                    .get(index)
+                    .and_then(|tab| tab.sessions().first().copied())
+                {
+                    self.tab_rename = Some((anchor, current));
+                    return operate(focusable::focus(tab_rename_id()));
+                }
+                Task::none()
+            }
+            Message::TabRenameInput(value) => {
+                if let Some((_, buffer)) = &mut self.tab_rename {
+                    *buffer = value;
+                }
+                Task::none()
+            }
+            Message::CommitTabRename => {
+                self.commit_tab_rename();
+                Task::none()
+            }
+            Message::CancelTabRename => {
+                self.tab_rename = None;
                 Task::none()
             }
             Message::ConfirmCloseWindow => match self.closing_window.take() {
@@ -1519,6 +1609,27 @@ impl Shell {
         self.resize_focused()
     }
 
+    /// Apply the pending tab rename to the core and clear the edit. The core's
+    /// [`rename_tab`] owns the naming rules — a blank name (or one equal to the
+    /// derived title) reverts to the derived title rather than freezing it, so
+    /// an accidental double-click + Enter leaves the tab dynamic. The index is
+    /// resolved *fresh* from the anchor session, since it may have shifted (or
+    /// the tab vanished) since the edit began. No-op when nothing is pending or
+    /// the anchored tab is gone.
+    ///
+    /// [`rename_tab`]: termherd_core::workspace::Workspace::rename_tab
+    fn commit_tab_rename(&mut self) {
+        let Some((anchor, title)) = self.tab_rename.take() else {
+            return;
+        };
+        let Some(index) = self.core.workspace.tab_of_session(anchor) else {
+            return;
+        };
+        let _ = self
+            .core
+            .apply(termherd_core::Event::RenameTab { index, title });
+    }
+
     /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
     /// `PrevTab`). No-op when nothing is open.
     fn cycle_tab(&mut self, delta: i32) -> Task<Message> {
@@ -1575,6 +1686,19 @@ impl Shell {
     /// Route a key press to the focused terminal's PTY (FR4). Ignored unless a
     /// terminal holds focus, so the search box keeps its own typing.
     fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
+        // While renaming a tab inline, the text field owns the keyboard —
+        // except Escape, which abandons the edit (Enter commits via the field's
+        // own submit; a blur commits through `commits_tab_rename`).
+        if self.tab_rename.is_some() {
+            if let keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                ..
+            } = &event
+            {
+                return self.update(Message::CancelTabRename);
+            }
+            return Task::none();
+        }
         // While renaming inline, let the text field own the keyboard.
         if self.renaming.is_some() {
             return Task::none();
@@ -1698,6 +1822,7 @@ impl Shell {
     fn accepts_terminal_input(&self) -> bool {
         self.focus == Focus::Terminal
             && self.renaming.is_none()
+            && self.tab_rename.is_none()
             && self.closing.is_none()
             && self.archiving.is_none()
             && self.open_doc.is_none()
@@ -2461,6 +2586,175 @@ mod key_routing {
             ),
             "quit takes precedence over the other confirmations"
         );
+    }
+
+    #[test]
+    fn double_clicking_a_tab_then_typing_and_enter_renames_it() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived.clone(),
+        });
+        // The edit anchors on tab 1's session, so it resolves back to index 1.
+        let anchor = shell
+            .tab_rename
+            .as_ref()
+            .map(|(a, _)| *a)
+            .expect("renaming");
+        assert_eq!(shell.core.workspace.tab_of_session(anchor), Some(1));
+
+        let _ = shell.update(Message::TabRenameInput("My work".to_string()));
+        let _ = shell.update(Message::CommitTabRename);
+
+        assert_eq!(shell.core.workspace.tabs[1].display_title(), "My work");
+        assert!(shell.tab_rename.is_none(), "committing clears the editor");
+    }
+
+    #[test]
+    fn escape_abandons_a_tab_rename_without_touching_the_title() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived.clone(),
+        });
+        let _ = shell.update(Message::TabRenameInput("half-typed".to_string()));
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+
+        assert!(shell.tab_rename.is_none(), "Escape abandons the edit");
+        assert_eq!(
+            shell.core.workspace.tabs[1].display_title(),
+            derived,
+            "an abandoned rename leaves the derived title intact"
+        );
+    }
+
+    #[test]
+    fn pressing_another_tab_commits_the_rename_but_the_double_clicks_own_drag_does_not() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived,
+        });
+        let _ = shell.update(Message::TabRenameInput("Renamed".to_string()));
+
+        // The double-click that opened the edit still emits TabDragStart(1) /
+        // TabDragEnd around it — those must not commit or the field would vanish
+        // before a key is pressed.
+        let _ = shell.update(Message::TabDragStart(1));
+        let _ = shell.update(Message::TabDragEnd);
+        assert!(
+            shell.tab_rename.is_some(),
+            "the renamed tab's own drag noise leaves the edit open"
+        );
+
+        // A press on a *different* tab is a real blur → commit.
+        let _ = shell.update(Message::TabDragStart(0));
+        assert!(shell.tab_rename.is_none(), "clicking another tab commits");
+        assert_eq!(shell.core.workspace.tabs[1].display_title(), "Renamed");
+    }
+
+    #[test]
+    fn committing_a_blank_tab_rename_reverts_to_the_derived_title() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived.clone(),
+        });
+        let _ = shell.update(Message::TabRenameInput("   ".to_string()));
+        let _ = shell.update(Message::CommitTabRename);
+
+        assert_eq!(
+            shell.core.workspace.tabs[1].display_title(),
+            derived,
+            "a blank rename falls back to the derived title"
+        );
+    }
+
+    #[test]
+    fn committing_an_unchanged_tab_name_leaves_the_title_dynamic() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        // Open the editor (seeded with the shown title) and commit without
+        // editing — an accidental double-click + Enter.
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived,
+        });
+        let _ = shell.update(Message::CommitTabRename);
+
+        // No override is stored, so the tab keeps tracking its derived title
+        // rather than freezing the current one against future relabels.
+        assert!(
+            shell.core.workspace.tabs[1].custom_title.is_none(),
+            "an unchanged commit must not create an override"
+        );
+    }
+
+    #[test]
+    fn a_genuine_interaction_elsewhere_commits_a_pending_tab_rename() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived,
+        });
+        let _ = shell.update(Message::TabRenameInput("Renamed".to_string()));
+
+        // Starring a sidebar session is a real blur — it dismisses a session
+        // rename, so it must also commit a tab rename (shared allowlist).
+        let _ = shell.update(Message::ToggleStar("sess".to_string()));
+
+        assert!(shell.tab_rename.is_none(), "an elsewhere-click commits");
+        assert_eq!(shell.core.workspace.tabs[1].display_title(), "Renamed");
+    }
+
+    #[test]
+    fn a_pending_tab_rename_follows_its_tab_across_a_reorder() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[2].display_title().to_owned();
+        let _ = shell.update(Message::StartTabRename {
+            index: 2,
+            current: derived,
+        });
+        let _ = shell.update(Message::TabRenameInput("Pinned".to_string()));
+        let anchor = shell
+            .tab_rename
+            .as_ref()
+            .map(|(a, _)| *a)
+            .expect("renaming");
+
+        // A reorder shifts the anchored tab to a new index without committing.
+        // Because the edit anchors on the session, not the position, the commit
+        // must still land on the right tab.
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::MoveTab { from: 0, to: 2 });
+        let _ = shell.update(Message::CommitTabRename);
+
+        let idx = shell
+            .core
+            .workspace
+            .tab_of_session(anchor)
+            .expect("the anchored tab still exists");
+        assert_eq!(shell.core.workspace.tabs[idx].display_title(), "Pinned");
+        let renamed = shell
+            .core
+            .workspace
+            .tabs
+            .iter()
+            .filter(|t| t.display_title() == "Pinned")
+            .count();
+        assert_eq!(renamed, 1, "only the anchored tab is renamed");
     }
 
     #[test]
