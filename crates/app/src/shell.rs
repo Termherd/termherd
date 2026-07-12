@@ -24,8 +24,8 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Action, CaptureDump, Effect, Keymap, Launch, LaunchSpec, Overlay, ScrollTarget, SessionRecord,
-    SessionStatus,
+    Action, CaptureDump, Effect, Keymap, Launch, LaunchSpec, Overlay, ScrollTarget, SelectOp,
+    SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen, TermKey};
 
@@ -376,6 +376,19 @@ enum Message {
         row: u16,
         lines: i32,
     },
+    /// Change a terminal's grid-anchored selection — press, drag, or clear — so
+    /// the highlight follows the text through scroll (FR4).
+    Select {
+        session: SessionId,
+        op: SelectOp,
+    },
+    /// Set a terminal's selection (a double-click word) and copy it at once, so
+    /// the highlight persists and tracks while the word lands on the clipboard.
+    SelectAndCopy {
+        session: SessionId,
+        op: SelectOp,
+        text: String,
+    },
     /// Copy the given text (a terminal selection) to the clipboard (FR4).
     CopySelection(String),
     /// Clipboard contents read back for a paste into the focused terminal (FR4).
@@ -657,6 +670,7 @@ impl Shell {
                     rows,
                 } => self.pty.resize(session, cols, rows),
                 Effect::Scroll { session, target } => self.pty.scroll(session, target),
+                Effect::Select { session, op } => self.pty.select(session, op),
                 Effect::Kill(session) => self.pty.kill(session),
                 // Metadata persistence is a file write, not a PTY call.
                 Effect::SaveMetadata(metadata) => {
@@ -1235,6 +1249,24 @@ impl Shell {
                 row,
                 lines,
             } => self.scroll_session(session, ScrollTarget::Wheel { col, row, lines }),
+            Message::Select { session, op } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::Select { session, op });
+                self.perform(effects)
+            }
+            Message::SelectAndCopy { session, op, text } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::Select { session, op });
+                let select = self.perform(effects);
+                if text.is_empty() {
+                    select
+                } else {
+                    self.selection = Some(text.clone());
+                    Task::batch([select, iced::clipboard::write(text)])
+                }
+            }
             Message::CopySelection(text) => {
                 if text.is_empty() {
                     Task::none()
@@ -1980,8 +2012,8 @@ mod key_routing {
     use iced::keyboard::key::{Named, NativeCode, Physical};
     use iced::keyboard::{Key, Location, Modifiers};
     use std::sync::Mutex as StdMutex;
-    use termherd_core::SpawnSpec;
     use termherd_core::ports::{PtyError, ScanError};
+    use termherd_core::{SelectSide, SpawnSpec};
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]
@@ -1992,6 +2024,7 @@ mod key_routing {
         launches: StdMutex<Vec<Launch>>,
         resizes: StdMutex<Vec<(u16, u16)>>,
         scrolls: StdMutex<Vec<ScrollTarget>>,
+        selects: StdMutex<Vec<SelectOp>>,
     }
 
     impl RecordingPty {
@@ -2014,6 +2047,9 @@ mod key_routing {
         }
         fn scrolls(&self) -> Vec<ScrollTarget> {
             self.scrolls.lock().expect("scrolls lock").clone()
+        }
+        fn selects(&self) -> Vec<SelectOp> {
+            self.selects.lock().expect("selects lock").clone()
         }
     }
 
@@ -2042,6 +2078,10 @@ mod key_routing {
         }
         fn scroll(&self, _: SessionId, target: ScrollTarget) -> Result<(), PtyError> {
             self.scrolls.lock().expect("scrolls lock").push(target);
+            Ok(())
+        }
+        fn select(&self, _: SessionId, op: SelectOp) -> Result<(), PtyError> {
+            self.selects.lock().expect("selects lock").push(op);
             Ok(())
         }
         fn kill(&self, _: SessionId) -> Result<(), PtyError> {
@@ -2098,6 +2138,80 @@ mod key_routing {
             status: SessionStatus::Busy,
         });
         (shell, pty)
+    }
+
+    #[test]
+    fn a_drag_selection_reaches_the_pty_as_grid_anchored_ops() {
+        // The canvas turns a press-then-drag into Select ops; the shell must
+        // route them through core to the PTY, which owns the grid selection so
+        // the highlight follows the text through scroll.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::Select {
+            session,
+            op: SelectOp::Start {
+                line: 0,
+                col: 0,
+                side: SelectSide::Left,
+            },
+        });
+        let _ = shell.update(Message::Select {
+            session,
+            op: SelectOp::Update {
+                line: 0,
+                col: 5,
+                side: SelectSide::Right,
+            },
+        });
+        assert_eq!(
+            pty.selects(),
+            vec![
+                SelectOp::Start {
+                    line: 0,
+                    col: 0,
+                    side: SelectSide::Left
+                },
+                SelectOp::Update {
+                    line: 0,
+                    col: 5,
+                    side: SelectSide::Right
+                },
+            ],
+            "press and drag reach the PTY as grid-anchored selection ops"
+        );
+    }
+
+    #[test]
+    fn a_double_click_selects_the_word_and_copies_it() {
+        // SelectAndCopy sets the native word selection *and* lands the text on
+        // the clipboard in one step.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::SelectAndCopy {
+            session,
+            op: SelectOp::Range {
+                line0: 0,
+                col0: 4,
+                line1: 0,
+                col1: 14,
+            },
+            text: "src/main.rs".to_string(),
+        });
+        assert_eq!(
+            pty.selects(),
+            vec![SelectOp::Range {
+                line0: 0,
+                col0: 4,
+                line1: 0,
+                col1: 14
+            }],
+            "the word range is applied to the terminal selection"
+        );
+        assert_eq!(
+            shell.selection.as_deref(),
+            Some("src/main.rs"),
+            "the word is remembered as the last copy"
+        );
     }
 
     #[test]

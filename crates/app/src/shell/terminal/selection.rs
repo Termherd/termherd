@@ -1,11 +1,12 @@
-//! Pure pointer/selection geometry for the terminal grid: mapping a pointer to
-//! a cell, resolving the word or link under a cell, anchoring a selection to
-//! absolute scrollback lines so it follows the text through scroll, and turning
-//! that selection into its per-row visible column spans and copied text. No
-//! rendering, no iced state — just arithmetic over a [`Screen`] snapshot, so
-//! every function here is exhaustively unit-testable.
+//! Pure pointer geometry for the terminal grid: mapping a pointer to a cell and
+//! its selection side, resolving the word or link under a cell, and reading the
+//! text of a highlighted span. The selection itself is anchored and rotated by
+//! the terminal (`termherd_pty`), which carries the highlighted spans on each
+//! [`Screen`]; the functions here only translate pointer positions and read the
+//! resulting spans, so every one is exhaustively unit-testable.
 
 use iced::{Rectangle, mouse};
+use termherd_core::SelectSide;
 use termherd_pty::Screen;
 
 /// A link the pointer is hovering with Ctrl/Cmd held — what to highlight and,
@@ -35,6 +36,22 @@ pub(super) fn cell_at(
     let c = (p.x / cw).floor().clamp(0.0, (cols - 1) as f32) as u16;
     let r = (p.y / ch).floor().clamp(0.0, (rows - 1) as f32) as u16;
     Some((c, r))
+}
+
+/// Which half of its cell the pointer sits in. A press past a cell's centre
+/// starts/extends the selection *through* that cell (right side); before it, the
+/// selection stops at the cell's left edge — the terminal's own left/right
+/// notion, so a drag feels precise rather than snapping to whole cells.
+pub(super) fn cell_side(cursor: mouse::Cursor, bounds: Rectangle, cols: u16) -> SelectSide {
+    let frac = cursor.position_in(bounds).map_or(0.0, |p| {
+        let cw = bounds.width / cols.max(1) as f32;
+        if cw > 0.0 { (p.x / cw).fract() } else { 0.0 }
+    });
+    if frac >= 0.5 {
+        SelectSide::Right
+    } else {
+        SelectSide::Left
+    }
 }
 
 /// The link under grid cell `(col, row)`, if any. Builds the row's text
@@ -84,69 +101,23 @@ pub(super) fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16)
     Some(((start as u16, row), (end as u16, row)))
 }
 
-/// The absolute scrollback line for a viewport `row` under the current scroll
-/// `display_offset` — the coordinate a selection is anchored in so it tracks the
-/// text through scroll. `render row = abs_line + display_offset` inverts it
-/// (see [`visible_spans`]); the line is signed because a selection can sit above
-/// the live tail (`row < display_offset`).
-pub(super) fn abs_line(row: u16, display_offset: usize) -> i32 {
-    row as i32 - display_offset as i32
+/// The text of the highlighted selection carried on `screen` — one line per
+/// covered row, trailing blanks trimmed, joined by newlines. This is what a drag
+/// copies; the terminal already clipped the spans to the visible rows, so a
+/// selection scrolled partly out of view copies only what is on screen.
+pub(super) fn selection_text(screen: &Screen) -> String {
+    spans_text(screen, &screen.selection)
 }
 
-/// The visible highlighted spans for a selection under the current scroll
-/// `offset`: for each on-screen row the selection covers, `(row, c0, c1)` with
-/// inclusive columns. `anchor`/`head` are absolute scrollback lines
-/// (see [`abs_line`]); each is mapped back to a viewport row by adding `offset`,
-/// and rows falling outside `0..rows` are omitted — so the highlight rides down
-/// with the text as the viewport scrolls up and clips cleanly at the edges.
-pub(super) fn visible_spans(
-    anchor: (u16, i32),
-    head: (u16, i32),
-    offset: usize,
-    cols: u16,
-    rows: u16,
-) -> Vec<(u16, u16, u16)> {
-    let a = (anchor.0, anchor.1 + offset as i32);
-    let b = (head.0, head.1 + offset as i32);
-    // Reading order: by row, then column.
-    let (start, end) = if (a.1, a.0) <= (b.1, b.0) {
-        (a, b)
-    } else {
-        (b, a)
-    };
-    let last = cols.saturating_sub(1);
-    (0..rows)
-        .filter_map(|r| {
-            let ri = i32::from(r);
-            if ri < start.1 || ri > end.1 {
-                return None;
-            }
-            let (c0, c1) = if start.1 == end.1 {
-                (start.0.min(end.0), start.0.max(end.0))
-            } else if ri == start.1 {
-                (start.0, last)
-            } else if ri == end.1 {
-                (0, end.0)
-            } else {
-                (0, last)
-            };
-            Some((r, c0, c1))
-        })
-        .collect()
+/// The text of a single-row word / filename range — what a double-click copies
+/// before its native selection has been echoed back on a snapshot.
+pub(super) fn word_text(screen: &Screen, anchor: (u16, u16), head: (u16, u16)) -> String {
+    spans_text(screen, &[(anchor.1, anchor.0, head.0)])
 }
 
-/// Extract the selected text from the visible grid, trimming trailing blanks.
-/// `anchor`/`head` are absolute scrollback lines; only the on-screen portion of
-/// the selection is read (the snapshot holds just the visible rows), so a
-/// selection scrolled partly out of view copies only what is visible.
-pub(super) fn selection_text(screen: &Screen, anchor: (u16, i32), head: (u16, i32)) -> String {
-    let spans = visible_spans(
-        anchor,
-        head,
-        screen.display_offset,
-        screen.cols,
-        screen.rows,
-    );
+/// Read inclusive `(row, c0, c1)` spans off the grid, trimming each row's
+/// trailing blanks and joining rows with newlines.
+fn spans_text(screen: &Screen, spans: &[(u16, u16, u16)]) -> String {
     let mut out = String::new();
     let last = spans.len().saturating_sub(1);
     for (i, (r, c0, c1)) in spans.iter().enumerate() {
@@ -193,8 +164,9 @@ mod tests {
         }
     }
 
-    /// A screen from one string per row, blank-padded to the widest row.
-    fn grid_from(rows: &[&str]) -> Screen {
+    /// A screen from one string per row, blank-padded to the widest row, with a
+    /// given set of highlighted spans.
+    fn grid_with_selection(rows: &[&str], selection: Vec<(u16, u16, u16)>) -> Screen {
         let cell = |c| ScreenCell {
             c,
             fg: [0, 0, 0],
@@ -218,25 +190,48 @@ mod tests {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
-            selection: Vec::new(),
+            selection,
         }
     }
 
     #[test]
     fn selection_text_reads_and_trims_the_covered_rows() {
-        // A multi-row selection: the first row runs from its column to the edge,
-        // middle rows are full width (trailing blanks trimmed), the last row
-        // stops at its column — the newlines join exactly the covered rows.
-        let screen = grid_from(&["AAAA", "BB  ", "CCCC"]);
-        assert_eq!(selection_text(&screen, (1, 0), (1, 2)), "AAA\nBB\nCC");
+        // A multi-row selection carried on the screen: first row to its column
+        // span, middle full width (trailing blanks trimmed), last row to its
+        // column — the newlines join exactly the covered rows.
+        let screen = grid_with_selection(
+            &["AAAA", "BB  ", "CCCC"],
+            vec![(0, 1, 3), (1, 0, 3), (2, 0, 1)],
+        );
+        assert_eq!(selection_text(&screen), "AAA\nBB\nCC");
     }
 
     #[test]
-    fn selection_text_copies_only_the_visible_portion_when_scrolled_off() {
-        // A selection whose absolute line sits above the viewport copies nothing
-        // (only on-screen rows are in the snapshot).
-        let screen = grid_from(&["AAAA", "BBBB"]);
-        assert_eq!(selection_text(&screen, (0, -3), (3, -3)), "");
+    fn selection_text_is_empty_without_a_selection() {
+        let screen = grid_with_selection(&["AAAA"], Vec::new());
+        assert_eq!(selection_text(&screen), "");
+    }
+
+    #[test]
+    fn word_text_reads_a_single_row_range() {
+        let screen = screen_from("see src/main.rs now");
+        // cols 4..=14 is `src/main.rs`.
+        assert_eq!(word_text(&screen, (4, 0), (14, 0)), "src/main.rs");
+    }
+
+    #[test]
+    fn cell_side_splits_the_cell_at_its_centre() {
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 10.0,
+        };
+        // 4 columns → 10px each. x=2 is the left half of cell 0, x=8 the right.
+        let left = mouse::Cursor::Available(iced::Point::new(2.0, 5.0));
+        let right = mouse::Cursor::Available(iced::Point::new(8.0, 5.0));
+        assert!(matches!(cell_side(left, bounds, 4), SelectSide::Left));
+        assert!(matches!(cell_side(right, bounds, 4), SelectSide::Right));
     }
 
     #[test]
@@ -261,70 +256,5 @@ mod tests {
         assert_eq!(word_at(&screen, 3, 0), None);
         // A column past the line has no word.
         assert_eq!(word_at(&screen, 99, 0), None);
-    }
-
-    #[test]
-    fn visible_spans_covers_a_single_row_selection() {
-        // one row, inclusive column span.
-        assert_eq!(visible_spans((1, 0), (3, 0), 0, 4, 3), vec![(0, 1, 3)]);
-    }
-
-    #[test]
-    fn visible_spans_fills_middle_rows_full_width() {
-        // a multi-row selection: the first row runs to the edge, middle rows are
-        // full width, the last row stops at its column — regardless of which
-        // endpoint was the anchor (reading-order normalised).
-        assert_eq!(
-            visible_spans((2, 0), (1, 2), 0, 4, 3),
-            vec![(0, 2, 3), (1, 0, 3), (2, 0, 1)]
-        );
-        assert_eq!(
-            visible_spans((1, 2), (2, 0), 0, 4, 3),
-            vec![(0, 2, 3), (1, 0, 3), (2, 0, 1)]
-        );
-    }
-
-    #[test]
-    fn visible_spans_ride_down_with_the_scroll_offset() {
-        // the same absolute selection appears one row lower per line scrolled up.
-        assert_eq!(visible_spans((0, 1), (3, 1), 0, 4, 3), vec![(1, 0, 3)]);
-        assert_eq!(visible_spans((0, 1), (3, 1), 1, 4, 3), vec![(2, 0, 3)]);
-    }
-
-    #[test]
-    fn visible_spans_clip_at_the_viewport_edges() {
-        // rows mapping outside 0..rows are dropped.
-        assert!(visible_spans((0, -2), (3, -2), 0, 4, 3).is_empty()); // above top
-        assert!(visible_spans((0, 5), (3, 5), 0, 4, 3).is_empty()); // below bottom
-        // straddling the top edge keeps only the visible rows.
-        assert_eq!(
-            visible_spans((0, -1), (1, 1), 0, 4, 3),
-            vec![(0, 0, 3), (1, 0, 1)]
-        );
-    }
-
-    proptest::proptest! {
-        /// `abs_line` and the render mapping are inverse: capturing a viewport
-        /// row at an offset and mapping it straight back returns that row.
-        #[test]
-        fn abs_line_round_trips(row in 0u16..500, offset in 0usize..500) {
-            proptest::prop_assert_eq!(abs_line(row, offset) + offset as i32, i32::from(row));
-        }
-
-        /// Scrolling up `d` lines shifts a fully on-screen single-row highlight
-        /// down by exactly `d` rows — never dropping or duplicating it.
-        #[test]
-        fn a_selection_shifts_by_the_offset_delta(row in 0u16..8, d in 0usize..8) {
-            let rows = 16u16;
-            let anchor = (0u16, abs_line(row, 0));
-            let head = (3u16, abs_line(row, 0));
-            proptest::prop_assert_eq!(visible_spans(anchor, head, 0, 4, rows), vec![(row, 0, 3)]);
-            if (row as usize) + d < rows as usize {
-                proptest::prop_assert_eq!(
-                    visible_spans(anchor, head, d, 4, rows),
-                    vec![(row + d as u16, 0, 3)]
-                );
-            }
-        }
     }
 }

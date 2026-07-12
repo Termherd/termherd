@@ -28,7 +28,7 @@ use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, nativ
 use termherd_claude::osc::{OscSignal, decode_chunk};
 use termherd_core::ports::{PtyError, PtyHost};
 use termherd_core::workspace::SessionId;
-use termherd_core::{Launch, ScrollTarget, SessionStatus, SpawnSpec};
+use termherd_core::{Launch, ScrollTarget, SelectOp, SelectSide, SessionStatus, SpawnSpec};
 
 /// Read buffer for the per-session reader thread.
 const READ_BUF: usize = 8192;
@@ -308,6 +308,8 @@ enum TermCmd {
     Resize(u16, u16),
     /// Move the viewport: a relative line delta or an absolute top/bottom jump.
     Scroll(ScrollTarget),
+    /// Change the grid-anchored text selection (press / drag / clear).
+    Select(SelectOp),
     /// The PTY reached end of file; the process is gone.
     Eof,
 }
@@ -482,6 +484,19 @@ impl PtyHost for PtyManager {
             .ok_or(PtyError::NoSuchSession(session.0.get()))?;
         s.ctrl
             .send(TermCmd::Scroll(target))
+            .map_err(|_| PtyError::Io("terminal thread gone".into()))
+    }
+
+    fn select(&self, session: SessionId, op: SelectOp) -> Result<(), PtyError> {
+        let map = self
+            .sessions
+            .lock()
+            .map_err(|_| PtyError::Io("session lock poisoned".into()))?;
+        let s = map
+            .get(&session)
+            .ok_or(PtyError::NoSuchSession(session.0.get()))?;
+        s.ctrl
+            .send(TermCmd::Select(op))
             .map_err(|_| PtyError::Io("terminal thread gone".into()))
     }
 
@@ -690,6 +705,7 @@ fn spawn_term(
                             ScrollTarget::Bottom => term.scroll_display(Scroll::Bottom),
                         }
                     }
+                    TermCmd::Select(op) => apply_select(&mut term, op),
                     TermCmd::Eof => break,
                 }
                 term_sink(PtyEvent::Output {
@@ -925,6 +941,41 @@ fn csi_tilde(n: u8, modifier: u8) -> Vec<u8> {
 /// Snapshot the visible grid into a [`Screen`] with resolved colours and the
 /// cursor (FR4). Wide-char spacer cells are dropped; the wide glyph keeps its
 /// own column.
+/// Apply a selection change to the terminal's own grid-anchored selection. The
+/// grid `Point` is what the emulator rotates on every scroll, so the highlight
+/// (derived by [`selected_spans`]) follows the text; a bare click clears it.
+fn apply_select<T: EventListener>(term: &mut Term<T>, op: SelectOp) {
+    use alacritty_terminal::index::{Column, Line, Point, Side};
+    use alacritty_terminal::selection::{Selection, SelectionType};
+    let to_side = |s| match s {
+        SelectSide::Left => Side::Left,
+        SelectSide::Right => Side::Right,
+    };
+    match op {
+        SelectOp::Start { line, col, side } => {
+            let at = Point::new(Line(line), Column(col));
+            term.selection = Some(Selection::new(SelectionType::Simple, at, to_side(side)));
+        }
+        SelectOp::Update { line, col, side } => {
+            if let Some(sel) = term.selection.as_mut() {
+                sel.update(Point::new(Line(line), Column(col)), to_side(side));
+            }
+        }
+        SelectOp::Range {
+            line0,
+            col0,
+            line1,
+            col1,
+        } => {
+            let anchor = Point::new(Line(line0), Column(col0));
+            let mut sel = Selection::new(SelectionType::Simple, anchor, Side::Left);
+            sel.update(Point::new(Line(line1), Column(col1)), Side::Right);
+            term.selection = Some(sel);
+        }
+        SelectOp::Clear => term.selection = None,
+    }
+}
+
 /// The terminal's own selection as inclusive per-row column spans in visible
 /// coordinates. The selection is anchored in the grid and the emulator rotates
 /// it on every scroll, so mapping each covered grid line to its viewport row

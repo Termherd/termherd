@@ -6,7 +6,7 @@
 
 use std::time::SystemTime;
 
-use crate::app::{ScrollTarget, SpawnSpec};
+use crate::app::{ScrollTarget, SelectOp, SpawnSpec};
 use crate::browser::SessionRecord;
 use crate::workspace::SessionId;
 
@@ -48,6 +48,9 @@ pub trait PtyHost: Send + Sync {
     /// Move a session's viewport: a relative line delta or an absolute jump to
     /// the top/bottom of the scrollback.
     fn scroll(&self, session: SessionId, target: ScrollTarget) -> Result<(), PtyError>;
+    /// Apply a selection change to a session's terminal grid — anchored in the
+    /// grid so the highlight follows the text through scroll.
+    fn select(&self, session: SessionId, op: SelectOp) -> Result<(), PtyError>;
     /// Terminate a session's process and drop its task.
     fn kill(&self, session: SessionId) -> Result<(), PtyError>;
 }
