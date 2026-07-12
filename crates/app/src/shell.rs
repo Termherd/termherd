@@ -2073,27 +2073,37 @@ mod key_routing {
         }
     }
 
-    /// A `Shell` with one terminal open and focused, plus its recording PTY.
-    fn shell_with_terminal() -> (Shell, Arc<RecordingPty>) {
-        let pty = Arc::new(RecordingPty::default());
+    /// The default startup payload the test shells boot with.
+    fn test_startup() -> Startup {
+        Startup {
+            theme: ThemeChoice::default(),
+            keymap: Keymap::defaults(),
+            metadata: Overlay::default(),
+            collapsed: HashSet::new(),
+            record: RecordConfig::default(),
+            session_limit: 0,
+            font_size: 14.0,
+            close: CloseSettings::default(),
+        }
+    }
+
+    /// A `Shell` over the given PTY host, with no terminal open yet.
+    fn shell_over(pty: Arc<dyn PtyHost>) -> Shell {
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
-        let mut shell = Shell::new(
+        Shell::new(
             WindowConfig::default(),
             Arc::new(EmptyScanner),
             None,
-            pty.clone(),
+            pty,
             PtyOutput::new(rx),
-            Startup {
-                theme: ThemeChoice::default(),
-                keymap: Keymap::defaults(),
-                metadata: Overlay::default(),
-                collapsed: HashSet::new(),
-                record: RecordConfig::default(),
-                session_limit: 0,
-                font_size: 14.0,
-                close: CloseSettings::default(),
-            },
-        );
+            test_startup(),
+        )
+    }
+
+    /// A `Shell` with one terminal open and focused, plus its recording PTY.
+    fn shell_with_terminal() -> (Shell, Arc<RecordingPty>) {
+        let pty = Arc::new(RecordingPty::default());
+        let mut shell = shell_over(pty.clone());
         let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
         assert!(
             shell.core.workspace.focused_session().is_some(),
@@ -3122,6 +3132,51 @@ mod key_routing {
             0,
             "an exited session no longer counts as live to kill"
         );
+    }
+
+    /// End-to-end auto-close: a **real PTY** running the platform default
+    /// shell, a typed `exit`, and the real `update` loop — everything but the
+    /// iced runtime (whose event glue, [`streams::pty_message`], this test
+    /// shares). Regression guard for the ConPTY gap where a child's natural
+    /// exit never surfaced as reader EOF, so the tab silently stayed open.
+    #[test]
+    fn typing_exit_into_a_real_shell_closes_the_tab_end_to_end() {
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: termherd_pty::EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let pty = Arc::new(termherd_pty::PtyManager::new(
+            sink,
+            None,
+            termherd_pty::Palette::default(),
+        ));
+        let mut shell = shell_over(pty.clone());
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        let _ = shell.launch(cwd, Launch::Shell);
+        let session = shell.core.workspace.focused_session().expect("focused");
+
+        pty.write(session, b"exit\r\n").expect("type exit");
+
+        // Pump the adapter's events through the real update loop until the
+        // auto-close lands (or the deadline proves it never does).
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !shell.core.workspace.tabs.is_empty() && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(event) => {
+                    let _ = shell.update(streams::pty_message(event));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert!(
+            shell.core.workspace.tabs.is_empty(),
+            "typing `exit` into a real shell must auto-close its tab"
+        );
+        assert!(pty.is_empty(), "the dead session's PTY entry is released");
     }
 
     #[test]
