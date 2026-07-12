@@ -268,18 +268,20 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   `set_option` (writes), the `keys` surface and the orchestration tools
   (open session / split / focus / rename / run-in-session) are still to come
 
-- [ ] `F-terminal-palette` — configurable terminal colours: background, default
-  foreground/text, cursor and the 16-colour ANSI palette set in
-  `settings.json`. Distinct from the shipped GUI theme in `F-settings`, which
-  only styles the iced chrome (dark/light) — today the grid colours are
-  hardcoded in the `pty` adapter. **Tortured (👍 ship, feature-torture
-  `F-terminal-palette.md`)**: graduated to #181 — an optional
-  `terminal.colors` block, a `Palette` injected into `PtyManager::new` like
-  the shell profile (colours keep resolving in the adapter, `core` never sees
-  RGB), restart-to-apply. Selection colour trimmed out (app affordance, not
-  terminal content); named preset schemes deferred to a follow-up
-  (`F-terminal-palette-presets`); live reload waits for the in-app settings
-  panel
+- [x] `F-terminal-palette` — configurable terminal colours (#181, shipped
+  in #183; tortured 👍, feature-torture `F-terminal-palette.md`): an optional
+  `terminal.colors` block in `settings.json` — `foreground`, `background`,
+  `cursor` and the 16-colour ANSI `palette`, plus a `scheme` picking a
+  built-in preset (`solarized-dark`/`-light`, `gruvbox-dark`/`-light`) that
+  explicit fields override. A `Palette` is injected into `PtyManager::new`
+  like the shell profile — colours keep resolving in the `pty` adapter,
+  `core` never sees RGB, and `Screen` carries `default_bg`/`cursor_color` so
+  the canvas dropped its duplicated constants. Wide-parse per field: a bad
+  value warns and degrades alone. Restart-to-apply; the MCP catalog exposes
+  the five keys. Dims stay a fixed hand-tuned table (legibility guards).
+  Deliberately out: selection colour (app affordance), live reload (waits
+  for the in-app settings panel). Verified end-to-end via F-capture on a
+  real session (Solarized Light)
 - [ ] `F-session-accent-colors` — per-session / per-agent visual accents:
   give each session (or agent kind — Claude, plain shell, `agy`) a colour used
   on its tab chip, sidebar row and pane border, so parallel sessions are
