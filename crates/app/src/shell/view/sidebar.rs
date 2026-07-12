@@ -9,8 +9,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, stack, text, text_input,
-    tooltip,
+    button, checkbox, column, container, mouse_area, row, rule, scrollable, stack, text,
+    text_input, tooltip,
 };
 use iced::{Element, Fill};
 use termherd_core::browser::{ProjectGroup, project_label, relative_age};
@@ -85,14 +85,22 @@ impl Shell {
             };
             list = list.push(text(label).size(12));
         }
+        // A thin rule precedes each present section, so the Favorites / Plans /
+        // Projects grouping reads at a glance and the first rule sets the list
+        // apart from the search chrome above. Absent sections leave no rule.
         if let Some(section) = self.favorites_section(&visible, &live) {
+            list = list.push(section_divider());
             list = list.push(section);
         }
         if let Some(section) = self.plans_section() {
+            list = list.push(section_divider());
             list = list.push(section);
         }
-        for group in &visible {
-            list = list.push(self.project_group(group, &live, now));
+        if !visible.is_empty() {
+            list = list.push(section_divider());
+            for group in &visible {
+                list = list.push(self.project_group(group, &live, now));
+            }
         }
         // A handle to collapse the sidebar, mirroring the one that
         // restores it from the main pane.
@@ -415,6 +423,28 @@ fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
         .on_press(Message::ToggleCollapsed(key.to_owned()))
         .style(button::text)
         .padding(0)
+        .into()
+}
+
+/// A thin, low-contrast horizontal rule between sidebar sections (Favorites,
+/// Plans & mémoire, Projects), so the grouping reads at a glance. Theme-aware —
+/// the line is the text colour mixed most of the way to the background, never a
+/// hardcoded grey.
+fn section_divider() -> Element<'static, Message> {
+    rule::horizontal(1)
+        .style(|theme: &iced::Theme| {
+            let palette = theme.extended_palette();
+            rule::Style {
+                color: mix(
+                    palette.background.base.text,
+                    palette.background.base.color,
+                    0.85,
+                ),
+                radius: 0.0.into(),
+                fill_mode: rule::FillMode::Full,
+                snap: true,
+            }
+        })
         .into()
 }
 
