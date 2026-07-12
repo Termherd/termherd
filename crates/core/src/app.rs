@@ -304,8 +304,13 @@ pub enum Event {
         session: SessionId,
         status: SessionStatus,
     },
-    /// A session's PTY process exited.
-    PtyExited(SessionId),
+    /// A session's PTY process exited. `clean` is true when the adapter saw a
+    /// successful completion (exit code 0, no signal); false also covers an
+    /// unobservable status.
+    PtyExited {
+        session: SessionId,
+        clean: bool,
+    },
     /// The session reported a new title over OSC; relabel its tab.
     SessionTitleChanged {
         session: SessionId,
@@ -515,12 +520,7 @@ impl App {
                 }
                 Vec::new()
             }
-            Event::PtyExited(session) => {
-                if let Some(s) = self.sessions.get_mut(&session) {
-                    s.status = SessionStatus::Exited;
-                }
-                Vec::new()
-            }
+            Event::PtyExited { session, clean } => self.pty_exited(session, clean),
             Event::SessionTitleChanged { session, title } => {
                 self.workspace.set_session_title(session, title);
                 Vec::new()
@@ -1060,6 +1060,48 @@ impl App {
         })]
     }
 
+    /// A session's PTY ended. A plain shell that exited *cleanly* — the user
+    /// typed `exit` — leaves nothing worth reading, so its pane closes on its
+    /// own; everything else keeps the dead terminal visible: a failed exit's
+    /// last screen is worth reading, and a finished Claude session is worth
+    /// reviewing, so neither auto-closes.
+    fn pty_exited(&mut self, session: SessionId, clean: bool) -> Vec<Effect> {
+        let clean_shell = clean
+            && self
+                .sessions
+                .get(&session)
+                .is_some_and(|s| matches!(s.launch, Launch::Shell));
+        if clean_shell && let Some(effects) = self.auto_close_pane(session) {
+            return effects;
+        }
+        if let Some(s) = self.sessions.get_mut(&session) {
+            s.status = SessionStatus::Exited;
+        }
+        Vec::new()
+    }
+
+    /// Close the pane hosting `session` after its clean exit: the whole tab
+    /// (snapshotted onto the reopen stack, like a manual close) when it is the
+    /// tab's only pane, else just its leaf, collapsing the split. The emptied
+    /// workspace stays open — a clean exit never quits the app. The `Kill`
+    /// still goes out for an already-dead process: it releases the adapter's
+    /// PTY handles. `None` when no tab hosts the session — the caller falls
+    /// back to recording the exit.
+    fn auto_close_pane(&mut self, session: SessionId) -> Option<Vec<Effect>> {
+        let index = self.workspace.tab_of(session)?;
+        let only_pane = self
+            .workspace
+            .tabs
+            .get(index)
+            .is_some_and(|tab| tab.sessions() == [session]);
+        if only_pane {
+            return Some(self.close_tab(index));
+        }
+        self.workspace.close_pane_of(session)?;
+        self.sessions.remove(&session);
+        Some(vec![Effect::Kill(session)])
+    }
+
     /// Close a tab (FR5): drop its sessions from the live registry and ask the
     /// runtime to kill each PTY. An out-of-range index yields no effects.
     /// Snapshots the tab onto the reopen stack first, so the close can be
@@ -1576,7 +1618,10 @@ mod tests {
         ));
 
         // After exit, no further effects are produced for that session.
-        app.apply(Event::PtyExited(id));
+        app.apply(Event::PtyExited {
+            session: id,
+            clean: false,
+        });
         assert_eq!(app.sessions[&id].status, SessionStatus::Exited);
         assert!(
             app.apply(Event::TerminalInput {
@@ -2209,12 +2254,140 @@ mod tests {
         }
     }
 
+    // ---- auto-close on a clean shell exit ----
+
+    #[test]
+    fn a_clean_shell_exit_closes_its_tab_and_kills_the_pty() {
+        let mut app = App::new();
+        let keep = launch(&mut app, "keep");
+        let done = launch(&mut app, "done");
+        let effects = app.apply(Event::PtyExited {
+            session: done,
+            clean: true,
+        });
+        // The kill releases the adapter's PTY handles for the dead process.
+        assert!(matches!(effects.as_slice(), [Effect::Kill(k)] if *k == done));
+        assert_eq!(app.workspace.tabs.len(), 1);
+        assert!(
+            !app.sessions.contains_key(&done),
+            "the exited session is forgotten"
+        );
+        assert!(app.sessions.contains_key(&keep));
+    }
+
+    #[test]
+    fn a_clean_shell_exit_of_the_last_tab_leaves_the_workspace_open_and_empty() {
+        let mut app = App::new();
+        let id = launch(&mut app, "only");
+        let effects = app.apply(Event::PtyExited {
+            session: id,
+            clean: true,
+        });
+        assert!(matches!(effects.as_slice(), [Effect::Kill(k)] if *k == id));
+        assert!(
+            app.workspace.tabs.is_empty(),
+            "the tab closes; the app stays"
+        );
+        assert!(app.sessions.is_empty());
+    }
+
+    #[test]
+    fn a_clean_shell_exit_in_a_split_collapses_only_its_pane() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        let second = match app
+            .apply(Event::SplitFocused(SplitDir::Vertical))
+            .as_slice()
+        {
+            [Effect::Spawn(spec)] => spec.session,
+            other => panic!("expected Spawn, got {other:?}"),
+        };
+        let effects = app.apply(Event::PtyExited {
+            session: second,
+            clean: true,
+        });
+        assert!(matches!(effects.as_slice(), [Effect::Kill(k)] if *k == second));
+        assert_eq!(
+            app.workspace.tabs.len(),
+            1,
+            "the sibling pane keeps the tab"
+        );
+        assert_eq!(app.workspace.tabs[0].sessions(), vec![first]);
+        assert!(!app.sessions.contains_key(&second));
+        assert_eq!(app.workspace.focused_session(), Some(first));
+    }
+
+    #[test]
+    fn an_auto_closed_tab_lands_on_the_reopen_stack() {
+        let mut app = App::new();
+        let id = match app
+            .apply(Event::LaunchSession(LaunchSpec {
+                cwd: Some("/proj".into()),
+                launch: Launch::Shell,
+                title: "shell".into(),
+            }))
+            .as_slice()
+        {
+            [Effect::Spawn(spec)] => spec.session,
+            other => panic!("expected Spawn, got {other:?}"),
+        };
+        app.apply(Event::PtyExited {
+            session: id,
+            clean: true,
+        });
+        // Reopen restores a shell in the directory the exited one ran in.
+        match app.apply(Event::ReopenClosedTab).as_slice() {
+            [Effect::Spawn(spec)] => {
+                assert_eq!(spec.cwd.as_deref(), Some("/proj"));
+                assert_eq!(spec.launch, Launch::Shell);
+            }
+            other => panic!("expected Spawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_dirty_shell_exit_keeps_the_dead_terminal_visible() {
+        let mut app = App::new();
+        let id = launch(&mut app, "crashed");
+        let effects = app.apply(Event::PtyExited {
+            session: id,
+            clean: false,
+        });
+        assert!(effects.is_empty());
+        assert_eq!(
+            app.workspace.tabs.len(),
+            1,
+            "a failed exit's last screen stays readable"
+        );
+        assert_eq!(app.sessions[&id].status, SessionStatus::Exited);
+    }
+
+    #[test]
+    fn a_clean_claude_exit_never_auto_closes() {
+        let mut app = App::new();
+        let id = launch_claude(&mut app);
+        let effects = app.apply(Event::PtyExited {
+            session: id,
+            clean: true,
+        });
+        assert!(effects.is_empty());
+        assert_eq!(
+            app.workspace.tabs.len(),
+            1,
+            "a finished Claude session stays open for review"
+        );
+        assert_eq!(app.sessions[&id].status, SessionStatus::Exited);
+    }
+
     #[test]
     fn an_exited_tab_has_no_running_process() {
         let mut app = App::new();
         let id = launch_claude(&mut app);
         assert!(app.tab_has_running_process(0));
-        app.apply(Event::PtyExited(id));
+        app.apply(Event::PtyExited {
+            session: id,
+            clean: false,
+        });
         assert!(
             !app.tab_has_running_process(0),
             "nothing is left to kill once the PTY has exited"
@@ -2301,7 +2474,10 @@ mod tests {
         });
         assert_eq!(app.sessions[&id].status, SessionStatus::Busy);
 
-        app.apply(Event::PtyExited(id));
+        app.apply(Event::PtyExited {
+            session: id,
+            clean: false,
+        });
         app.apply(Event::StatusChanged {
             session: id,
             status: SessionStatus::Idle,
@@ -2375,7 +2551,10 @@ mod tests {
     fn a_notification_for_an_exited_session_is_dropped() {
         let mut app = App::new();
         let id = launch(&mut app, "myproj");
-        app.apply(Event::PtyExited(id));
+        app.apply(Event::PtyExited {
+            session: id,
+            clean: false,
+        });
 
         // Nothing to return to — a dead session must not raise a desktop alert.
         let effects = app.apply(Event::SessionNotified {

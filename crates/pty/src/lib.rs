@@ -33,6 +33,10 @@ use termherd_core::{Launch, ScrollTarget, SessionStatus, SpawnSpec};
 /// Read buffer for the per-session reader thread.
 const READ_BUF: usize = 8192;
 
+/// How long the terminal thread keeps draining trailing output after the
+/// waiter reported the process exit, before declaring the session over.
+const EOF_DRAIN_QUIET: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// What the adapter emits back to the runtime, out-of-band. The iced shell
 /// maps these onto `core` events.
 #[derive(Debug, Clone)]
@@ -51,8 +55,10 @@ pub enum PtyEvent {
     /// raw payload text, forwarded to the OS notification centre on top of the
     /// in-app `Attention` status (which `Status` already conveys).
     Notification { session: SessionId, body: String },
-    /// The session's PTY process exited.
-    Exited { session: SessionId },
+    /// The session's PTY process exited. `clean` is true when the child
+    /// reported successful completion (exit code 0, no signal); false also
+    /// covers a status the reaper could not observe.
+    Exited { session: SessionId, clean: bool },
 }
 
 /// A snapshot of the visible terminal grid handed to the GUI for rendering.
@@ -426,8 +432,9 @@ enum TermCmd {
     Resize(u16, u16),
     /// Move the viewport: a relative line delta or an absolute top/bottom jump.
     Scroll(ScrollTarget),
-    /// The PTY reached end of file; the process is gone.
-    Eof,
+    /// The PTY reached end of file; the process is gone. `clean` carries the
+    /// reaped exit status (see [`PtyEvent::Exited`]).
+    Eof { clean: bool },
 }
 
 /// The control-side handle to one session. The grid lives in the terminal
@@ -437,7 +444,7 @@ struct Session {
     writer: SharedWriter,
     killer: Box<dyn ChildKiller + Send + Sync>,
     /// Commands to the terminal thread (resize / scroll). The reader thread
-    /// holds the other clone for `Bytes`/`Eof`.
+    /// holds a clone for `Bytes`, the waiter thread one for `Eof`.
     ctrl: mpsc::Sender<TermCmd>,
     reader: Option<JoinHandle<()>>,
     term: Option<JoinHandle<()>>,
@@ -538,7 +545,10 @@ impl PtyHost for PtyManager {
             self.sink.clone(),
             self.palette.clone(),
         );
-        let reader = spawn_reader(spec.session, reader, child, ctrl.clone(), self.sink.clone());
+        let reader = spawn_reader(spec.session, reader, ctrl.clone());
+        // Detached from birth: it parks in `wait()` until the process ends,
+        // whether by the user's `exit` or a later kill.
+        let _ = spawn_waiter(spec.session, child, ctrl.clone(), self.sink.clone());
 
         let session = Session {
             master: pair.master,
@@ -614,9 +624,9 @@ impl PtyHost for PtyManager {
             .remove(&session)
             .ok_or(PtyError::NoSuchSession(session.0.get()))?;
         let result = s.killer.kill();
-        // Dropping the session drops the master/writer; the reader thread then
-        // sees EOF, reaps the child (`wait`) and signals the terminal thread,
-        // which emits `Exited` on its own.
+        // Dropping the session drops the master/writer, which unblocks the
+        // reader; the waiter thread reaps the killed child (`wait`) and signals
+        // the terminal thread, which emits `Exited` on its own.
         drop(s.reader.take());
         drop(s.term.take());
         // portable-pty's `WinChildKiller::kill` inverts its result — it
@@ -672,15 +682,15 @@ fn apply_terminal_env(cmd: &mut CommandBuilder) {
 }
 
 /// The PTY reader thread: blocking-reads bytes and forwards them to the
-/// terminal thread, then reaps the child and signals EOF. Reading is isolated
-/// here so the terminal thread can react to resize/scroll immediately, without
-/// waiting on a blocked `read` (FR4 scrollback).
+/// terminal thread. Reading is isolated here so the terminal thread can react
+/// to resize/scroll immediately, without waiting on a blocked `read` (FR4
+/// scrollback). End-of-session is *not* detected here: under ConPTY the output
+/// pipe only closes when the pseudo console itself is dropped, so a child's
+/// natural exit never surfaces as EOF — the waiter thread owns that signal.
 fn spawn_reader(
     session: SessionId,
     mut reader: Box<dyn Read + Send>,
-    mut child: Box<dyn Child + Send + Sync>,
     ctrl: mpsc::Sender<TermCmd>,
-    sink: EventSink,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name(format!("pty-rd-{}", session.0.get()))
@@ -700,13 +710,41 @@ fn spawn_reader(
                     }
                 }
             }
-            // Reap the child so it does not linger as a zombie, then tell the
-            // terminal thread the session is over.
-            let _ = child.wait();
-            let _ = ctrl.send(TermCmd::Eof);
+        })
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                %error,
+                session = session.0.get(),
+                "could not spawn the pty reader thread"
+            );
+            std::thread::spawn(|| {})
+        })
+}
+
+/// The child-waiter thread: blocks until the session's process exits, reaps it
+/// (no zombie), and tells the terminal thread the session is over — with
+/// whether it completed successfully, which drives the auto-close on a clean
+/// shell exit. Exit must be observed on the process itself, not as reader EOF
+/// (see [`spawn_reader`]).
+fn spawn_waiter(
+    session: SessionId,
+    mut child: Box<dyn Child + Send + Sync>,
+    ctrl: mpsc::Sender<TermCmd>,
+    sink: EventSink,
+) -> JoinHandle<()> {
+    std::thread::Builder::new()
+        .name(format!("pty-wt-{}", session.0.get()))
+        .spawn(move || {
+            let clean = child.wait().map(|status| status.success()).unwrap_or(false);
+            let _ = ctrl.send(TermCmd::Eof { clean });
         })
         .unwrap_or_else(|_| {
-            sink(PtyEvent::Exited { session });
+            // Without a waiter the exit would never be observed; declare the
+            // session over rather than leaving it undead.
+            sink(PtyEvent::Exited {
+                session,
+                clean: false,
+            });
             std::thread::spawn(|| {})
         })
 }
@@ -739,6 +777,9 @@ fn spawn_term(
             let mut parser: Processor = Processor::new();
             let mut status = SessionStatus::Starting;
             let mut title: Option<String> = None;
+            // Stays false when the loop ends without an EOF (every sender
+            // dropped) — an unobserved exit is never a clean one.
+            let mut clean = false;
             while let Ok(cmd) = ctrl_rx.recv() {
                 match cmd {
                     TermCmd::Bytes(bytes) => {
@@ -811,17 +852,37 @@ fn spawn_term(
                             ScrollTarget::Bottom => term.scroll_display(Scroll::Bottom),
                         }
                     }
-                    TermCmd::Eof => break,
+                    TermCmd::Eof { clean: c } => {
+                        clean = c;
+                        // The waiter races the reader: the exit is observed on
+                        // the process while the last output chunks may still be
+                        // in flight. Give them a short quiet window — a crash
+                        // message is exactly what the surviving screen must show.
+                        while let Ok(TermCmd::Bytes(bytes)) = ctrl_rx.recv_timeout(EOF_DRAIN_QUIET)
+                        {
+                            parser.advance(&mut term, &bytes);
+                        }
+                        break;
+                    }
                 }
                 term_sink(PtyEvent::Output {
                     session,
                     screen: snapshot(&term, &palette),
                 });
             }
-            term_sink(PtyEvent::Exited { session });
+            // A final snapshot so any drained bytes reach the screen the tab
+            // keeps showing on an unclean exit.
+            term_sink(PtyEvent::Output {
+                session,
+                screen: snapshot(&term, &palette),
+            });
+            term_sink(PtyEvent::Exited { session, clean });
         })
         .unwrap_or_else(|_| {
-            sink(PtyEvent::Exited { session });
+            sink(PtyEvent::Exited {
+                session,
+                clean: false,
+            });
             std::thread::spawn(|| {})
         })
 }
@@ -1235,6 +1296,38 @@ mod tests {
         );
 
         mgr.kill(id).expect("kill");
+    }
+
+    /// Type `exit` into a spawned shell and assert the adapter reaps it as a
+    /// *clean* exit — the signal the shell auto-close keys off.
+    #[test]
+    fn a_typed_exit_reports_a_clean_exit() {
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let mgr = PtyManager::new(sink, None, Palette::default());
+        let id = sid(2);
+        mgr.spawn(spec(id)).expect("spawn");
+        mgr.write(id, b"exit\r\n").expect("write");
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut reaped = None;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(PtyEvent::Exited { clean, .. }) => {
+                    reaped = Some(clean);
+                    break;
+                }
+                Ok(_) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            }
+        }
+        assert_eq!(reaped, Some(true), "a typed `exit` must reap as clean");
+        // The manager holds the dead session's handles until the kill —
+        // exactly what the auto-close's `Kill` effect releases.
+        mgr.kill(id).expect("kill releases the dead session");
     }
 
     #[test]
