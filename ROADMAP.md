@@ -204,6 +204,14 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   (MVP: fixed-ratio split; `core::Workspace` stays the single source of truth)
   with drag-resize as fast-follow #55. Note: the keymap actions are currently
   dropped at `shell.rs:721` (`=> Task::none()`) — wiring them is step one
+- [ ] `F-close-on-exit` — auto-close a shell pane/tab on clean exit (#185):
+  when a `Launch::Shell` session's process exits with code 0 (the user typed
+  `exit`), close its pane — collapse the split, or close the tab (onto the
+  reopen stack) when it was the last pane; an emptied workspace stays open,
+  termherd never quits. Non-zero/unknown exits keep today's dead-terminal
+  view so errors stay readable, and Claude sessions never auto-close. Needs
+  the exit status threaded through the `pty` adapter (currently discarded at
+  `child.wait()`) into `Event::PtyExited`. Fixed policy, no settings knob
 - [ ] `F-jsonl-viewer`
 - [ ] `F-terminal-images` — render images inline in the terminal (iTerm2 OSC
   1337 / Sixel / Kitty graphics), sibling to `F-jsonl-viewer` /
