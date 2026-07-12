@@ -10,13 +10,14 @@ gist `d1d02e5`).
 The MoSCoW buckets below stay tied to PRD §5; this block is just the order to
 pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 
-> **Reprioritization (2026-07-05).** The board had flattened at P2; a fresh
-> pass differentiated it. Current **P1**: #102 (scroll-drift correctness bug),
-> #54 (split-pane UI — the release headline), #79 + #80 (confirm-on-running-
-> process guards), #119 (reflect Claude's own `/rename` in the tab), plus the
-> `F-quality-gates` slices #105/#106/#107. All three code-signing paths dropped
-> to **P3**. #90 stays P2 but is marked `needs-design`; #55 is blocked-by #54.
-> #110 closed — rung 2 shipped as #124/#126.
+> **Reprioritization (2026-07-12).** Supersedes the 2026-07-05 pass. Closed
+> since: #79 + #80 (confirm-on-running guards → `F-close-confirm-policy`),
+> #56 + #57 (favorites → `F-favorites`), #86 (background notifications), and the
+> `F-quality-gates` P1 slices #105/#106/#107. Current **P1**: #102 (scroll-drift
+> correctness bug), #54 (split-pane UI — the release headline), #119 (reflect
+> Claude's own `/rename` in the tab), plus the intra-crate refactor cluster
+> #167–#169 (P1 `tech-health`). All three code-signing paths are **P3**. #90
+> stays P2 but is marked `needs-design`; #55 is blocked-by #54.
 
 1. **Finish the Musts** (`v0.1.0` milestone) — macOS ships **unsigned**
    (`.dmg` + manual `xattr`); **Linux** signed checksums (#52, done) and the
@@ -30,13 +31,15 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
    `F-packaging-ci.md`.
 2. **P1 — correctness + the headline feature:** #102 (scroll-drift property
    failure — the one open correctness bug), #54 (fixed-ratio split-pane UI —
-   cheapest large/visible feature, core already landed), #79/#80 (don't kill a
-   running Claude by accident), #119 (live tab name), and `F-quality-gates`
-   #105/#106/#107.
+   cheapest large/visible feature, core already landed), #119 (live tab name),
+   and the intra-crate refactor cluster #167–#169 (`tech-health`). Done since
+   the last pass: #79/#80 (running-process guards) and the `F-quality-gates`
+   P1 slices #105/#106/#107.
 3. **P2 — polish:** #36 (copy-on-select), #55 (drag-resize, **blocked-by #54**),
-   #56/#57 (favorites), #59 (modifier bypass), #37 (settings template), #84
-   (OSC 8 links), #85 (inline images), #86 (bg notifications), #82 (link-cursor
-   bug), #90 (MCP control surface, **`needs-design`**), #114 (Cmd+M minimize).
+   #59 (modifier bypass), #37 (settings template), #84 (OSC 8 links), #85
+   (inline images), #82 (link-cursor bug), #90 (MCP control surface,
+   **`needs-design`**), #114 (Cmd+M minimize). Done since the last pass:
+   #56/#57 (favorites) and #86 (bg notifications).
 4. **P3 — parked / not actionable now:** code signing — #51, #61, #62.
 5. **Design-first backlog** — see below; don't code until scoped.
 
@@ -118,13 +121,15 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
 - [ ] `F-quality-gates` — intrinsic-quality CI gates beyond the existing
   fmt/clippy/test/deny set, targeting the structural/maintainability axis
   (complexity, domain boundaries, merge-conflict risk). Scoped from a
-  brainstorm (`brainstorm/20260627-ci-quality-gates.md`). **P1:** function
-  length (#105), unused deps (#106), and the crate-level dependency rule as an
-  architecture fitness function enforcing the hexagonal inward-only invariant
-  (#107). **P2 follow-ups** (not yet filed): intra-crate module rules (D
-  phase 2, `cargo-modules`/archtest) and cognitive-complexity (signal C).
-  **P3 / report-only** (blocked on a quality-report home): file length
-  (signal A) and churn×size hotspots (signal J). Dropped: MSRV check,
+  brainstorm (`brainstorm/20260627-ci-quality-gates.md`). **P1 — shipped:**
+  function length (#105), unused deps (#106), and the crate-level dependency
+  rule as an architecture fitness function enforcing the hexagonal inward-only
+  invariant (#107) all landed. **P2 follow-ups — now filed** as the intra-crate
+  refactor cluster #167–#173: the module-boundary/`cfg(target_os)`/file-length
+  gate is #173, blocked by the god-object splits #167/#168/#169; cognitive-
+  complexity (signal C) stays unfiled. **P3 / report-only** (blocked on a
+  quality-report home): file length (signal A, folded into #173's report) and
+  churn×size hotspots (signal J). Dropped: MSRV check,
   `todo!`→deny, PR-size warning (rationale in the report). `tech-health`
 - [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is
   a tab; a tab strip switches between them, each chip carrying its activity
