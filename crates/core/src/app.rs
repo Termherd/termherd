@@ -321,6 +321,13 @@ pub enum Event {
     /// Reopen the most recently closed tab, restoring its mode and
     /// directory. A no-op when nothing has been closed.
     ReopenClosedTab,
+    /// Give the tab at `index` a manual name, overriding its derived title
+    /// (FR5). A blank title clears the override; the manual name is never
+    /// clobbered by a later OSC/digest update. A pure relabel — no PTY touched.
+    RenameTab {
+        index: usize,
+        title: String,
+    },
     /// Split the focused pane, opening a fresh session beside it (FR6).
     SplitFocused(SplitDir),
     /// Close the focused pane (FR6); its PTY is killed and the split collapses.
@@ -525,6 +532,10 @@ impl App {
                 Vec::new()
             }
             Event::ReopenClosedTab => self.reopen_closed_tab(),
+            Event::RenameTab { index, title } => {
+                self.workspace.rename_tab(index, &title);
+                Vec::new()
+            }
             Event::SplitFocused(dir) => self.split_focused(dir),
             Event::CloseFocusedPane => match self.workspace.close_focused() {
                 Some(id) => {

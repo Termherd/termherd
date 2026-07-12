@@ -136,7 +136,13 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   the session's fuller description — the same hover card the sidebar uses for a
   resumed session, a title + cwd card otherwise (#76, `App::tab_record` resolves
   the record so the two surfaces stay single-sourced). Drag-reorder (FR5) and
-  keyboard switching (deferred to `F-keyboard-shortcuts`) still to come
+  keyboard switching (`Ctrl+Tab`, via `F-keyboard-shortcuts`) both ship.
+  Double-clicking a chip renames the tab inline (#145): a durable
+  `Tab.custom_title` overlays the derived title (`Tab::display_title` resolves
+  the precedence, so a later OSC/digest relabel never masks a custom name), a
+  blank name reverts to the derived title, blur commits and Escape cancels. The
+  tab-strip view was extracted to its own `shell/view/tabs.rs` for this (C2 of
+  the intra-crate refactor, #168)
 - [x] `F-close-confirm-policy` — configurable close confirmation for tab close
   and app quit (`close.tab` / `close.app` in `settings.json`, each
   `alwaysConfirm` / `confirmWhenActive` / `noConfirmation`). One pure decision

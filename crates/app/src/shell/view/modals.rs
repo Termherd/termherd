@@ -53,7 +53,7 @@ impl Shell {
         let index = self.closing?;
         let tab = self.core.workspace.tabs.get(index)?;
         Some(Self::confirmation_bar(
-            strings::close_tab_prompt(&clip(&tab.title, 24)),
+            strings::close_tab_prompt(&clip(tab.display_title(), 24)),
             strings::CLOSE,
             button::danger,
             Message::CloseTab(index),

@@ -39,7 +39,14 @@ pub struct Tab {
     /// Path from the root to the focused leaf. An empty path means the root
     /// itself is the focused leaf.
     pub focus: Vec<Branch>,
+    /// The derived title — the scanned session digest / OSC title, updated by
+    /// [`Workspace::set_session_title`]. Shown only when there is no manual
+    /// override (see [`Tab::custom_title`] / [`Tab::display_title`]).
     pub title: String,
+    /// A user-set name that overrides the derived [`title`](Self::title) and is
+    /// never clobbered by a later derived/OSC update — the manual rename wins.
+    /// `None` means "use the derived title"; a rename to blank reverts to it.
+    pub custom_title: Option<String>,
 }
 
 impl Tab {
@@ -50,6 +57,14 @@ impl Tab {
         let mut out = Vec::new();
         collect_leaves(&self.root, &mut out);
         out
+    }
+
+    /// The title to display: the manual override when set, else the derived
+    /// title. This is the single read every surface (tab chip, close prompt,
+    /// hover card) should use so the override is honoured everywhere.
+    #[must_use]
+    pub fn display_title(&self) -> &str {
+        self.custom_title.as_deref().unwrap_or(&self.title)
     }
 }
 
@@ -81,6 +96,7 @@ impl Workspace {
             root: Pane::Leaf(session),
             focus: Vec::new(),
             title: title.into(),
+            custom_title: None,
         });
         self.active = self.tabs.len() - 1;
     }
@@ -132,6 +148,21 @@ impl Workspace {
             .iter_mut()
             .find(|tab| tab.sessions().contains(&session))?;
         tab.title = title.into();
+        Some(())
+    }
+
+    /// Give the tab at `index` a manual name that overrides its derived title.
+    /// A blank name (empty or whitespace) clears the override, reverting to the
+    /// derived title. Returns `None` (changing nothing) when `index` is out of
+    /// range.
+    pub fn rename_tab(&mut self, index: usize, name: &str) -> Option<()> {
+        let tab = self.tabs.get_mut(index)?;
+        let trimmed = name.trim();
+        tab.custom_title = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        };
         Some(())
     }
 
@@ -369,6 +400,49 @@ mod tests {
         assert_eq!(ws.set_session_title(sid(99), "ghost"), None);
         assert_eq!(ws.tabs[0].title, "renamed");
         assert_eq!(ws.tabs[1].title, "split title");
+    }
+
+    #[test]
+    fn rename_tab_overrides_the_derived_title_while_keeping_it() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "derived");
+        assert_eq!(ws.rename_tab(0, "custom"), Some(()));
+        assert_eq!(ws.tabs[0].display_title(), "custom");
+        // the derived title is retained underneath the override.
+        assert_eq!(ws.tabs[0].title, "derived");
+    }
+
+    #[test]
+    fn a_custom_title_wins_over_a_later_derived_update() {
+        // The manual name must not be clobbered by a subsequent OSC/digest
+        // title — the user override wins.
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "derived");
+        ws.rename_tab(0, "custom");
+        assert_eq!(ws.set_session_title(sid(1), "new derived"), Some(()));
+        assert_eq!(ws.tabs[0].display_title(), "custom");
+        assert_eq!(ws.tabs[0].title, "new derived");
+    }
+
+    #[test]
+    fn a_blank_rename_reverts_to_the_derived_title() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "derived");
+        ws.rename_tab(0, "custom");
+        // whitespace-only clears the override.
+        assert_eq!(ws.rename_tab(0, "   "), Some(()));
+        assert_eq!(ws.tabs[0].custom_title, None);
+        assert_eq!(ws.tabs[0].display_title(), "derived");
+    }
+
+    #[test]
+    fn rename_tab_trims_and_ignores_an_out_of_range_index() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "derived");
+        assert_eq!(ws.rename_tab(0, "  spaced  "), Some(()));
+        assert_eq!(ws.tabs[0].display_title(), "spaced");
+        assert_eq!(ws.rename_tab(9, "x"), None);
+        assert_eq!(ws.tabs[0].display_title(), "spaced");
     }
 
     #[test]

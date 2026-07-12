@@ -67,6 +67,10 @@ fn rename_id() -> widget::Id {
     widget::Id::new("termherd-rename")
 }
 
+fn tab_rename_id() -> widget::Id {
+    widget::Id::new("termherd-tab-rename")
+}
+
 /// The user's home directory, the fallback cwd for "new shell here" when no
 /// session is open to inherit one from. Falls back to "." if neither
 /// `USERPROFILE` (Windows) nor `HOME` (Unix) is set, so a launch always has a
@@ -229,6 +233,10 @@ struct Shell {
     keymap: Keymap,
     /// In-progress inline rename: `(session id, edit buffer)` (F-session-metadata).
     renaming: Option<(String, String)>,
+    /// In-progress inline tab rename: `(tab index, edit buffer)`. Distinct from
+    /// [`Self::renaming`] (a browsed session's title) — this overrides a tab's
+    /// *display* title, and its dismissal commits on blur rather than cancelling.
+    tab_rename: Option<(usize, String)>,
     /// Browsable plan / memory docs (F-plans-memory), refreshed on scan.
     docs: Vec<DocEntry>,
     /// Whether a scan is currently in flight. At most one runs at a time;
@@ -384,6 +392,18 @@ enum Message {
     TabDragEnd,
     /// The drag left the tab strip without a drop — abandon it.
     TabDragCancel,
+    /// Begin renaming a tab inline (double-click its chip), seeded with the
+    /// title currently shown.
+    StartTabRename {
+        index: usize,
+        current: String,
+    },
+    /// The inline tab-rename field's text changed.
+    TabRenameInput(String),
+    /// Commit the tab rename (Enter, or a blur onto another interaction).
+    CommitTabRename,
+    /// Abandon the tab rename (Escape), keeping the previous display title.
+    CancelTabRename,
     /// Confirm quitting TermHerd, closing the window (and hard-killing every
     /// live session). Reached only after the quit modal is accepted.
     ConfirmCloseWindow,
@@ -495,6 +515,26 @@ impl Message {
                 | Self::CloseDoc
         )
     }
+
+    /// Whether this message is a deliberate interaction *elsewhere* that should
+    /// commit an in-progress tab rename — the blur-commits convention (unlike a
+    /// session rename, which blur cancels). `active` is the tab being renamed:
+    /// the double-click that opened the edit emits `TabDragStart(active)` /
+    /// `TabDragEnd` around it, and those must not commit; a press on a *different*
+    /// tab, or focusing the terminal / search / launching, does.
+    fn commits_tab_rename(&self, active: usize) -> bool {
+        match self {
+            Self::TabDragStart(index) => *index != active,
+            Self::FocusTerminal
+            | Self::FocusSearch
+            | Self::LaunchProject(_)
+            | Self::LaunchSession { .. }
+            | Self::RequestCloseTab(_)
+            | Self::OpenDoc { .. }
+            | Self::ToggleSidebar => true,
+            _ => false,
+        }
+    }
 }
 
 impl Shell {
@@ -527,6 +567,7 @@ impl Shell {
             theme: startup.theme.to_iced(),
             keymap: startup.keymap,
             renaming: None,
+            tab_rename: None,
             // Populated by the first scan's `refresh_docs` — `discover` does
             // blocking fs I/O, which must stay off the UI thread.
             docs: Vec::new(),
@@ -1060,6 +1101,15 @@ impl Shell {
         if self.renaming.is_some() && message.dismisses_rename() {
             self.renaming = None;
         }
+        // A tab rename blurs the other way: a genuine interaction elsewhere
+        // *commits* the pending name (the double-click's own drag noise on the
+        // same tab is excluded by `commits_tab_rename`), then the message itself
+        // still dispatches below.
+        if let Some((index, _)) = self.tab_rename
+            && message.commits_tab_rename(index)
+        {
+            self.commit_tab_rename();
+        }
         match message {
             Message::Window(id, event) => self.on_window_event(id, event),
             Message::ScanCompleted(Ok(records)) => {
@@ -1237,6 +1287,27 @@ impl Shell {
             },
             Message::TabDragCancel => {
                 self.tab_drag = None;
+                Task::none()
+            }
+            Message::StartTabRename { index, current } => {
+                if index < self.core.workspace.tabs.len() {
+                    self.tab_rename = Some((index, current));
+                    return operate(focusable::focus(tab_rename_id()));
+                }
+                Task::none()
+            }
+            Message::TabRenameInput(value) => {
+                if let Some((_, buffer)) = &mut self.tab_rename {
+                    *buffer = value;
+                }
+                Task::none()
+            }
+            Message::CommitTabRename => {
+                self.commit_tab_rename();
+                Task::none()
+            }
+            Message::CancelTabRename => {
+                self.tab_rename = None;
                 Task::none()
             }
             Message::ConfirmCloseWindow => match self.closing_window.take() {
@@ -1519,6 +1590,19 @@ impl Shell {
         self.resize_focused()
     }
 
+    /// Apply the pending tab rename to the core and clear the edit. A blank name
+    /// reverts to the derived title — the core's [`rename_tab`] owns that rule,
+    /// so this just forwards the buffer verbatim. No-op when nothing is pending.
+    ///
+    /// [`rename_tab`]: termherd_core::workspace::Workspace::rename_tab
+    fn commit_tab_rename(&mut self) {
+        if let Some((index, title)) = self.tab_rename.take() {
+            let _ = self
+                .core
+                .apply(termherd_core::Event::RenameTab { index, title });
+        }
+    }
+
     /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
     /// `PrevTab`). No-op when nothing is open.
     fn cycle_tab(&mut self, delta: i32) -> Task<Message> {
@@ -1575,6 +1659,19 @@ impl Shell {
     /// Route a key press to the focused terminal's PTY (FR4). Ignored unless a
     /// terminal holds focus, so the search box keeps its own typing.
     fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
+        // While renaming a tab inline, the text field owns the keyboard —
+        // except Escape, which abandons the edit (Enter commits via the field's
+        // own submit; a blur commits through `commits_tab_rename`).
+        if self.tab_rename.is_some() {
+            if let keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Escape),
+                ..
+            } = &event
+            {
+                return self.update(Message::CancelTabRename);
+            }
+            return Task::none();
+        }
         // While renaming inline, let the text field own the keyboard.
         if self.renaming.is_some() {
             return Task::none();
@@ -1698,6 +1795,7 @@ impl Shell {
     fn accepts_terminal_input(&self) -> bool {
         self.focus == Focus::Terminal
             && self.renaming.is_none()
+            && self.tab_rename.is_none()
             && self.closing.is_none()
             && self.archiving.is_none()
             && self.open_doc.is_none()
@@ -2460,6 +2558,90 @@ mod key_routing {
                 Some((_, Message::CancelCloseWindow))
             ),
             "quit takes precedence over the other confirmations"
+        );
+    }
+
+    #[test]
+    fn double_clicking_a_tab_then_typing_and_enter_renames_it() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived.clone(),
+        });
+        assert_eq!(shell.tab_rename.as_ref().map(|(i, _)| *i), Some(1));
+
+        let _ = shell.update(Message::TabRenameInput("My work".to_string()));
+        let _ = shell.update(Message::CommitTabRename);
+
+        assert_eq!(shell.core.workspace.tabs[1].display_title(), "My work");
+        assert!(shell.tab_rename.is_none(), "committing clears the editor");
+    }
+
+    #[test]
+    fn escape_abandons_a_tab_rename_without_touching_the_title() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived.clone(),
+        });
+        let _ = shell.update(Message::TabRenameInput("half-typed".to_string()));
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+
+        assert!(shell.tab_rename.is_none(), "Escape abandons the edit");
+        assert_eq!(
+            shell.core.workspace.tabs[1].display_title(),
+            derived,
+            "an abandoned rename leaves the derived title intact"
+        );
+    }
+
+    #[test]
+    fn pressing_another_tab_commits_the_rename_but_the_double_clicks_own_drag_does_not() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived,
+        });
+        let _ = shell.update(Message::TabRenameInput("Renamed".to_string()));
+
+        // The double-click that opened the edit still emits TabDragStart(1) /
+        // TabDragEnd around it — those must not commit or the field would vanish
+        // before a key is pressed.
+        let _ = shell.update(Message::TabDragStart(1));
+        let _ = shell.update(Message::TabDragEnd);
+        assert!(
+            shell.tab_rename.is_some(),
+            "the renamed tab's own drag noise leaves the edit open"
+        );
+
+        // A press on a *different* tab is a real blur → commit.
+        let _ = shell.update(Message::TabDragStart(0));
+        assert!(shell.tab_rename.is_none(), "clicking another tab commits");
+        assert_eq!(shell.core.workspace.tabs[1].display_title(), "Renamed");
+    }
+
+    #[test]
+    fn committing_a_blank_tab_rename_reverts_to_the_derived_title() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived.clone(),
+        });
+        let _ = shell.update(Message::TabRenameInput("   ".to_string()));
+        let _ = shell.update(Message::CommitTabRename);
+
+        assert_eq!(
+            shell.core.workspace.tabs[1].display_title(),
+            derived,
+            "a blank rename falls back to the derived title"
         );
     }
 

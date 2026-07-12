@@ -6,12 +6,12 @@
 
 use std::time::SystemTime;
 
-use iced::widget::{button, column, container, mouse_area, row, text, tooltip};
+use iced::widget::{button, column, container, mouse_area, row, text, text_input, tooltip};
 use iced::{Color, Element};
 use termherd_core::workspace::Tab;
 
 use super::{card_secondary_text, card_style, clip, session_card, status_color};
-use crate::shell::{Message, Shell};
+use crate::shell::{Message, Shell, tab_rename_id};
 
 impl Shell {
     /// The tab strip (FR5): one chip per open session, the active one
@@ -42,41 +42,72 @@ impl Shell {
             // insertion bar between chips, not on the chip itself.
             let dragging_this = drag.is_some_and(|(from, _)| from == index);
 
-            let mut inner = row![].spacing(6).align_y(iced::Center);
-            if let Some(status) = self.core.tab_status(index) {
-                inner = inner.push(text("●").size(9).color(status_color(status)));
-            }
-            inner = inner.push(text(clip(&tab.title, 24)).size(12));
-            // The × lives inside the chip so it sits on the active tab's fill,
-            // and its colour follows the chip's text so it stays legible there.
-            inner = inner.push(
-                button(text("×").size(14))
-                    .on_press(Message::RequestCloseTab(index))
-                    .style(move |theme: &iced::Theme, _status| button::Style {
-                        background: None,
-                        text_color: tab_chip_text(theme, active),
-                        ..button::Style::default()
-                    })
-                    .padding(0),
-            );
-            let chip = container(inner)
-                .padding(6)
-                .style(move |theme: &iced::Theme| tab_chip_style(theme, active, dragging_this));
-            // A press starts a drag; entering another chip moves the drop slot.
-            // Release/cancel are handled by the strip below, so a plain click
-            // (press and release on the same chip) still just activates it. The
-            // × button captures its own click, so it never starts a drag.
-            let chip = mouse_area(chip)
-                .on_press(Message::TabDragStart(index))
-                .on_enter(Message::TabDragOver(index));
-            // The chip clips the title; hovering reveals the fuller description —
-            // the very session card the sidebar shows when the tab
-            // resumes a browsed session, else a minimal title + cwd card.
-            let chip = tooltip(
-                chip,
-                self.tab_hover_card(index, tab, now),
-                tooltip::Position::Bottom,
-            );
+            // Double-clicking a chip opens an inline field over it; while that
+            // field is up the chip is the editor, not a draggable button — so it
+            // emits no drag messages that could dismiss its own edit.
+            let renaming_this = self.tab_rename.as_ref().is_some_and(|(ri, _)| *ri == index);
+            let chip: Element<'_, Message> = if renaming_this {
+                let buffer = self.tab_rename.as_ref().map_or("", |(_, b)| b.as_str());
+                let mut inner = row![].spacing(6).align_y(iced::Center);
+                if let Some(status) = self.core.tab_status(index) {
+                    inner = inner.push(text("●").size(9).color(status_color(status)));
+                }
+                inner = inner.push(
+                    text_input("", buffer)
+                        .id(tab_rename_id())
+                        .on_input(Message::TabRenameInput)
+                        .on_submit(Message::CommitTabRename)
+                        .size(12)
+                        .padding(2)
+                        .width(140.0),
+                );
+                container(inner)
+                    .padding(6)
+                    .style(move |theme: &iced::Theme| tab_chip_style(theme, active, false))
+                    .into()
+            } else {
+                let mut inner = row![].spacing(6).align_y(iced::Center);
+                if let Some(status) = self.core.tab_status(index) {
+                    inner = inner.push(text("●").size(9).color(status_color(status)));
+                }
+                inner = inner.push(text(clip(tab.display_title(), 24)).size(12));
+                // The × lives inside the chip so it sits on the active tab's fill,
+                // and its colour follows the chip's text so it stays legible there.
+                inner = inner.push(
+                    button(text("×").size(14))
+                        .on_press(Message::RequestCloseTab(index))
+                        .style(move |theme: &iced::Theme, _status| button::Style {
+                            background: None,
+                            text_color: tab_chip_text(theme, active),
+                            ..button::Style::default()
+                        })
+                        .padding(0),
+                );
+                let chip = container(inner)
+                    .padding(6)
+                    .style(move |theme: &iced::Theme| tab_chip_style(theme, active, dragging_this));
+                // A press starts a drag; entering another chip moves the drop
+                // slot; a double-click opens the inline rename. Release/cancel are
+                // handled by the strip below, so a plain click (press and release
+                // on the same chip) still just activates it. The × button captures
+                // its own click, so it never starts a drag.
+                let chip = mouse_area(chip)
+                    .on_press(Message::TabDragStart(index))
+                    .on_enter(Message::TabDragOver(index))
+                    .on_double_click(Message::StartTabRename {
+                        index,
+                        current: tab.display_title().to_owned(),
+                    });
+                // The chip clips the title; hovering reveals the fuller
+                // description — the very session card the sidebar shows when the
+                // tab resumes a browsed session, else a minimal title + cwd card.
+                tooltip(
+                    chip,
+                    self.tab_hover_card(index, tab, now),
+                    tooltip::Position::Bottom,
+                )
+                .into()
+            };
             if caret_at == Some(index) {
                 bar = bar.push(insertion_caret());
             }
@@ -116,7 +147,7 @@ impl Shell {
                     .first()
                     .and_then(|id| self.core.sessions.get(id))
                     .and_then(|s| s.cwd.clone());
-                tab_card(tab.title.clone(), cwd)
+                tab_card(tab.display_title().to_owned(), cwd)
             }
         }
     }
