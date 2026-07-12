@@ -268,6 +268,25 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   `set_option` (writes), the `keys` surface and the orchestration tools
   (open session / split / focus / rename / run-in-session) are still to come
 
+- [ ] `F-terminal-palette` — configurable terminal colours: background, default
+  foreground/text, cursor and the 16-colour ANSI palette set in
+  `settings.json`. Distinct from the shipped GUI theme in `F-settings`, which
+  only styles the iced chrome (dark/light) — today the grid colours are
+  hardcoded in the `pty` adapter. **Tortured (👍 ship, feature-torture
+  `F-terminal-palette.md`)**: graduated to #181 — an optional
+  `terminal.colors` block, a `Palette` injected into `PtyManager::new` like
+  the shell profile (colours keep resolving in the adapter, `core` never sees
+  RGB), restart-to-apply. Selection colour trimmed out (app affordance, not
+  terminal content); named preset schemes deferred to a follow-up
+  (`F-terminal-palette-presets`); live reload waits for the in-app settings
+  panel
+- [ ] `F-session-accent-colors` — per-session / per-agent visual accents:
+  give each session (or agent kind — Claude, plain shell, `agy`) a colour used
+  on its tab chip, sidebar row and pane border, so parallel sessions are
+  distinguishable at a glance. Chrome accents, not grid colours — sibling of,
+  but separate from, `F-terminal-palette`. Natural home for the assignment is
+  the `~/.termherd/metadata.json` overlay (like `F-session-metadata`).
+  **Design-first**
 - [ ] `F-capture` — capture termherd (screenshots / screencasts) along a
   fidelity ladder, for three goals: **G1** dev/AI debug loop, **G2** promo &
   tutorial visuals, **G3** bug-repro recordings (devs now, maybe end users
