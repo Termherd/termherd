@@ -2232,6 +2232,7 @@ mod key_routing {
             lines: vec![line],
             cursor: None,
             scrolled: false,
+            display_offset: 0,
             bracketed_paste: false,
         }
     }
