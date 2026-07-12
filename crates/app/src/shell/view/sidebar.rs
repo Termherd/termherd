@@ -140,13 +140,12 @@ impl Shell {
             return None;
         }
         let collapsed = self.core.is_collapsed(FAVORITES_SECTION_KEY);
-        let header = row![
-            fold_toggle(FAVORITES_SECTION_KEY, collapsed),
-            text(strings::FAVORITES).size(12)
-        ]
-        .spacing(6)
-        .align_y(iced::Center);
-        let mut fav_col = column![header].spacing(4);
+        let mut fav_col = column![section_header(
+            FAVORITES_SECTION_KEY,
+            collapsed,
+            strings::FAVORITES
+        )]
+        .spacing(4);
         if !collapsed {
             for (path, s) in &favorites {
                 let id = s.session_id.as_str();
@@ -186,13 +185,12 @@ impl Shell {
             return None;
         }
         let collapsed = self.core.is_collapsed(PLANS_SECTION_KEY);
-        let header = row![
-            fold_toggle(PLANS_SECTION_KEY, collapsed),
-            text(strings::PLANS_AND_MEMORY).size(12)
-        ]
-        .spacing(6)
-        .align_y(iced::Center);
-        let mut docs_col = column![header].spacing(4);
+        let mut docs_col = column![section_header(
+            PLANS_SECTION_KEY,
+            collapsed,
+            strings::PLANS_AND_MEMORY
+        )]
+        .spacing(4);
         if !collapsed {
             for doc in &self.docs {
                 docs_col = docs_col.push(
@@ -418,6 +416,24 @@ fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
         .style(button::text)
         .padding(0)
         .into()
+}
+
+/// A foldable section header: the disclosure triangle and the section title,
+/// both toggling the fold for `key`. Clicking the title folds the section, at
+/// parity with a project group header — the tiny triangle is not the only
+/// target. Shared by the Favorites and Plans & mémoire sections so the two
+/// keep the same affordance.
+fn section_header(key: &str, collapsed: bool, label: &str) -> Element<'static, Message> {
+    row![
+        fold_toggle(key, collapsed),
+        button(text(label.to_owned()).size(12))
+            .on_press(Message::ToggleCollapsed(key.to_owned()))
+            .style(button::text)
+            .padding(0),
+    ]
+    .spacing(6)
+    .align_y(iced::Center)
+    .into()
 }
 
 /// An icon button beside a project header that launches a session in the repo
