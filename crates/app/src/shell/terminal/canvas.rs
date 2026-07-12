@@ -398,6 +398,7 @@ mod tests {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            selection: Vec::new(),
         }
     }
 
@@ -544,6 +545,7 @@ mod tests {
             scrolled: offset > 0,
             display_offset: offset,
             bracketed_paste: false,
+            selection: Vec::new(),
         }
     }
 
@@ -659,6 +661,7 @@ mod tests {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            selection: Vec::new(),
         }
     }
 

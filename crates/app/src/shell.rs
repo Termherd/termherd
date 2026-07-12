@@ -2371,6 +2371,7 @@ mod key_routing {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            selection: Vec::new(),
         }
     }
 

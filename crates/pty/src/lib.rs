@@ -76,6 +76,12 @@ pub struct Screen {
     /// the shell wraps a paste in `ESC[200~`…`ESC[201~` and a multi-line paste
     /// lands as one block instead of submitting line by line (FR4).
     pub bracketed_paste: bool,
+    /// The highlighted selection as inclusive per-row column spans `(row, c0, c1)`
+    /// in visible coordinates, one per on-screen row the selection covers, empty
+    /// when nothing is selected. Derived from the terminal's own selection, which
+    /// the emulator rotates on every grid scroll — so the highlight follows the
+    /// text through both scrollback and application-driven (alt-screen) scroll.
+    pub selection: Vec<(u16, u16, u16)>,
 }
 
 /// One rendered grid cell: a character and its resolved colours.
@@ -919,6 +925,45 @@ fn csi_tilde(n: u8, modifier: u8) -> Vec<u8> {
 /// Snapshot the visible grid into a [`Screen`] with resolved colours and the
 /// cursor (FR4). Wide-char spacer cells are dropped; the wide glyph keeps its
 /// own column.
+/// The terminal's own selection as inclusive per-row column spans in visible
+/// coordinates. The selection is anchored in the grid and the emulator rotates
+/// it on every scroll, so mapping each covered grid line to its viewport row
+/// (`line - first_line`, matching the cell loop) makes the highlight follow the
+/// text through both scrollback and application-driven scroll. Rows outside the
+/// viewport are dropped, so a selection scrolled partly off clips cleanly.
+fn selected_spans<T: EventListener>(
+    term: &Term<T>,
+    first_line: i32,
+    cols: u16,
+    rows: u16,
+) -> Vec<(u16, u16, u16)> {
+    let Some(range) = term.selection.as_ref().and_then(|s| s.to_range(term)) else {
+        return Vec::new();
+    };
+    let last = cols.saturating_sub(1) as usize;
+    let mut spans = Vec::new();
+    for line in range.start.line.0..=range.end.line.0 {
+        let row = line - first_line;
+        if row < 0 || row as u16 >= rows {
+            continue;
+        }
+        // Block selection keeps the same columns on every row; a normal
+        // selection runs the first row to the edge, fills the middle, and stops
+        // the last row at its column.
+        let (c0, c1) = if range.is_block || range.start.line.0 == range.end.line.0 {
+            (range.start.column.0, range.end.column.0)
+        } else if line == range.start.line.0 {
+            (range.start.column.0, last)
+        } else if line == range.end.line.0 {
+            (0, range.end.column.0)
+        } else {
+            (0, last)
+        };
+        spans.push((row as u16, c0.min(last) as u16, c1.min(last) as u16));
+    }
+    spans
+}
+
 fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
     let cols = term.columns() as u16;
     let rows = term.screen_lines() as u16;
@@ -975,6 +1020,7 @@ fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
         scrolled: content.display_offset > 0,
         display_offset: content.display_offset,
         bracketed_paste: term.mode().contains(TermMode::BRACKETED_PASTE),
+        selection: selected_spans(term, first_line, cols, rows),
     }
 }
 
@@ -1322,6 +1368,102 @@ mod tests {
         assert!(snapshot(&term).bracketed_paste);
         parser.advance(&mut term, b"\x1b[?2004l");
         assert!(!snapshot(&term).bracketed_paste);
+    }
+
+    /// The bug behind reopening the "selection follows scroll" work: in the
+    /// alternate screen a TUI (Claude, vim, less) scrolls its *own* content —
+    /// `display_offset` never moves — so a selection anchored to a viewport row
+    /// froze in place. Anchored to the terminal's own selection, which the
+    /// emulator rotates on every grid scroll, the highlight must ride the text.
+    #[test]
+    fn a_selection_rides_an_app_driven_scroll_in_the_alt_screen() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 4), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"\x1b[?1049h"); // enter the alternate screen
+        parser.advance(&mut term, b"one\r\ntwo\r\nthree\r\nfour");
+        // Select "three" on viewport row 2.
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(2), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(2), Column(4)), Side::Right);
+        term.selection = Some(sel);
+        assert_eq!(
+            snapshot(&term).selection,
+            vec![(2, 0, 4)],
+            "row 2 is highlighted before the scroll"
+        );
+        // The app scrolls its content up one line (a linefeed on the bottom row),
+        // as a TUI does: the grid scrolls though display_offset stays 0.
+        parser.advance(&mut term, b"\r\nfive");
+        assert_eq!(
+            snapshot(&term).selection,
+            vec![(1, 0, 4)],
+            "the highlight followed the text up to row 1"
+        );
+    }
+
+    /// The shipped behaviour, now via the native selection: scrolling the
+    /// viewport back into scrollback rides the highlight down with the text.
+    #[test]
+    fn a_selection_rides_scrollback_scroll() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        // Six rows into a three-row screen leaves three lines of scrollback.
+        parser.advance(&mut term, b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5");
+        // Select the live row 0 ("l3").
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(0), Column(1)), Side::Right);
+        term.selection = Some(sel);
+        assert_eq!(
+            snapshot(&term).selection,
+            vec![(0, 0, 1)],
+            "row 0 is highlighted at the live tail"
+        );
+        // Scroll one line up into history; the same text now sits one row lower.
+        term.scroll_display(Scroll::Delta(1));
+        assert_eq!(
+            snapshot(&term).selection,
+            vec![(1, 0, 1)],
+            "the highlight followed the text down to row 1"
+        );
+    }
+
+    /// A multi-row selection maps to inclusive per-row column spans: the first
+    /// row runs from its column to the edge, middle rows are full width, the last
+    /// row stops at its column — what the highlight draw pass paints.
+    #[test]
+    fn snapshot_reports_a_multi_row_selection_as_per_row_spans() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"aaaaaaaaaa\r\nbbbbbbbbbb\r\ncccccccccc");
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(2)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(2), Column(1)), Side::Right);
+        term.selection = Some(sel);
+        assert_eq!(
+            snapshot(&term).selection,
+            vec![(0, 2, 9), (1, 0, 9), (2, 0, 1)],
+            "first row to the edge, middle full width, last row to its column"
+        );
     }
 
     #[test]
