@@ -1,16 +1,17 @@
 //! The `view` half of the shell: how `Shell` state is rendered (ARCHITECTURE
-//! §8). The session browser sidebar (FR1/FR3), the focused-terminal main pane
-//! with its tab strip (FR5) and close-confirmation bar, plus the small
-//! status-dot and text helpers shared across them. No state transitions live
-//! here — those are in the parent module.
+//! §8). The session browser sidebar (FR1/FR3) and the focused-terminal main
+//! pane with its tab strip (FR5), plus the small status-dot and text helpers
+//! shared across them. The confirmation modals (quit / tab-close / archive)
+//! live in [`modals`]. No state transitions live here — those are in the
+//! parent module.
 
 use std::collections::HashMap;
 use std::time::SystemTime;
 
 use iced::widget::canvas::Canvas;
 use iced::widget::{
-    button, center, checkbox, column, container, mouse_area, opaque, row, scrollable, stack, text,
-    text_editor, text_input, tooltip,
+    button, checkbox, column, container, mouse_area, row, scrollable, stack, text, text_editor,
+    text_input, tooltip,
 };
 use iced::{Color, Element, Fill, Font, Size};
 use termherd_core::SessionRecord;
@@ -22,6 +23,10 @@ use super::ime::ime_area;
 use super::terminal::{TerminalView, cell_size};
 use super::{DocFeedback, Focus, HANDLE_W, Message, OpenDoc, Shell, rename_id, search_id};
 use crate::strings;
+
+mod modals;
+
+use modals::modal;
 
 impl Shell {
     pub(super) fn view(&self) -> Element<'_, Message> {
@@ -42,28 +47,13 @@ impl Shell {
         } else {
             row![self.sidebar(), self.main_pane()].into()
         };
-        // A pending quit overlays a modal confirmation, so the about-to-die
-        // sessions stay untouchable until the user decides.
-        match self.quit_confirmation() {
-            Some(card) => modal(base, card, Message::CancelCloseWindow),
+        // Any armed confirmation — quit, tab-close or archive — overlays the
+        // same centred modal, so the about-to-change sessions stay untouchable
+        // until the user decides. `active_confirmation` picks the one in force.
+        match self.active_confirmation() {
+            Some((card, on_cancel)) => modal(base, card, on_cancel),
             None => base,
         }
-    }
-
-    /// The quit-confirmation modal card (shown when a window close is armed and
-    /// live sessions would be hard-killed). `None` when no quit is pending.
-    fn quit_confirmation(&self) -> Option<Element<'_, Message>> {
-        if !self.quit_pending() {
-            return None;
-        }
-        let live = self.live_session_count();
-        Some(Self::confirmation_bar(
-            strings::quit_prompt(live),
-            strings::QUIT,
-            button::danger,
-            Message::ConfirmCloseWindow,
-            Message::CancelCloseWindow,
-        ))
     }
 
     /// The session browser (FR1 + FR3): search box, then projects by recency.
@@ -392,35 +382,11 @@ impl Shell {
             .on_press(Message::ToggleSidebar)
             .style(button::text)
             .padding(0);
-        let mut chrome = column![hide, search, titles_only, show_archived].spacing(8);
-        if let Some(confirm) = self.archive_confirmation() {
-            chrome = chrome.push(confirm);
-        }
+        let chrome = column![hide, search, titles_only, show_archived].spacing(8);
         container(chrome.push(scrollable(list).height(Fill)).padding(8))
             .width(300)
             .style(container::rounded_box)
             .into()
-    }
-
-    /// The archive-confirmation bar, shown in the sidebar when an archive
-    /// is armed: it names the session about to be hidden and offers Archiver
-    /// (confirm) / Annuler. `None` when nothing is pending.
-    fn archive_confirmation(&self) -> Option<Element<'_, Message>> {
-        let session = self.archiving.as_deref()?;
-        let title = self
-            .core
-            .projects
-            .iter()
-            .flat_map(|group| &group.sessions)
-            .find(|s| s.session_id == session)
-            .map_or_else(|| session.to_owned(), |s| self.core.session_title(s));
-        Some(Self::confirmation_bar(
-            strings::archive_prompt(&clip(&title, 24)),
-            strings::ARCHIVE,
-            button::primary,
-            Message::ConfirmArchive,
-            Message::CancelArchive,
-        ))
     }
 
     /// The focused terminal: a status badge, then its grid drawn on a canvas.
@@ -446,11 +412,12 @@ impl Shell {
                 .width(Fill)
                 .height(Fill);
                 // Wrap the grid so the platform IME is on while the terminal is
-                // focused — without it dead/accent keys never compose. Off
-                // while an overlay (inline rename / close confirmation) is up, so
-                // its own field owns composition and a dead key can't leak to the
-                // PTY; focus stays `Terminal` underneath those, so they must be
-                // excluded explicitly — the same guard `on_key` applies.
+                // focused — without it dead/accent keys never compose. Off while
+                // an overlay (the inline rename field, or a quit / tab-close /
+                // archive confirmation modal) is up, so its own field owns
+                // composition and a dead key can't leak to the PTY; focus stays
+                // `Terminal` underneath those, so they must be excluded
+                // explicitly — the same guard `on_key` applies.
                 let composed = ime_area(
                     canvas,
                     self.accepts_terminal_input(),
@@ -487,58 +454,10 @@ impl Shell {
         if let Some(indicator) = self.recording_indicator() {
             pane = pane.push(indicator);
         }
-        if let Some(confirm) = self.close_confirmation() {
-            pane = pane.push(confirm);
-        }
         if let Some(status) = focused.and_then(|id| self.core.sessions.get(&id)) {
             pane = pane.push(status_badge(status.status));
         }
         container(pane.push(body)).width(Fill).height(Fill).into()
-    }
-
-    /// The close-confirmation bar, shown when a close is armed: it names
-    /// the session about to die and offers Fermer (confirm) / Annuler. `None`
-    /// when nothing is pending or the armed index has since gone away.
-    fn close_confirmation(&self) -> Option<Element<'_, Message>> {
-        let index = self.closing?;
-        let tab = self.core.workspace.tabs.get(index)?;
-        Some(Self::confirmation_bar(
-            strings::close_tab_prompt(&clip(&tab.title, 24)),
-            strings::CLOSE,
-            button::danger,
-            Message::CloseTab(index),
-            Message::CancelClose,
-        ))
-    }
-
-    /// A confirmation bar shared by the close and archive prompts:
-    /// the question, a styled confirm button, and an Annuler cancel, in the
-    /// rounded container both use. Keeping one builder stops the two bars
-    /// drifting apart.
-    fn confirmation_bar<'a>(
-        prompt: String,
-        confirm_label: &'a str,
-        confirm_style: impl Fn(&iced::Theme, button::Status) -> button::Style + 'a,
-        on_confirm: Message,
-        on_cancel: Message,
-    ) -> Element<'a, Message> {
-        let prompt = text(prompt).size(12);
-        let confirm = button(text(confirm_label).size(12))
-            .on_press(on_confirm)
-            .style(confirm_style)
-            .padding(6);
-        let cancel = button(text(strings::CANCEL).size(12))
-            .on_press(on_cancel)
-            .style(button::text)
-            .padding(6);
-        container(
-            row![prompt, confirm, cancel]
-                .spacing(12)
-                .align_y(iced::Center),
-        )
-        .padding(6)
-        .style(container::rounded_box)
-        .into()
     }
 
     /// The tab strip (FR5): one chip per open session, the active one
@@ -796,37 +715,6 @@ fn launch_button(
     .into()
 }
 
-/// Overlay `content` as a centred modal over `base`, dimming everything behind
-/// it; a click on the scrim emits `on_blur` to dismiss. The base UI keeps
-/// rendering underneath but cannot be interacted with — the inner `opaque`
-/// swallows clicks on the card, the outer one blocks the layers below.
-fn modal<'a>(
-    base: Element<'a, Message>,
-    content: Element<'a, Message>,
-    on_blur: Message,
-) -> Element<'a, Message> {
-    stack(vec![
-        base,
-        opaque(mouse_area(center(opaque(content)).style(modal_backdrop)).on_press(on_blur)),
-    ])
-    .into()
-}
-
-/// Semi-transparent scrim drawn behind a modal so the dialog reads as the only
-/// actionable surface.
-fn modal_backdrop(_theme: &iced::Theme) -> container::Style {
-    container::Style {
-        background: Some(
-            Color {
-                a: 0.6,
-                ..Color::BLACK
-            }
-            .into(),
-        ),
-        ..container::Style::default()
-    }
-}
-
 /// Background for the session hover card — a step away from the surrounding
 /// surface (the `strong` palette tier rather than the default `weak`) so the
 /// card reads as a distinct floating layer, with a thin border to seal it.
@@ -990,7 +878,7 @@ fn tab_card(title: String, cwd: Option<String>) -> Element<'static, Message> {
 }
 
 /// Collapse newlines to spaces and truncate to `max` characters with an ellipsis.
-fn clip(s: &str, max: usize) -> String {
+pub(super) fn clip(s: &str, max: usize) -> String {
     let cleaned: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
     if cleaned.chars().count() <= max {
         cleaned

@@ -1699,6 +1699,7 @@ impl Shell {
         self.focus == Focus::Terminal
             && self.renaming.is_none()
             && self.closing.is_none()
+            && self.archiving.is_none()
             && self.open_doc.is_none()
             && !self.quit_pending()
     }
@@ -2214,6 +2215,17 @@ mod key_routing {
         assert!(pty.writes().is_empty());
     }
 
+    #[test]
+    fn ime_commit_is_ignored_while_the_archive_modal_is_up() {
+        // The archive confirmation is a full-screen modal (like quit / tab-close),
+        // so a composed IME character must not leak to the terminal underneath it
+        // even though focus stays `Terminal`.
+        let (mut shell, pty) = shell_with_terminal();
+        shell.archiving = Some("sess".to_string());
+        let _ = shell.update(Message::ImeCommit("ê".to_string()));
+        assert!(pty.writes().is_empty());
+    }
+
     /// Build a `Screen` of one line of text, for seeding the focused PTY of a
     /// capture test.
     fn screen_of(text: &str) -> Screen {
@@ -2411,6 +2423,44 @@ mod key_routing {
         let _ = shell.launch("/tmp/c".to_string(), Launch::Shell);
         assert_eq!(shell.core.workspace.tabs.len(), 3);
         shell
+    }
+
+    #[test]
+    fn confirmations_route_through_one_modal_in_priority_order() {
+        // Quit, tab-close and archive all confirm via the same modal, and at
+        // most one shows at a time — quit > close > archive.
+        let mut shell = shell_with_three_tabs();
+        assert!(
+            shell.active_confirmation().is_none(),
+            "nothing armed → no modal"
+        );
+
+        shell.closing = Some(0);
+        assert!(
+            matches!(shell.active_confirmation(), Some((_, Message::CancelClose))),
+            "a tab close arms the close modal"
+        );
+
+        shell.closing = None;
+        shell.archiving = Some("sess".to_string());
+        assert!(
+            matches!(
+                shell.active_confirmation(),
+                Some((_, Message::CancelArchive))
+            ),
+            "an archive alone arms the archive modal"
+        );
+
+        // Armed together, quit outranks the tab close (and the archive).
+        shell.closing = Some(0);
+        shell.closing_window = Some(window::Id::unique());
+        assert!(
+            matches!(
+                shell.active_confirmation(),
+                Some((_, Message::CancelCloseWindow))
+            ),
+            "quit takes precedence over the other confirmations"
+        );
     }
 
     #[test]
