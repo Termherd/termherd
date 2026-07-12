@@ -18,13 +18,6 @@ use super::selection::{
     HoverLink, abs_line, cell_at, link_at, selection_text, visible_spans, word_at,
 };
 
-/// The terminal's default background (matches `termherd_pty`'s default).
-const BG: Color = Color::from_rgb(
-    0x11 as f32 / 255.0,
-    0x13 as f32 / 255.0,
-    0x18 as f32 / 255.0,
-);
-
 /// A canvas program that draws the visible terminal grid with per-cell colour
 /// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
 /// The fields are `pub(in crate::shell)` because the view layer
@@ -278,13 +271,13 @@ impl canvas::Program<Message> for TerminalView<'_> {
         let cell_w = bounds.width / cols;
         let cell_h = bounds.height / rows;
 
-        frame.fill_rectangle(Point::ORIGIN, bounds.size(), BG);
+        frame.fill_rectangle(Point::ORIGIN, bounds.size(), rgb(self.screen.default_bg));
 
         for (r, line) in self.screen.lines.iter().enumerate() {
             let y = r as f32 * cell_h;
             for (c, cell) in line.iter().enumerate() {
                 let x = c as f32 * cell_w;
-                if cell.bg != [0x11, 0x13, 0x18] {
+                if cell.bg != self.screen.default_bg {
                     frame.fill_rectangle(Point::new(x, y), Size::new(cell_w, cell_h), rgb(cell.bg));
                 }
                 if cell.c != ' ' && cell.c != '\0' {
@@ -337,7 +330,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 Size::new(cell_w, cell_h),
                 Color {
                     a: 0.6,
-                    ..rgb([0xd0, 0xd0, 0xd0])
+                    ..rgb(self.screen.cursor_color)
                 },
             );
         }
@@ -398,6 +391,8 @@ mod tests {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            default_bg: [0x11, 0x13, 0x18],
+            cursor_color: [0xd0, 0xd0, 0xd0],
         }
     }
 
@@ -544,6 +539,8 @@ mod tests {
             scrolled: offset > 0,
             display_offset: offset,
             bracketed_paste: false,
+            default_bg: [0x11, 0x13, 0x18],
+            cursor_color: [0xd0, 0xd0, 0xd0],
         }
     }
 
@@ -659,6 +656,8 @@ mod tests {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            default_bg: [0x11, 0x13, 0x18],
+            cursor_color: [0xd0, 0xd0, 0xd0],
         }
     }
 

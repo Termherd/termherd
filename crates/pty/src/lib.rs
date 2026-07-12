@@ -76,6 +76,12 @@ pub struct Screen {
     /// the shell wraps a paste in `ESC[200~`…`ESC[201~` and a multi-line paste
     /// lands as one block instead of submitting line by line (FR4).
     pub bracketed_paste: bool,
+    /// The palette's default background — what the GUI paints behind the grid
+    /// (and skips repainting per cell). Carried here so the shell needs no
+    /// palette knowledge.
+    pub default_bg: [u8; 3],
+    /// The palette's cursor colour, for the GUI's cursor block.
+    pub cursor_color: [u8; 3],
 }
 
 /// One rendered grid cell: a character and its resolved colours.
@@ -87,12 +93,41 @@ pub struct ScreenCell {
     pub bold: bool,
 }
 
-impl ScreenCell {
-    const fn blank() -> Self {
+/// The terminal colour scheme: the default foreground/background, the cursor
+/// block, and the 16 ANSI colours. Built from `settings.json` in the
+/// composition root and injected into [`PtyManager::new`] (FR10); [`Default`]
+/// is the built-in scheme. The dim named colours stay a fixed, hand-tuned
+/// table — they are legibility guards, not part of the configurable 16.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Palette {
+    /// Default text colour when a cell uses the terminal's foreground.
+    pub foreground: [u8; 3],
+    /// Default background — also what the GUI paints behind the grid.
+    pub background: [u8; 3],
+    /// The cursor block colour.
+    pub cursor: [u8; 3],
+    /// The 16 ANSI colours, indices 0–15.
+    pub ansi: [[u8; 3]; 16],
+}
+
+impl Default for Palette {
+    fn default() -> Self {
         Self {
+            foreground: DEFAULT_FG,
+            background: DEFAULT_BG,
+            cursor: DEFAULT_FG,
+            ansi: ANSI16,
+        }
+    }
+}
+
+impl Palette {
+    /// An empty cell in this palette's default colours.
+    const fn blank_cell(&self) -> ScreenCell {
+        ScreenCell {
             c: ' ',
-            fg: DEFAULT_FG,
-            bg: DEFAULT_BG,
+            fg: self.foreground,
+            bg: self.background,
             bold: false,
         }
     }
@@ -138,9 +173,9 @@ const ANSI16: [[u8; 3]; 16] = [
 ];
 
 /// Resolve an xterm 256-colour index to RGB (16 ANSI + 6×6×6 cube + ramp).
-fn indexed_rgb(i: u8) -> [u8; 3] {
+fn indexed_rgb(i: u8, palette: &Palette) -> [u8; 3] {
     match i {
-        0..=15 => ANSI16[i as usize],
+        0..=15 => palette.ansi[i as usize],
         16..=231 => {
             let n = i - 16;
             let levels = [0u8, 95, 135, 175, 215, 255];
@@ -157,27 +192,28 @@ fn indexed_rgb(i: u8) -> [u8; 3] {
     }
 }
 
-/// Resolve a named colour to RGB, falling back to the configured defaults.
-fn named_rgb(named: NamedColor) -> [u8; 3] {
+/// Resolve a named colour to RGB against the palette. The dim variants keep a
+/// fixed, hand-tuned table (see [`Palette`]).
+fn named_rgb(named: NamedColor, palette: &Palette) -> [u8; 3] {
     use NamedColor::*;
     match named {
-        Black => ANSI16[0],
-        Red => ANSI16[1],
-        Green => ANSI16[2],
-        Yellow => ANSI16[3],
-        Blue => ANSI16[4],
-        Magenta => ANSI16[5],
-        Cyan => ANSI16[6],
-        White => ANSI16[7],
-        BrightBlack => ANSI16[8],
-        BrightRed => ANSI16[9],
-        BrightGreen => ANSI16[10],
-        BrightYellow => ANSI16[11],
-        BrightBlue => ANSI16[12],
-        BrightMagenta => ANSI16[13],
-        BrightCyan => ANSI16[14],
-        BrightWhite => ANSI16[15],
-        DimBlack => ANSI16[0],
+        Black => palette.ansi[0],
+        Red => palette.ansi[1],
+        Green => palette.ansi[2],
+        Yellow => palette.ansi[3],
+        Blue => palette.ansi[4],
+        Magenta => palette.ansi[5],
+        Cyan => palette.ansi[6],
+        White => palette.ansi[7],
+        BrightBlack => palette.ansi[8],
+        BrightRed => palette.ansi[9],
+        BrightGreen => palette.ansi[10],
+        BrightYellow => palette.ansi[11],
+        BrightBlue => palette.ansi[12],
+        BrightMagenta => palette.ansi[13],
+        BrightCyan => palette.ansi[14],
+        BrightWhite => palette.ansi[15],
+        DimBlack => palette.ansi[0],
         DimRed => [0x88, 0x22, 0x22],
         DimGreen => [0x22, 0x88, 0x22],
         DimYellow => [0x88, 0x88, 0x22],
@@ -185,10 +221,10 @@ fn named_rgb(named: NamedColor) -> [u8; 3] {
         DimMagenta => [0x88, 0x22, 0x88],
         DimCyan => [0x22, 0x88, 0x88],
         DimWhite => [0x88, 0x88, 0x88],
-        Foreground | BrightForeground => DEFAULT_FG,
+        Foreground | BrightForeground => palette.foreground,
         DimForeground => [0x99, 0x99, 0x99],
-        Background => DEFAULT_BG,
-        Cursor => DEFAULT_FG,
+        Background => palette.background,
+        Cursor => palette.cursor,
     }
 }
 
@@ -203,11 +239,11 @@ fn dim([r, g, b]: [u8; 3]) -> [u8; 3] {
     ]
 }
 
-fn resolve(color: Color) -> [u8; 3] {
+fn resolve(color: Color, palette: &Palette) -> [u8; 3] {
     match color {
         Color::Spec(rgb) => [rgb.r, rgb.g, rgb.b],
-        Color::Indexed(i) => indexed_rgb(i),
-        Color::Named(named) => named_rgb(named),
+        Color::Indexed(i) => indexed_rgb(i, palette),
+        Color::Named(named) => named_rgb(named, palette),
     }
 }
 
@@ -292,6 +328,8 @@ pub struct PtyManager {
     sink: EventSink,
     /// User-configured shell; `None` falls back to the platform default.
     shell: Option<Shell>,
+    /// The terminal colour scheme every session renders with.
+    palette: Palette,
 }
 
 /// A command for the per-session terminal thread, which owns the grid.
@@ -323,12 +361,13 @@ impl PtyManager {
     /// `sink` receives every session's output and exit, from the reader
     /// threads. Wrap a channel sender to bridge into the GUI subscription.
     /// `shell` is the configured shell to launch, or `None` for the platform
-    /// default (FR10).
-    pub fn new(sink: EventSink, shell: Option<Shell>) -> Self {
+    /// default; `palette` the terminal colour scheme (FR10).
+    pub fn new(sink: EventSink, shell: Option<Shell>, palette: Palette) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             sink,
             shell,
+            palette,
         }
     }
 
@@ -411,6 +450,7 @@ impl PtyHost for PtyManager {
             (spec.cols, spec.rows),
             writer.clone(),
             self.sink.clone(),
+            self.palette.clone(),
         );
         let reader = spawn_reader(spec.session, reader, child, ctrl.clone(), self.sink.clone());
 
@@ -595,6 +635,7 @@ fn spawn_term(
     size: (u16, u16),
     writer: SharedWriter,
     sink: EventSink,
+    palette: Palette,
 ) -> JoinHandle<()> {
     let (cols, rows) = size;
     let term_sink = sink.clone();
@@ -688,7 +729,7 @@ fn spawn_term(
                 }
                 term_sink(PtyEvent::Output {
                     session,
-                    screen: snapshot(&term),
+                    screen: snapshot(&term, &palette),
                 });
             }
             term_sink(PtyEvent::Exited { session });
@@ -919,10 +960,10 @@ fn csi_tilde(n: u8, modifier: u8) -> Vec<u8> {
 /// Snapshot the visible grid into a [`Screen`] with resolved colours and the
 /// cursor (FR4). Wide-char spacer cells are dropped; the wide glyph keeps its
 /// own column.
-fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
+fn snapshot<T: EventListener>(term: &Term<T>, palette: &Palette) -> Screen {
     let cols = term.columns() as u16;
     let rows = term.screen_lines() as u16;
-    let mut lines = vec![vec![ScreenCell::blank(); cols as usize]; rows as usize];
+    let mut lines = vec![vec![palette.blank_cell(); cols as usize]; rows as usize];
 
     let content = term.renderable_content();
     let first_line = -(content.display_offset as i32);
@@ -940,14 +981,14 @@ fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
             continue;
         }
         let bold = cell.flags.intersects(Flags::BOLD | Flags::DIM_BOLD);
-        let mut fg = resolve(cell.fg);
+        let mut fg = resolve(cell.fg, palette);
         // The faint/dim attribute (SGR 2) darkens the foreground. Without this
         // dim default-fg text — like Claude's greyed suggestions — rendered at
         // full intensity, i.e. near-white.
         if cell.flags.contains(Flags::DIM) {
             fg = dim(fg);
         }
-        let mut bg = resolve(cell.bg);
+        let mut bg = resolve(cell.bg, palette);
         if cell.flags.contains(Flags::INVERSE) {
             std::mem::swap(&mut fg, &mut bg);
         }
@@ -975,6 +1016,8 @@ fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
         scrolled: content.display_offset > 0,
         display_offset: content.display_offset,
         bracketed_paste: term.mode().contains(TermMode::BRACKETED_PASTE),
+        default_bg: palette.background,
+        cursor_color: palette.cursor,
     }
 }
 
@@ -1067,7 +1110,7 @@ mod tests {
         let sink: EventSink = Arc::new(move |ev| {
             let _ = tx.send(ev);
         });
-        let mgr = PtyManager::new(sink, None);
+        let mgr = PtyManager::new(sink, None, Palette::default());
         let id = sid(1);
 
         mgr.spawn(spec(id)).expect("spawn");
@@ -1104,6 +1147,54 @@ mod tests {
             saw_marker,
             "expected the echoed marker in the grid, got:\n{screen}"
         );
+
+        mgr.kill(id).expect("kill");
+    }
+
+    /// Spawn a real PTY with a custom palette and assert the streamed screens
+    /// render in it — exercising manager → terminal thread → snapshot with the
+    /// injected colours, the path the GUI consumes.
+    #[test]
+    fn a_spawned_session_streams_screens_in_the_injected_palette() {
+        let palette = Palette {
+            foreground: [0xff, 0xcc, 0x00],
+            background: [0x3a, 0x0c, 0xa3],
+            cursor: [0xff, 0x00, 0x00],
+            ..Palette::default()
+        };
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let mgr = PtyManager::new(sink, None, palette.clone());
+        let id = sid(7);
+        mgr.spawn(spec(id)).expect("spawn");
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut verified = false;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(PtyEvent::Output { screen, .. }) => {
+                    assert_eq!(screen.default_bg, palette.background);
+                    assert_eq!(screen.cursor_color, palette.cursor);
+                    // A cell the shell hasn't painted renders in the custom
+                    // defaults, so the whole grid follows the scheme.
+                    let blank = screen.lines.last().and_then(|l| l.last());
+                    if let Some(cell) = blank
+                        && cell.c == ' '
+                    {
+                        assert_eq!(cell.fg, palette.foreground);
+                        assert_eq!(cell.bg, palette.background);
+                        verified = true;
+                        break;
+                    }
+                }
+                Ok(_) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            }
+        }
+        assert!(verified, "expected a screen rendered in the custom palette");
 
         mgr.kill(id).expect("kill");
     }
@@ -1316,12 +1407,13 @@ mod tests {
         use alacritty_terminal::event::VoidListener;
         let mut term = Term::new(Config::default(), &TermSize::new(20, 5), VoidListener);
         let mut parser: Processor = Processor::new();
-        assert!(!snapshot(&term).bracketed_paste);
+        let palette = Palette::default();
+        assert!(!snapshot(&term, &palette).bracketed_paste);
         // DECSET 2004 turns it on; the matching reset turns it off again.
         parser.advance(&mut term, b"\x1b[?2004h");
-        assert!(snapshot(&term).bracketed_paste);
+        assert!(snapshot(&term, &palette).bracketed_paste);
         parser.advance(&mut term, b"\x1b[?2004l");
-        assert!(!snapshot(&term).bracketed_paste);
+        assert!(!snapshot(&term, &palette).bracketed_paste);
     }
 
     #[test]
@@ -1338,7 +1430,7 @@ mod tests {
         let mut parser: Processor = Processor::new();
         // SGR 2 = faint/dim, then a glyph on the default foreground.
         parser.advance(&mut term, b"\x1b[2mX");
-        let cell = snapshot(&term).lines[0][0];
+        let cell = snapshot(&term, &Palette::default()).lines[0][0];
         assert_eq!(cell.c, 'X');
         assert_eq!(cell.fg, dim(DEFAULT_FG));
         assert!(
@@ -1349,25 +1441,71 @@ mod tests {
 
     #[test]
     fn colour_resolution_covers_the_256_palette() {
+        let palette = Palette::default();
         // ANSI 16.
-        assert_eq!(indexed_rgb(0), [0x00, 0x00, 0x00]);
-        assert_eq!(indexed_rgb(15), [0xff, 0xff, 0xff]);
+        assert_eq!(indexed_rgb(0, &palette), [0x00, 0x00, 0x00]);
+        assert_eq!(indexed_rgb(15, &palette), [0xff, 0xff, 0xff]);
         // First cube entry (16) is black; last (231) is white.
-        assert_eq!(indexed_rgb(16), [0, 0, 0]);
-        assert_eq!(indexed_rgb(231), [255, 255, 255]);
+        assert_eq!(indexed_rgb(16, &palette), [0, 0, 0]);
+        assert_eq!(indexed_rgb(231, &palette), [255, 255, 255]);
         // Grayscale ramp endpoints.
-        assert_eq!(indexed_rgb(232), [8, 8, 8]);
-        assert_eq!(indexed_rgb(255), [238, 238, 238]);
+        assert_eq!(indexed_rgb(232, &palette), [8, 8, 8]);
+        assert_eq!(indexed_rgb(255, &palette), [238, 238, 238]);
         // Spec passes through; named foreground/background hit the defaults.
         assert_eq!(
-            resolve(Color::Spec(alacritty_terminal::vte::ansi::Rgb {
-                r: 1,
-                g: 2,
-                b: 3
-            })),
+            resolve(
+                Color::Spec(alacritty_terminal::vte::ansi::Rgb { r: 1, g: 2, b: 3 }),
+                &palette
+            ),
             [1, 2, 3]
         );
-        assert_eq!(resolve(Color::Named(NamedColor::Background)), DEFAULT_BG);
+        assert_eq!(
+            resolve(Color::Named(NamedColor::Background), &palette),
+            DEFAULT_BG
+        );
+    }
+
+    #[test]
+    fn a_custom_palette_recolours_named_indexed_and_default_cells() {
+        let mut ansi = ANSI16;
+        ansi[1] = [0xaa, 0x00, 0x00];
+        let palette = Palette {
+            foreground: [0x10, 0x20, 0x30],
+            background: [0xfa, 0xfb, 0xfc],
+            cursor: [0x01, 0x02, 0x03],
+            ansi,
+        };
+
+        // The configurable 16 drive both the named and the indexed forms.
+        assert_eq!(
+            resolve(Color::Named(NamedColor::Red), &palette),
+            [0xaa, 0x00, 0x00]
+        );
+        assert_eq!(resolve(Color::Indexed(1), &palette), [0xaa, 0x00, 0x00]);
+        assert_eq!(
+            resolve(Color::Named(NamedColor::Foreground), &palette),
+            [0x10, 0x20, 0x30]
+        );
+        assert_eq!(
+            resolve(Color::Named(NamedColor::Cursor), &palette),
+            [0x01, 0x02, 0x03]
+        );
+        // The 256-cube stays computed, untouched by the overrides.
+        assert_eq!(resolve(Color::Indexed(231), &palette), [255, 255, 255]);
+        // The dim variants keep their fixed, hand-tuned values.
+        assert_eq!(
+            resolve(Color::Named(NamedColor::DimRed), &palette),
+            [0x88, 0x22, 0x22]
+        );
+
+        // A snapshot carries the palette's chrome colours and blanks.
+        use alacritty_terminal::event::VoidListener;
+        let term = Term::new(Config::default(), &TermSize::new(4, 2), VoidListener);
+        let screen = snapshot(&term, &palette);
+        assert_eq!(screen.default_bg, [0xfa, 0xfb, 0xfc]);
+        assert_eq!(screen.cursor_color, [0x01, 0x02, 0x03]);
+        assert_eq!(screen.lines[0][0].fg, [0x10, 0x20, 0x30]);
+        assert_eq!(screen.lines[0][0].bg, [0xfa, 0xfb, 0xfc]);
     }
 
     // --- wheel forwarding for mouse-mode / alt-screen TUIs --------------
@@ -1450,7 +1588,7 @@ mod tests {
     #[test]
     fn control_methods_reject_unknown_sessions() {
         let sink: EventSink = Arc::new(|_| {});
-        let mgr = PtyManager::new(sink, None);
+        let mgr = PtyManager::new(sink, None, Palette::default());
         let id = sid(42);
         assert!(matches!(
             mgr.write(id, b"x"),

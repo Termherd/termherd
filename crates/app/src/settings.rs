@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use termherd_core::{Action, KeyChord, Keymap};
+use termherd_pty::Palette;
 use tracing::warn;
 
 use crate::record::RecordConfig;
@@ -171,12 +172,81 @@ impl SidebarSettings {
 /// The on-disk terminal settings. Wide (`f64`) for the same reason as
 /// [`RecordSettings`]: an out-of-range typo must not fail serde for the whole
 /// file and silently reset the user's other settings.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TerminalSettings {
     /// Base terminal font size in pixels; the zoom shortcuts step from
     /// here at runtime without touching this setting.
     pub font_size: f64,
+    /// Terminal grid colours; absent → the built-in scheme.
+    pub colors: ColorSettings,
+}
+
+/// The on-disk terminal colour overrides. Every field is optional and parsed
+/// as a plain string for the usual reason: a malformed colour must degrade to
+/// its default (with a warning), never fail serde for the whole file. The
+/// sanitised result is [`ColorSettings::to_palette`].
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColorSettings {
+    /// Default text colour, `"#rrggbb"`.
+    pub foreground: Option<String>,
+    /// Default background colour, `"#rrggbb"`.
+    pub background: Option<String>,
+    /// Cursor block colour, `"#rrggbb"`.
+    pub cursor: Option<String>,
+    /// The 16 ANSI colours (normal 0–7, then bright 8–15), each `"#rrggbb"`.
+    pub palette: Option<Vec<String>>,
+}
+
+impl ColorSettings {
+    /// Sanitise the overrides into the runtime [`Palette`]: each valid field
+    /// replaces its default, each invalid one is warned about and skipped, so
+    /// one bad hex value never costs the rest of the scheme.
+    #[must_use]
+    pub fn to_palette(&self) -> Palette {
+        let mut palette = Palette::default();
+        let apply = |field: &str, raw: &Option<String>, slot: &mut [u8; 3]| {
+            let Some(raw) = raw else { return };
+            match parse_hex(raw) {
+                Some(rgb) => *slot = rgb,
+                None => warn!(field, value = raw, "invalid terminal colour; using default"),
+            }
+        };
+        apply("foreground", &self.foreground, &mut palette.foreground);
+        apply("background", &self.background, &mut palette.background);
+        apply("cursor", &self.cursor, &mut palette.cursor);
+        if let Some(entries) = &self.palette {
+            if entries.len() != 16 {
+                warn!(
+                    entries = entries.len(),
+                    "terminal palette should have exactly 16 colours; \
+                     applying the valid ones in place"
+                );
+            }
+            for (i, raw) in entries.iter().take(16).enumerate() {
+                match parse_hex(raw) {
+                    Some(rgb) => palette.ansi[i] = rgb,
+                    None => warn!(
+                        index = i,
+                        value = raw,
+                        "invalid terminal palette colour; using default"
+                    ),
+                }
+            }
+        }
+        palette
+    }
+}
+
+/// Parse a `"#rrggbb"` colour (the `#` optional) into RGB.
+fn parse_hex(raw: &str) -> Option<[u8; 3]> {
+    let hex = raw.strip_prefix('#').unwrap_or(raw);
+    if hex.len() != 6 || !hex.is_ascii() {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
 }
 
 /// Mirrors `core`'s built-in default so an absent block changes nothing
@@ -187,6 +257,7 @@ impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
             font_size: f64::from(termherd_core::DEFAULT_FONT_SIZE),
+            colors: ColorSettings::default(),
         }
     }
 }
@@ -195,7 +266,7 @@ impl TerminalSettings {
     /// Sanitise the raw value into the runtime base size: clamp into range,
     /// and fall back to the default if it is not finite.
     #[must_use]
-    pub fn font_size(self) -> f32 {
+    pub fn font_size(&self) -> f32 {
         if self.font_size.is_finite() {
             self.font_size
                 .clamp(f64::from(FONT_SIZE_RANGE.0), f64::from(FONT_SIZE_RANGE.1))
@@ -302,6 +373,13 @@ impl Settings {
     #[must_use]
     pub fn font_size(&self) -> f32 {
         self.terminal.font_size()
+    }
+
+    /// The sanitised terminal colour scheme: the built-in defaults with the
+    /// user's valid `terminal.colors` overrides applied.
+    #[must_use]
+    pub fn palette(&self) -> Palette {
+        self.terminal.colors.to_palette()
     }
 
     /// The active keymap: platform defaults with the user's `keys` overrides
@@ -481,6 +559,77 @@ mod tests {
         let s: Settings =
             serde_json::from_str(r#"{ "terminal": { "font_size": -3 } }"#).expect("valid json");
         assert!((s.font_size() - 6.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn terminal_colors_default_to_the_builtin_palette() {
+        // Absent block → the pty defaults, so nothing changes.
+        assert_eq!(Settings::default().palette(), Palette::default());
+    }
+
+    #[test]
+    fn terminal_colors_apply_valid_overrides() {
+        let s: Settings = serde_json::from_str(
+            r##"{ "terminal": { "colors": {
+                "foreground": "#102030",
+                "background": "fafbfc",
+                "cursor": "#010203"
+            } } }"##,
+        )
+        .expect("valid json");
+        let p = s.palette();
+        assert_eq!(p.foreground, [0x10, 0x20, 0x30]);
+        assert_eq!(p.background, [0xfa, 0xfb, 0xfc], "the # prefix is optional");
+        assert_eq!(p.cursor, [0x01, 0x02, 0x03]);
+        assert_eq!(
+            p.ansi,
+            Palette::default().ansi,
+            "untouched fields keep defaults"
+        );
+    }
+
+    #[test]
+    fn a_bad_terminal_colour_degrades_alone() {
+        // A malformed hex value falls back to its default; the other colours —
+        // and the rest of the file — survive.
+        let s: Settings = serde_json::from_str(
+            r##"{ "theme": "light", "terminal": { "colors": {
+                "foreground": "not-a-colour",
+                "background": "#fafbfc"
+            } } }"##,
+        )
+        .expect("a bad colour must not fail the whole parse");
+        let p = s.palette();
+        assert_eq!(p.foreground, Palette::default().foreground);
+        assert_eq!(p.background, [0xfa, 0xfb, 0xfc]);
+        assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
+    }
+
+    #[test]
+    fn a_partial_or_oversized_palette_applies_entries_in_place() {
+        // Fewer than 16 entries override the head; a bad entry keeps its
+        // default; extra entries past 16 are ignored.
+        let s: Settings = serde_json::from_str(
+            r##"{ "terminal": { "colors": {
+                "palette": ["#aa0000", "oops", "#00aa00"]
+            } } }"##,
+        )
+        .expect("valid json");
+        let p = s.palette();
+        assert_eq!(p.ansi[0], [0xaa, 0x00, 0x00]);
+        assert_eq!(p.ansi[1], Palette::default().ansi[1]);
+        assert_eq!(p.ansi[2], [0x00, 0xaa, 0x00]);
+        assert_eq!(p.ansi[3..], Palette::default().ansi[3..]);
+    }
+
+    #[test]
+    fn parse_hex_accepts_rrggbb_only() {
+        assert_eq!(parse_hex("#0189ff"), Some([0x01, 0x89, 0xff]));
+        assert_eq!(parse_hex("0189FF"), Some([0x01, 0x89, 0xff]));
+        assert_eq!(parse_hex("#fff"), None, "shorthand form is not supported");
+        assert_eq!(parse_hex("#01890g"), None);
+        assert_eq!(parse_hex(""), None);
+        assert_eq!(parse_hex("#01 9ff"), None);
     }
 
     #[test]
