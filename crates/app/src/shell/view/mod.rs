@@ -412,11 +412,12 @@ impl Shell {
                 .width(Fill)
                 .height(Fill);
                 // Wrap the grid so the platform IME is on while the terminal is
-                // focused — without it dead/accent keys never compose. Off
-                // while an overlay (inline rename / close confirmation) is up, so
-                // its own field owns composition and a dead key can't leak to the
-                // PTY; focus stays `Terminal` underneath those, so they must be
-                // excluded explicitly — the same guard `on_key` applies.
+                // focused — without it dead/accent keys never compose. Off while
+                // an overlay (the inline rename field, or a quit / tab-close /
+                // archive confirmation modal) is up, so its own field owns
+                // composition and a dead key can't leak to the PTY; focus stays
+                // `Terminal` underneath those, so they must be excluded
+                // explicitly — the same guard `on_key` applies.
                 let composed = ime_area(
                     canvas,
                     self.accepts_terminal_input(),

@@ -10,41 +10,24 @@ use super::clip;
 use crate::shell::{Message, Shell};
 use crate::strings;
 
-/// Which confirmation, if any, is currently armed. At most one modal shows at a
-/// time; quit takes precedence over a tab close, which takes precedence over an
-/// archive.
-#[derive(Debug, PartialEq, Eq)]
-enum Confirm {
-    Quit,
-    CloseTab,
-    Archive,
-}
-
 impl Shell {
-    /// The armed confirmation in priority order, or `None` when nothing is
-    /// pending — the single source of truth for which modal `view` shows.
-    fn pending_confirm(&self) -> Option<Confirm> {
-        if self.quit_pending() {
-            Some(Confirm::Quit)
-        } else if self.closing.is_some() {
-            Some(Confirm::CloseTab)
-        } else if self.archiving.is_some() {
-            Some(Confirm::Archive)
-        } else {
-            None
-        }
-    }
-
     /// The active confirmation card and the message to fire when its backdrop is
     /// dismissed. Quit, tab-close and archive are all routed through the same
-    /// [`modal`] presentation for parity; `view` wraps the base UI with it.
-    /// `pub(in crate::shell)` so the shell's own tests can assert the routing.
+    /// [`modal`] presentation for parity, in priority order (quit > tab-close >
+    /// archive — at most one is armed at a time); `view` wraps the base UI with
+    /// it. `pub(in crate::shell)` so the shell's own tests can assert the
+    /// routing.
     pub(in crate::shell) fn active_confirmation(&self) -> Option<(Element<'_, Message>, Message)> {
-        match self.pending_confirm()? {
-            Confirm::Quit => Some((self.quit_confirmation()?, Message::CancelCloseWindow)),
-            Confirm::CloseTab => Some((self.close_confirmation()?, Message::CancelClose)),
-            Confirm::Archive => Some((self.archive_confirmation()?, Message::CancelArchive)),
-        }
+        self.quit_confirmation()
+            .map(|card| (card, Message::CancelCloseWindow))
+            .or_else(|| {
+                self.close_confirmation()
+                    .map(|card| (card, Message::CancelClose))
+            })
+            .or_else(|| {
+                self.archive_confirmation()
+                    .map(|card| (card, Message::CancelArchive))
+            })
     }
 
     /// The quit-confirmation card (shown when a window close is armed and live
