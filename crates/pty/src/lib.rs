@@ -938,9 +938,6 @@ fn csi_tilde(n: u8, modifier: u8) -> Vec<u8> {
     }
 }
 
-/// Snapshot the visible grid into a [`Screen`] with resolved colours and the
-/// cursor (FR4). Wide-char spacer cells are dropped; the wide glyph keeps its
-/// own column.
 /// Apply a selection change to the terminal's own grid-anchored selection. The
 /// grid `Point` is what the emulator rotates on every scroll, so the highlight
 /// (derived by [`selected_spans`]) follows the text; a bare click clears it.
@@ -993,11 +990,15 @@ fn selected_spans<T: EventListener>(
     };
     let last = cols.saturating_sub(1) as usize;
     let mut spans = Vec::new();
-    for line in range.start.line.0..=range.end.line.0 {
-        let row = line - first_line;
-        if row < 0 || row as u16 >= rows {
-            continue;
-        }
+    // Only the rows on screen can be highlighted, so walk the selection clamped
+    // to the viewport (`first_line..first_line + rows`) rather than its full
+    // height — a select-all over deep scrollback would otherwise spin thousands
+    // of off-screen iterations on every frame. An off-screen selection makes the
+    // range empty, so nothing is pushed.
+    let top = range.start.line.0.max(first_line);
+    let bottom = range.end.line.0.min(first_line + i32::from(rows) - 1);
+    for line in top..=bottom {
+        let row = (line - first_line) as u16;
         // Block selection keeps the same columns on every row; a normal
         // selection runs the first row to the edge, fills the middle, and stops
         // the last row at its column.
@@ -1010,11 +1011,14 @@ fn selected_spans<T: EventListener>(
         } else {
             (0, last)
         };
-        spans.push((row as u16, c0.min(last) as u16, c1.min(last) as u16));
+        spans.push((row, c0.min(last) as u16, c1.min(last) as u16));
     }
     spans
 }
 
+/// Snapshot the visible grid into a [`Screen`] with resolved colours and the
+/// cursor (FR4). Wide-char spacer cells are dropped; the wide glyph keeps its
+/// own column.
 fn snapshot<T: EventListener>(term: &Term<T>) -> Screen {
     let cols = term.columns() as u16;
     let rows = term.screen_lines() as u16;
@@ -1514,6 +1518,37 @@ mod tests {
             snapshot(&term).selection,
             vec![(0, 2, 9), (1, 0, 9), (2, 0, 1)],
             "first row to the edge, middle full width, last row to its column"
+        );
+    }
+
+    /// A selection straddling the viewport's top edge — its start scrolled up
+    /// into history — highlights only the on-screen rows. This is what makes a
+    /// copy of it take only the visible text (the clip that used to live in the
+    /// app's `visible_spans`).
+    #[test]
+    fn a_selection_scrolled_partly_off_clips_to_the_visible_rows() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        // Six rows into a three-row screen leaves three lines of scrollback; the
+        // visible rows hold l3 / l4 / l5, and l1 / l2 sit above at Line(-2)/(-1).
+        parser.advance(&mut term, b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5");
+        // Select from a history line (Line -2 = "l1") down to a visible one
+        // (Line 1 = "l4").
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(-2), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(1), Column(1)), Side::Right);
+        term.selection = Some(sel);
+        // Only the two on-screen rows appear; the off-top history rows clip out.
+        assert_eq!(
+            snapshot(&term).selection,
+            vec![(0, 0, 9), (1, 0, 1)],
+            "the highlight covers only the visible rows of the selection"
         );
     }
 
