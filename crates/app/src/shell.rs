@@ -524,15 +524,15 @@ impl Message {
     /// tab, or focusing the terminal / search / launching, does.
     fn commits_tab_rename(&self, active: usize) -> bool {
         match self {
+            // The double-click that opened the edit emits `TabDragStart(active)`
+            // then `TabDragEnd` around it — its own drag noise must not commit. A
+            // press on a *different* tab is a genuine blur.
             Self::TabDragStart(index) => *index != active,
-            Self::FocusTerminal
-            | Self::FocusSearch
-            | Self::LaunchProject(_)
-            | Self::LaunchSession { .. }
-            | Self::RequestCloseTab(_)
-            | Self::OpenDoc { .. }
-            | Self::ToggleSidebar => true,
-            _ => false,
+            Self::TabDragEnd => false,
+            // Every other deliberate interaction elsewhere that would dismiss a
+            // session rename also commits a tab rename (the blur-commits
+            // convention) — one shared allowlist, so the two can't drift.
+            other => other.dismisses_rename(),
         }
     }
 }
@@ -1591,16 +1591,29 @@ impl Shell {
     }
 
     /// Apply the pending tab rename to the core and clear the edit. A blank name
-    /// reverts to the derived title — the core's [`rename_tab`] owns that rule,
-    /// so this just forwards the buffer verbatim. No-op when nothing is pending.
+    /// reverts to the derived title — the core's [`rename_tab`] owns that rule.
+    /// No-op when nothing is pending, or when the trimmed name still matches what
+    /// the tab already shows: committing an *unchanged* name would freeze a
+    /// derived title as a custom override, silently blocking future OSC/digest
+    /// relabels (an accidental double-click + Enter must leave the tab dynamic).
     ///
     /// [`rename_tab`]: termherd_core::workspace::Workspace::rename_tab
     fn commit_tab_rename(&mut self) {
-        if let Some((index, title)) = self.tab_rename.take() {
-            let _ = self
-                .core
-                .apply(termherd_core::Event::RenameTab { index, title });
+        let Some((index, title)) = self.tab_rename.take() else {
+            return;
+        };
+        let unchanged = self
+            .core
+            .workspace
+            .tabs
+            .get(index)
+            .is_some_and(|tab| tab.display_title() == title.trim());
+        if unchanged {
+            return;
         }
+        let _ = self
+            .core
+            .apply(termherd_core::Event::RenameTab { index, title });
     }
 
     /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
@@ -2643,6 +2656,46 @@ mod key_routing {
             derived,
             "a blank rename falls back to the derived title"
         );
+    }
+
+    #[test]
+    fn committing_an_unchanged_tab_name_leaves_the_title_dynamic() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        // Open the editor (seeded with the shown title) and commit without
+        // editing — an accidental double-click + Enter.
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived,
+        });
+        let _ = shell.update(Message::CommitTabRename);
+
+        // No override is stored, so the tab keeps tracking its derived title
+        // rather than freezing the current one against future relabels.
+        assert!(
+            shell.core.workspace.tabs[1].custom_title.is_none(),
+            "an unchanged commit must not create an override"
+        );
+    }
+
+    #[test]
+    fn a_genuine_interaction_elsewhere_commits_a_pending_tab_rename() {
+        let mut shell = shell_with_three_tabs();
+        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let _ = shell.update(Message::StartTabRename {
+            index: 1,
+            current: derived,
+        });
+        let _ = shell.update(Message::TabRenameInput("Renamed".to_string()));
+
+        // Starring a sidebar session is a real blur — it dismisses a session
+        // rename, so it must also commit a tab rename (shared allowlist).
+        let _ = shell.update(Message::ToggleStar("sess".to_string()));
+
+        assert!(shell.tab_rename.is_none(), "an elsewhere-click commits");
+        assert_eq!(shell.core.workspace.tabs[1].display_title(), "Renamed");
     }
 
     #[test]

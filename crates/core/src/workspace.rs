@@ -174,7 +174,7 @@ impl Workspace {
         self.tabs
             .iter()
             .find(|tab| tab.sessions().contains(&session))
-            .map(|tab| tab.title.as_str())
+            .map(Tab::display_title)
     }
 
     /// Make the tab at `index` active (FR5). Returns `None` if the index is
@@ -433,6 +433,16 @@ mod tests {
         assert_eq!(ws.rename_tab(0, "   "), Some(()));
         assert_eq!(ws.tabs[0].custom_title, None);
         assert_eq!(ws.tabs[0].display_title(), "derived");
+    }
+
+    #[test]
+    fn session_title_reflects_a_custom_tab_name() {
+        // The notification title reads through session_title; a renamed tab must
+        // announce its custom name, not the derived one it hides.
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "derived");
+        ws.rename_tab(0, "custom");
+        assert_eq!(ws.session_title(sid(1)), Some("custom"));
     }
 
     #[test]

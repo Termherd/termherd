@@ -129,6 +129,9 @@ const MAX_CLOSED_TABS: usize = 16;
 #[derive(Debug, Clone)]
 pub struct ClosedTab {
     pub title: String,
+    /// The manual name overlaid on the derived title when the tab was closed, if
+    /// any — restored on reopen so a rename round-trips, not just the digest.
+    pub custom_title: Option<String>,
     pub cwd: Option<String>,
     pub launch: Launch,
 }
@@ -702,7 +705,7 @@ impl App {
                 let active = active_tab == Some(index);
                 CaptureTab {
                     active,
-                    title: tab.title.clone(),
+                    title: tab.display_title().to_owned(),
                     status: self.tab_status(index),
                     sessions: tab.sessions().into_iter().map(|s| s.0.get()).collect(),
                     // Only the active tab has a live focus to report.
@@ -1079,6 +1082,7 @@ impl App {
             return;
         };
         let title = tab.title.clone();
+        let custom_title = tab.custom_title.clone();
         let Some(first) = tab.sessions().first().copied() else {
             return;
         };
@@ -1087,6 +1091,7 @@ impl App {
         };
         self.closed_tabs.push(ClosedTab {
             title,
+            custom_title,
             cwd: session.cwd.clone(),
             launch: session.launch.clone(),
         });
@@ -1103,11 +1108,22 @@ impl App {
         let Some(closed) = self.closed_tabs.pop() else {
             return Vec::new();
         };
-        self.launch(LaunchSpec {
+        let custom_title = closed.custom_title;
+        let effects = self.launch(LaunchSpec {
             cwd: closed.cwd,
             launch: closed.launch,
             title: closed.title,
-        })
+        });
+        // Restore the manual name on top of the derived title. `launch` opens
+        // the reopened tab as the new active one, so its index is `active` — but
+        // only when the launch actually opened a tab (empty effects = id
+        // overflow, no tab), or we would rename an unrelated tab.
+        if !effects.is_empty()
+            && let Some(name) = custom_title
+        {
+            self.workspace.rename_tab(self.workspace.active, &name);
+        }
+        effects
     }
 
     /// The activity status to badge on the tab at `index` (FR8): the most
@@ -1659,6 +1675,33 @@ mod tests {
         );
         assert_eq!(app.workspace.tabs.len(), 1);
         assert_eq!(app.workspace.tabs[0].title, "repo 🤖");
+    }
+
+    #[test]
+    fn reopening_a_renamed_tab_restores_the_custom_title() {
+        let mut app = App::new();
+        launch(&mut app, "derived");
+        app.apply(Event::RenameTab {
+            index: 0,
+            title: "Prod deploy".into(),
+        });
+        app.apply(Event::CloseTab(0));
+
+        let effects = app.apply(Event::ReopenClosedTab);
+        let new_id = match effects.as_slice() {
+            [Effect::Spawn(spec)] => spec.session,
+            other => panic!("expected one Spawn, got {other:?}"),
+        };
+        // The manual name round-trips the close/reopen, laid back over the
+        // derived title — not lost, and still a real override.
+        assert_eq!(app.workspace.tabs[0].display_title(), "Prod deploy");
+        assert_eq!(app.workspace.tabs[0].title, "derived");
+        // Being a real override, a later relabel still cannot clobber it.
+        app.apply(Event::SessionTitleChanged {
+            session: new_id,
+            title: "new derived".into(),
+        });
+        assert_eq!(app.workspace.tabs[0].display_title(), "Prod deploy");
     }
 
     #[test]
@@ -2462,6 +2505,24 @@ mod tests {
         assert_eq!(tab1.status, Some(SessionStatus::Busy));
         assert_eq!(tab1.sessions, vec![second.0.get()]);
         assert_eq!(tab1.focus_session, Some(second.0.get()));
+    }
+
+    #[test]
+    fn capture_reports_a_tabs_custom_title_not_its_derived_one() {
+        let mut app = App::new();
+        launch(&mut app, "derived");
+        app.apply(Event::RenameTab {
+            index: 0,
+            title: "My work".into(),
+        });
+
+        let effects = app.apply(Event::Capture {
+            focused_pty_text: None,
+        });
+        let dump = capture_dump(&effects);
+        // The dump must match what the user sees on the chip, or an AI reading
+        // the state would name the tab wrong.
+        assert_eq!(dump.tabs[0].title, "My work");
     }
 
     #[test]
