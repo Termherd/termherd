@@ -153,6 +153,8 @@ mod tests {
             display_offset: 0,
             bracketed_paste: false,
             selection: Vec::new(),
+            default_bg: [0x11, 0x13, 0x18],
+            cursor_color: [0xd0, 0xd0, 0xd0],
         }
     }
 

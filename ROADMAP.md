@@ -62,7 +62,14 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   updates (debounced `notify`, FR2); a per-project disclosure triangle folds
   its session list, persisted to `~/.termherd/collapsed.json` (#22); long
   groups list only the N most recent sessions with a "… N more" expander
-  (`sidebar.session_limit` in `settings.json`, default 5, 0 = all; #131)
+  (`sidebar.session_limit` in `settings.json`, default 5, 0 = all; #131).
+  Section headers fold on a title click, not only the disclosure triangle —
+  the Favorites and Plans & mémoire titles gained the parity a project header
+  already had, via a shared `section_header` builder (#146). Thin theme-aware
+  rules separate the sidebar sections (Favorites / Plans & mémoire / Projects)
+  so the grouping reads at a glance (#150). The sidebar view was extracted to
+  its own `shell/view/sidebar.rs` with per-section row builders, dropping the
+  `too_many_lines` allow (C2 of the intra-crate refactor, #168)
 - [x] `F-builtin-terminal` — PTY + native terminal widget (M2):
   `termherd-pty` adapter (`portable-pty` + `alacritty_terminal`,
   reader + terminal thread per session, cursor-report reply for ConPTY);
@@ -204,6 +211,14 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   (MVP: fixed-ratio split; `core::Workspace` stays the single source of truth)
   with drag-resize as fast-follow #55. Note: the keymap actions are currently
   dropped at `shell.rs:721` (`=> Task::none()`) — wiring them is step one
+- [ ] `F-close-on-exit` — auto-close a shell pane/tab on clean exit (#185):
+  when a `Launch::Shell` session's process exits with code 0 (the user typed
+  `exit`), close its pane — collapse the split, or close the tab (onto the
+  reopen stack) when it was the last pane; an emptied workspace stays open,
+  termherd never quits. Non-zero/unknown exits keep today's dead-terminal
+  view so errors stay readable, and Claude sessions never auto-close. Needs
+  the exit status threaded through the `pty` adapter (currently discarded at
+  `child.wait()`) into `Event::PtyExited`. Fixed policy, no settings knob
 - [ ] `F-jsonl-viewer`
 - [ ] `F-terminal-images` — render images inline in the terminal (iTerm2 OSC
   1337 / Sixel / Kitty graphics), sibling to `F-jsonl-viewer` /
@@ -268,6 +283,27 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   `set_option` (writes), the `keys` surface and the orchestration tools
   (open session / split / focus / rename / run-in-session) are still to come
 
+- [x] `F-terminal-palette` — configurable terminal colours (#181, shipped
+  in #183; tortured 👍, feature-torture `F-terminal-palette.md`): an optional
+  `terminal.colors` block in `settings.json` — `foreground`, `background`,
+  `cursor` and the 16-colour ANSI `palette`, plus a `scheme` picking a
+  built-in preset (`solarized-dark`/`-light`, `gruvbox-dark`/`-light`) that
+  explicit fields override. A `Palette` is injected into `PtyManager::new`
+  like the shell profile — colours keep resolving in the `pty` adapter,
+  `core` never sees RGB, and `Screen` carries `default_bg`/`cursor_color` so
+  the canvas dropped its duplicated constants. Wide-parse per field: a bad
+  value warns and degrades alone. Restart-to-apply; the MCP catalog exposes
+  the five keys. Dims stay a fixed hand-tuned table (legibility guards).
+  Deliberately out: selection colour (app affordance), live reload (waits
+  for the in-app settings panel). Verified end-to-end via F-capture on a
+  real session (Solarized Light)
+- [ ] `F-session-accent-colors` — per-session / per-agent visual accents:
+  give each session (or agent kind — Claude, plain shell, `agy`) a colour used
+  on its tab chip, sidebar row and pane border, so parallel sessions are
+  distinguishable at a glance. Chrome accents, not grid colours — sibling of,
+  but separate from, `F-terminal-palette`. Natural home for the assignment is
+  the `~/.termherd/metadata.json` overlay (like `F-session-metadata`).
+  **Design-first**
 - [ ] `F-capture` — capture termherd (screenshots / screencasts) along a
   fidelity ladder, for three goals: **G1** dev/AI debug loop, **G2** promo &
   tutorial visuals, **G3** bug-repro recordings (devs now, maybe end users
