@@ -389,6 +389,12 @@ enum Message {
         op: SelectOp,
         text: String,
     },
+    /// Ask a terminal to copy its current selection (a drag release). The text
+    /// is read from the live grid selection and returned out-of-band, so it is
+    /// exact even right after a fast drag whose highlight has not echoed back.
+    RequestCopySelection {
+        session: SessionId,
+    },
     /// Copy the given text (a terminal selection) to the clipboard (FR4).
     CopySelection(String),
     /// Clipboard contents read back for a paste into the focused terminal (FR4).
@@ -671,6 +677,7 @@ impl Shell {
                 } => self.pty.resize(session, cols, rows),
                 Effect::Scroll { session, target } => self.pty.scroll(session, target),
                 Effect::Select { session, op } => self.pty.select(session, op),
+                Effect::CopyTerminalSelection { session } => self.pty.copy_selection(session),
                 Effect::Kill(session) => self.pty.kill(session),
                 // Metadata persistence is a file write, not a PTY call.
                 Effect::SaveMetadata(metadata) => {
@@ -1266,6 +1273,12 @@ impl Shell {
                     self.selection = Some(text.clone());
                     Task::batch([select, iced::clipboard::write(text)])
                 }
+            }
+            Message::RequestCopySelection { session } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::CopyTerminalSelection { session });
+                self.perform(effects)
             }
             Message::CopySelection(text) => {
                 if text.is_empty() {
@@ -2025,6 +2038,7 @@ mod key_routing {
         resizes: StdMutex<Vec<(u16, u16)>>,
         scrolls: StdMutex<Vec<ScrollTarget>>,
         selects: StdMutex<Vec<SelectOp>>,
+        copies: StdMutex<usize>,
     }
 
     impl RecordingPty {
@@ -2050,6 +2064,9 @@ mod key_routing {
         }
         fn selects(&self) -> Vec<SelectOp> {
             self.selects.lock().expect("selects lock").clone()
+        }
+        fn copy_count(&self) -> usize {
+            *self.copies.lock().expect("copies lock")
         }
     }
 
@@ -2082,6 +2099,10 @@ mod key_routing {
         }
         fn select(&self, _: SessionId, op: SelectOp) -> Result<(), PtyError> {
             self.selects.lock().expect("selects lock").push(op);
+            Ok(())
+        }
+        fn copy_selection(&self, _: SessionId) -> Result<(), PtyError> {
+            *self.copies.lock().expect("copies lock") += 1;
             Ok(())
         }
         fn kill(&self, _: SessionId) -> Result<(), PtyError> {
@@ -2211,6 +2232,21 @@ mod key_routing {
             shell.selection.as_deref(),
             Some("src/main.rs"),
             "the word is remembered as the last copy"
+        );
+    }
+
+    #[test]
+    fn a_drag_release_asks_the_pty_to_copy_its_live_selection() {
+        // The copy reads the terminal's own selection (returned out-of-band), so
+        // it is exact even right after a fast drag — not the possibly-lagged
+        // snapshot the shell last rendered.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::RequestCopySelection { session });
+        assert_eq!(
+            pty.copy_count(),
+            1,
+            "a drag release asks the terminal to copy its selection"
         );
     }
 

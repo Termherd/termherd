@@ -53,6 +53,10 @@ pub enum PtyEvent {
     Notification { session: SessionId, body: String },
     /// The session's PTY process exited.
     Exited { session: SessionId },
+    /// The text of the session's current selection, in response to a copy
+    /// request — read from the live grid selection so it is exact even right
+    /// after a fast drag. Absent (no event) when nothing is selected.
+    SelectionCopied { session: SessionId, text: String },
 }
 
 /// A snapshot of the visible terminal grid handed to the GUI for rendering.
@@ -310,6 +314,8 @@ enum TermCmd {
     Scroll(ScrollTarget),
     /// Change the grid-anchored text selection (press / drag / clear).
     Select(SelectOp),
+    /// Copy the current selection to the clipboard via a `SelectionCopied` event.
+    CopySelection,
     /// The PTY reached end of file; the process is gone.
     Eof,
 }
@@ -497,6 +503,19 @@ impl PtyHost for PtyManager {
             .ok_or(PtyError::NoSuchSession(session.0.get()))?;
         s.ctrl
             .send(TermCmd::Select(op))
+            .map_err(|_| PtyError::Io("terminal thread gone".into()))
+    }
+
+    fn copy_selection(&self, session: SessionId) -> Result<(), PtyError> {
+        let map = self
+            .sessions
+            .lock()
+            .map_err(|_| PtyError::Io("session lock poisoned".into()))?;
+        let s = map
+            .get(&session)
+            .ok_or(PtyError::NoSuchSession(session.0.get()))?;
+        s.ctrl
+            .send(TermCmd::CopySelection)
             .map_err(|_| PtyError::Io("terminal thread gone".into()))
     }
 
@@ -706,6 +725,14 @@ fn spawn_term(
                         }
                     }
                     TermCmd::Select(op) => apply_select(&mut term, op),
+                    TermCmd::CopySelection => {
+                        // Read the text from the live selection, not a snapshot,
+                        // so a fast drag's copy is exact. Commands are FIFO, so
+                        // any queued Select ops have already been applied here.
+                        if let Some(text) = term.selection_to_string() {
+                            term_sink(PtyEvent::SelectionCopied { session, text });
+                        }
+                    }
                     TermCmd::Eof => break,
                 }
                 term_sink(PtyEvent::Output {
@@ -1194,7 +1221,8 @@ mod tests {
                 Ok(
                     PtyEvent::Status { .. }
                     | PtyEvent::Title { .. }
-                    | PtyEvent::Notification { .. },
+                    | PtyEvent::Notification { .. }
+                    | PtyEvent::SelectionCopied { .. },
                 ) => continue,
                 Ok(PtyEvent::Exited { .. }) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,

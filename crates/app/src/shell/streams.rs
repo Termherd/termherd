@@ -59,6 +59,9 @@ pub(super) fn pty_stream(output: &PtyOutput) -> impl Stream<Item = Message> + us
                                 Message::PtyNotify { session, body }
                             }
                             PtyEvent::Exited { session } => Message::PtyExited(session),
+                            // The clipboard is global, so the requesting session
+                            // no longer matters — reuse the copy-to-clipboard path.
+                            PtyEvent::SelectionCopied { text, .. } => Message::CopySelection(text),
                         };
                         if out.send(message).await.is_err() {
                             break;

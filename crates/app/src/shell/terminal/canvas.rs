@@ -15,9 +15,7 @@ use termherd_pty::Screen;
 use crate::shell::Message;
 
 use super::cell_size;
-use super::selection::{
-    HoverLink, cell_at, cell_side, link_at, selection_text, word_at, word_text,
-};
+use super::selection::{HoverLink, cell_at, cell_side, link_at, word_at, word_text};
 
 /// The terminal's default background (matches `termherd_pty`'s default).
 const BG: Color = Color::from_rgb(
@@ -244,11 +242,13 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 state.selecting = false;
                 state.dragged = false;
                 if dragged {
-                    // A real drag: copy the highlighted text the terminal echoed
-                    // back on the snapshot. The selection itself stays live.
-                    let text = selection_text(self.screen);
-                    (!text.is_empty())
-                        .then(|| canvas::Action::publish(Message::CopySelection(text)))
+                    // A real drag: ask the terminal to copy its selection. The
+                    // text is read from the live grid selection (not this
+                    // possibly-lagged snapshot), so a fast flick copies exactly
+                    // what was dragged; an empty selection simply copies nothing.
+                    Some(canvas::Action::publish(Message::RequestCopySelection {
+                        session: self.session,
+                    }))
                 } else {
                     // A bare click clears any selection, so a single click can't
                     // leave an undismissable highlight.
@@ -481,28 +481,7 @@ mod tests {
     #[test]
     fn a_drag_makes_a_selection_and_copies() {
         use canvas::Program;
-        use termherd_pty::ScreenCell;
-        // Row 0 holds "abcd" with cols 0..=2 already highlighted — the spans the
-        // PTY echoes back after the drag ops. The release copies that text.
-        let cell = |c| ScreenCell {
-            c,
-            fg: [0, 0, 0],
-            bg: [0, 0, 0],
-            bold: false,
-        };
-        let screen = Screen {
-            cols: 4,
-            rows: 2,
-            lines: vec![
-                vec![cell('a'), cell('b'), cell('c'), cell('d')],
-                vec![cell(' '); 4],
-            ],
-            cursor: None,
-            scrolled: false,
-            display_offset: 0,
-            bracketed_paste: false,
-            selection: vec![(0, 0, 2)],
-        };
+        let screen = test_screen();
         let view = TerminalView {
             screen: &screen,
             session: sid(1),
@@ -516,11 +495,12 @@ mod tests {
             state.selecting && state.dragged,
             "a moved drag is a live selection"
         );
-        // A real drag copies the highlighted text the terminal echoed back.
+        // Releasing a drag requests a copy from the terminal (which reads its own
+        // live selection), independent of what this snapshot happens to hold.
         assert!(
             view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0))
                 .is_some(),
-            "releasing a drag over a highlighted screen publishes a copy"
+            "releasing a drag requests a copy"
         );
     }
 

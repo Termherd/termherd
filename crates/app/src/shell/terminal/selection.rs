@@ -101,14 +101,6 @@ pub(super) fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16)
     Some(((start as u16, row), (end as u16, row)))
 }
 
-/// The text of the highlighted selection carried on `screen` — one line per
-/// covered row, trailing blanks trimmed, joined by newlines. This is what a drag
-/// copies; the terminal already clipped the spans to the visible rows, so a
-/// selection scrolled partly out of view copies only what is on screen.
-pub(super) fn selection_text(screen: &Screen) -> String {
-    spans_text(screen, &screen.selection)
-}
-
 /// The text of a single-row word / filename range — what a double-click copies
 /// before its native selection has been echoed back on a snapshot.
 pub(super) fn word_text(screen: &Screen, anchor: (u16, u16), head: (u16, u16)) -> String {
@@ -162,54 +154,6 @@ mod tests {
             bracketed_paste: false,
             selection: Vec::new(),
         }
-    }
-
-    /// A screen from one string per row, blank-padded to the widest row, with a
-    /// given set of highlighted spans.
-    fn grid_with_selection(rows: &[&str], selection: Vec<(u16, u16, u16)>) -> Screen {
-        let cell = |c| ScreenCell {
-            c,
-            fg: [0, 0, 0],
-            bg: [0, 0, 0],
-            bold: false,
-        };
-        let cols = rows.iter().map(|r| r.chars().count()).max().unwrap_or(0) as u16;
-        let lines = rows
-            .iter()
-            .map(|r| {
-                let mut cells: Vec<ScreenCell> = r.chars().map(cell).collect();
-                cells.resize(cols as usize, cell(' '));
-                cells
-            })
-            .collect();
-        Screen {
-            cols,
-            rows: rows.len() as u16,
-            lines,
-            cursor: None,
-            scrolled: false,
-            display_offset: 0,
-            bracketed_paste: false,
-            selection,
-        }
-    }
-
-    #[test]
-    fn selection_text_reads_and_trims_the_covered_rows() {
-        // A multi-row selection carried on the screen: first row to its column
-        // span, middle full width (trailing blanks trimmed), last row to its
-        // column — the newlines join exactly the covered rows.
-        let screen = grid_with_selection(
-            &["AAAA", "BB  ", "CCCC"],
-            vec![(0, 1, 3), (1, 0, 3), (2, 0, 1)],
-        );
-        assert_eq!(selection_text(&screen), "AAA\nBB\nCC");
-    }
-
-    #[test]
-    fn selection_text_is_empty_without_a_selection() {
-        let screen = grid_with_selection(&["AAAA"], Vec::new());
-        assert_eq!(selection_text(&screen), "");
     }
 
     #[test]

@@ -337,6 +337,12 @@ pub enum Event {
         session: SessionId,
         op: SelectOp,
     },
+    /// Copy a terminal's current selection to the clipboard. The text is read
+    /// from the terminal's own selection (not a snapshot), so it is exact even
+    /// right after a fast drag whose highlight has not yet echoed back.
+    CopyTerminalSelection {
+        session: SessionId,
+    },
     /// The user moved a terminal's viewport (FR4 scrollback): a relative wheel
     /// delta, or an absolute jump to the top/bottom of the history.
     ScrollViewport {
@@ -467,6 +473,9 @@ pub enum Effect {
     },
     /// Apply a selection change to a session's terminal grid.
     Select { session: SessionId, op: SelectOp },
+    /// Ask a session's terminal to copy its current selection — the text comes
+    /// back out-of-band (a PTY event), so it is read from the live selection.
+    CopyTerminalSelection { session: SessionId },
     /// Terminate a session's PTY process.
     Kill(SessionId),
     /// Persist the whole metadata overlay (sessions + repos) as one file.
@@ -556,6 +565,13 @@ impl App {
             Event::Select { session, op } => {
                 if self.is_live(session) {
                     vec![Effect::Select { session, op }]
+                } else {
+                    Vec::new()
+                }
+            }
+            Event::CopyTerminalSelection { session } => {
+                if self.is_live(session) {
+                    vec![Effect::CopyTerminalSelection { session }]
                 } else {
                     Vec::new()
                 }
