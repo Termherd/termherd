@@ -131,7 +131,93 @@ impl Palette {
             bold: false,
         }
     }
+
+    /// A built-in scheme by its settings name (`terminal.colors.scheme`), or
+    /// `None` when unknown. The unnamed built-in default is
+    /// [`Palette::default`]. Values from the published Solarized (Ethan
+    /// Schoonover) and Gruvbox (Pavel Pertsev) specifications, both MIT.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        let (foreground, background, ansi) = match name {
+            "solarized-dark" => (hex(0x839496), hex(0x002b36), SOLARIZED_ANSI),
+            "solarized-light" => (hex(0x657b83), hex(0xfdf6e3), SOLARIZED_ANSI),
+            "gruvbox-dark" => (hex(0xebdbb2), hex(0x282828), GRUVBOX_DARK_ANSI),
+            "gruvbox-light" => (hex(0x3c3836), hex(0xfbf1c7), GRUVBOX_LIGHT_ANSI),
+            _ => return None,
+        };
+        Some(Self {
+            foreground,
+            background,
+            cursor: foreground,
+            ansi,
+        })
+    }
 }
+
+/// Split a `0xrrggbb` literal into RGB — lets the scheme tables read as the
+/// hex values their specifications publish.
+const fn hex(c: u32) -> [u8; 3] {
+    [(c >> 16) as u8, (c >> 8) as u8, c as u8]
+}
+
+/// Solarized accents (shared by the dark and light variants, which differ
+/// only in the base tones the fg/bg pick).
+const SOLARIZED_ANSI: [[u8; 3]; 16] = [
+    hex(0x073642), // base02
+    hex(0xdc322f), // red
+    hex(0x859900), // green
+    hex(0xb58900), // yellow
+    hex(0x268bd2), // blue
+    hex(0xd33682), // magenta
+    hex(0x2aa198), // cyan
+    hex(0xeee8d5), // base2
+    hex(0x002b36), // base03
+    hex(0xcb4b16), // orange
+    hex(0x586e75), // base01
+    hex(0x657b83), // base00
+    hex(0x839496), // base0
+    hex(0x6c71c4), // violet
+    hex(0x93a1a1), // base1
+    hex(0xfdf6e3), // base3
+];
+
+const GRUVBOX_DARK_ANSI: [[u8; 3]; 16] = [
+    hex(0x282828),
+    hex(0xcc241d),
+    hex(0x98971a),
+    hex(0xd79921),
+    hex(0x458588),
+    hex(0xb16286),
+    hex(0x689d6a),
+    hex(0xa89984),
+    hex(0x928374),
+    hex(0xfb4934),
+    hex(0xb8bb26),
+    hex(0xfabd2f),
+    hex(0x83a598),
+    hex(0xd3869b),
+    hex(0x8ec07c),
+    hex(0xebdbb2),
+];
+
+const GRUVBOX_LIGHT_ANSI: [[u8; 3]; 16] = [
+    hex(0xfbf1c7),
+    hex(0xcc241d),
+    hex(0x98971a),
+    hex(0xd79921),
+    hex(0x458588),
+    hex(0xb16286),
+    hex(0x689d6a),
+    hex(0x7c6f64),
+    hex(0x928374),
+    hex(0x9d0006),
+    hex(0x79740e),
+    hex(0xb57614),
+    hex(0x076678),
+    hex(0x8f3f71),
+    hex(0x427b58),
+    hex(0x3c3836),
+];
 
 impl Screen {
     /// Flatten the visible grid to plain text (trailing blanks trimmed) — for
@@ -1149,6 +1235,27 @@ mod tests {
         );
 
         mgr.kill(id).expect("kill");
+    }
+
+    #[test]
+    fn named_schemes_resolve_and_unknown_is_none() {
+        // Two darks, two lights — fg/bg from each published specification.
+        let sd = Palette::named("solarized-dark").expect("known scheme");
+        assert_eq!(sd.background, [0x00, 0x2b, 0x36]);
+        assert_eq!(sd.foreground, [0x83, 0x94, 0x96]);
+        let sl = Palette::named("solarized-light").expect("known scheme");
+        assert_eq!(sl.background, [0xfd, 0xf6, 0xe3]);
+        assert_eq!(sl.ansi, sd.ansi, "solarized variants share their accents");
+        let gd = Palette::named("gruvbox-dark").expect("known scheme");
+        assert_eq!(gd.background, [0x28, 0x28, 0x28]);
+        let gl = Palette::named("gruvbox-light").expect("known scheme");
+        assert_eq!(gl.background, [0xfb, 0xf1, 0xc7]);
+        assert_ne!(gl.ansi, gd.ansi, "gruvbox brights differ per variant");
+        // Every scheme keeps the cursor on its foreground.
+        for p in [&sd, &sl, &gd, &gl] {
+            assert_eq!(p.cursor, p.foreground);
+        }
+        assert_eq!(Palette::named("no-such-scheme"), None);
     }
 
     /// Spawn a real PTY with a custom palette and assert the streamed screens

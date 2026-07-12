@@ -63,6 +63,18 @@ pub const OPTIONS: &[OptionSpec] = &[
         choices: &[],
     },
     OptionSpec {
+        id: "terminal.colors.scheme",
+        pointer: "/terminal/colors/scheme",
+        description: "Built-in terminal colour scheme the overrides start from; unset means the built-in default.",
+        kind: "enum",
+        choices: &[
+            "solarized-dark",
+            "solarized-light",
+            "gruvbox-dark",
+            "gruvbox-light",
+        ],
+    },
+    OptionSpec {
         id: "terminal.colors.foreground",
         pointer: "/terminal/colors/foreground",
         description: "Terminal default text colour, \"#rrggbb\"; unset means the built-in scheme.",

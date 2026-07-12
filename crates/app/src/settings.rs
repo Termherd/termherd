@@ -189,6 +189,10 @@ pub struct TerminalSettings {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ColorSettings {
+    /// A built-in scheme the overrides below start from: `"solarized-dark"`,
+    /// `"solarized-light"`, `"gruvbox-dark"` or `"gruvbox-light"`; absent →
+    /// the built-in default scheme.
+    pub scheme: Option<String>,
     /// Default text colour, `"#rrggbb"`.
     pub foreground: Option<String>,
     /// Default background colour, `"#rrggbb"`.
@@ -200,12 +204,22 @@ pub struct ColorSettings {
 }
 
 impl ColorSettings {
-    /// Sanitise the overrides into the runtime [`Palette`]: each valid field
-    /// replaces its default, each invalid one is warned about and skipped, so
-    /// one bad hex value never costs the rest of the scheme.
+    /// Sanitise the overrides into the runtime [`Palette`]: the named scheme
+    /// (or the built-in default) first, then each valid field replaces its
+    /// slot; each invalid one is warned about and skipped, so one bad value
+    /// never costs the rest of the scheme.
     #[must_use]
     pub fn to_palette(&self) -> Palette {
-        let mut palette = Palette::default();
+        let mut palette = match &self.scheme {
+            None => Palette::default(),
+            Some(name) => Palette::named(name).unwrap_or_else(|| {
+                warn!(
+                    scheme = name,
+                    "unknown terminal colour scheme; using the default"
+                );
+                Palette::default()
+            }),
+        };
         let apply = |field: &str, raw: &Option<String>, slot: &mut [u8; 3]| {
             let Some(raw) = raw else { return };
             match parse_hex(raw) {
@@ -620,6 +634,32 @@ mod tests {
         assert_eq!(p.ansi[1], Palette::default().ansi[1]);
         assert_eq!(p.ansi[2], [0x00, 0xaa, 0x00]);
         assert_eq!(p.ansi[3..], Palette::default().ansi[3..]);
+    }
+
+    #[test]
+    fn a_named_scheme_applies_and_explicit_overrides_win() {
+        let s: Settings = serde_json::from_str(
+            r##"{ "terminal": { "colors": {
+                "scheme": "solarized-dark",
+                "background": "#101010"
+            } } }"##,
+        )
+        .expect("valid json");
+        let p = s.palette();
+        let scheme = Palette::named("solarized-dark").expect("known scheme");
+        assert_eq!(p.background, [0x10, 0x10, 0x10], "the override wins");
+        assert_eq!(p.foreground, scheme.foreground);
+        assert_eq!(p.ansi, scheme.ansi);
+    }
+
+    #[test]
+    fn an_unknown_scheme_degrades_to_the_default() {
+        let s: Settings = serde_json::from_str(
+            r#"{ "theme": "light", "terminal": { "colors": { "scheme": "no-such" } } }"#,
+        )
+        .expect("valid json");
+        assert_eq!(s.palette(), Palette::default());
+        assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
     }
 
     #[test]
