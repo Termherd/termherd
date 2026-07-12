@@ -2414,6 +2414,44 @@ mod key_routing {
     }
 
     #[test]
+    fn confirmations_route_through_one_modal_in_priority_order() {
+        // #147: quit, tab-close and archive all confirm via the same modal, and
+        // at most one shows at a time — quit > close > archive.
+        let mut shell = shell_with_three_tabs();
+        assert!(
+            shell.active_confirmation().is_none(),
+            "nothing armed → no modal"
+        );
+
+        shell.closing = Some(0);
+        assert!(
+            matches!(shell.active_confirmation(), Some((_, Message::CancelClose))),
+            "a tab close arms the close modal"
+        );
+
+        shell.closing = None;
+        shell.archiving = Some("sess".to_string());
+        assert!(
+            matches!(
+                shell.active_confirmation(),
+                Some((_, Message::CancelArchive))
+            ),
+            "an archive alone arms the archive modal"
+        );
+
+        // Armed together, quit outranks the tab close (and the archive).
+        shell.closing = Some(0);
+        shell.closing_window = Some(window::Id::unique());
+        assert!(
+            matches!(
+                shell.active_confirmation(),
+                Some((_, Message::CancelCloseWindow))
+            ),
+            "quit takes precedence over the other confirmations"
+        );
+    }
+
+    #[test]
     fn dragging_a_tab_reorders_the_workspace() {
         let mut shell = shell_with_three_tabs();
         let before = tab_order(&shell);
