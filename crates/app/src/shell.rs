@@ -24,8 +24,7 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    CaptureDump, Effect, Keymap, Launch, Overlay, ScrollTarget, SelectOp, SessionRecord,
-    SessionStatus,
+    Keymap, Launch, Overlay, ScrollTarget, SelectOp, SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
@@ -35,6 +34,7 @@ use crate::settings::{CloseSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
 mod docs;
+mod effects;
 mod geometry;
 mod ime;
 mod input;
@@ -50,7 +50,6 @@ use docs::{DocFeedback, OpenDoc};
 use input::event_modifiers;
 use record::RecordState;
 use streams::{PtyOutput, pty_stream, watch_stream};
-use terminal::{notify, open_url};
 
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
@@ -603,120 +602,6 @@ impl Shell {
         )
     }
 
-    /// Carry out the effects `core` asked for, against the adapters. The PTY
-    /// calls are quick (channel sends / a spawn); failures are logged, never
-    /// fatal — a dead terminal must not take the app down (Q3).
-    fn perform(&self, effects: Vec<Effect>) -> Task<Message> {
-        for effect in effects {
-            let outcome = match effect {
-                Effect::Spawn(spec) => self.pty.spawn(spec),
-                Effect::Write { session, bytes } => self.pty.write(session, &bytes),
-                Effect::Resize {
-                    session,
-                    cols,
-                    rows,
-                } => self.pty.resize(session, cols, rows),
-                Effect::Scroll { session, target } => self.pty.scroll(session, target),
-                Effect::Select { session, op } => self.pty.select(session, op),
-                Effect::CopyTerminalSelection { session } => self.pty.copy_selection(session),
-                Effect::Kill(session) => self.pty.kill(session),
-                // Metadata persistence is a file write, not a PTY call.
-                Effect::SaveMetadata(metadata) => {
-                    crate::metadata_store::save(&metadata);
-                    Ok(())
-                }
-                // Fold state is a file write too.
-                Effect::SaveCollapsed(collapsed) => {
-                    crate::collapsed_store::save(&collapsed);
-                    Ok(())
-                }
-                // Opening a link is an OS handoff, not a PTY call.
-                Effect::OpenUrl(url) => open_url(&url),
-                // A desktop notification is an OS handoff too.
-                Effect::Notify { title, body } => notify(&title, &body),
-                // Capture is performed by `Shell::capture`, not here: the JSON
-                // dump and the PNG must share one timestamp, and the PNG needs
-                // an async `window::screenshot` follow-up this fire-and-forget
-                // loop can't return. Reaching this arm is unexpected — log it.
-                Effect::Capture(_) => {
-                    tracing::warn!("Effect::Capture routed through perform; ignored");
-                    Ok(())
-                }
-                // Record effects are performed by `Shell::run_record_effects`,
-                // not here: `CaptureFrame` needs an async `window::screenshot`
-                // follow-up this loop can't return, and start/finish manage the
-                // encoder thread. Reaching this arm is unexpected — log it.
-                Effect::StartRecording
-                | Effect::CaptureFrame
-                | Effect::FinishRecording { .. }
-                | Effect::CancelRecording => {
-                    tracing::warn!("record effect routed through perform; ignored");
-                    Ok(())
-                }
-            };
-            if let Err(error) = outcome {
-                tracing::warn!(%error, "pty effect failed");
-            }
-        }
-        Task::none()
-    }
-
-    /// The focused terminal's visible grid as text, for a capture. `None`
-    /// when nothing is focused or its screen has not rendered yet — `core` then
-    /// records a focus-less dump.
-    fn focused_pty_text(&self) -> Option<String> {
-        let id = self.core.workspace.focused_session()?;
-        self.screens.get(&id).map(Screen::text)
-    }
-
-    /// Capture the current state for the AI dev loop: hand `core` the
-    /// focused terminal's text, then write the JSON dump and take the PNG into
-    /// `~/.termherd/captures/`. A no-op when no home directory is set.
-    fn capture(&mut self) -> Task<Message> {
-        let Some(dir) = crate::capture::captures_dir() else {
-            tracing::warn!("no home directory; capture skipped");
-            return Task::none();
-        };
-        let focused_pty_text = self.focused_pty_text();
-        let effects = self
-            .core
-            .apply(termherd_core::Event::Capture { focused_pty_text });
-        for effect in effects {
-            if let Effect::Capture(dump) = effect {
-                return self.perform_capture(&dir, dump);
-            }
-        }
-        Task::none()
-    }
-
-    /// Write the rung-0 JSON dump into `dir` now and schedule the rung-1 PNG.
-    /// Both share one timestamp so the pair is easy to find; the JSON is written
-    /// synchronously (cheap), the PNG follows once iced returns the window
-    /// screenshot. `dir` is a seam: production passes `~/.termherd/captures`,
-    /// tests a throwaway. Any I/O failure is logged, never fatal — a missed
-    /// capture must not take the app down.
-    fn perform_capture(&self, dir: &std::path::Path, dump: CaptureDump) -> Task<Message> {
-        if let Err(error) = std::fs::create_dir_all(dir) {
-            tracing::warn!(%error, "could not create captures dir; capture skipped");
-            return Task::none();
-        }
-        let stamp = crate::capture::stamp(SystemTime::now());
-        match crate::capture::write_dump(dir, &stamp, &dump) {
-            Ok(path) => tracing::info!(path = %path.display(), "capture dump written"),
-            Err(error) => tracing::warn!(%error, "could not write capture dump"),
-        }
-        let png_path = crate::capture::png_path(dir, &stamp);
-        // Screenshot the live window (rung 1), then encode + write the PNG.
-        // `Task::<Option>::and_then` only fires for `Some`, so a window-less run
-        // simply skips the PNG and the JSON dump still stands.
-        window::latest()
-            .and_then(window::screenshot)
-            .map(move |screenshot| Message::CaptureScreenshot {
-                screenshot,
-                png_path: png_path.clone(),
-            })
-    }
-
     // The iced `update` is a flat `match` over every `Message` variant — the
     // app's central event dispatcher. Length here is breadth (one arm per
     // message), not nested complexity; splitting it would scatter the dispatch.
@@ -784,14 +669,14 @@ impl Shell {
                 self.rescan()
             }
             Message::SearchChanged(query) => {
-                let _ = self.core.apply(termherd_core::Event::SearchChanged(query));
-                Task::none()
+                let effects = self.core.apply(termherd_core::Event::SearchChanged(query));
+                self.perform(effects)
             }
             Message::SearchTitlesOnly(titles_only) => {
-                let _ = self
+                let effects = self
                     .core
                     .apply(termherd_core::Event::SearchTitlesOnlyToggled(titles_only));
-                Task::none()
+                self.perform(effects)
             }
             Message::LaunchProject(cwd) => self.launch(cwd, Launch::Shell),
             Message::LaunchClaude(cwd) => self.launch(cwd, Launch::Claude { resume: None }),
@@ -816,16 +701,16 @@ impl Shell {
                 Task::none()
             }
             Message::PtyStatus { session, status } => {
-                let _ = self
+                let effects = self
                     .core
                     .apply(termherd_core::Event::StatusChanged { session, status });
-                Task::none()
+                self.perform(effects)
             }
             Message::PtyTitle { session, title } => {
-                let _ = self
+                let effects = self
                     .core
                     .apply(termherd_core::Event::SessionTitleChanged { session, title });
-                Task::none()
+                self.perform(effects)
             }
             Message::PtyNotify { session, body } => {
                 // Unlike status/title, this yields an `Effect::Notify` that the
@@ -836,8 +721,8 @@ impl Shell {
                 self.perform(effects)
             }
             Message::PtyExited(session) => {
-                let _ = self.core.apply(termherd_core::Event::PtyExited(session));
-                Task::none()
+                let effects = self.core.apply(termherd_core::Event::PtyExited(session));
+                self.perform(effects)
             }
             Message::Key(event) => {
                 // Keep the link-open modifier state current regardless of focus,
@@ -938,10 +823,10 @@ impl Shell {
             Message::TabDragEnd => match self.tab_drag.take() {
                 // A real drag (the pointer crossed onto another tab): reorder.
                 Some(TabDrag { from, over }) if from != over => {
-                    let _ = self
+                    let effects = self
                         .core
                         .apply(termherd_core::Event::MoveTab { from, to: over });
-                    Task::none()
+                    self.perform(effects)
                 }
                 // No movement — the press/release was a plain click: activate.
                 Some(TabDrag { from, .. }) => self.activate_tab(from),
@@ -1027,18 +912,18 @@ impl Shell {
                 Task::none()
             }
             Message::ShowArchived(show) => {
-                let _ = self
+                let effects = self
                     .core
                     .apply(termherd_core::Event::ShowArchivedToggled(show));
-                Task::none()
+                self.perform(effects)
             }
             Message::ToggleCollapsed(path) => {
                 let effects = self.core.apply(termherd_core::Event::ToggleCollapsed(path));
                 self.perform(effects)
             }
             Message::ToggleExpanded(path) => {
-                let _ = self.core.apply(termherd_core::Event::ToggleExpanded(path));
-                Task::none()
+                let effects = self.core.apply(termherd_core::Event::ToggleExpanded(path));
+                self.perform(effects)
             }
             Message::ToggleSidebar => self.toggle_sidebar(),
             Message::StartRename { session, current } => {
@@ -1185,9 +1070,10 @@ impl Shell {
         let Some(index) = self.core.workspace.tab_of_session(anchor) else {
             return;
         };
-        let _ = self
+        let effects = self
             .core
             .apply(termherd_core::Event::RenameTab { index, title });
+        debug_assert!(effects.is_empty());
     }
 
     fn subscription(&self) -> Subscription<Message> {

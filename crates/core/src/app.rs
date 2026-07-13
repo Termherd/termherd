@@ -2539,6 +2539,48 @@ mod tests {
     }
 
     #[test]
+    fn the_state_only_events_yield_no_effects() {
+        // The shell routes these through its one executor precisely because they
+        // yield nothing today (pure state mutations); if any starts returning
+        // effects, the shell now performs them — and this guard flags the change
+        // so the new effect is reviewed rather than silently performed.
+        let mut app = App::new();
+        let session = launch(&mut app, "a");
+        app.apply(Event::ScanCompleted(vec![record("abc", "/p", "x")]));
+        let effect_free = [
+            Event::SearchChanged("q".into()),
+            Event::SearchTitlesOnlyToggled(true),
+            Event::ToggleSidebar,
+            Event::Zoom(Zoom::In),
+            Event::ToggleExpanded("/p".into()),
+            Event::ShowArchivedToggled(true),
+            Event::ActivateTab(0),
+            Event::MoveTab { from: 0, to: 0 },
+            Event::WindowFocusChanged(false),
+            Event::StatusChanged {
+                session,
+                status: SessionStatus::Idle,
+            },
+            Event::SessionTitleChanged {
+                session,
+                title: "t".into(),
+            },
+            Event::RenameTab {
+                index: 0,
+                title: "t".into(),
+            },
+            Event::PtyExited(session),
+        ];
+        for event in effect_free {
+            let label = format!("{event:?}");
+            assert!(
+                app.apply(event).is_empty(),
+                "{label} must stay effect-free (the shell routes it through perform)"
+            );
+        }
+    }
+
+    #[test]
     fn status_changes_are_recorded_but_never_revive_an_exited_session() {
         let mut app = App::new();
         let spawn = app.apply(Event::LaunchSession(LaunchSpec {

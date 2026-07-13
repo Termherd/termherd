@@ -69,36 +69,40 @@ impl RecordState {
         self.finish_pending
     }
 
-    /// Perform the record effects `core` returned: open/feed/finish the
-    /// encoder thread. `CaptureFrame` is the only one with an async follow-up —
-    /// it screenshots the window, the result arriving as [`Message::RecordFrame`].
-    pub(super) fn run_effects(&mut self, effects: Vec<Effect>) -> Task<Message> {
-        let mut task = Task::none();
-        for effect in effects {
-            match effect {
-                Effect::StartRecording => self.start(),
-                Effect::CaptureFrame => {
-                    self.inflight += 1;
-                    task = window::latest()
-                        .and_then(window::screenshot)
-                        .map(Message::RecordFrame);
-                }
-                // `core` names the stop reason; logged the moment it happens (not
-                // after the encoder drains) so start↔stop is unambiguous in the
-                // trace.
-                Effect::FinishRecording { capped } => {
-                    let reason = if capped { "cap reached" } else { "manual" };
-                    tracing::info!(reason, "screencast recording stopped");
-                    self.request_finish();
-                }
-                Effect::CancelRecording => {
-                    tracing::info!("screencast recording cancelled (no frames captured)");
-                    self.cancel();
-                }
-                _ => {}
+    /// Perform one record effect `core` returned: open/feed/finish the encoder
+    /// thread. `CaptureFrame` is the only one with an async follow-up — it
+    /// screenshots the window, the result arriving as [`Message::RecordFrame`].
+    /// The shell's unified executor delegates each record effect here.
+    pub(super) fn run_one(&mut self, effect: Effect) -> Task<Message> {
+        match effect {
+            Effect::StartRecording => {
+                self.start();
+                Task::none()
             }
+            Effect::CaptureFrame => {
+                self.inflight += 1;
+                window::latest()
+                    .and_then(window::screenshot)
+                    .map(Message::RecordFrame)
+            }
+            // `core` names the stop reason; logged the moment it happens (not
+            // after the encoder drains) so start↔stop is unambiguous in the
+            // trace.
+            Effect::FinishRecording { capped } => {
+                let reason = if capped { "cap reached" } else { "manual" };
+                tracing::info!(reason, "screencast recording stopped");
+                self.request_finish();
+                Task::none()
+            }
+            Effect::CancelRecording => {
+                tracing::info!("screencast recording cancelled (no frames captured)");
+                self.cancel();
+                Task::none()
+            }
+            // The unified executor only routes record effects here; anything
+            // else is a no-op.
+            _ => Task::none(),
         }
-        task
     }
 
     /// Open the recorder thread for a new screencast, writing to
@@ -236,7 +240,7 @@ impl Shell {
         let effects = self
             .core
             .apply(termherd_core::Event::ToggleRecord { max_frames });
-        self.record.run_effects(effects)
+        self.perform(effects)
     }
 
     /// A window present arrived while recording: throttle the present rate down
@@ -247,6 +251,6 @@ impl Shell {
             return Task::none();
         }
         let effects = self.core.apply(termherd_core::Event::RecordTick);
-        self.record.run_effects(effects)
+        self.perform(effects)
     }
 }

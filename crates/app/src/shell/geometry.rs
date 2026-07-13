@@ -107,15 +107,15 @@ impl Shell {
     /// Toggle the sidebar, then resize: the reclaimed width must re-derive as
     /// columns, not stretch the existing cells.
     pub(super) fn toggle_sidebar(&mut self) -> Task<Message> {
-        let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
-        self.resize_panes()
+        let effects = self.core.apply(termherd_core::Event::ToggleSidebar);
+        Task::batch([self.perform(effects), self.resize_panes()])
     }
 
     /// Zoom the terminal font, then resize so the grid re-derives cols/rows for
     /// the new cell box.
     pub(super) fn zoom(&mut self, zoom: termherd_core::Zoom) -> Task<Message> {
-        let _ = self.core.apply(termherd_core::Event::Zoom(zoom));
-        self.resize_panes()
+        let effects = self.core.apply(termherd_core::Event::Zoom(zoom));
+        Task::batch([self.perform(effects), self.resize_panes()])
     }
 
     /// The pixel area the pane region occupies: the window minus the sidebar

@@ -64,11 +64,11 @@ impl Shell {
     /// silent no-op in `core`, so a number key with no matching tab does
     /// nothing.
     pub(super) fn activate_tab(&mut self, index: usize) -> Task<Message> {
-        let _ = self.core.apply(termherd_core::Event::ActivateTab(index));
+        let effects = self.core.apply(termherd_core::Event::ActivateTab(index));
         self.focus = Focus::Terminal;
         self.closing = None;
         self.archiving = None;
-        self.resize_panes()
+        Task::batch([self.perform(effects), self.resize_panes()])
     }
 
     /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
@@ -122,16 +122,16 @@ impl Shell {
                 self.request_quit(id)
             }
             window::Event::Focused => {
-                let _ = self
+                let effects = self
                     .core
                     .apply(termherd_core::Event::WindowFocusChanged(true));
-                Task::none()
+                self.perform(effects)
             }
             window::Event::Unfocused => {
-                let _ = self
+                let effects = self
                     .core
                     .apply(termherd_core::Event::WindowFocusChanged(false));
-                Task::none()
+                self.perform(effects)
             }
             _ => Task::none(),
         }
