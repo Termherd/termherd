@@ -6,7 +6,8 @@
 use iced::widget::{button, column, container, row, text, text_editor};
 use iced::{Color, Element, Fill, Font};
 
-use super::super::{DocFeedback, Message, OpenDoc};
+use super::super::Message;
+use super::super::docs::{DocFeedback, OpenDoc};
 use crate::strings;
 
 /// Render an open plan/memory doc: a header (label, save state, actions) above
