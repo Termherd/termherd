@@ -1060,18 +1060,21 @@ impl App {
         })]
     }
 
-    /// A session's PTY ended. A plain shell that exited *cleanly* — the user
-    /// typed `exit` — leaves nothing worth reading, so its pane closes on its
-    /// own; everything else keeps the dead terminal visible: a failed exit's
-    /// last screen is worth reading, and a finished Claude session is worth
-    /// reviewing, so neither auto-closes.
+    /// A session's PTY ended. A *clean* exit — the user typed `exit` at a
+    /// prompt — leaves nothing worth reading, so its pane closes on its own;
+    /// an unclean exit keeps the dead terminal visible: a failure's last
+    /// screen is worth reading. This applies to every launch kind: quitting
+    /// Claude never raises this event (`claude` is *typed into* a shell, so
+    /// its exit returns to the prompt with the PTY alive and the tab open —
+    /// see `launch_command` in the `pty` adapter), which means a clean PTY
+    /// exit on a Claude tab is that same shell `exit`, closed like any other.
+    /// If launching ever `exec`s Claude directly, revisit: the CLI quitting
+    /// would then end the PTY cleanly and auto-close a tab worth reviewing.
     fn pty_exited(&mut self, session: SessionId, clean: bool) -> Vec<Effect> {
-        let clean_shell = clean
-            && self
-                .sessions
-                .get(&session)
-                .is_some_and(|s| matches!(s.launch, Launch::Shell));
-        if clean_shell && let Some(effects) = self.auto_close_pane(session) {
+        if clean
+            && self.sessions.contains_key(&session)
+            && let Some(effects) = self.auto_close_pane(session)
+        {
             return effects;
         }
         if let Some(s) = self.sessions.get_mut(&session) {
@@ -2363,19 +2366,31 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_claude_exit_never_auto_closes() {
+    fn a_clean_exit_of_a_claude_tabs_shell_closes_it_too() {
+        // Quitting Claude never raises `PtyExited` — the CLI is typed into a
+        // shell, so its exit returns to the prompt with the PTY alive (and the
+        // tab open for review). A clean PTY exit on a Claude tab is therefore
+        // the user typing `exit` at that prompt: close it like any shell.
         let mut app = App::new();
         let id = launch_claude(&mut app);
         let effects = app.apply(Event::PtyExited {
             session: id,
             clean: true,
         });
+        assert!(matches!(effects.as_slice(), [Effect::Kill(k)] if *k == id));
+        assert!(app.workspace.tabs.is_empty());
+    }
+
+    #[test]
+    fn a_dirty_claude_exit_keeps_the_dead_terminal_visible() {
+        let mut app = App::new();
+        let id = launch_claude(&mut app);
+        let effects = app.apply(Event::PtyExited {
+            session: id,
+            clean: false,
+        });
         assert!(effects.is_empty());
-        assert_eq!(
-            app.workspace.tabs.len(),
-            1,
-            "a finished Claude session stays open for review"
-        );
+        assert_eq!(app.workspace.tabs.len(), 1);
         assert_eq!(app.sessions[&id].status, SessionStatus::Exited);
     }
 
