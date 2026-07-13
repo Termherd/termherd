@@ -3566,6 +3566,7 @@ name = "termherd-mcp"
 version = "0.0.0"
 dependencies = [
  "serde_json",
+ "termherd-core",
 ]
 
 [[package]]

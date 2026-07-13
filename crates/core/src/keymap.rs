@@ -331,6 +331,33 @@ impl Action {
     }
 }
 
+/// One entry of the public, read-only action vocabulary: a bindable action's
+/// kebab-case config name and its default chord specs (a `mod` token means the
+/// platform primary modifier — ⌘ on macOS, Ctrl elsewhere). This is the shape
+/// an out-of-crate surface enumerates; it does not expose the internal
+/// [`Action`] value.
+pub struct ActionBinding {
+    /// The kebab-case name the `keys` section of `settings.json` speaks.
+    pub name: &'static str,
+    /// Default chord specs for this action; empty means "no built-in binding".
+    pub default_chords: &'static [&'static str],
+}
+
+/// The bindable simple-action vocabulary with its defaults, in table order.
+/// Derives from the single [`ACTIONS`] source so a consumer (the MCP `keys`
+/// resource) never duplicates the table. The parameterized `activate-tab-N`
+/// family is named separately and is not included.
+#[must_use]
+pub fn action_catalog() -> Vec<ActionBinding> {
+    ACTIONS
+        .iter()
+        .map(|def| ActionBinding {
+            name: def.name,
+            default_chords: def.default_chords,
+        })
+        .collect()
+}
+
 /// Parse an `activate-tab-N` config name (N in `1..=NUMBER_ROW_TABS`) into the
 /// matching zero-based [`Action::ActivateTab`], or `None` for anything else.
 fn activate_tab_from_config_name(name: &str) -> Option<Action> {
@@ -560,6 +587,19 @@ mod tests {
                 def.action,
                 def.name,
             );
+        }
+    }
+
+    #[test]
+    fn action_catalog_mirrors_the_source_table() {
+        // The public catalogue is the read-only face of ACTIONS; it must expose
+        // every entry, name and defaults intact, so an out-of-crate consumer
+        // (the MCP `keys` resource) never drifts from the single source.
+        let catalog = action_catalog();
+        assert_eq!(catalog.len(), ACTIONS.len());
+        for (entry, def) in catalog.iter().zip(ACTIONS.iter()) {
+            assert_eq!(entry.name, def.name);
+            assert_eq!(entry.default_chords, def.default_chords);
         }
     }
 

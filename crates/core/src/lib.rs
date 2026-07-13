@@ -20,7 +20,7 @@ pub use app::{
 };
 pub use browser::{ProjectGroup, SessionRecord};
 pub use capture::{CaptureDump, CaptureTab};
-pub use keymap::{Action, ChordError, KeyChord, Keymap};
+pub use keymap::{Action, ActionBinding, ChordError, KeyChord, Keymap, action_catalog};
 pub use metadata::{Overlay, RepoMeta, SessionMeta};
 pub use record::Recording;
 pub use workspace::{Branch, Pane, SessionId, SplitDir, Tab, Workspace};
