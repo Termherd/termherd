@@ -24,40 +24,28 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Action, CaptureDump, Effect, Keymap, Launch, LaunchSpec, Overlay, ScrollTarget, SelectOp,
+    CaptureDump, Effect, Keymap, Launch, LaunchSpec, Overlay, ScrollTarget, SelectOp,
     SessionRecord, SessionStatus,
 };
-use termherd_pty::{PtyEvent, Screen, TermKey};
+use termherd_pty::{PtyEvent, Screen};
 
 use crate::docs::DocEntry;
 use crate::record::{FrameStats, FrameThrottle, RecordConfig, Recorder};
 use crate::settings::{CloseSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
+mod geometry;
 mod ime;
 mod input;
+mod routing;
 mod streams;
 mod terminal;
 mod view;
 
-use input::{chord_of, event_modifiers, key_mods, numpad_char, to_term_key};
+use input::event_modifiers;
 use streams::{PtyOutput, pty_stream, watch_stream};
 use termherd_core::browser::project_label;
-use terminal::{cell_size, notify, open_url};
-
-/// Sidebar width and the chrome reserved around the terminal, in logical px.
-/// Combined with the zoom-derived cell metrics ([`terminal::cell_size`])
-/// to size the
-/// PTY grid to the window (FR4 resize).
-const SIDEBAR_W: f32 = 300.0;
-/// Width the collapsed sidebar still occupies: just the slim "▶" handle.
-/// The grid reserves this instead of `SIDEBAR_W` when hidden, so the reclaimed
-/// space becomes columns rather than stretched cells. The view pins the
-/// handle to exactly this width (`view::view`), so it is a contract the layout
-/// honours, not an estimate that can silently drift.
-pub(super) const HANDLE_W: f32 = 28.0;
-const H_CHROME: f32 = 40.0;
-const V_CHROME: f32 = 84.0;
+use terminal::{notify, open_url};
 
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
@@ -1043,74 +1031,6 @@ impl Shell {
         Task::none()
     }
 
-    /// Move the focused terminal's viewport: the mouse wheel sends a
-    /// relative delta, the scroll-top/bottom shortcuts an absolute jump. Shared
-    /// so both paths go through the one `Event::ScrollViewport`.
-    fn scroll_focused(&mut self, target: ScrollTarget) -> Task<Message> {
-        let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
-        };
-        self.scroll_session(session, target)
-    }
-
-    /// Move a specific session's viewport. The wheel targets the pane under the
-    /// pointer, which need not be the focused one in a split layout.
-    fn scroll_session(&mut self, session: SessionId, target: ScrollTarget) -> Task<Message> {
-        let effects = self
-            .core
-            .apply(termherd_core::Event::ScrollViewport { session, target });
-        self.perform(effects)
-    }
-
-    /// Tell the focused session's PTY to match the current pane geometry.
-    fn resize_focused(&mut self) -> Task<Message> {
-        let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
-        };
-        let (cols, rows) = self.grid_size();
-        let effects = self.core.apply(termherd_core::Event::TerminalResized {
-            session,
-            cols,
-            rows,
-        });
-        self.perform(effects)
-    }
-
-    /// Collapse or restore the sidebar, then resize the focused terminal
-    /// so the grid re-derives its column count for the new width — without this
-    /// the cells just stretch to fill the reclaimed space. Shared by the
-    /// button (`Message::ToggleSidebar`) and the keymap (`Action::ToggleSidebar`).
-    fn toggle_sidebar(&mut self) -> Task<Message> {
-        let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
-        self.resize_focused()
-    }
-
-    /// Zoom the terminal font, then resize the focused terminal so the
-    /// grid re-derives its cols/rows for the new cell box — the same pattern
-    /// as [`Self::toggle_sidebar`].
-    fn zoom(&mut self, zoom: termherd_core::Zoom) -> Task<Message> {
-        let _ = self.core.apply(termherd_core::Event::Zoom(zoom));
-        self.resize_focused()
-    }
-
-    /// The terminal grid size (cols, rows) that fits the current window. The
-    /// sidebar's width is only reserved while it's visible; collapsing it
-    /// hands that space to the grid as extra columns instead of stretching the
-    /// existing cells.
-    fn grid_size(&self) -> (u16, u16) {
-        let sidebar = if self.core.sidebar_hidden {
-            HANDLE_W
-        } else {
-            SIDEBAR_W
-        };
-        let (cell_w, cell_h) = cell_size(self.core.font_size());
-        let avail_w = (self.bounds.width - sidebar - H_CHROME).max(cell_w);
-        let avail_h = (self.bounds.height - V_CHROME).max(cell_h);
-        let cols = (avail_w / cell_w).floor().clamp(20.0, 500.0) as u16;
-        let rows = (avail_h / cell_h).floor().clamp(5.0, 200.0) as u16;
-        (cols, rows)
-    }
-
     // The iced `update` is a flat `match` over every `Message` variant — the
     // app's central event dispatcher. Length here is breadth (one arm per
     // message), not nested complexity; splitting it would scatter the dispatch.
@@ -1686,212 +1606,6 @@ impl Shell {
         self.activate_tab(next)
     }
 
-    /// Run a keymap [`Action`] (FR9). Clipboard actions become iced tasks; tab
-    /// actions drive `core`. Actions without a surface yet are no-ops.
-    fn run_action(&mut self, action: Action) -> Task<Message> {
-        match action {
-            Action::Copy => self.copy_selection(),
-            Action::Paste => iced::clipboard::read().map(Message::Paste),
-            Action::NextTab => self.cycle_tab(1),
-            Action::PrevTab => self.cycle_tab(-1),
-            Action::CloseFocused => self.request_close(self.core.workspace.active),
-            Action::FocusSearch => {
-                self.focus = Focus::Search;
-                operate(focusable::focus(search_id()))
-            }
-            Action::ToggleSidebar => self.toggle_sidebar(),
-            Action::ScrollTop => self.scroll_focused(ScrollTarget::Top),
-            Action::ScrollBottom => self.scroll_focused(ScrollTarget::Bottom),
-            // New shell / Claude session in the focused context, and
-            // reopen the last closed tab.
-            Action::NewShellHere => self.new_shell_here(),
-            Action::NewClaudeSessionHere => self.new_claude_here(),
-            Action::ReopenClosedTab => self.reopen_closed_tab(),
-            // Capture the current state for the AI dev loop.
-            Action::Capture => self.capture(),
-            // Start / stop the GIF screencast.
-            Action::ToggleRecord => self.toggle_record(),
-            // Zoom re-derives the grid geometry, so the focused terminal is
-            // resized like on a window resize; other tabs catch up on
-            // focus, the existing convention.
-            Action::ZoomIn => self.zoom(termherd_core::Zoom::In),
-            Action::ZoomOut => self.zoom(termherd_core::Zoom::Out),
-            Action::ZoomReset => self.zoom(termherd_core::Zoom::Reset),
-            // Number-row jump straight to a tab. An index past the
-            // open tabs is absorbed by `core` as a no-op.
-            Action::ActivateTab(index) => self.activate_tab(index),
-            Action::OpenNewSession
-            | Action::SplitHorizontal
-            | Action::SplitVertical
-            | Action::FocusNext
-            | Action::FocusPrev => Task::none(),
-        }
-    }
-
-    /// Route a key press to the focused terminal's PTY (FR4). Ignored unless a
-    /// terminal holds focus, so the search box keeps its own typing.
-    fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
-        // While renaming a tab inline, the text field owns the keyboard —
-        // except Escape, which abandons the edit (Enter commits via the field's
-        // own submit; a blur commits through `commits_tab_rename`).
-        if self.tab_rename.is_some() {
-            if let keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Escape),
-                ..
-            } = &event
-            {
-                return self.update(Message::CancelTabRename);
-            }
-            return Task::none();
-        }
-        // While renaming inline, let the text field own the keyboard.
-        if self.renaming.is_some() {
-            return Task::none();
-        }
-        // The quit modal owns the keyboard while it is up: Enter quits, Escape
-        // cancels, every other key is swallowed. Checked first so it wins over
-        // the tab/archive prompts beneath it.
-        if self.quit_pending() {
-            if let keyboard::Event::KeyPressed { key, .. } = &event {
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        return self.update(Message::ConfirmCloseWindow);
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                        self.closing_window = None;
-                    }
-                    _ => {}
-                }
-            }
-            return Task::none();
-        }
-        // A pending close confirmation captures the keyboard: Enter
-        // confirms, Escape cancels, and every other key is swallowed so a
-        // keystroke can't slip past to the terminal while the prompt is up.
-        if let Some(index) = self.closing {
-            if let keyboard::Event::KeyPressed { key, .. } = &event {
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        return self.close_tab(index);
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                        self.closing = None;
-                    }
-                    _ => {}
-                }
-            }
-            return Task::none();
-        }
-        // A pending archive confirmation likewise owns the keyboard:
-        // Enter archives, Escape cancels, other keys are swallowed.
-        if self.archiving.is_some() {
-            if let keyboard::Event::KeyPressed { key, .. } = &event {
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        return self.update(Message::ConfirmArchive);
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                        self.archiving = None;
-                    }
-                    _ => {}
-                }
-            }
-            return Task::none();
-        }
-        // An open doc owns the keyboard: the text editor handles keys itself, so
-        // swallow them here (never leak to the terminal underneath), but honour
-        // the save chord (Cmd/Ctrl+S).
-        if self.open_doc.is_some() {
-            if let keyboard::Event::KeyPressed { key, modifiers, .. } = &event
-                && modifiers.command()
-                && matches!(key, keyboard::Key::Character(c) if c.as_str() == "s")
-            {
-                return self.save_open_doc();
-            }
-            return Task::none();
-        }
-        let keyboard::Event::KeyPressed {
-            key,
-            physical_key,
-            modifiers,
-            text,
-            location,
-            ..
-        } = event
-        else {
-            return Task::none();
-        };
-        // A configured shortcut wins over raw terminal input: build the chord
-        // and run its action if the keymap binds one (FR9). Resolved before the
-        // terminal-focus guard so command chords are global — `mod+T` opens the
-        // first shell even from an empty workspace with the search box focused.
-        // Run-action handlers that need a session guard for one
-        // themselves. Unbound keys fall through to the terminal, so plain Ctrl+C
-        // stays the interrupt signal.
-        if let Some(chord) = chord_of(&key, &physical_key, modifiers)
-            && let Some(action) = self.keymap.lookup(&chord)
-        {
-            return self.run_action(action);
-        }
-        if self.focus != Focus::Terminal {
-            return Task::none();
-        }
-        let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
-        };
-        // A numpad key with NumLock on reports its un-locked name (`End`, arrows,
-        // …) but carries the digit/operator in `text`; type that instead of the
-        // navigation sequence its name would otherwise produce. Other keys map
-        // by name as usual.
-        let term_key = numpad_char(location, text.as_deref())
-            .map(TermKey::Char)
-            .or_else(|| to_term_key(&key));
-        let Some(term_key) = term_key else {
-            return Task::none();
-        };
-        let Some(bytes) = termherd_pty::key_bytes(term_key, key_mods(modifiers), text.as_deref())
-        else {
-            return Task::none();
-        };
-        let effects = self
-            .core
-            .apply(termherd_core::Event::TerminalInput { session, bytes });
-        self.perform(effects)
-    }
-
-    /// Whether raw keyboard / IME input should reach the focused terminal: it
-    /// holds focus and no overlay (inline rename, close confirmation) is up.
-    /// Focus stays `Terminal` while those overlays are open, so they have to be
-    /// excluded explicitly — this is the predicate [`Shell::on_key`] enforces
-    /// step by step, shared so the IME path can't drift from it.
-    fn accepts_terminal_input(&self) -> bool {
-        self.focus == Focus::Terminal
-            && self.renaming.is_none()
-            && self.tab_rename.is_none()
-            && self.closing.is_none()
-            && self.archiving.is_none()
-            && self.open_doc.is_none()
-            && !self.quit_pending()
-    }
-
-    /// Route IME-composed text (dead/accent keys, CJK) to the focused terminal
-    /// as typed bytes. A commit only fires while the terminal accepts
-    /// input (see [`Shell::accepts_terminal_input`]), but guard anyway so a
-    /// composing overlay (rename / close confirmation) keeps its own typing.
-    fn on_ime_commit(&mut self, text: String) -> Task<Message> {
-        if !self.accepts_terminal_input() || text.is_empty() {
-            return Task::none();
-        }
-        let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
-        };
-        let effects = self.core.apply(termherd_core::Event::TerminalInput {
-            session,
-            bytes: text.into_bytes(),
-        });
-        self.perform(effects)
-    }
-
     fn on_window_event(&mut self, id: window::Id, event: window::Event) -> Task<Message> {
         match event {
             window::Event::Opened { .. } => {
@@ -2026,7 +1740,7 @@ mod key_routing {
     use iced::keyboard::{Key, Location, Modifiers};
     use std::sync::Mutex as StdMutex;
     use termherd_core::ports::{PtyError, ScanError};
-    use termherd_core::{SelectSide, SpawnSpec};
+    use termherd_core::{Action, SelectSide, SpawnSpec};
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]

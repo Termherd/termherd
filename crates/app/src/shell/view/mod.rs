@@ -14,9 +14,10 @@ use termherd_core::SessionRecord;
 use termherd_core::SessionStatus;
 use termherd_core::browser::relative_age;
 
+use super::geometry::HANDLE_W;
 use super::ime::ime_area;
 use super::terminal::{TerminalView, cell_size};
-use super::{HANDLE_W, Message, Shell};
+use super::{Message, Shell};
 use crate::strings;
 
 mod doc_editor;
