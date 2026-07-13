@@ -9,10 +9,11 @@ use std::time::SystemTime;
 
 use iced::widget::canvas::Canvas;
 use iced::widget::{button, column, container, mouse_area, row, text};
-use iced::{Color, Element, Fill, Size};
+use iced::{Border, Color, Element, Fill, Length, Size};
 use termherd_core::SessionRecord;
 use termherd_core::SessionStatus;
 use termherd_core::browser::relative_age;
+use termherd_core::workspace::{Pane, SessionId, SplitDir};
 
 use super::geometry::HANDLE_W;
 use super::ime::ime_area;
@@ -35,7 +36,7 @@ impl Shell {
         // Hiding the sidebar hands its width to the terminal; a slim
         // always-present handle brings it back without needing the shortcut.
         // The handle is pinned to `HANDLE_W` so the grid reserves exactly what
-        // it occupies — keeping `grid_size` honest rather than estimating.
+        // it occupies — keeping the pane geometry honest rather than estimating.
         let base: Element<'_, Message> = if self.core.sidebar_hidden {
             let handle = container(
                 button(text("▶").size(12))
@@ -68,53 +69,34 @@ impl Shell {
         }
 
         let focused = self.core.workspace.focused_session();
-        let screen = focused.and_then(|id| self.screens.get(&id).map(|s| (id, s)));
 
-        let body: Element<'_, Message> = match screen {
-            Some((session, screen)) => {
-                let canvas = Canvas::new(TerminalView {
-                    screen,
-                    session,
-                    link_modifier: self.link_modifier,
-                    font_size: self.core.font_size(),
-                })
-                .width(Fill)
-                .height(Fill);
-                // Wrap the grid so the platform IME is on while the terminal is
-                // focused — without it dead/accent keys never compose. Off while
-                // an overlay (the inline rename field, or a quit / tab-close /
-                // archive confirmation modal) is up, so its own field owns
-                // composition and a dead key can't leak to the PTY; focus stays
-                // `Terminal` underneath those, so they must be excluded
-                // explicitly — the same guard `on_key` applies.
-                let composed = ime_area(
-                    canvas,
-                    self.accepts_terminal_input(),
-                    screen.cursor,
-                    {
-                        let (cw, ch) = cell_size(self.core.font_size());
-                        Size::new(cw, ch)
-                    },
-                    Message::ImeCommit,
-                );
-                mouse_area(composed).on_press(Message::FocusTerminal).into()
-            }
-            None => {
-                let total: usize = self.core.projects.iter().map(|g| g.sessions.len()).sum();
-                iced::widget::center(
-                    column![
-                        text("TermHerd").size(40),
-                        text(strings::welcome_counts(total, self.core.projects.len())).size(14),
-                        text(strings::WELCOME_HINT_OPEN).size(13),
-                        text(strings::WELCOME_HINT_RESUME).size(13),
-                    ]
-                    .spacing(8)
-                    .align_x(iced::Center),
-                )
-                .height(Fill)
-                .into()
-            }
-        };
+        // The pane region: recursively render the active tab's pane tree so a
+        // split shows every leaf (FR6), or the welcome summary on an empty
+        // workspace. The tree is the single source of truth — no rival layout.
+        let body: Element<'_, Message> =
+            match self.core.workspace.tabs.get(self.core.workspace.active) {
+                // A lone terminal needs no focus border (nothing to
+                // disambiguate); only a split outlines its panes.
+                Some(tab) => {
+                    let split = matches!(tab.root, Pane::Split { .. });
+                    self.render_pane(&tab.root, focused, split)
+                }
+                None => {
+                    let total: usize = self.core.projects.iter().map(|g| g.sessions.len()).sum();
+                    iced::widget::center(
+                        column![
+                            text("TermHerd").size(40),
+                            text(strings::welcome_counts(total, self.core.projects.len())).size(14),
+                            text(strings::WELCOME_HINT_OPEN).size(13),
+                            text(strings::WELCOME_HINT_RESUME).size(13),
+                        ]
+                        .spacing(8)
+                        .align_x(iced::Center),
+                    )
+                    .height(Fill)
+                    .into()
+                }
+            };
 
         let mut pane = column![].spacing(8).padding(8);
         if let Some(bar) = self.tab_bar() {
@@ -127,6 +109,121 @@ impl Shell {
             pane = pane.push(status_badge(status.status));
         }
         container(pane.push(body)).width(Fill).height(Fill).into()
+    }
+
+    /// Recursively render the pane tree (FR6): a leaf becomes its terminal, a
+    /// split becomes a `row!` (vertical divider, side by side) or `column!`
+    /// (horizontal divider, stacked) whose children share the space at the
+    /// split's ratio. The layout is derived from the `core` tree each frame, so
+    /// it can never drift from the source of truth.
+    fn render_pane(
+        &self,
+        pane: &Pane,
+        focused: Option<SessionId>,
+        bordered: bool,
+    ) -> Element<'_, Message> {
+        match pane {
+            Pane::Leaf(session) => {
+                self.terminal_leaf(*session, focused == Some(*session), bordered)
+            }
+            Pane::Split { dir, ratio, a, b } => {
+                let a_el = self.render_pane(a, focused, bordered);
+                let b_el = self.render_pane(b, focused, bordered);
+                let pa = ((ratio * 100.0).round() as u16).clamp(1, 99);
+                let pb = 100 - pa;
+                // No inter-pane spacing: the per-pane borders already separate
+                // them, and a gap here would be geometry `resize_panes` cannot
+                // see, drifting the PTY grid from the visible canvas.
+                match dir {
+                    SplitDir::Vertical => row![
+                        container(a_el).width(Length::FillPortion(pa)),
+                        container(b_el).width(Length::FillPortion(pb)),
+                    ]
+                    .into(),
+                    SplitDir::Horizontal => column![
+                        container(a_el).height(Length::FillPortion(pa)),
+                        container(b_el).height(Length::FillPortion(pb)),
+                    ]
+                    .into(),
+                }
+            }
+        }
+    }
+
+    /// One leaf: its terminal grid, click-to-focus, and a focus border on the
+    /// active pane. The focused leaf also carries the IME overlay so
+    /// composition follows the keyboard; a pane whose PTY has not yet produced
+    /// output holds an empty slot so the layout stays stable.
+    fn terminal_leaf(
+        &self,
+        session: SessionId,
+        is_focused: bool,
+        bordered: bool,
+    ) -> Element<'_, Message> {
+        let inner: Element<'_, Message> = match self.screens.get(&session) {
+            Some(screen) => {
+                let canvas = Canvas::new(TerminalView {
+                    screen,
+                    session,
+                    link_modifier: self.link_modifier,
+                    font_size: self.core.font_size(),
+                })
+                .width(Fill)
+                .height(Fill);
+                // The IME is on only for the focused leaf (and only when no
+                // overlay owns the keyboard); other panes just take a click to
+                // focus. Same guard `on_key` applies — see [`Shell::on_key`].
+                if is_focused {
+                    let composed = ime_area(
+                        canvas,
+                        self.accepts_terminal_input(),
+                        screen.cursor,
+                        {
+                            let (cw, ch) = cell_size(self.core.font_size());
+                            Size::new(cw, ch)
+                        },
+                        Message::ImeCommit,
+                    );
+                    mouse_area(composed)
+                        .on_press(Message::FocusPane(session))
+                        .into()
+                } else {
+                    mouse_area(canvas)
+                        .on_press(Message::FocusPane(session))
+                        .into()
+                }
+            }
+            None => container(text("")).width(Fill).height(Fill).into(),
+        };
+        // A lone pane needs no frame — nothing to distinguish it from.
+        if !bordered {
+            return inner;
+        }
+        container(inner)
+            .width(Fill)
+            .height(Fill)
+            .padding(2)
+            .style(move |theme: &iced::Theme| {
+                // Every split pane is outlined so the layout is legible; the
+                // focused one gets a thicker, accent-coloured border so which
+                // terminal holds the keyboard is unmistakable, the rest a thin
+                // muted one.
+                let palette = theme.extended_palette();
+                let (color, width) = if is_focused {
+                    (palette.primary.strong.color, 2.0)
+                } else {
+                    (palette.background.strong.color, 1.0)
+                };
+                container::Style {
+                    border: Border {
+                        color,
+                        width,
+                        radius: 3.0.into(),
+                    },
+                    ..container::Style::default()
+                }
+            })
+            .into()
     }
 
     /// The `● REC n/cap` indicator shown while a GIF screencast records,

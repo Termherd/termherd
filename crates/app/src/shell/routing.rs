@@ -5,6 +5,7 @@
 
 use iced::advanced::widget::{operate, operation::focusable};
 use iced::{Task, keyboard};
+use termherd_core::workspace::{Direction, SplitDir};
 use termherd_core::{Action, ScrollTarget};
 use termherd_pty::TermKey;
 
@@ -20,7 +21,7 @@ impl Shell {
             Action::Paste => iced::clipboard::read().map(Message::Paste),
             Action::NextTab => self.cycle_tab(1),
             Action::PrevTab => self.cycle_tab(-1),
-            Action::CloseFocused => self.request_close(self.core.workspace.active),
+            Action::CloseFocused => self.close_focused_pane(),
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -46,12 +47,63 @@ impl Shell {
             // Number-row jump straight to a tab. An index past the
             // open tabs is absorbed by `core` as a no-op.
             Action::ActivateTab(index) => self.activate_tab(index),
-            Action::OpenNewSession
-            | Action::SplitHorizontal
-            | Action::SplitVertical
-            | Action::FocusNext
-            | Action::FocusPrev => Task::none(),
+            // Split the focused pane / move focus between panes (FR6).
+            Action::SplitHorizontal => self.split_pane(SplitDir::Horizontal),
+            Action::SplitVertical => self.split_pane(SplitDir::Vertical),
+            Action::FocusNext => self.focus_pane(true),
+            Action::FocusPrev => self.focus_pane(false),
+            Action::FocusLeft => self.focus_dir(Direction::Left),
+            Action::FocusRight => self.focus_dir(Direction::Right),
+            Action::FocusUp => self.focus_dir(Direction::Up),
+            Action::FocusDown => self.focus_dir(Direction::Down),
+            Action::OpenNewSession => Task::none(),
         }
+    }
+
+    /// Split the focused pane, spawning a fresh session beside it, then resize
+    /// every pane: the split hands the original leaf half its area, and the new
+    /// leaf spawns at a default grid that must be corrected to its sub-rect.
+    fn split_pane(&mut self, dir: SplitDir) -> Task<Message> {
+        let effects = self.core.apply(termherd_core::Event::SplitFocused(dir));
+        Task::batch([self.perform(effects), self.resize_panes()])
+    }
+
+    /// Close the focused pane (FR6). In a split, collapse just that pane and
+    /// resize the survivors; a lone pane *is* the whole tab, so fall back to the
+    /// tab-close path, which honours the close-confirmation policy for a
+    /// still-running session rather than hard-killing it silently.
+    fn close_focused_pane(&mut self) -> Task<Message> {
+        let in_split = self
+            .core
+            .workspace
+            .tabs
+            .get(self.core.workspace.active)
+            .is_some_and(|tab| tab.sessions().len() > 1);
+        if in_split {
+            let effects = self.core.apply(termherd_core::Event::CloseFocusedPane);
+            Task::batch([self.perform(effects), self.resize_panes()])
+        } else {
+            self.request_close(self.core.workspace.active)
+        }
+    }
+
+    /// Move pane focus forward (`next`) or back through the active tab's leaves,
+    /// wrapping. Focus alone changes no geometry, so no resize follows.
+    fn focus_pane(&mut self, next: bool) -> Task<Message> {
+        let event = if next {
+            termherd_core::Event::FocusNextPane
+        } else {
+            termherd_core::Event::FocusPrevPane
+        };
+        let effects = self.core.apply(event);
+        self.perform(effects)
+    }
+
+    /// Move pane focus one step in a spatial direction (FR6). Like [`focus_pane`]
+    /// it changes no geometry, so no resize follows.
+    fn focus_dir(&mut self, dir: Direction) -> Task<Message> {
+        let effects = self.core.apply(termherd_core::Event::FocusDir(dir));
+        self.perform(effects)
     }
 
     /// Route a key press to the focused terminal's PTY (FR4). Ignored unless a

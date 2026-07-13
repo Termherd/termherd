@@ -208,14 +208,15 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   unrelated session, so two real files read alike — handled not by fork
   detection but by the summary disambiguator (#93), not a fork
 - [ ] `F-terminal-split` — split panes (h/v), focus, resize (moved from Must,
-  PRD rev. 5): the pure pane-tree core already landed — `Workspace::split` /
-  `close_focused` / `focus_next`/`prev` and the `App` events
-  `SplitFocused`/`CloseFocusedPane`/`FocusNextPane`/`Prev`, all unit-tested,
-  plus the `split-*` / `focus-*` keymap actions. What remains is the iced
-  recursive pane rendering, click-to-focus, and per-pane PTY geometry — #54
-  (MVP: fixed-ratio split; `core::Workspace` stays the single source of truth)
-  with drag-resize as fast-follow #55. Note: the keymap actions are currently
-  dropped at `shell.rs:721` (`=> Task::none()`) — wiring them is step one
+  PRD rev. 5): the **#54 MVP shipped** — the `split-*`/`focus-*`/`close-focused`
+  keymap actions now drive `core` (recursive iced pane rendering from the
+  `Workspace` tree, fixed-ratio 50/50 splits, per-leaf PTY geometry), plus
+  click-to-focus (`Event::FocusPane`) and directional keyboard focus that
+  cycles within its axis (`Event::FocusDir`, `mod+shift+arrows`); `mod+w`
+  collapses the focused pane rather than the whole tab. Default binds: `mod+d`
+  / `mod+shift+d` split, `mod+shift+arrows` focus. What remains is **drag-resize
+  (#55, blocked-by #54)** to flip the fixed ratio; `core::Workspace` stays the
+  single source of truth throughout
 - [ ] `F-close-on-exit` — auto-close a shell pane/tab on clean exit (#185):
   when a `Launch::Shell` session's process exits with code 0 (the user typed
   `exit`), close its pane — collapse the split, or close the tab (onto the
