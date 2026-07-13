@@ -4,6 +4,7 @@
 //! shell's state machine so the precedence wiring lives in one auditable place.
 
 use iced::advanced::widget::{operate, operation::focusable};
+use iced::keyboard::{Key, key::Named};
 use iced::{Task, keyboard};
 use termherd_core::workspace::{Direction, SplitDir};
 use termherd_core::{Action, ScrollTarget};
@@ -11,6 +12,30 @@ use termherd_pty::TermKey;
 
 use super::input::{chord_of, key_mods, numpad_char, to_term_key};
 use super::{Focus, Message, Shell, search_id};
+
+/// How a confirmation overlay reads a key — the shared shape behind the quit,
+/// tab-close and archive prompts.
+enum ConfirmKey {
+    Confirm,
+    Cancel,
+    Swallow,
+}
+
+/// Enter confirms, Escape cancels; everything else (and any non-press event) is
+/// swallowed so it can't reach the terminal beneath the prompt.
+fn classify_confirm(event: &keyboard::Event) -> ConfirmKey {
+    match event {
+        keyboard::Event::KeyPressed {
+            key: Key::Named(Named::Enter),
+            ..
+        } => ConfirmKey::Confirm,
+        keyboard::Event::KeyPressed {
+            key: Key::Named(Named::Escape),
+            ..
+        } => ConfirmKey::Cancel,
+        _ => ConfirmKey::Swallow,
+    }
+}
 
 impl Shell {
     /// Run a keymap [`Action`] (FR9). Clipboard actions become iced tasks; tab
@@ -47,7 +72,7 @@ impl Shell {
             // Number-row jump straight to a tab. An index past the
             // open tabs is absorbed by `core` as a no-op.
             Action::ActivateTab(index) => self.activate_tab(index),
-            // Split the focused pane / move focus between panes (FR6).
+            // Split the focused pane / move pane focus (FR6).
             Action::SplitHorizontal => self.split_pane(SplitDir::Horizontal),
             Action::SplitVertical => self.split_pane(SplitDir::Vertical),
             Action::FocusNext => self.focus_pane(true),
@@ -60,9 +85,8 @@ impl Shell {
         }
     }
 
-    /// Split the focused pane, spawning a fresh session beside it, then resize
-    /// every pane: the split hands the original leaf half its area, and the new
-    /// leaf spawns at a default grid that must be corrected to its sub-rect.
+    /// Split the focused pane, then resize: the original leaf drops to half its
+    /// area and the new one spawns at a default grid, both needing correction.
     fn split_pane(&mut self, dir: SplitDir) -> Task<Message> {
         let effects = self.core.apply(termherd_core::Event::SplitFocused(dir));
         Task::batch([self.perform(effects), self.resize_panes()])
@@ -106,88 +130,104 @@ impl Shell {
         self.perform(effects)
     }
 
-    /// Route a key press to the focused terminal's PTY (FR4). Ignored unless a
-    /// terminal holds focus, so the search box keeps its own typing.
+    /// Route a key press (FR4): an open overlay captures it, otherwise it
+    /// reaches the focused terminal's PTY.
     pub(super) fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
-        // While renaming a tab inline, the text field owns the keyboard —
-        // except Escape, which abandons the edit (Enter commits via the field's
-        // own submit; a blur commits through `commits_tab_rename`).
+        match self.overlay_key(&event) {
+            Some(task) => task,
+            None => self.terminal_key(event),
+        }
+    }
+
+    /// The overlays that own the keyboard while open, in precedence order — the
+    /// quit modal wins over the tab/archive prompts beneath it. `Some` means the
+    /// key was consumed (acted on or swallowed, never leaking to the terminal);
+    /// `None` falls through to [`Self::terminal_key`].
+    fn overlay_key(&mut self, event: &keyboard::Event) -> Option<Task<Message>> {
         if self.tab_rename.is_some() {
-            if let keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Escape),
-                ..
-            } = &event
-            {
-                return self.update(Message::CancelTabRename);
-            }
-            return Task::none();
+            return Some(self.tab_rename_key(event));
         }
-        // While renaming inline, let the text field own the keyboard.
         if self.renaming.is_some() {
-            return Task::none();
+            return Some(Task::none());
         }
-        // The quit modal owns the keyboard while it is up: Enter quits, Escape
-        // cancels, every other key is swallowed. Checked first so it wins over
-        // the tab/archive prompts beneath it.
         if self.quit_pending() {
-            if let keyboard::Event::KeyPressed { key, .. } = &event {
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        return self.update(Message::ConfirmCloseWindow);
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                        self.closing_window = None;
-                    }
-                    _ => {}
-                }
-            }
-            return Task::none();
+            return Some(self.quit_confirm_key(event));
         }
-        // A pending close confirmation captures the keyboard: Enter
-        // confirms, Escape cancels, and every other key is swallowed so a
-        // keystroke can't slip past to the terminal while the prompt is up.
         if let Some(index) = self.closing {
-            if let keyboard::Event::KeyPressed { key, .. } = &event {
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        return self.close_tab(index);
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                        self.closing = None;
-                    }
-                    _ => {}
-                }
-            }
-            return Task::none();
+            return Some(self.tab_close_confirm_key(event, index));
         }
-        // A pending archive confirmation likewise owns the keyboard:
-        // Enter archives, Escape cancels, other keys are swallowed.
         if self.archiving.is_some() {
-            if let keyboard::Event::KeyPressed { key, .. } = &event {
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        return self.update(Message::ConfirmArchive);
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                        self.archiving = None;
-                    }
-                    _ => {}
-                }
-            }
-            return Task::none();
+            return Some(self.archive_confirm_key(event));
         }
-        // An open doc owns the keyboard: the text editor handles keys itself, so
-        // swallow them here (never leak to the terminal underneath), but honour
-        // the save chord (Cmd/Ctrl+S).
         if self.open_doc.is_some() {
-            if let keyboard::Event::KeyPressed { key, modifiers, .. } = &event
-                && modifiers.command()
-                && matches!(key, keyboard::Key::Character(c) if c.as_str() == "s")
-            {
-                return self.save_open_doc();
-            }
-            return Task::none();
+            return Some(self.open_doc_key(event));
         }
+        None
+    }
+
+    /// Escape abandons a tab rename; Enter and a blur commit it elsewhere, so
+    /// every other key is swallowed.
+    fn tab_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        if let keyboard::Event::KeyPressed {
+            key: Key::Named(Named::Escape),
+            ..
+        } = event
+        {
+            return self.update(Message::CancelTabRename);
+        }
+        Task::none()
+    }
+
+    fn quit_confirm_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        match classify_confirm(event) {
+            ConfirmKey::Confirm => self.update(Message::ConfirmCloseWindow),
+            ConfirmKey::Cancel => {
+                self.closing_window = None;
+                Task::none()
+            }
+            ConfirmKey::Swallow => Task::none(),
+        }
+    }
+
+    fn tab_close_confirm_key(&mut self, event: &keyboard::Event, index: usize) -> Task<Message> {
+        match classify_confirm(event) {
+            ConfirmKey::Confirm => self.close_tab(index),
+            ConfirmKey::Cancel => {
+                self.closing = None;
+                Task::none()
+            }
+            ConfirmKey::Swallow => Task::none(),
+        }
+    }
+
+    fn archive_confirm_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        match classify_confirm(event) {
+            ConfirmKey::Confirm => self.update(Message::ConfirmArchive),
+            ConfirmKey::Cancel => {
+                self.archiving = None;
+                Task::none()
+            }
+            ConfirmKey::Swallow => Task::none(),
+        }
+    }
+
+    /// The doc editor handles its own keys; only the save chord (Cmd/Ctrl+S) is
+    /// intercepted.
+    fn open_doc_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        if let keyboard::Event::KeyPressed { key, modifiers, .. } = event
+            && modifiers.command()
+            && matches!(key, Key::Character(c) if c.as_str() == "s")
+        {
+            return self.save_open_doc();
+        }
+        Task::none()
+    }
+
+    /// A key no overlay claimed: a bound keymap chord wins over raw input —
+    /// resolved before the focus guard so command chords stay global (e.g.
+    /// `mod+T` from an empty workspace with the search box focused) — otherwise
+    /// it goes to the focused terminal's PTY, leaving plain Ctrl+C as interrupt.
+    fn terminal_key(&mut self, event: keyboard::Event) -> Task<Message> {
         let keyboard::Event::KeyPressed {
             key,
             physical_key,
@@ -199,13 +239,6 @@ impl Shell {
         else {
             return Task::none();
         };
-        // A configured shortcut wins over raw terminal input: build the chord
-        // and run its action if the keymap binds one (FR9). Resolved before the
-        // terminal-focus guard so command chords are global — `mod+T` opens the
-        // first shell even from an empty workspace with the search box focused.
-        // Run-action handlers that need a session guard for one
-        // themselves. Unbound keys fall through to the terminal, so plain Ctrl+C
-        // stays the interrupt signal.
         if let Some(chord) = chord_of(&key, &physical_key, modifiers)
             && let Some(action) = self.keymap.lookup(&chord)
         {
@@ -217,10 +250,9 @@ impl Shell {
         let Some(session) = self.core.workspace.focused_session() else {
             return Task::none();
         };
-        // A numpad key with NumLock on reports its un-locked name (`End`, arrows,
-        // …) but carries the digit/operator in `text`; type that instead of the
-        // navigation sequence its name would otherwise produce. Other keys map
-        // by name as usual.
+        // With NumLock on, a numpad key reports its un-locked name (`End`,
+        // arrows, …) but carries the digit/operator in `text`; type that rather
+        // than the navigation sequence the name would otherwise produce.
         let term_key = numpad_char(location, text.as_deref())
             .map(TermKey::Char)
             .or_else(|| to_term_key(&key));

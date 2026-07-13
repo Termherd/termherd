@@ -353,9 +353,9 @@ enum Message {
     ImeCommit(String),
     /// Give keyboard focus to the search box.
     FocusSearch,
-    /// Click-to-focus the pane hosting a session (FR6): moves pane focus to that
-    /// leaf and gives the keyboard to the terminal. A lone terminal is a
-    /// one-leaf tree, so a plain click focuses it the same way.
+    /// Click-to-focus the pane hosting a session (FR6): moves pane focus there
+    /// and gives the keyboard to the terminal. A lone terminal is the one-leaf
+    /// case, focused the same way.
     FocusPane(SessionId),
     /// The mouse wheel turned over a terminal: the session under the pointer
     /// (not necessarily the focused one — splits), the pointer cell, and a line

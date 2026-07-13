@@ -15,7 +15,7 @@ use termherd_core::SessionStatus;
 use termherd_core::browser::relative_age;
 use termherd_core::workspace::{Pane, SessionId, SplitDir};
 
-use super::geometry::HANDLE_W;
+use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD};
 use super::ime::ime_area;
 use super::terminal::{TerminalView, cell_size};
 use super::{Message, Shell};
@@ -70,13 +70,10 @@ impl Shell {
 
         let focused = self.core.workspace.focused_session();
 
-        // The pane region: recursively render the active tab's pane tree so a
-        // split shows every leaf (FR6), or the welcome summary on an empty
-        // workspace. The tree is the single source of truth — no rival layout.
         let body: Element<'_, Message> =
             match self.core.workspace.tabs.get(self.core.workspace.active) {
-                // A lone terminal needs no focus border (nothing to
-                // disambiguate); only a split outlines its panes.
+                // A lone terminal needs no focus border — nothing to
+                // disambiguate — so only a split renders bordered.
                 Some(tab) => {
                     let split = matches!(tab.root, Pane::Split { .. });
                     self.render_pane(&tab.root, focused, split)
@@ -111,11 +108,9 @@ impl Shell {
         container(pane.push(body)).width(Fill).height(Fill).into()
     }
 
-    /// Recursively render the pane tree (FR6): a leaf becomes its terminal, a
-    /// split becomes a `row!` (vertical divider, side by side) or `column!`
-    /// (horizontal divider, stacked) whose children share the space at the
-    /// split's ratio. The layout is derived from the `core` tree each frame, so
-    /// it can never drift from the source of truth.
+    /// Render the pane tree (FR6): a leaf is its terminal; a split becomes a
+    /// `row!` (vertical divider) or `column!` (horizontal) sharing space at its
+    /// ratio. Derived from the `core` tree each frame, so it can't drift.
     fn render_pane(
         &self,
         pane: &Pane,
@@ -150,10 +145,9 @@ impl Shell {
         }
     }
 
-    /// One leaf: its terminal grid, click-to-focus, and a focus border on the
-    /// active pane. The focused leaf also carries the IME overlay so
-    /// composition follows the keyboard; a pane whose PTY has not yet produced
-    /// output holds an empty slot so the layout stays stable.
+    /// One leaf: its terminal, click-to-focus, and (in a split) a focus border.
+    /// The focused leaf carries the IME so composition follows the keyboard; a
+    /// pane with no output yet holds an empty slot to keep the layout stable.
     fn terminal_leaf(
         &self,
         session: SessionId,
@@ -170,9 +164,9 @@ impl Shell {
                 })
                 .width(Fill)
                 .height(Fill);
-                // The IME is on only for the focused leaf (and only when no
-                // overlay owns the keyboard); other panes just take a click to
-                // focus. Same guard `on_key` applies — see [`Shell::on_key`].
+                // IME only on the focused leaf, and only when no overlay owns
+                // the keyboard — the same guard `on_key` applies. Others just
+                // take a click to focus.
                 if is_focused {
                     let composed = ime_area(
                         canvas,
@@ -202,7 +196,7 @@ impl Shell {
         container(inner)
             .width(Fill)
             .height(Fill)
-            .padding(2)
+            .padding(PANE_PAD)
             .style(move |theme: &iced::Theme| {
                 // Every split pane is outlined so the layout is legible; the
                 // focused one gets a thicker, accent-coloured border so which
@@ -210,9 +204,9 @@ impl Shell {
                 // muted one.
                 let palette = theme.extended_palette();
                 let (color, width) = if is_focused {
-                    (palette.primary.strong.color, 2.0)
+                    (palette.primary.strong.color, PANE_BORDER)
                 } else {
-                    (palette.background.strong.color, 1.0)
+                    (palette.background.strong.color, PANE_BORDER / 2.0)
                 };
                 container::Style {
                     border: Border {

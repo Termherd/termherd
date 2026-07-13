@@ -19,30 +19,30 @@ const MAX_COLS: f32 = 500.0;
 const MIN_ROWS: f32 = 5.0;
 const MAX_ROWS: f32 = 200.0;
 
-/// Chrome a split pane's container spends on each axis: 2px padding + a ~2px
-/// border on both sides (`view::terminal_leaf`). Subtracted from a leaf's rect
-/// before deriving its grid so the PTY is sized to the visible canvas, not the
-/// slightly larger slot. A lone (unbordered) pane spends none.
-const PANE_CHROME: f32 = 8.0;
+/// The padding and border a split pane's container spends on each side, shared
+/// with `view::terminal_leaf` so the two never drift: the view draws with these,
+/// the grid subtracts them. Change here, both follow.
+pub(super) const PANE_PAD: f32 = 2.0;
+pub(super) const PANE_BORDER: f32 = 2.0;
+/// Chrome lost on each axis — padding + border on both sides — subtracted from a
+/// leaf's rect before deriving its grid so the PTY is sized to the visible
+/// canvas, not the slightly larger slot. A lone (unbordered) pane spends none.
+const PANE_CHROME: f32 = 2.0 * (PANE_PAD + PANE_BORDER);
 
 /// Sidebar width and the chrome reserved around the terminal, in logical px.
 /// Combined with the zoom-derived cell metrics ([`super::terminal::cell_size`])
 /// to size the
 /// PTY grid to the window (FR4 resize).
 const SIDEBAR_W: f32 = 300.0;
-/// Width the collapsed sidebar still occupies: just the slim "▶" handle.
-/// The grid reserves this instead of `SIDEBAR_W` when hidden, so the reclaimed
-/// space becomes columns rather than stretched cells. The view pins the
-/// handle to exactly this width (`view::view`), so it is a contract the layout
-/// honours, not an estimate that can silently drift.
+/// Width the collapsed sidebar's "▶" handle occupies; the grid reserves this
+/// (not `SIDEBAR_W`) when hidden so the reclaimed space becomes columns. The
+/// view pins the handle to it, making it a contract, not a drifting estimate.
 pub(super) const HANDLE_W: f32 = 28.0;
 const H_CHROME: f32 = 40.0;
 const V_CHROME: f32 = 84.0;
 
 impl Shell {
-    /// Move the focused terminal's viewport: the mouse wheel sends a
-    /// relative delta, the scroll-top/bottom shortcuts an absolute jump. Shared
-    /// so both paths go through the one `Event::ScrollViewport`.
+    /// Scroll the focused terminal's viewport (a wheel delta or a top/bottom jump).
     pub(super) fn scroll_focused(&mut self, target: ScrollTarget) -> Task<Message> {
         let Some(session) = self.core.workspace.focused_session() else {
             return Task::none();
@@ -50,8 +50,8 @@ impl Shell {
         self.scroll_session(session, target)
     }
 
-    /// Move a specific session's viewport. The wheel targets the pane under the
-    /// pointer, which need not be the focused one in a split layout.
+    /// Scroll a specific session's viewport — the wheel targets the pane under
+    /// the pointer, not necessarily the focused one.
     pub(super) fn scroll_session(
         &mut self,
         session: SessionId,
@@ -63,11 +63,9 @@ impl Shell {
         self.perform(effects)
     }
 
-    /// Size every pane's PTY to its own sub-rect of the terminal area (FR6).
-    /// The pane region is subdivided by [`pane_rects`] from the `core` tree, so
-    /// a plain single-pane tab resizes exactly as before (one leaf spanning the
-    /// whole area) while a split sizes each leaf independently — one
-    /// `TerminalResized` per leaf.
+    /// Size every pane's PTY to its own sub-rect from [`pane_rects`] (FR6): one
+    /// `TerminalResized` per leaf. A single-pane tab is the one-leaf case,
+    /// resized exactly as before.
     pub(super) fn resize_panes(&mut self) -> Task<Message> {
         let (width, height) = self.content_size();
         let area = Rectangle {
@@ -76,10 +74,9 @@ impl Shell {
             width,
             height,
         };
-        // Resolve the rects before touching `self.core` mutably: `pane_rects`
-        // borrows the tree, so the returned owned Vec must outlive that borrow.
-        // A split gives each pane a bordered container the terminal sits inside;
-        // a lone pane has none, so only the former loses `PANE_CHROME`.
+        // Resolve the rects before the mutable `self.core` loop: `pane_rects`
+        // borrows the tree, so its owned result must outlive that borrow. Only a
+        // split's panes are bordered, so only they lose `PANE_CHROME`.
         let (rects, inset) = {
             let Some(tab) = self.core.workspace.tabs.get(self.core.workspace.active) else {
                 return Task::none();
@@ -107,18 +104,15 @@ impl Shell {
         Task::batch(tasks)
     }
 
-    /// Collapse or restore the sidebar, then resize the panes so the grid
-    /// re-derives its column count for the new width — without this the cells
-    /// just stretch to fill the reclaimed space. Shared by the button
-    /// (`Message::ToggleSidebar`) and the keymap (`Action::ToggleSidebar`).
+    /// Toggle the sidebar, then resize: the reclaimed width must re-derive as
+    /// columns, not stretch the existing cells.
     pub(super) fn toggle_sidebar(&mut self) -> Task<Message> {
         let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
         self.resize_panes()
     }
 
-    /// Zoom the terminal font, then resize the panes so the grid re-derives its
-    /// cols/rows for the new cell box — the same pattern as
-    /// [`Self::toggle_sidebar`].
+    /// Zoom the terminal font, then resize so the grid re-derives cols/rows for
+    /// the new cell box.
     pub(super) fn zoom(&mut self, zoom: termherd_core::Zoom) -> Task<Message> {
         let _ = self.core.apply(termherd_core::Event::Zoom(zoom));
         self.resize_panes()
@@ -150,12 +144,10 @@ pub(super) fn grid_of(width: f32, height: f32, font_size: f32) -> (u16, u16) {
     (cols, rows)
 }
 
-/// Subdivide `area` across every leaf of the pane tree, left-to-right /
-/// top-to-bottom, at each split's ratio. A `SplitDir::Vertical` (vertical
-/// divider) halves the width so the panes sit side by side; a
-/// `SplitDir::Horizontal` halves the height so they stack. Pure: the single
-/// source of truth for both the recursive render and the per-leaf PTY geometry,
-/// derived from the `core` tree each frame so no rival layout can drift from it.
+/// Subdivide `area` across the tree's leaves at each split's ratio: `Vertical`
+/// halves the width (panes side by side), `Horizontal` the height (stacked).
+/// Pure, and the single source of truth for both the render and the per-leaf
+/// PTY geometry.
 pub(super) fn pane_rects(pane: &Pane, area: Rectangle) -> Vec<(SessionId, Rectangle)> {
     let mut out = Vec::new();
     collect_pane_rects(pane, area, &mut out);
