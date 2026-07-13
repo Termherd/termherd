@@ -72,6 +72,13 @@ fn key_name(key: &keyboard::Key) -> Option<String> {
         keyboard::Key::Named(Named::Tab) => Some("tab".to_string()),
         keyboard::Key::Named(Named::Enter) => Some("enter".to_string()),
         keyboard::Key::Named(Named::Escape) => Some("escape".to_string()),
+        // Arrow keys carry chord names so bindings like `mod+up` (scroll) and
+        // `mod+shift+left` (pane focus) resolve — without this they fall through
+        // to the terminal, leaking the raw cursor sequence to the shell.
+        keyboard::Key::Named(Named::ArrowUp) => Some("up".to_string()),
+        keyboard::Key::Named(Named::ArrowDown) => Some("down".to_string()),
+        keyboard::Key::Named(Named::ArrowLeft) => Some("left".to_string()),
+        keyboard::Key::Named(Named::ArrowRight) => Some("right".to_string()),
         _ => None,
     }
 }
@@ -190,6 +197,20 @@ mod tests {
         assert_eq!(
             chord_of(&Key::Named(Named::Tab), &NON_DIGIT, Modifiers::CTRL),
             Some(KeyChord::new("tab", keymap::MOD_CTRL))
+        );
+        // Arrow keys carry chord names so `mod+up` / `mod+shift+left` resolve
+        // instead of leaking the cursor sequence to the terminal.
+        assert_eq!(
+            chord_of(
+                &Key::Named(Named::ArrowRight),
+                &NON_DIGIT,
+                Modifiers::LOGO | Modifiers::SHIFT
+            ),
+            Some(KeyChord::new("right", keymap::MOD_CMD | keymap::MOD_SHIFT))
+        );
+        assert_eq!(
+            chord_of(&Key::Named(Named::ArrowUp), &NON_DIGIT, Modifiers::LOGO),
+            Some(KeyChord::new("up", keymap::MOD_CMD))
         );
         // Keys no shortcut targets carry no chord.
         assert_eq!(

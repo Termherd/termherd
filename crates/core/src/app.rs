@@ -16,7 +16,7 @@ use crate::browser::{
 use crate::capture::{CaptureDump, CaptureTab};
 use crate::metadata::{Overlay, RepoMeta, SessionMeta};
 use crate::record::Recording;
-use crate::workspace::{SessionId, SplitDir, Workspace};
+use crate::workspace::{Direction, SessionId, SplitDir, Workspace};
 
 /// Cell size a freshly launched PTY starts at, before the widget reports its
 /// real geometry via [`Event::TerminalResized`].
@@ -388,6 +388,11 @@ pub enum Event {
     /// Move focus to the next / previous pane in the active tab (FR6).
     FocusNextPane,
     FocusPrevPane,
+    /// Move focus to the pane hosting a session (click-to-focus, FR6).
+    FocusPane(SessionId),
+    /// Move pane focus one step in a spatial direction, cycling within its axis
+    /// (FR6).
+    FocusDir(Direction),
     /// Persisted metadata loaded at startup (sessions + repos).
     MetadataLoaded(Overlay),
     /// Toggle a session's star, by Claude session id.
@@ -622,6 +627,14 @@ impl App {
             }
             Event::FocusPrevPane => {
                 self.workspace.focus_prev();
+                Vec::new()
+            }
+            Event::FocusPane(session) => {
+                self.workspace.focus_pane_of(session);
+                Vec::new()
+            }
+            Event::FocusDir(dir) => {
+                self.workspace.focus_dir(dir);
                 Vec::new()
             }
             Event::MetadataLoaded(overlay) => {

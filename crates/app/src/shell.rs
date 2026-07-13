@@ -351,9 +351,12 @@ enum Message {
     Key(keyboard::Event),
     /// IME-composed text (dead/accent keys, CJK) for the focused terminal.
     ImeCommit(String),
-    /// Give keyboard focus to the terminal / the search box.
-    FocusTerminal,
+    /// Give keyboard focus to the search box.
     FocusSearch,
+    /// Click-to-focus the pane hosting a session (FR6): moves pane focus there
+    /// and gives the keyboard to the terminal. A lone terminal is the one-leaf
+    /// case, focused the same way.
+    FocusPane(SessionId),
     /// The mouse wheel turned over a terminal: the session under the pointer
     /// (not necessarily the focused one — splits), the pointer cell, and a line
     /// delta, so a mouse-mode app gets the wheel as input and a plain shell gets
@@ -506,8 +509,8 @@ impl Message {
                 | Self::SearchTitlesOnly(_)
                 | Self::LaunchProject(_)
                 | Self::LaunchSession { .. }
-                | Self::FocusTerminal
                 | Self::FocusSearch
+                | Self::FocusPane(_)
                 | Self::TermScroll { .. }
                 | Self::Paste(_)
                 | Self::TabDragStart(_)
@@ -744,7 +747,7 @@ impl Shell {
         // no longer in view.
         self.closing = None;
         self.archiving = None;
-        Task::batch([spawn, self.resize_focused()])
+        Task::batch([spawn, self.resize_panes()])
     }
 
     /// The working directory of the focused session, if one is open and its cwd
@@ -789,7 +792,7 @@ impl Shell {
         self.focus = Focus::Terminal;
         self.closing = None;
         self.archiving = None;
-        Task::batch([spawn, self.resize_focused()])
+        Task::batch([spawn, self.resize_panes()])
     }
 
     /// The focused terminal's visible grid as text, for a capture. `None`
@@ -1162,9 +1165,10 @@ impl Shell {
                 self.on_key(event)
             }
             Message::ImeCommit(text) => self.on_ime_commit(text),
-            Message::FocusTerminal => {
+            Message::FocusPane(session) => {
                 self.focus = Focus::Terminal;
-                Task::none()
+                let effects = self.core.apply(termherd_core::Event::FocusPane(session));
+                self.perform(effects)
             }
             Message::FocusSearch => {
                 self.focus = Focus::Search;
@@ -1551,7 +1555,7 @@ impl Shell {
             self.screens.remove(&id);
         }
         let kill = self.perform(effects);
-        Task::batch([kill, self.resize_focused()])
+        Task::batch([kill, self.resize_panes()])
     }
 
     /// Copy the last terminal selection to the clipboard, if any (FR4).
@@ -1571,7 +1575,7 @@ impl Shell {
         self.focus = Focus::Terminal;
         self.closing = None;
         self.archiving = None;
-        self.resize_focused()
+        self.resize_panes()
     }
 
     /// Apply the pending tab rename to the core and clear the edit. The core's
@@ -1637,7 +1641,7 @@ impl Shell {
             window::Event::Resized(size) => {
                 self.bounds.width = size.width;
                 self.bounds.height = size.height;
-                self.resize_focused()
+                self.resize_panes()
             }
             window::Event::CloseRequested => {
                 self.bounds.save();
@@ -2835,26 +2839,30 @@ mod key_routing {
         // width becomes columns), and the toggle must push that wider size to
         // the PTY rather than leaving cols stale (which stretched the cells).
         let (mut shell, pty) = shell_with_terminal();
-        let (cols_visible, _) = shell.grid_size();
+        // The launch resizes the lone pane once; read the visible-sidebar cols
+        // straight off that recorded resize rather than an internal helper.
+        let cols_visible = pty
+            .resizes()
+            .last()
+            .map(|(cols, _)| *cols)
+            .expect("the launch resizes the pane once");
         let resizes_before = pty.resizes().len();
 
         let _ = shell.toggle_sidebar();
         assert!(shell.core.sidebar_hidden, "toggle should hide the sidebar");
 
-        let (cols_hidden, _) = shell.grid_size();
-        assert!(
-            cols_hidden > cols_visible,
-            "hiding the sidebar must add columns (was {cols_visible}, now {cols_hidden})"
-        );
         let resizes = pty.resizes();
         assert!(
             resizes.len() > resizes_before,
-            "toggling the sidebar must resize the focused PTY"
+            "toggling the sidebar must resize the PTY"
         );
-        assert_eq!(
-            resizes.last().map(|(cols, _)| *cols),
-            Some(cols_hidden),
-            "the resize must carry the new, wider column count"
+        let cols_hidden = resizes
+            .last()
+            .map(|(cols, _)| *cols)
+            .expect("the toggle resizes the pane");
+        assert!(
+            cols_hidden > cols_visible,
+            "hiding the sidebar must add columns (was {cols_visible}, now {cols_hidden})"
         );
     }
 
@@ -2889,6 +2897,127 @@ mod key_routing {
                     lines: 3
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn split_action_opens_a_new_pane_beside_the_focused_one() {
+        // The `split-*` keymap action must reach `core` (it is dropped on the
+        // floor today), minting a second session in the active tab and spawning
+        // its PTY while the original pane stays open.
+        let (mut shell, pty) = shell_with_terminal();
+        let spawns_before = pty.spawn_count();
+        let original = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("a launched terminal is focused");
+
+        let _ = shell.run_action(Action::SplitVertical);
+
+        let active = shell.core.workspace.active;
+        let sessions = shell.core.workspace.tabs[active].sessions();
+        assert_eq!(
+            sessions.len(),
+            2,
+            "splitting must add a second pane to the active tab"
+        );
+        assert!(
+            sessions.contains(&original),
+            "the original pane stays open beside the new one"
+        );
+        assert_eq!(
+            pty.spawn_count(),
+            spawns_before + 1,
+            "the new pane spawns its own PTY"
+        );
+    }
+
+    #[test]
+    fn close_focused_closes_only_the_focused_pane_in_a_split() {
+        // `mod+w` in a split must collapse just the focused pane, not the whole
+        // tab: the sibling survives, the tab stays open, one PTY is killed.
+        let (mut shell, pty) = shell_with_terminal();
+        let original = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("a launched terminal is focused");
+        let _ = shell.run_action(Action::SplitVertical);
+        let new_pane = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("the new split pane is focused");
+        let active = shell.core.workspace.active;
+        assert_eq!(shell.core.workspace.tabs[active].sessions().len(), 2);
+
+        let kills_before = pty.kill_count();
+        let _ = shell.run_action(Action::CloseFocused);
+
+        assert_eq!(shell.core.workspace.tabs.len(), 1, "the tab stays open");
+        let active = shell.core.workspace.active;
+        let sessions = shell.core.workspace.tabs[active].sessions();
+        assert_eq!(sessions, vec![original], "only the original pane remains");
+        assert!(
+            !sessions.contains(&new_pane),
+            "the focused pane was the one closed"
+        );
+        assert_eq!(
+            pty.kill_count(),
+            kills_before + 1,
+            "exactly the closed pane's PTY is killed"
+        );
+    }
+
+    #[test]
+    fn focus_prev_returns_to_the_original_pane_after_a_split() {
+        // Splitting focuses the new pane; `focus-prev` must cycle back — the
+        // `focus-*` actions are dropped on the floor today.
+        let (mut shell, _pty) = shell_with_terminal();
+        let original = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("a launched terminal is focused");
+
+        let _ = shell.run_action(Action::SplitVertical);
+        let new_pane = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("the new split pane is focused");
+        assert_ne!(
+            new_pane, original,
+            "a split focuses the freshly minted pane"
+        );
+
+        let _ = shell.run_action(Action::FocusPrev);
+        assert_eq!(
+            shell.core.workspace.focused_session(),
+            Some(original),
+            "focus-prev walks back to the original pane"
+        );
+    }
+
+    #[test]
+    fn a_window_resize_resizes_every_split_pane() {
+        // Per-leaf PTY geometry: a resize must size *each* pane to its own
+        // sub-rect, not just the focused one — two panes, two resizes.
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.run_action(Action::SplitVertical);
+        let resizes_before = pty.resizes().len();
+
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::Resized(Size::new(1600.0, 900.0)),
+        ));
+
+        assert!(
+            pty.resizes().len() >= resizes_before + 2,
+            "each of the two split panes must be resized to its own geometry \
+             (was {resizes_before}, now {})",
+            pty.resizes().len()
         );
     }
 

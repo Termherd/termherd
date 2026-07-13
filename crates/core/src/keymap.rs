@@ -109,6 +109,13 @@ pub enum Action {
     SplitVertical,
     FocusNext,
     FocusPrev,
+    /// Move pane focus one step in a spatial direction, cycling within the
+    /// move's axis (FR6). Left/Right traverse vertical splits, Up/Down
+    /// horizontal ones.
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
     NextTab,
     PrevTab,
     FocusSearch,
@@ -179,12 +186,12 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         action: Action::SplitHorizontal,
         name: "split-horizontal",
-        default_chords: &[],
+        default_chords: &["mod+shift+d"],
     },
     ActionDef {
         action: Action::SplitVertical,
         name: "split-vertical",
-        default_chords: &[],
+        default_chords: &["mod+d"],
     },
     ActionDef {
         action: Action::FocusNext,
@@ -195,6 +202,26 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::FocusPrev,
         name: "focus-prev",
         default_chords: &[],
+    },
+    ActionDef {
+        action: Action::FocusLeft,
+        name: "focus-left",
+        default_chords: &["mod+shift+left"],
+    },
+    ActionDef {
+        action: Action::FocusRight,
+        name: "focus-right",
+        default_chords: &["mod+shift+right"],
+    },
+    ActionDef {
+        action: Action::FocusUp,
+        name: "focus-up",
+        default_chords: &["mod+shift+up"],
+    },
+    ActionDef {
+        action: Action::FocusDown,
+        name: "focus-down",
+        default_chords: &["mod+shift+down"],
     },
     ActionDef {
         action: Action::NextTab,

@@ -15,6 +15,30 @@ pub enum SplitDir {
     Vertical,
 }
 
+/// A spatial pane-focus move (FR6). Left/Right traverse `Vertical` splits (side
+/// by side); Up/Down traverse `Horizontal` splits (stacked). Movement cycles
+/// within its own axis: stepping past the last pane wraps to the first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl Direction {
+    /// The split orientation this move traverses, and whether it heads toward
+    /// the B (right/bottom) branch.
+    fn axis_toward_b(self) -> (SplitDir, bool) {
+        match self {
+            Direction::Right => (SplitDir::Vertical, true),
+            Direction::Left => (SplitDir::Vertical, false),
+            Direction::Down => (SplitDir::Horizontal, true),
+            Direction::Up => (SplitDir::Horizontal, false),
+        }
+    }
+}
+
 /// One side of a split, used to address a pane along the tree path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Branch {
@@ -293,6 +317,58 @@ impl Workspace {
         self.cycle_focus(-1)
     }
 
+    /// Move focus to the leaf hosting `session` in the active tab
+    /// (click-to-focus, FR6). Returns `None` — leaving focus untouched — when
+    /// no active tab hosts it as a leaf.
+    pub fn focus_pane_of(&mut self, session: SessionId) -> Option<()> {
+        let tab = self.tabs.get_mut(self.active)?;
+        let path = leaf_paths(&tab.root)
+            .into_iter()
+            .find(|p| matches!(navigate(&tab.root, p), Some(Pane::Leaf(s)) if *s == session))?;
+        tab.focus = path;
+        Some(())
+    }
+
+    /// Move pane focus one step in a spatial direction (FR6), cycling within
+    /// the move's axis. It crosses the nearest ancestor split of that
+    /// orientation into the sibling subtree, landing on the adjacent leaf; from
+    /// the far edge it wraps to the opposite end. Returns `None` (focus
+    /// unchanged) when no split of that orientation exists to move through.
+    pub fn focus_dir(&mut self, dir: Direction) -> Option<()> {
+        let (axis, toward_b) = dir.axis_toward_b();
+        let tab = self.tabs.get_mut(self.active)?;
+        let focus = tab.focus.clone();
+
+        // A directional step: the nearest ancestor split of this axis where the
+        // focused subtree sits on the branch we can leave in this direction.
+        for i in (0..focus.len()).rev() {
+            let parent = &focus[..i];
+            let leaving = focus[i];
+            let on_near_branch = leaving == if toward_b { Branch::A } else { Branch::B };
+            if on_near_branch && ancestor_is(&tab.root, parent, axis) {
+                let mut path = parent.to_vec();
+                path.push(if toward_b { Branch::B } else { Branch::A });
+                descend_edge(&tab.root, &mut path, toward_b);
+                tab.focus = path;
+                return Some(());
+            }
+        }
+
+        // Already at the far edge → wrap to the opposite end of the outermost
+        // split of this axis. No such split → nothing to move through.
+        for i in 0..focus.len() {
+            let parent = &focus[..i];
+            if ancestor_is(&tab.root, parent, axis) {
+                let mut path = parent.to_vec();
+                path.push(if toward_b { Branch::A } else { Branch::B });
+                descend_edge(&tab.root, &mut path, toward_b);
+                tab.focus = path;
+                return Some(());
+            }
+        }
+        None
+    }
+
     fn cycle_focus(&mut self, delta: i32) -> Option<()> {
         let tab = self.tabs.get_mut(self.active)?;
         let paths = leaf_paths(&tab.root);
@@ -329,6 +405,20 @@ fn shift_index(i: usize, from: usize, to: usize) -> usize {
 fn focus_first_leaf(root: &Pane, focus: &mut Vec<Branch>) {
     while let Some(Pane::Split { .. }) = navigate(root, focus) {
         focus.push(Branch::A);
+    }
+}
+
+/// Whether the node at `path` is a split of the given orientation.
+fn ancestor_is(root: &Pane, path: &[Branch], axis: SplitDir) -> bool {
+    matches!(navigate(root, path), Some(Pane::Split { dir, .. }) if *dir == axis)
+}
+
+/// Descend from the node at `path` to the leaf on the edge nearest the pane we
+/// arrived from: moving toward B (right/down) lands on the sibling's leftmost /
+/// topmost leaf, moving toward A on its rightmost / bottommost.
+fn descend_edge(root: &Pane, path: &mut Vec<Branch>, toward_b: bool) {
+    while let Some(Pane::Split { .. }) = navigate(root, path) {
+        path.push(if toward_b { Branch::A } else { Branch::B });
     }
 }
 
@@ -413,6 +503,67 @@ mod tests {
         assert_eq!(ws.set_session_title(sid(99), "ghost"), None);
         assert_eq!(ws.tabs[0].title, "renamed");
         assert_eq!(ws.tabs[1].title, "split title");
+    }
+
+    #[test]
+    fn focus_dir_moves_and_wraps_within_a_vertical_split() {
+        // Two panes side by side (sid1 | sid2), focus on sid2 (the new pane).
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+
+        // Left steps to the pane on the left.
+        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+        // Left again from the leftmost wraps to the rightmost (cyclic on axis).
+        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+        // Right from the rightmost wraps back to the leftmost.
+        assert_eq!(ws.focus_dir(Direction::Right), Some(()));
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+
+        // Up/Down find no horizontal split to traverse: no-op.
+        assert_eq!(ws.focus_dir(Direction::Up), None);
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+    }
+
+    #[test]
+    fn focus_dir_traverses_the_matching_axis_in_a_nested_split() {
+        // Left column sid1; right column stacked sid2 over sid3.
+        //   Vertical( sid1 , Horizontal( sid2 , sid3 ) )
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2)); // focus sid2 (right)
+        ws.split(SplitDir::Horizontal, sid(3)); // focus sid3 (bottom-right)
+        assert_eq!(ws.focused_session(), Some(sid(3)));
+
+        // Up moves within the right column to sid2.
+        assert_eq!(ws.focus_dir(Direction::Up), Some(()));
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+        // Left crosses the outer vertical split to the left column.
+        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+        // Right crosses back; the edge nearest the divider is sid2 (top-right).
+        assert_eq!(ws.focus_dir(Direction::Right), Some(()));
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+    }
+
+    #[test]
+    fn focus_pane_of_moves_focus_to_the_leaf_hosting_a_session() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        // A split moves focus to the new pane (sid(2)).
+        ws.split(SplitDir::Vertical, sid(2));
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+
+        // Clicking the other pane jumps focus to the leaf hosting sid(1).
+        assert_eq!(ws.focus_pane_of(sid(1)), Some(()));
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+
+        // A session absent from the active tab is a no-op, focus unchanged.
+        assert_eq!(ws.focus_pane_of(sid(99)), None);
+        assert_eq!(ws.focused_session(), Some(sid(1)));
     }
 
     #[test]
