@@ -156,43 +156,52 @@ pub fn schema_resource() -> Value {
     json!({ "options": options })
 }
 
-/// The result of applying [`set_option`] purely: the mutated `settings.json`
-/// value plus any warnings for a value that does not match the option's
-/// declared shape. The value is written regardless — the read surface degrades
-/// an out-of-shape value on its own — so warnings inform, they do not block.
-pub struct SetOutcome {
-    /// The settings value with the one option applied.
-    pub settings: Value,
-    /// Human warnings about the applied value (empty when it fits the shape).
-    pub warnings: Vec<String>,
+/// The outcome of a [`set_option`]: either the option was applied (carrying the
+/// settings value to persist) or the value was refused. A value that does not
+/// match the option's declared shape is **rejected, not written** — the GUI
+/// parses `settings.json` as one struct and resets *every* setting to its
+/// default on a single unparseable field, so persisting a bad value would
+/// silently wipe the user's whole config, not degrade one field. An unknown id
+/// is signalled by `None` from [`set_option`] (no pointer to address).
+pub enum SetOutcome {
+    /// The option was set; carries the full settings value to persist.
+    Applied(Value),
+    /// The value was refused (it would corrupt the file the GUI must parse).
+    /// Carries the reason, for the caller's error.
+    Rejected(String),
 }
 
-/// Apply `set_option` purely: resolve `id` against [`OPTIONS`], set its JSON
-/// pointer in a clone of `settings` (creating intermediate objects as needed),
-/// and collect a warning when `value` does not match the option's kind/choices.
-/// Returns `None` for an unknown `id` — there is no pointer to write, the only
-/// hard error — mirroring the "broken invariant → `None`" idiom in `core`.
+/// Apply `set_option` purely: resolve `id` against [`OPTIONS`], and either apply
+/// the value or reject it. A value that violates the option's kind/choices is
+/// [`SetOutcome::Rejected`] with no write. `null` unsets the option by *removing*
+/// its key (so the field falls back to its default) rather than persisting an
+/// explicit `null` the GUI's non-optional fields cannot parse. Returns `None`
+/// for an unknown `id` — the "broken invariant → `None`" idiom in `core`.
 #[must_use]
 pub fn set_option(settings: &Value, id: &str, value: &Value) -> Option<SetOutcome> {
     let spec = OPTIONS.iter().find(|spec| spec.id == id)?;
-    let warnings = shape_warnings(spec, value);
+    if let Some(reason) = shape_violation(spec, value) {
+        return Some(SetOutcome::Rejected(reason));
+    }
     let mut new_settings = settings.clone();
-    set_pointer(&mut new_settings, spec.pointer, value.clone());
-    Some(SetOutcome {
-        settings: new_settings,
-        warnings,
-    })
+    if value.is_null() {
+        remove_pointer(&mut new_settings, spec.pointer);
+    } else {
+        set_pointer(&mut new_settings, spec.pointer, value.clone());
+    }
+    Some(SetOutcome::Applied(new_settings))
 }
 
-/// Warn when `value` does not match `spec`'s declared shape. `null` is always
-/// accepted (it unsets the option — the read side reports absent and null
-/// alike). Warnings inform only: the value is written regardless, and the read
-/// surface degrades an out-of-shape value on its own.
-fn shape_warnings(spec: &OptionSpec, value: &Value) -> Vec<String> {
+/// The reason `value` violates `spec`'s declared shape, or `None` when it fits.
+/// `null` always fits — it unsets the option. Otherwise an `enum` value must be
+/// one of the declared choices, a `string` must be a JSON string, and an `array`
+/// must be a JSON array; each is a shape the GUI's typed `Settings` requires, so
+/// a mismatch must be refused before it can corrupt the file.
+fn shape_violation(spec: &OptionSpec, value: &Value) -> Option<String> {
     if value.is_null() {
-        return Vec::new();
+        return None;
     }
-    let mismatch = match spec.kind {
+    match spec.kind {
         "enum" => value
             .as_str()
             .is_none_or(|s| !spec.choices.contains(&s))
@@ -209,8 +218,7 @@ fn shape_warnings(spec: &OptionSpec, value: &Value) -> Vec<String> {
             (!value.is_array()).then(|| format!("option {} expects an array, got {value}", spec.id))
         }
         _ => None,
-    };
-    mismatch.into_iter().collect()
+    }
 }
 
 /// Set `value` at a JSON Pointer (RFC 6901) in `root`, creating intermediate
@@ -241,6 +249,30 @@ fn set_pointer(root: &mut Value, pointer: &str, value: Value) {
     }
     if let Some(map) = cursor.as_object_mut() {
         map.insert((*last).to_owned(), value);
+    }
+}
+
+/// Remove the key a JSON Pointer addresses, walking only existing objects. Used
+/// to unset an option so its field falls back to the default — persisting an
+/// explicit `null` would instead fail the GUI's non-optional field parse. A path
+/// whose parent is absent or not an object is a no-op (nothing to remove).
+fn remove_pointer(root: &mut Value, pointer: &str) {
+    let Some(path) = pointer.strip_prefix('/') else {
+        return;
+    };
+    let segments: Vec<&str> = path.split('/').collect();
+    let Some((last, parents)) = segments.split_last() else {
+        return;
+    };
+    let mut cursor = root;
+    for segment in parents {
+        match cursor.as_object_mut().and_then(|map| map.get_mut(*segment)) {
+            Some(next) => cursor = next,
+            None => return,
+        }
+    }
+    if let Some(map) = cursor.as_object_mut() {
+        map.remove(*last);
     }
 }
 
@@ -384,8 +416,10 @@ fn tool_call_result(
 }
 
 /// The `set_option` tool call: read `id`/`value` from the arguments, apply the
-/// pure mutation, and — when the `id` is known — stage the new settings for the
-/// transport to persist. An unknown `id` is a tool error (no pointer to write).
+/// pure mutation, and — when the value is accepted — stage the new settings for
+/// the transport to persist. Errors (no write) for an unknown `id`, a missing
+/// `value` (required — a missing one must not silently unset), or a value the
+/// option's shape refuses.
 fn set_option_call(
     message: &Value,
     settings: &Value,
@@ -395,24 +429,24 @@ fn set_option_call(
         .pointer("/params/arguments/id")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let value = message
-        .pointer("/params/arguments/value")
-        .cloned()
-        .unwrap_or(Value::Null);
+    // `value` is required. A missing key must error, not default to null — that
+    // would silently unset the option (and an explicit null is a deliberate
+    // unset). An explicit `"value": null` in the call still reaches here as Null.
+    let Some(value) = message.pointer("/params/arguments/value").cloned() else {
+        return Err(error_object(-32602, "missing required argument: value"));
+    };
 
-    let Some(outcome) = set_option(settings, id, &value) else {
-        return Err(error_object(-32602, &format!("unknown option: {id}")));
-    };
-    *write_settings = Some(outcome.settings);
-    let text = if outcome.warnings.is_empty() {
-        format!("set {id}")
-    } else {
-        format!("set {id} (with warnings: {})", outcome.warnings.join("; "))
-    };
-    Ok(json!({
-        "content": [{ "type": "text", "text": text }],
-        "isError": false,
-    }))
+    match set_option(settings, id, &value) {
+        None => Err(error_object(-32602, &format!("unknown option: {id}"))),
+        Some(SetOutcome::Rejected(reason)) => Err(error_object(-32602, &reason)),
+        Some(SetOutcome::Applied(new_settings)) => {
+            *write_settings = Some(new_settings);
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("set {id}") }],
+                "isError": false,
+            }))
+        }
+    }
 }
 
 /// Advertise the resources: the option schema and the keymap (`keys`) catalogue.
@@ -611,32 +645,39 @@ mod tests {
 
     // --- set_option (the write half) --------------------------------------
 
+    /// Unwrap an `Applied` outcome to its settings, failing on `Rejected`.
+    fn applied(outcome: Option<SetOutcome>) -> Value {
+        match outcome.expect("known option") {
+            SetOutcome::Applied(settings) => settings,
+            SetOutcome::Rejected(reason) => panic!("expected Applied, got Rejected: {reason}"),
+        }
+    }
+
     #[test]
     fn set_option_sets_a_known_option_value() {
-        let outcome = set_option(&settings(), "theme", &json!("dark")).expect("known option");
-        assert_eq!(outcome.settings.pointer("/theme"), Some(&json!("dark")));
-        assert!(outcome.warnings.is_empty(), "a valid choice warns nothing");
+        let out = applied(set_option(&settings(), "theme", &json!("dark")));
+        assert_eq!(out.pointer("/theme"), Some(&json!("dark")));
     }
 
     #[test]
     fn set_option_creates_missing_parent_objects() {
         // `terminal.colors.background` is nested; none of it exists yet.
-        let outcome = set_option(&json!({}), "terminal.colors.background", &json!("#101010"))
-            .expect("known option");
+        let out = applied(set_option(
+            &json!({}),
+            "terminal.colors.background",
+            &json!("#101010"),
+        ));
         assert_eq!(
-            outcome.settings.pointer("/terminal/colors/background"),
+            out.pointer("/terminal/colors/background"),
             Some(&json!("#101010"))
         );
     }
 
     #[test]
     fn set_option_leaves_sibling_config_untouched() {
-        let outcome = set_option(&settings(), "theme", &json!("dark")).expect("known option");
+        let out = applied(set_option(&settings(), "theme", &json!("dark")));
         // The shell block set in `settings()` must survive the theme write.
-        assert_eq!(
-            outcome.settings.pointer("/shell/program"),
-            Some(&json!("pwsh"))
-        );
+        assert_eq!(out.pointer("/shell/program"), Some(&json!("pwsh")));
     }
 
     #[test]
@@ -645,23 +686,37 @@ mod tests {
     }
 
     #[test]
-    fn set_option_writes_an_out_of_choices_enum_but_warns() {
-        // "banana" is not a theme choice: written anyway (the read side degrades
-        // it), with a warning so the agent knows.
+    fn set_option_rejects_an_out_of_choices_enum() {
+        // "banana" is not a theme choice. Persisting it would make the GUI fail
+        // to parse the whole file and reset every setting — so it is refused, not
+        // written.
         let outcome = set_option(&settings(), "theme", &json!("banana")).expect("known option");
-        assert_eq!(outcome.settings.pointer("/theme"), Some(&json!("banana")));
         assert!(
-            !outcome.warnings.is_empty(),
-            "an out-of-choices value warns"
+            matches!(outcome, SetOutcome::Rejected(_)),
+            "an out-of-choices enum is rejected"
         );
     }
 
     #[test]
-    fn set_option_warns_on_a_type_mismatch() {
-        // `shell.args` is an array; a string is the wrong shape.
+    fn set_option_rejects_a_type_mismatch() {
+        // `shell.args` is an array; a string is the wrong shape and would break
+        // the GUI's typed parse, so it is refused.
         let outcome =
             set_option(&settings(), "shell.args", &json!("not-an-array")).expect("known option");
-        assert!(!outcome.warnings.is_empty(), "a wrong-typed value warns");
+        assert!(
+            matches!(outcome, SetOutcome::Rejected(_)),
+            "a wrong-typed value is rejected"
+        );
+    }
+
+    #[test]
+    fn set_option_null_unsets_by_removing_the_key() {
+        // Unsetting must remove the key (fall back to default), not persist an
+        // explicit null the GUI's non-optional theme field cannot parse.
+        let out = applied(set_option(&settings(), "theme", &Value::Null));
+        assert_eq!(out.pointer("/theme"), None, "the key is gone, not null");
+        // A sibling stays put — only the one key is removed.
+        assert_eq!(out.pointer("/shell/program"), Some(&json!("pwsh")));
     }
 
     #[test]
@@ -690,6 +745,38 @@ mod tests {
         assert!(
             reply.write_settings.is_none(),
             "an unknown id writes nothing"
+        );
+    }
+
+    #[test]
+    fn tools_call_set_option_rejects_invalid_value_without_writing() {
+        let req = json!({
+            "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+            "params": { "name": "set_option", "arguments": { "id": "theme", "value": "banana" } }
+        });
+        let reply = handle_message(&req, &settings());
+        let resp = reply.response.expect("a response");
+        assert_eq!(resp["error"]["code"], json!(-32602));
+        assert!(
+            reply.write_settings.is_none(),
+            "a rejected value writes nothing — the file is never corrupted"
+        );
+    }
+
+    #[test]
+    fn tools_call_set_option_missing_value_errors_without_writing() {
+        // `value` is required; a call that omits it must error, not silently
+        // unset the option.
+        let req = json!({
+            "jsonrpc": "2.0", "id": 13, "method": "tools/call",
+            "params": { "name": "set_option", "arguments": { "id": "theme" } }
+        });
+        let reply = handle_message(&req, &settings());
+        let resp = reply.response.expect("a response");
+        assert_eq!(resp["error"]["code"], json!(-32602));
+        assert!(
+            reply.write_settings.is_none(),
+            "a missing value writes nothing"
         );
     }
 

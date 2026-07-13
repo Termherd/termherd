@@ -30,20 +30,30 @@ fn main() {
             continue;
         };
         // Read settings fresh per request so a live edit is reflected without a
-        // restart; a missing or invalid file reads as "no options set".
-        let settings = load_settings();
+        // restart; a missing file reads as "no options set". `malformed` marks a
+        // file that exists but does not parse — safe to read as empty, but a
+        // write must refuse it rather than clobber the user's content.
+        let (settings, malformed) = read_settings();
         let reply = termherd_mcp::handle_message(&message, &settings);
-        // Perform the write effect the pure layer described, before replying,
-        // so a caller that reads back sees its own change. A write that fails
-        // must not report success — turn it into a JSON-RPC error for the same
-        // request rather than swallow it (the very silent-catch this project
-        // exists to avoid).
+        // Perform the write effect the pure layer described, before replying, so
+        // a caller that reads back sees its own change. Any write failure — or a
+        // refusal to overwrite a malformed file — becomes a JSON-RPC error for
+        // the same request rather than a false success (the silent-catch this
+        // project exists to avoid).
         let mut response = reply.response;
-        if let Some(new_settings) = reply.write_settings
-            && let Err(err) = store_settings(&new_settings)
-        {
-            eprintln!("termherd-mcp: {err}");
-            response = write_error_response(&message, &err);
+        if let Some(new_settings) = reply.write_settings {
+            let outcome = if malformed {
+                Err(
+                    "settings file exists but is not valid JSON; refusing to overwrite it"
+                        .to_owned(),
+                )
+            } else {
+                store_settings(&new_settings)
+            };
+            if let Err(err) = outcome {
+                eprintln!("termherd-mcp: {err}");
+                response = write_error_response(&message, &err);
+            }
         }
         if let Some(response) = response {
             if writeln!(stdout, "{response}").is_err() {
@@ -68,23 +78,30 @@ fn write_error_response(message: &Value, detail: &str) -> Option<Value> {
     }))
 }
 
-/// Read `~/.termherd/settings.json` into a JSON value, falling back to an empty
-/// object when it is missing or unreadable — the read-only surface then reports
-/// every option as unset rather than failing.
-fn load_settings() -> Value {
+/// Read `~/.termherd/settings.json` into a JSON value plus a `malformed` flag.
+/// A missing or unreadable file reads as an empty object (`malformed = false`) —
+/// the read surface then reports every option as unset. A file that exists but
+/// does not parse reads as empty too, but with `malformed = true`, so the write
+/// path can refuse to overwrite it rather than discard the user's content.
+fn read_settings() -> (Value, bool) {
     let Some(path) = settings_path() else {
-        return json!({});
+        return (json!({}), false);
     };
     match std::fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|_| json!({})),
-        Err(_) => json!({}),
+        Ok(raw) => match serde_json::from_str(&raw) {
+            Ok(value) => (value, false),
+            Err(_) => (json!({}), true),
+        },
+        Err(_) => (json!({}), false),
     }
 }
 
 /// Persist the mutated settings to `~/.termherd/settings.json`, pretty-printed
-/// like the file the GUI writes. Creates the `~/.termherd` directory if needed.
-/// Returns an error message (not a panic — the server stays up) so the caller
-/// can report the failure instead of a false success.
+/// like the file the GUI writes. Creates the `~/.termherd` directory if needed
+/// and replaces the file **atomically** — write a sibling temp file, then rename
+/// — so a crash or a concurrent reader never sees a half-written file. Returns an
+/// error message (not a panic — the server stays up) so the caller can report the
+/// failure instead of a false success.
 fn store_settings(settings: &Value) -> Result<(), String> {
     let path = settings_path().ok_or("no home directory; cannot write settings")?;
     if let Some(dir) = path.parent() {
@@ -93,8 +110,11 @@ fn store_settings(settings: &Value) -> Result<(), String> {
     }
     let raw = serde_json::to_string_pretty(settings)
         .map_err(|err| format!("could not encode settings: {err}"))?;
-    std::fs::write(&path, raw + "\n")
-        .map_err(|err| format!("could not write {}: {err}", path.display()))
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, raw + "\n")
+        .map_err(|err| format!("could not write {}: {err}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|err| format!("could not replace {}: {err}", path.display()))
 }
 
 /// `~/.termherd/settings.json` — the same file the GUI shell reads.
