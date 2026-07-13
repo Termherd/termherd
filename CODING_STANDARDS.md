@@ -294,10 +294,28 @@ purpose*, not by accident.
 ### Comments & Documentation
 
 - Default to **no inline comments**. Code says *what*; commit messages and PR
-  descriptions say *why*.
-- Write an inline comment only when the *why* is non-obvious from the code: a
-  hidden constraint, a surprising invariant, a workaround for a specific bug
-  (e.g. the `ESC[6n` responder that ConPTY needs before it starts the child).
+  descriptions say *why-it-changed*. A comment that restates the code
+  ("increment the index", "the quit modal owns the keyboard") is noise: it costs
+  every reader time, dilutes the real signal, and — being uncompiled — rots
+  silently when the code moves on. A well-named function or variable is better:
+  the compiler checks the name, so it cannot lie.
+- **Extract, don't annotate.** When a block needs a heading comment to say what
+  it does, that heading is usually a function name. A nested `if`/`match` ladder
+  with a comment per arm is the tell — hoist each arm into a named
+  predicate/handler and let the names carry the *what*: e.g. a modal key-routing
+  ladder reads best as a linear dispatch over named overlay handlers, not a
+  stack of commented blocks.
+- Write an inline comment only when the *why* is non-obvious **and
+  non-recoverable from the code**: a hidden constraint, a surprising invariant,
+  a platform quirk, a workaround for a specific bug (e.g. the `ESC[6n` responder
+  ConPTY needs before it starts the child; the NumLock numpad quirk in
+  `on_key`).
+- This why-only rule **overrides matching the comment density of the
+  surrounding code.** Much existing code is over-commented; do not reproduce
+  that when you touch it — thin the narration as you pass through.
+- A reference code in a comment must be resolvable without external context —
+  name the rule in prose, or use only a code whose source is recorded (the one
+  sanctioned code, `FRn`, is defined in [`AGENTS.md`](AGENTS.md) conventions).
 - Every public item has a doc comment: a one-line summary, then details and
   examples, using intra-doc links.
 

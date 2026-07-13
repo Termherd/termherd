@@ -186,6 +186,12 @@ exists). Do not relax them locally.
   issues are renumbered or migrated. Cite issues in commit/PR bodies and
   `ROADMAP.md`/PRD prose instead. Full rationale in
   [`CONTRIBUTING.md`](CONTRIBUTING.md).
+- A reference code in a comment must be resolvable without external context:
+  either name the rule in plain language, or use a code **whose source this
+  file records.** The one sanctioned code is **`FRn` = the numbered Functional
+  Requirements in [`docs/PRD.md`](docs/PRD.md) (§Functional requirements)** —
+  e.g. `FR4` is the embedded-terminal requirement, `FR6` splits. Do not coin
+  other bare abbreviations; a lone `FR4` is only readable because of this line.
 - Status of every feature is tracked in `ROADMAP.md` (MoSCoW from PRD §5).
   Check the ticked/unticked state there before assuming something is built.
 
