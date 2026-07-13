@@ -276,17 +276,32 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
 - [ ] `F-mcp-ide-bridge` — live MCP/IDE bridge to Claude (moved from Unsure,
   PRD rev. 6); decoupled from the still-Unsure diff panel
 - [ ] `F-mcp-control-surface` — termherd *exposes* an MCP server over its own
-  control/config surface (`list_options`/`set_option` + schema resource, plus
-  orchestration tools: open session, split pane, focus, rename tab, run in
-  another session), driven by the in-app Claude sessions. Inverse of
-  `F-mcp-ide-bridge` (termherd is the server, the session is the client).
-  Filed as #90; still design-first — needs a `/feature-torture` pass to settle
-  the full scope before the remaining slices become standalone issues. A first,
-  limited slice has landed: `crates/mcp` (`termherd-mcp`), a **read-only** stdio
-  MCP server exposing `list_options` + the option schema resource over the
-  existing `settings.json`, with the protocol/option logic pure and unit-tested.
-  `set_option` (writes), the `keys` surface and the orchestration tools
-  (open session / split / focus / rename / run-in-session) are still to come
+  control/config + orchestration surface, driven by the in-app Claude sessions
+  (termherd is the server, the session is the client). Inverse of
+  `F-mcp-ide-bridge`. Filed as #90 (now the **tracking epic**). Tortured 🧬
+  **split** (feature-torture `F-mcp-control-surface.md`; design brainstorm
+  `brainstorm/20260713-mcp-agent-terminal-interaction.md`): the entry hid
+  multiple features separated by the **transport** — config is *stateless* (a
+  file), orchestration/perception/synchro need the live `core::App` → an
+  in-process **http/sse** server (supersedes the earlier per-session-WS
+  assumption; Claude's MCP client speaks `stdio | http/sse`). A first,
+  **read-only** stdio slice has landed: `crates/mcp` (`termherd-mcp`),
+  `list_options` + schema resource, pure and unit-tested. Split into rungs, each
+  shippable:
+  - [ ] `F-mcp-config-write` (#191) — `set_option` + `keys` on the stdio slice;
+    independent, deliverable now
+  - [ ] async transport substrate (#192, `tech-health`) — tokio + a bounded
+    round-trip through the iced loop; shared enabler, also unblocks
+    `F-mcp-ide-bridge`; relates to #167/#171
+  - [ ] `F-mcp-live-bridge` (#193) — in-process http/sse + `mcpServers`
+    injection + `list_sessions` spike (**the gate**); blocked by #167 + #169,
+    depends on #192
+  - [ ] `F-mcp-orchestration` (#194) — open/split/focus/rename/run-in-session;
+    depends on #193
+  - [ ] `F-mcp-terminal-sync` (#195) — `wait_for_status` (OSC) + `read_terminal`;
+    depends on #193
+  - [ ] `F-mcp-agent-loop` (#196) — `type_into_terminal` + prompt→wait→read,
+    opt-in; depends on #195; product-scope question open (may be cut)
 
 - [x] `F-terminal-palette` — configurable terminal colours (#181, shipped
   in #183; tortured 👍, feature-torture `F-terminal-palette.md`): an optional
