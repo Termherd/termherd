@@ -603,9 +603,11 @@ impl Shell {
     }
 
     // The iced `update` is a flat `match` over every `Message` variant — the
-    // app's central event dispatcher. Length here is breadth (one arm per
-    // message), not nested complexity; splitting it would scatter the dispatch.
-    // Tracked as a refactor candidate (shell.rs is the god-object signal A).
+    // app's central event dispatcher, whose arms delegate to the domain modules
+    // (launch, session_ops, effects, geometry, routing, …). The length here is
+    // breadth (one arm per message), not nested complexity, and splitting the
+    // dispatch itself would only scatter it — the allow is by design, not a
+    // deferred cleanup.
     #[allow(clippy::too_many_lines)]
     fn update(&mut self, message: Message) -> Task<Message> {
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
