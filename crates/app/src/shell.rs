@@ -1014,7 +1014,7 @@ impl Shell {
                 // Only archive a session still on the scanned list: a rescan
                 // could have dropped it while the prompt was up, and toggling a
                 // vanished id would persist phantom metadata for it.
-                Some(session) if self.is_browsable(&session) => {
+                Some(session) if self.core.is_browsable(&session) => {
                     let effects = self
                         .core
                         .apply(termherd_core::Event::ToggleArchive(session));
@@ -1161,16 +1161,6 @@ impl Shell {
         }
     }
 
-    /// Whether a session id is still on the scanned project list — used to
-    /// guard the archive confirmation against a session a rescan removed while
-    /// the prompt was up.
-    fn is_browsable(&self, session: &str) -> bool {
-        self.core
-            .projects
-            .iter()
-            .any(|group| group.sessions.iter().any(|s| s.session_id == session))
-    }
-
     /// Copy the last terminal selection to the clipboard, if any (FR4).
     fn copy_selection(&self) -> Task<Message> {
         match &self.selection {
@@ -1198,16 +1188,6 @@ impl Shell {
         let _ = self
             .core
             .apply(termherd_core::Event::RenameTab { index, title });
-    }
-
-    /// Count of sessions whose PTY is still running — the ones a quit would
-    /// hard-kill. Exited sessions linger in the map but cost nothing to drop.
-    fn live_session_count(&self) -> usize {
-        self.core
-            .sessions
-            .values()
-            .filter(|s| s.status != SessionStatus::Exited)
-            .count()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -2651,19 +2631,6 @@ mod key_routing {
     }
 
     #[test]
-    fn live_session_count_excludes_exited_sessions() {
-        let (mut shell, _pty) = shell_with_terminal();
-        assert_eq!(shell.live_session_count(), 1, "a launched session is live");
-        let session = shell.core.workspace.focused_session().expect("focused");
-        let _ = shell.update(Message::PtyExited(session));
-        assert_eq!(
-            shell.live_session_count(),
-            0,
-            "an exited session no longer counts as live to kill"
-        );
-    }
-
-    #[test]
     fn the_quit_modal_owns_the_keyboard() {
         // While the quit modal is up, a plain key is swallowed (not sent to the
         // terminal) and Escape dismisses it without quitting.
@@ -2708,7 +2675,11 @@ mod key_routing {
         let (mut shell, _pty) = shell_with_terminal();
         let session = shell.core.workspace.focused_session().expect("focused");
         let _ = shell.update(Message::PtyExited(session));
-        assert_eq!(shell.live_session_count(), 0, "precondition: nothing live");
+        assert_eq!(
+            shell.core.live_session_count(),
+            0,
+            "precondition: nothing live"
+        );
 
         let _ = shell.update(Message::Window(
             window::Id::unique(),
@@ -2762,7 +2733,7 @@ mod key_routing {
             "precondition: the launched shell is idle, nothing running"
         );
         assert_eq!(
-            shell.live_session_count(),
+            shell.core.live_session_count(),
             1,
             "…but it is still a live session"
         );
@@ -2780,7 +2751,11 @@ mod key_routing {
         shell.close_confirm.app = ConfirmClose::AlwaysConfirm;
         let session = shell.core.workspace.focused_session().expect("focused");
         let _ = shell.update(Message::PtyExited(session));
-        assert_eq!(shell.live_session_count(), 0, "precondition: nothing live");
+        assert_eq!(
+            shell.core.live_session_count(),
+            0,
+            "precondition: nothing live"
+        );
         let _ = shell.update(Message::Window(
             window::Id::unique(),
             window::Event::CloseRequested,

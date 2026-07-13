@@ -74,11 +74,9 @@ impl Shell {
     /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
     /// `PrevTab`). No-op when nothing is open.
     pub(super) fn cycle_tab(&mut self, delta: i32) -> Task<Message> {
-        let count = self.core.workspace.tabs.len();
-        if count == 0 {
+        let Some(next) = self.core.workspace.cycled_tab(delta) else {
             return Task::none();
-        }
-        let next = (self.core.workspace.active as i32 + delta).rem_euclid(count as i32) as usize;
+        };
         self.activate_tab(next)
     }
 

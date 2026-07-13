@@ -381,6 +381,18 @@ impl Workspace {
         tab.focus = paths[next].clone();
         Some(())
     }
+
+    /// The active-tab index after cycling by `delta`, wrapping around both ends
+    /// (FR9 `NextTab` / `PrevTab`). `None` when there are no tabs, so the caller
+    /// no-ops rather than switching to a tab that isn't there.
+    #[must_use]
+    pub fn cycled_tab(&self, delta: i32) -> Option<usize> {
+        let count = self.tabs.len();
+        if count == 0 {
+            return None;
+        }
+        Some((self.active as i32 + delta).rem_euclid(count as i32) as usize)
+    }
 }
 
 /// Where an index `i` ends up after the tab at `from` is removed and
@@ -482,6 +494,24 @@ mod tests {
         assert_eq!(ws.active, 0);
         assert_eq!(ws.focused_session(), Some(sid(1)));
         assert!(ws.tabs[0].focus.is_empty());
+    }
+
+    #[test]
+    fn cycled_tab_wraps_both_directions() {
+        let mut ws = Workspace::new();
+        assert_eq!(ws.cycled_tab(1), None, "no tabs: nothing to cycle to");
+
+        ws.open(sid(1), "a"); // tab 0
+        ws.open(sid(2), "b"); // tab 1
+        ws.open(sid(3), "c"); // tab 2, now active
+        assert_eq!(ws.active, 2);
+
+        // Forward from the last tab wraps round to the first.
+        assert_eq!(ws.cycled_tab(1), Some(0));
+        // Backward from the last tab steps to the middle.
+        assert_eq!(ws.cycled_tab(-1), Some(1));
+        // The query is pure — it computes the next index, it does not switch.
+        assert_eq!(ws.active, 2, "cycled_tab must not mutate the active index");
     }
 
     #[test]

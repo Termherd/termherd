@@ -4,34 +4,23 @@
 //! spawn-and-focus flow lives in one place.
 
 use iced::Task;
-use termherd_core::browser::project_label;
 use termherd_core::{Launch, LaunchSpec};
 
 use super::{Focus, Message, Shell, home_dir};
+
+/// Tab-title kind suffixes (presentation): a shell tab shows `$`, a Claude tab
+/// 🤖, so the two kinds stay distinguishable at a glance. Kept app-side and
+/// handed to the core title policy, so `core` carries no glyph literals.
+const SHELL_GLYPH: &str = "$";
+const CLAUDE_GLYPH: &str = "🤖";
 
 impl Shell {
     /// Launch a terminal: register it in `core`, perform the spawn, focus it,
     /// and size its PTY to the current pane (FR4).
     pub(super) fn launch(&mut self, cwd: String, launch: Launch) -> Task<Message> {
-        // The kind is shown as a suffix so a shell tab and a Claude tab for the
-        // same repo stay distinct. Resuming a known session takes its real
-        // name from the scanned digest — current Claude renders status
-        // in-band and emits no OSC title, so the live override never fires;
-        // without this every resumed tab in a repo would read alike. A fresh or
-        // unscanned session keeps the kind label; an OSC title still wins later.
-        let label = project_label(&cwd);
-        let title = match &launch {
-            Launch::Shell => format!("{label} $"),
-            Launch::Claude {
-                resume: Some(claude_id),
-            } => self
-                .core
-                .record_for(claude_id)
-                .map(|record| self.core.session_title(record))
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| format!("{label} 🤖")),
-            Launch::Claude { resume: None } => format!("{label} 🤖"),
-        };
+        let title = self
+            .core
+            .tab_title(&cwd, &launch, SHELL_GLYPH, CLAUDE_GLYPH);
         let effects = self
             .core
             .apply(termherd_core::Event::LaunchSession(LaunchSpec {

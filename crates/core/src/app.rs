@@ -12,6 +12,7 @@ use std::num::NonZeroU64;
 
 use crate::browser::{
     MatchSnippet, ProjectGroup, SessionRecord, content_snippet, filter_projects, group_projects,
+    project_label,
 };
 use crate::capture::{CaptureDump, CaptureTab};
 use crate::metadata::{Overlay, RepoMeta, SessionMeta};
@@ -976,6 +977,44 @@ impl App {
             .find(|record| record.session_id == claude_id)
     }
 
+    /// Whether a session id is still on the scanned project list — the guard
+    /// the archive confirmation uses against a session a rescan removed while
+    /// the prompt was up. Exactly "the last scan has a record for it", so it
+    /// tracks [`Self::record_for`].
+    #[must_use]
+    pub fn is_browsable(&self, session: &str) -> bool {
+        self.record_for(session).is_some()
+    }
+
+    /// The tab title for a new session (FR4): the scanned digest name for a
+    /// resumed Claude session — current Claude renders status in-band and emits
+    /// no OSC title, so without this every resumed tab in a repo would read
+    /// alike — else the kind label `{project} {glyph}`. A fresh or unscanned
+    /// session keeps the kind label; an OSC title still wins later. The kind
+    /// glyphs are the caller's (view-side constants), so core carries no
+    /// presentation literals.
+    #[must_use]
+    pub fn tab_title(
+        &self,
+        cwd: &str,
+        launch: &Launch,
+        shell_glyph: &str,
+        claude_glyph: &str,
+    ) -> String {
+        let label = project_label(cwd);
+        match launch {
+            Launch::Shell => format!("{label} {shell_glyph}"),
+            Launch::Claude {
+                resume: Some(claude_id),
+            } => self
+                .record_for(claude_id)
+                .map(|record| self.session_title(record))
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| format!("{label} {claude_glyph}")),
+            Launch::Claude { resume: None } => format!("{label} {claude_glyph}"),
+        }
+    }
+
     /// The browsed record for the tab at `index` — the sidebar entry its first
     /// pane resumes, so a tab hover can show the same session card. `None`
     /// for an out-of-range index, or a tab whose first pane is a shell or a
@@ -1245,6 +1284,17 @@ impl App {
     #[must_use]
     pub fn any_running_process(&self) -> bool {
         self.sessions.values().any(LiveSession::has_running_process)
+    }
+
+    /// Count of sessions whose PTY is still running — the ones a quit would
+    /// hard-kill. Exited sessions linger in the registry but cost nothing to
+    /// drop; the count behind the quit-confirmation modal's summary line.
+    #[must_use]
+    pub fn live_session_count(&self) -> usize {
+        self.sessions
+            .values()
+            .filter(|s| s.status != SessionStatus::Exited)
+            .count()
     }
 
     /// Decide whether an OSC 9 notification reaches the OS notification
@@ -1603,6 +1653,75 @@ mod tests {
         );
         // A shell / fresh session id has no browsed record.
         assert!(app.record_for("not-scanned").is_none());
+    }
+
+    #[test]
+    fn is_browsable_tracks_the_scanned_list() {
+        // The archive-confirm guard: a session is browsable iff the last scan
+        // still lists it. A rescan that drops it must un-browse it.
+        let mut app = App::new();
+        assert!(!app.is_browsable("abc"), "empty app browses nothing");
+
+        app.apply(Event::ScanCompleted(vec![record("abc", "/p", "hi")]));
+        assert!(app.is_browsable("abc"), "a scanned session is browsable");
+        assert!(!app.is_browsable("gone"), "an unscanned id is not");
+
+        // A rescan without it drops it from the browsable set.
+        app.apply(Event::ScanCompleted(vec![]));
+        assert!(
+            !app.is_browsable("abc"),
+            "a session a rescan removed is no longer browsable"
+        );
+    }
+
+    #[test]
+    fn tab_title_prefers_the_scanned_digest_name() {
+        // Glyphs are the caller's (view-side constants), passed in; core owns
+        // the digest-name-else-kind-label policy.
+        let mut app = App::new();
+        // A shell gets the project label with the shell glyph.
+        assert_eq!(
+            app.tab_title("/home/me/proj", &Launch::Shell, "$", "🤖"),
+            "proj $"
+        );
+
+        // A fresh Claude session (no resume) gets the Claude glyph.
+        assert_eq!(
+            app.tab_title("/home/me/proj", &Launch::Claude { resume: None }, "$", "🤖"),
+            "proj 🤖"
+        );
+
+        // Resuming a *scanned* session takes its digest name (no glyph), so two
+        // resumed tabs in one repo don't read alike.
+        app.apply(Event::ScanCompleted(vec![record(
+            "abc-123",
+            "/home/me/proj",
+            "fix the login bug",
+        )]));
+        assert_eq!(
+            app.tab_title(
+                "/home/me/proj",
+                &Launch::Claude {
+                    resume: Some("abc-123".into())
+                },
+                "$",
+                "🤖",
+            ),
+            "fix the login bug"
+        );
+
+        // Resuming an *unscanned* session falls back to the kind label.
+        assert_eq!(
+            app.tab_title(
+                "/home/me/proj",
+                &Launch::Claude {
+                    resume: Some("not-scanned".into())
+                },
+                "$",
+                "🤖",
+            ),
+            "proj 🤖"
+        );
     }
 
     #[test]
@@ -2389,6 +2508,33 @@ mod tests {
         assert!(
             app.any_running_process(),
             "one busy session anywhere makes the app a running app"
+        );
+    }
+
+    #[test]
+    fn live_session_count_excludes_exited_sessions() {
+        // The quit-confirm summary counts sessions a quit would hard-kill:
+        // everything not yet Exited, whatever its running state.
+        let mut app = App::new();
+        assert_eq!(app.live_session_count(), 0, "an empty app has none live");
+
+        let a = launch(&mut app, "a");
+        launch(&mut app, "b");
+        assert_eq!(app.live_session_count(), 2, "two launched shells are live");
+
+        // An idle (but not exited) session still counts — it has a process.
+        app.apply(Event::StatusChanged {
+            session: a,
+            status: SessionStatus::Idle,
+        });
+        assert_eq!(app.live_session_count(), 2, "idle is still live");
+
+        // Exiting one drops it from the count; the map may still hold it.
+        app.apply(Event::PtyExited(a));
+        assert_eq!(
+            app.live_session_count(),
+            1,
+            "an exited session no longer counts"
         );
     }
 
