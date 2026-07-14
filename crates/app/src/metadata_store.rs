@@ -4,15 +4,14 @@
 //! (sessions + repos) and never does I/O.
 //!
 //! The on-disk shape is `{ "sessions": {…}, "repos": {…} }`. Older builds wrote
-//! a **flat** map of session id → meta with no wrapper; [`load`] migrates such
-//! files in place (see [`parse`]), and [`save`] always writes the new shape.
+//! a **flat** map of session id → meta with no wrapper; [`StoredOverlay`]'s
+//! deserialiser migrates such files in place, and [`save`] always writes the
+//! new shape. The file plumbing lives in [`crate::json_store`].
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use termherd_core::{Overlay, RepoMeta, SessionMeta};
-use tracing::warn;
 
 /// On-disk shape of one session entry. Default fields are skipped so the file
 /// only records what the user actually set.
@@ -46,62 +45,42 @@ fn is_false(b: &bool) -> bool {
     !b
 }
 
+/// The on-disk file as loaded, with the legacy migration applied: a new-format
+/// file has a top-level `sessions` or `repos` key; anything else is read as
+/// the legacy flat `{ id: meta }` map (session ids are Claude UUIDs, so they
+/// never collide with those two literal wrapper keys). A custom deserialiser
+/// so the migration rides any parse of the file, wherever it comes from.
+#[derive(Debug, Default)]
+struct StoredOverlay(OverlayDto);
+
+impl<'de> Deserialize<'de> for StoredOverlay {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let is_wrapped = value.get("sessions").is_some() || value.get("repos").is_some();
+        let dto = if is_wrapped {
+            serde_json::from_value(value)
+        } else {
+            serde_json::from_value(value).map(|sessions| OverlayDto {
+                sessions,
+                repos: HashMap::new(),
+            })
+        }
+        .map_err(D::Error::custom)?;
+        Ok(Self(dto))
+    }
+}
+
 /// Load the overlay; any problem (no file, bad JSON) yields an empty overlay —
 /// metadata must never block startup.
 #[must_use]
 pub fn load() -> Overlay {
-    let Some(path) = config_path() else {
-        return Overlay::default();
-    };
-    let Ok(raw) = std::fs::read_to_string(&path) else {
-        return Overlay::default();
-    };
-    parse(&raw).unwrap_or_else(|e| {
-        warn!(error = %e, path = %path.display(), "invalid metadata; ignoring");
-        Overlay::default()
-    })
-}
-
-/// Parse raw JSON into an [`Overlay`], migrating the legacy flat shape.
-///
-/// A new-format file has a top-level `sessions` or `repos` key; anything else is
-/// read as the legacy flat `{ id: meta }` map (session ids are Claude UUIDs, so
-/// they never collide with those two literal wrapper keys). Kept separate from
-/// [`load`] so the migration is unit-tested without touching the filesystem.
-fn parse(raw: &str) -> Result<Overlay, serde_json::Error> {
-    let value: serde_json::Value = serde_json::from_str(raw)?;
-    let is_wrapped = value.get("sessions").is_some() || value.get("repos").is_some();
-    let dto: OverlayDto = if is_wrapped {
-        serde_json::from_value(value)?
-    } else {
-        OverlayDto {
-            sessions: serde_json::from_value(value)?,
-            repos: HashMap::new(),
-        }
-    };
-    Ok(from_dto(dto))
+    from_dto(crate::json_store::load_json::<StoredOverlay>(FILE).0)
 }
 
 /// Persist the overlay. Failures are logged, never fatal.
 pub fn save(overlay: &Overlay) {
-    let Some(path) = config_path() else {
-        return;
-    };
-    if let Some(dir) = path.parent()
-        && let Err(e) = std::fs::create_dir_all(dir)
-    {
-        warn!(error = %e, "could not create config dir");
-        return;
-    }
-    let dto = to_dto(overlay);
-    match serde_json::to_string_pretty(&dto) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(&path, json) {
-                warn!(error = %e, path = %path.display(), "could not save metadata");
-            }
-        }
-        Err(e) => warn!(error = %e, "could not serialise metadata"),
-    }
+    crate::json_store::save_json(FILE, &to_dto(overlay));
 }
 
 fn from_dto(dto: OverlayDto) -> Overlay {
@@ -153,13 +132,17 @@ fn to_dto(overlay: &Overlay) -> OverlayDto {
 }
 
 /// `~/.termherd/metadata.json` — the app data dir from the PRD (§7).
-fn config_path() -> Option<PathBuf> {
-    Some(crate::paths::termherd_dir()?.join("metadata.json"))
-}
+const FILE: &str = "metadata.json";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Parse raw JSON as [`load`] would, exercising the legacy migration
+    /// without touching the filesystem.
+    fn parse(raw: &str) -> Result<Overlay, serde_json::Error> {
+        serde_json::from_str::<StoredOverlay>(raw).map(|stored| from_dto(stored.0))
+    }
 
     #[test]
     fn legacy_flat_file_migrates_to_sessions() {
