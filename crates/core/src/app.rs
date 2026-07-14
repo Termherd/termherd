@@ -1023,6 +1023,14 @@ impl App {
         Vec::new()
     }
 
+    /// Whether the OS reports the window focused, so the view can dim an
+    /// unfocused window. Starts `false` (unknown) until the first real focus
+    /// signal — the same convention notification suppression relies on.
+    #[must_use]
+    pub const fn window_focused(&self) -> bool {
+        self.window_focused
+    }
+
     /// The effective terminal font size: the configured base (or the
     /// built-in default before settings load) plus the zoom steps, clamped
     /// into [`FONT_SIZE_RANGE`].
