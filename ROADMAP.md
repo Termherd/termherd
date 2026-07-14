@@ -130,9 +130,11 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   refactor cluster #167–#173: the module-boundary/`cfg(target_os)`/file-length
   gate is #173, blocked by the god-object splits #167 (shell — **shipped**),
   #168 (terminal/view — **shipped**) and #169 (core `app/` split + `Sessions`
-  registry + `Sidebar`/`FontState` field-flatten, A1–A4 — **shipped**);
-  cognitive-
-  complexity (signal C) stays unfiled. **P3 / report-only** (blocked on a
+  registry + `Sidebar`/`FontState` field-flatten, A1–A4 — **shipped**). The
+  independent adapter splits: #170 (scan → `watch`/`cache`/`derive`/`walk`/`repo`
+  modules — **shipped**, the seam `F-antigravity-sessions` #160/#161 build on),
+  #171 (F, json_store) and #172 (D, pty) still open. Cognitive-complexity
+  (signal C) stays unfiled. **P3 / report-only** (blocked on a
   quality-report home): file length (signal A, folded into #173's report) and
   churn×size hotspots (signal J). Dropped: MSRV check,
   `todo!`→deny, PR-size warning (rationale in the report). `tech-health`
