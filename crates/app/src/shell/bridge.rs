@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
-use termherd_core::App;
+use termherd_core::{App, Launch, LiveSession, SessionStatus};
 use tokio::sync::{mpsc, oneshot};
 
 use super::Message;
@@ -47,12 +47,48 @@ const MESSAGE_STREAM_BUFFER: usize = 32;
 pub enum Request {
     /// A read-only snapshot of the workspace.
     Snapshot,
+    /// Every live session, for the `list_sessions` MCP tool (the spike).
+    ListSessions,
 }
 
 /// The app's answer to a [`Request`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     Snapshot(Snapshot),
+    Sessions(Vec<SessionInfo>),
+}
+
+/// The kind of program a session runs, as an MCP client sees it. Distinct from
+/// `core::Launch` (which also carries the resume id) so the external surface
+/// stays a plain tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionKind {
+    Shell,
+    Claude,
+}
+
+/// One live session as an external MCP client sees it.
+///
+/// `handle` is the **stable external id** — the runtime `SessionId`, minted once
+/// at launch (`Sessions::allocate`) and never re-keyed — deliberately distinct
+/// from `resume_id`, the Claude session id that *does* re-key on a fork /
+/// plan-accept (Q6). An MCP client addresses `handle`; it outlives the re-key
+/// that `resume_id` would not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionInfo {
+    /// The stable external handle: the runtime session id as a decimal string.
+    pub handle: String,
+    /// The tab label hosting this session.
+    pub title: String,
+    /// Real project path the session runs in, if known.
+    pub cwd: Option<String>,
+    /// Whether it runs a shell or the Claude CLI.
+    pub kind: SessionKind,
+    /// The Claude session id this launch resumes, if any — the *unstable* id
+    /// (see the type note); `None` for a shell or a fresh Claude session.
+    pub resume_id: Option<String>,
+    /// Current activity (FR8).
+    pub status: SessionStatus,
 }
 
 /// A minimal read of the workspace: how many tabs are open and which one is
@@ -178,11 +214,40 @@ pub fn snapshot(core: &App) -> Snapshot {
     }
 }
 
+/// Every live session as a stable-handle [`SessionInfo`] list, sorted by handle
+/// so the external surface is deterministic. Pure read of the registry `core`
+/// already owns.
+pub fn list_sessions(core: &App) -> Vec<SessionInfo> {
+    let mut live: Vec<&LiveSession> = core.sessions.values().collect();
+    // Deterministic ascending-handle order — the registry map is unordered, and
+    // an external API must not shuffle its rows between calls.
+    live.sort_by_key(|s| s.id.0);
+    live.into_iter()
+        .map(|s| SessionInfo {
+            handle: s.id.0.get().to_string(),
+            title: core
+                .workspace
+                .tab_of(s.id)
+                .and_then(|index| core.workspace.tabs.get(index))
+                .map(|tab| tab.title.clone())
+                .unwrap_or_default(),
+            cwd: s.cwd.clone(),
+            kind: match s.launch {
+                Launch::Shell => SessionKind::Shell,
+                Launch::Claude { .. } => SessionKind::Claude,
+            },
+            resume_id: s.launch.resume_id().map(str::to_owned),
+            status: s.status,
+        })
+        .collect()
+}
+
 /// Answer one request from the state `core` already holds. The shell calls this
 /// on the UI thread inside `update`, so it stays pure and cheap.
 pub fn respond(core: &App, request: &Request) -> Reply {
     match request {
         Request::Snapshot => Reply::Snapshot(snapshot(core)),
+        Request::ListSessions => Reply::Sessions(list_sessions(core)),
     }
 }
 
@@ -212,11 +277,29 @@ pub(super) fn request_stream(source: &Requests) -> impl Stream<Item = Message> +
     )
 }
 
+/// Test double for the shell side of the bridge: take the receiver, answer the
+/// next single request with `reply`, and return the request that arrived.
+/// Lets other modules' tests (e.g. the MCP tools) exercise a real round-trip
+/// without standing up the iced shell. `take` is `pub(super)`, so this helper —
+/// which lives inside the module — is how a sibling module reaches it.
+#[cfg(test)]
+pub(crate) fn spawn_test_shell(
+    requests: Requests,
+    reply: Reply,
+) -> tokio::task::JoinHandle<Request> {
+    tokio::spawn(async move {
+        let mut rx = requests.take().expect("a receiver on first take");
+        let (request, reply_tx) = rx.recv().await.expect("one request");
+        let _ = reply_tx.send(reply);
+        request
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
-    use termherd_core::{Event, Launch, LaunchSpec};
+    use termherd_core::{Event, Launch, LaunchSpec, SessionStatus};
 
     /// Open `n` shell tabs in a fresh `App`, so a snapshot has real workspace
     /// state to read.
@@ -251,6 +334,95 @@ mod tests {
         assert_eq!(
             snap.active_tab, None,
             "an empty workspace has no active tab"
+        );
+    }
+
+    /// Launch one Claude session (fresh or resumed) in `app`, returning its
+    /// handle string.
+    fn launch_claude(app: &mut App, cwd: &str, title: &str, resume: Option<&str>) -> String {
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some(cwd.to_owned()),
+            launch: Launch::Claude {
+                resume: resume.map(str::to_owned),
+            },
+            title: title.to_owned(),
+        }));
+        let id = app.workspace.focused_session().expect("a focused session");
+        id.0.get().to_string()
+    }
+
+    #[test]
+    fn list_sessions_is_empty_for_a_fresh_app() {
+        assert!(list_sessions(&App::new()).is_empty());
+    }
+
+    #[test]
+    fn list_sessions_reports_each_live_session_sorted_by_handle() {
+        let app = app_with_tabs(3);
+        let sessions = list_sessions(&app);
+        assert_eq!(sessions.len(), 3, "three sessions were launched");
+        let handles: Vec<&str> = sessions.iter().map(|s| s.handle.as_str()).collect();
+        assert_eq!(
+            handles,
+            ["1", "2", "3"],
+            "handles are the runtime ids, ascending"
+        );
+        // Each carries the tab title and cwd it was launched with.
+        assert_eq!(sessions[0].title, "tab 0");
+        assert_eq!(sessions[0].cwd.as_deref(), Some("/tmp/p0"));
+    }
+
+    #[test]
+    fn a_shell_session_has_kind_shell_and_no_resume_id() {
+        let app = app_with_tabs(1);
+        let info = &list_sessions(&app)[0];
+        assert_eq!(info.kind, SessionKind::Shell);
+        assert_eq!(info.resume_id, None);
+    }
+
+    #[test]
+    fn a_sessions_handle_is_its_runtime_id_not_the_claude_resume_id() {
+        let mut app = App::new();
+        let handle = launch_claude(&mut app, "/proj", "proj", Some("claude-abc-123"));
+        let info = &list_sessions(&app)[0];
+        assert_eq!(info.kind, SessionKind::Claude);
+        assert_eq!(info.handle, handle, "the handle is the runtime id");
+        assert_eq!(
+            info.resume_id.as_deref(),
+            Some("claude-abc-123"),
+            "the resume id is the Claude session id, reported separately"
+        );
+        assert_ne!(
+            info.handle, "claude-abc-123",
+            "the stable handle is never the Claude id (Q6)"
+        );
+    }
+
+    #[test]
+    fn the_external_handle_is_stable_across_a_status_change() {
+        // The runtime id is minted once and never re-keyed, so the mutable part
+        // of a session (its status, and — on a real re-key — its Claude id)
+        // changing must never move the handle an MCP client addresses (Q6).
+        let mut app = App::new();
+        launch_claude(&mut app, "/proj", "proj", Some("claude-abc-123"));
+        let before = list_sessions(&app)[0].handle.clone();
+        let id = app.workspace.focused_session().expect("a focused session");
+        app.apply(Event::StatusChanged {
+            session: id,
+            status: SessionStatus::Busy,
+        });
+        let after = &list_sessions(&app)[0];
+        assert_eq!(after.handle, before, "the handle survives a status change");
+        assert_eq!(after.status, SessionStatus::Busy, "but the status updates");
+    }
+
+    #[test]
+    fn respond_answers_list_sessions_with_the_same_list() {
+        let app = app_with_tabs(2);
+        assert_eq!(
+            respond(&app, &Request::ListSessions),
+            Reply::Sessions(list_sessions(&app)),
+            "respond forwards the live-session list unchanged"
         );
     }
 

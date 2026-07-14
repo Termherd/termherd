@@ -72,11 +72,45 @@ notify-rust = "4"
 # Typed save errors for the plans/memory write slice.
 thiserror = "2"
 gif = "0.14.2"
-# Async transport substrate: a tokio runtime hosts future transport tasks, and
+# Async transport substrate: a tokio runtime hosts the in-process MCP server and
 # every bridge round-trip is timeout-bounded (`tokio::time::timeout`) so a slow
-# reply can never hang the caller. Feature-frugal — no `net`/`io`/`fs`; just the
-# runtime, channels, and the time driver the timeout needs.
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+# reply can never hang the caller. `net` is added for the loopback listener the
+# rmcp Streamable-HTTP server binds; the rest are the runtime, channels, and the
+# time driver the timeout needs.
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "sync",
+    "time",
+    "macros",
+    "net",
+    "io-util",
+] }
+# In-process MCP server (the live-bridge gate): the official Model Context
+# Protocol Rust SDK carries the wire protocol — JSON-RPC, the initialize
+# handshake, tool listing/calls, session management — so the shell never
+# hand-rolls it. Apache-2.0 (already allowed by cargo-deny), edition 2024, and
+# tokio-native so it reuses the substrate runtime above. Feature-frugal: only
+# the server half and its Streamable-HTTP transport, plus the `#[tool]` macros.
+rmcp = { version = "2", default-features = false, features = [
+    "server",
+    "transport-streamable-http-server",
+    "macros",
+] }
+# The `transport-streamable-http-server` feature gives rmcp's request→response
+# handler (a `tower` service) but no bound HTTP server — we bring our own so the
+# per-session bearer-token check wraps it. hyper (+ hyper-util's tokio glue) is
+# the frugal base for that; axum would pull far more. `http`/`http-body-util`/
+# `bytes` are already in the tree (rmcp's http stack) — declared here because the
+# loopback listener and the 401 path use them directly.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+# Per-session MCP token: a v4 UUID (OS CSPRNG) — never logged, injected into the
+# session's mcp config, validated by the loopback server. `uuid` is already in
+# the tree (rmcp / notify-rust); this only turns on the `v4` generator.
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 # Temp dirs for the atomic-write round-trip tests.

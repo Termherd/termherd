@@ -12,6 +12,7 @@ mod instance;
 mod json_store;
 #[cfg(target_os = "macos")]
 mod macos;
+mod mcp;
 mod metadata_store;
 mod paths;
 mod record;
@@ -82,9 +83,33 @@ fn main() -> iced::Result {
     let bridge_runtime = build_bridge_runtime();
     let (bridge_handle, bridge_requests) = shell::bridge_channel();
 
+    // Bind the in-process MCP server on the substrate runtime (the live-bridge
+    // gate). Non-fatal: with no runtime, or a bind failure, the browser still
+    // runs — hosted sessions simply can't reach the live bridge until restart.
+    // The token registry is shared with the shell, which mints one per Claude
+    // launch and injects it into that session's `mcpServers` config.
+    let mcp_tokens = mcp::Tokens::default();
+    let mcp_endpoint = bridge_runtime.as_ref().and_then(|runtime| {
+        match runtime.block_on(mcp::serve(bridge_handle.clone(), mcp_tokens.clone())) {
+            Ok(endpoint) => {
+                info!(url = %endpoint.url, "mcp live bridge listening");
+                Some(endpoint)
+            }
+            Err(error) => {
+                warn!(%error, "mcp live bridge unavailable; hosted sessions can't reach it");
+                None
+            }
+        }
+    });
+
+    let live_bridge = shell::LiveBridge {
+        requests: bridge_requests,
+        mcp_endpoint,
+        mcp_tokens,
+    };
     let startup =
         shell::Startup::from_settings(&settings, metadata_store::load(), collapsed_store::load());
-    let result = shell::run(scanner, watch_root, pty, pty_rx, bridge_requests, startup);
+    let result = shell::run(scanner, watch_root, pty, pty_rx, live_bridge, startup);
     // Keep the single-instance guard and the async substrate alive until the GUI
     // exits: dropping the bridge handle would close the request channel, and
     // dropping the runtime would tear down any transport task hosted on it.
@@ -94,15 +119,17 @@ fn main() -> iced::Result {
     result
 }
 
-/// Build the tokio runtime that hosts the async transport tasks. One worker
-/// thread (the substrate is latency-bound plumbing, not throughput work) with
-/// the time driver enabled so `tokio::time::timeout` can bound every bridge
-/// call. `None` — logged, never fatal — when the runtime cannot be created.
+/// Build the tokio runtime that hosts the in-process MCP server and the async
+/// transport tasks. One worker thread (the substrate is latency-bound plumbing,
+/// not throughput work), with both drivers enabled: **time** so
+/// `tokio::time::timeout` can bound every bridge call, and **io** for the
+/// loopback `TcpListener` the MCP server binds. `None` — logged, never fatal —
+/// when the runtime cannot be created.
 fn build_bridge_runtime() -> Option<tokio::runtime::Runtime> {
     match tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
         .thread_name("termherd-bridge")
-        .enable_time()
+        .enable_all()
         .build()
     {
         Ok(runtime) => Some(runtime),
