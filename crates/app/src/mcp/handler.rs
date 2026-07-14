@@ -9,13 +9,17 @@
 
 use std::time::Duration;
 
+use std::collections::BTreeMap;
+
 use rmcp::{
     ErrorData, ServerHandler,
-    handler::server::router::tool::ToolRouter,
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{CallToolResult, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
+    schemars::JsonSchema,
     tool, tool_handler, tool_router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use termherd_core::{Section, SessionStatus, SnapshotFilter, TerminalScope, WorkspaceSnapshot};
 
 use crate::shell::bridge::{BridgeHandle, Reply, Request, SessionInfo, SessionKind};
 
@@ -69,6 +73,41 @@ impl TermherdMcp {
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
         Ok(CallToolResult::structured(value))
     }
+
+    /// A filterable, read-only snapshot of the whole workspace — the structured
+    /// "DOM" a client reads to perceive termherd before acting. Light by default
+    /// (structure only, no terminal text); scope terminal text to named handles.
+    #[tool(
+        name = "snapshot",
+        description = "A filterable snapshot of termherd's whole state: config, \
+                       the session-browser sidebar, and the open tabs with their \
+                       panes (each pane's stable handle, kind, cwd, status). Light \
+                       by default — no terminal text. Args (all optional): \
+                       `sections` (any of \"config\", \"sidebar\", \"tabs\"; omit \
+                       for all), `terminals` (session handles to include screen \
+                       text for; omit for none — read the structure first, then \
+                       request a handle), `text_lines` (trailing lines per \
+                       requested terminal, default 40)."
+    )]
+    async fn snapshot(
+        &self,
+        Parameters(args): Parameters<SnapshotArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let reply = self
+            .bridge
+            .call(Request::Snapshot(args.into_filter()), CALL_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Snapshot(snapshot) = reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        let value = serde_json::to_value(SnapshotDto::from(&snapshot))
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        Ok(CallToolResult::structured(value))
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -113,7 +152,6 @@ struct SessionDto {
 
 impl From<&SessionInfo> for SessionDto {
     fn from(info: &SessionInfo) -> Self {
-        use termherd_core::SessionStatus::*;
         Self {
             handle: info.handle.clone(),
             title: info.title.clone(),
@@ -123,13 +161,200 @@ impl From<&SessionInfo> for SessionDto {
                 SessionKind::Claude => "claude",
             },
             resume_id: info.resume_id.clone(),
-            status: match info.status {
-                Starting => "starting",
-                Busy => "busy",
-                Idle => "idle",
-                Attention => "attention",
-                Exited => "exited",
+            status: status_str(info.status),
+        }
+    }
+}
+
+/// The `snapshot` tool's arguments — every field optional so a bare call is the
+/// light default. Deserialised from the MCP `arguments` object.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct SnapshotArgs {
+    /// Sections to include: any of `"config"`, `"sidebar"`, `"tabs"`. Omit for
+    /// all three. Unknown names are ignored.
+    #[serde(default)]
+    sections: Option<Vec<String>>,
+    /// Session handles (as strings, as `list_sessions` reports them) to include
+    /// terminal text for. Omit (or empty) for none.
+    #[serde(default)]
+    terminals: Option<Vec<String>>,
+    /// Include the focused pane's terminal text — a one-call shortcut when you
+    /// don't yet know its handle. Ignored when `terminals` names handles.
+    #[serde(default)]
+    focused_terminal: Option<bool>,
+    /// Trailing terminal lines to keep per requested session.
+    #[serde(default)]
+    text_lines: Option<usize>,
+}
+
+impl SnapshotArgs {
+    /// Map the flat MCP arguments onto the core [`SnapshotFilter`]. Omitted
+    /// fields fall back to the light default. Explicit handles win over the
+    /// `focused_terminal` shortcut.
+    fn into_filter(self) -> SnapshotFilter {
+        let default = SnapshotFilter::default();
+        let sections = match self.sections {
+            Some(names) => names
+                .iter()
+                .filter_map(|name| match name.as_str() {
+                    "config" => Some(Section::Config),
+                    "sidebar" => Some(Section::Sidebar),
+                    "tabs" => Some(Section::Tabs),
+                    _ => None,
+                })
+                .collect(),
+            None => default.sections,
+        };
+        let terminals = match self.terminals {
+            Some(handles) if !handles.is_empty() => {
+                TerminalScope::Only(handles.iter().filter_map(|h| h.parse().ok()).collect())
+            }
+            _ if self.focused_terminal == Some(true) => TerminalScope::Focused,
+            _ => TerminalScope::None,
+        };
+        SnapshotFilter {
+            sections,
+            terminals,
+            text_lines: self.text_lines.unwrap_or(default.text_lines),
+        }
+    }
+}
+
+/// The on-the-wire snapshot: `core`'s model flattened to string-typed enums an
+/// MCP client reads without knowing termherd's internals. Absent sections and
+/// empty terminal text are omitted, keeping a light call light.
+#[derive(Serialize)]
+struct SnapshotDto {
+    focus: FocusDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config: Option<ConfigDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sidebar: Option<SidebarDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tabs: Option<Vec<TabDto>>,
+    /// Scoped terminal text by handle (string keys in JSON). Empty when none was
+    /// requested.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    terminals: BTreeMap<u64, String>,
+}
+
+#[derive(Serialize)]
+struct FocusDto {
+    tab: Option<usize>,
+    /// Focused session handle as a string, matching `list_sessions`.
+    session: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ConfigDto {
+    font_size: f32,
+    terminal_scheme: Option<String>,
+    record_fps: u32,
+    record_scale: f32,
+    keymap_overrides: usize,
+}
+
+#[derive(Serialize)]
+struct SidebarDto {
+    hidden: bool,
+    search: String,
+    search_titles_only: bool,
+    show_archived: bool,
+    projects: Vec<ProjectDto>,
+}
+
+#[derive(Serialize)]
+struct ProjectDto {
+    path: String,
+    session_count: usize,
+    collapsed: bool,
+}
+
+#[derive(Serialize)]
+struct TabDto {
+    active: bool,
+    title: String,
+    /// Most-urgent status among the tab's sessions, or `None` if none live.
+    status: Option<&'static str>,
+    panes: Vec<PaneDto>,
+}
+
+#[derive(Serialize)]
+struct PaneDto {
+    /// Stable session handle as a string, matching `list_sessions` and the
+    /// `terminals` argument.
+    handle: String,
+    /// `"shell"` or `"claude"`.
+    kind: &'static str,
+    cwd: Option<String>,
+    /// `"starting"`, `"busy"`, `"idle"`, `"attention"`, or `"exited"`.
+    status: &'static str,
+}
+
+/// The stable external string for a session status — one place both DTOs read.
+fn status_str(status: SessionStatus) -> &'static str {
+    match status {
+        SessionStatus::Starting => "starting",
+        SessionStatus::Busy => "busy",
+        SessionStatus::Idle => "idle",
+        SessionStatus::Attention => "attention",
+        SessionStatus::Exited => "exited",
+    }
+}
+
+impl From<&WorkspaceSnapshot> for SnapshotDto {
+    fn from(snapshot: &WorkspaceSnapshot) -> Self {
+        Self {
+            focus: FocusDto {
+                tab: snapshot.focus.tab,
+                session: snapshot.focus.session.map(|handle| handle.to_string()),
             },
+            config: snapshot.config.as_ref().map(|config| ConfigDto {
+                font_size: config.font_size,
+                terminal_scheme: config.terminal_scheme.clone(),
+                record_fps: config.record_fps,
+                record_scale: config.record_scale,
+                keymap_overrides: config.keymap_overrides,
+            }),
+            sidebar: snapshot.sidebar.as_ref().map(|sidebar| SidebarDto {
+                hidden: sidebar.hidden,
+                search: sidebar.search.clone(),
+                search_titles_only: sidebar.search_titles_only,
+                show_archived: sidebar.show_archived,
+                projects: sidebar
+                    .projects
+                    .iter()
+                    .map(|project| ProjectDto {
+                        path: project.path.clone(),
+                        session_count: project.session_count,
+                        collapsed: project.collapsed,
+                    })
+                    .collect(),
+            }),
+            tabs: snapshot.tabs.as_ref().map(|tabs| {
+                tabs.iter()
+                    .map(|tab| TabDto {
+                        active: tab.active,
+                        title: tab.title.clone(),
+                        status: tab.status.map(status_str),
+                        panes: tab
+                            .panes
+                            .iter()
+                            .map(|pane| PaneDto {
+                                handle: pane.handle.to_string(),
+                                kind: match pane.kind {
+                                    termherd_core::SessionKind::Shell => "shell",
+                                    termherd_core::SessionKind::Claude => "claude",
+                                },
+                                cwd: pane.cwd.clone(),
+                                status: status_str(pane.status),
+                            })
+                            .collect(),
+                    })
+                    .collect()
+            }),
+            terminals: snapshot.terminals.clone(),
         }
     }
 }
@@ -138,7 +363,7 @@ impl From<&SessionInfo> for SessionDto {
 mod tests {
     use super::*;
     use crate::shell::bridge::{Reply, Request, channel, spawn_test_shell};
-    use termherd_core::SessionStatus;
+    use termherd_core::{App, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs};
 
     #[tokio::test]
     async fn list_sessions_tool_shapes_the_bridge_reply_into_structured_json() {
@@ -197,5 +422,109 @@ mod tests {
             "the error names the closed bridge, got: {}",
             error.message
         );
+    }
+
+    #[test]
+    fn snapshot_args_default_to_the_light_filter() {
+        assert_eq!(
+            SnapshotArgs::default().into_filter(),
+            SnapshotFilter::default()
+        );
+    }
+
+    #[test]
+    fn snapshot_args_map_sections_terminals_and_text_lines() {
+        let filter = SnapshotArgs {
+            sections: Some(vec!["tabs".into(), "bogus".into()]),
+            terminals: Some(vec!["3".into(), "4".into()]),
+            text_lines: Some(10),
+            ..SnapshotArgs::default()
+        }
+        .into_filter();
+        // Unknown section names are dropped, not errors.
+        assert_eq!(filter.sections, vec![Section::Tabs]);
+        // String handles parse back to the numeric core scope.
+        assert_eq!(filter.terminals, TerminalScope::Only(vec![3, 4]));
+        assert_eq!(filter.text_lines, 10);
+    }
+
+    #[test]
+    fn snapshot_args_with_empty_terminals_stay_text_free() {
+        let filter = SnapshotArgs {
+            terminals: Some(Vec::new()),
+            ..SnapshotArgs::default()
+        }
+        .into_filter();
+        assert_eq!(filter.terminals, TerminalScope::None);
+    }
+
+    #[test]
+    fn snapshot_args_focused_terminal_shortcut_scopes_to_the_focused_pane() {
+        let filter = SnapshotArgs {
+            focused_terminal: Some(true),
+            ..SnapshotArgs::default()
+        }
+        .into_filter();
+        assert_eq!(filter.terminals, TerminalScope::Focused);
+
+        // Explicit handles win over the shortcut.
+        let filter = SnapshotArgs {
+            terminals: Some(vec!["5".into()]),
+            focused_terminal: Some(true),
+            ..SnapshotArgs::default()
+        }
+        .into_filter();
+        assert_eq!(filter.terminals, TerminalScope::Only(vec![5]));
+    }
+
+    #[tokio::test]
+    async fn snapshot_tool_shapes_the_bridge_reply_into_structured_json() {
+        // Answer with a real snapshot of a one-Claude-tab workspace.
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Claude { resume: None },
+            title: "work".into(),
+        }));
+        let filter = SnapshotFilter::default();
+        let snapshot = app.snapshot(&filter, &SnapshotInputs::default());
+
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(requests, Reply::Snapshot(snapshot));
+        let result = TermherdMcp::new(handle)
+            .snapshot(Parameters(SnapshotArgs::default()))
+            .await
+            .expect("the tool returns a result");
+
+        assert!(
+            matches!(shell.await.expect("shell task"), Request::Snapshot(_)),
+            "the tool asked the bridge for a snapshot"
+        );
+        let value = result.structured_content.expect("structured json content");
+        // Handles are strings on the wire, matching `list_sessions`.
+        assert_eq!(
+            value["focus"]["session"], "1",
+            "the launched session is focused"
+        );
+        assert_eq!(value["tabs"][0]["title"], "work");
+        assert_eq!(value["tabs"][0]["panes"][0]["handle"], "1");
+        assert_eq!(value["tabs"][0]["panes"][0]["kind"], "claude");
+        assert_eq!(value["tabs"][0]["panes"][0]["cwd"], "/proj");
+        // Light default: no terminal text was requested, so none is present.
+        assert!(
+            value.get("terminals").is_none(),
+            "no terminal text by default"
+        );
+    }
+
+    #[tokio::test]
+    async fn snapshot_tool_surfaces_a_bridge_failure_as_an_error() {
+        let (handle, requests) = channel();
+        drop(requests);
+        let error = TermherdMcp::new(handle)
+            .snapshot(Parameters(SnapshotArgs::default()))
+            .await
+            .expect_err("a closed bridge is a tool error");
+        assert!(error.message.contains("closed"), "got: {}", error.message);
     }
 }

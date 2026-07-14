@@ -331,14 +331,31 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
     it), edition 2024, tokio-native (reuses the #192 runtime, now `enable_all`
     for the listener); the http stack is `hyper`/`hyper-util` (frugal base — no
     axum). Unblocks #194/#195/#196
-  - [ ] `F-mcp-orchestration` (#194) — open/split/focus/rename/run-in-session;
-    depends on #193
+  - [x] `F-mcp-snapshot` (#212) — **the perception rung.** A filterable,
+    light-by-default `snapshot` MCP tool exposing the whole workspace "DOM":
+    config (font / scheme / record budget / keymap overrides), the
+    session-browser sidebar (projects + visible-session counts + fold state),
+    and the open tabs with their panes (each pane's stable handle, kind, cwd,
+    status), plus focus. Terminal text is **opt-in and scoped** (`terminals`
+    handles or `focused_terminal`, `text_lines`-truncated), so a driving agent
+    never pays for state it did not ask for — read the structure, then zoom into
+    a handle. Model + filter are pure in `core` (`core::snapshot`); the `app`
+    adapter injects the config bits (settings) and per-session text (the grid) it
+    owns, and `core` stamps the live font size. Handles are strings across the
+    whole surface, matching `list_sessions`. `screenshot` (#215, async window
+    round-trip) and single-sourcing the G1 dump (#108) onto this richer model
+    (#216) are follow-ups. Depends on #193; unblocks a verifiable act→observe
+    loop for #194
   - [ ] `F-mcp-orchestration` (#194) — open/split/focus/rename/run-in-session;
     depends on #193
   - [ ] `F-mcp-terminal-sync` (#195) — `wait_for_status` (OSC) + `read_terminal`;
     depends on #193
   - [ ] `F-mcp-agent-loop` (#196) — `type_into_terminal` + prompt→wait→read,
     opt-in; depends on #195; product-scope question open (may be cut)
+  - [ ] `F-mcp-screenshot` (#215) — expose the window PNG as an MCP tool (async
+    window round-trip); pixel companion to #212, depends on #212/#193
+  - [ ] `F-mcp-snapshot-g1` (#216) — single-source the G1 capture dump (#108)
+    onto the `WorkspaceSnapshot` model; changes the dump format, depends on #212
 
 - [x] `F-terminal-palette` — configurable terminal colours (#181, shipped
   in #183; tortured 👍, feature-torture `F-terminal-palette.md`): an optional

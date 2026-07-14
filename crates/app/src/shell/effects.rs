@@ -8,12 +8,18 @@
 
 mod os;
 
+use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::time::SystemTime;
 
 use iced::{Task, window};
-use termherd_core::{CaptureDump, Effect, Launch, McpConfig, SessionId, SpawnSpec};
+use termherd_core::{
+    CaptureDump, Effect, Launch, McpConfig, Section, SessionId, SnapshotFilter, SnapshotInputs,
+    SpawnSpec, TerminalScope,
+};
 use termherd_pty::Screen;
 
+use super::bridge::Request;
 use super::{Message, Shell};
 use os::{notify, open_url};
 
@@ -114,6 +120,45 @@ impl Shell {
     pub(super) fn focused_pty_text(&self) -> Option<String> {
         let id = self.core.workspace.focused_session()?;
         self.screens.get(&id).map(Screen::text)
+    }
+
+    /// Gather the adapter-owned inputs for a bridge request: the config summary
+    /// and the scoped terminal text a `snapshot` needs, which the pure `core`
+    /// cannot read (settings live here, the grid in the `pty` adapter). Only the
+    /// filter's scope is read, so an unscoped call gathers nothing. Any other
+    /// request needs no injection, so it gets the empty default.
+    pub(super) fn snapshot_inputs(&self, request: &Request) -> SnapshotInputs {
+        let Request::Snapshot(filter) = request else {
+            return SnapshotInputs::default();
+        };
+        SnapshotInputs {
+            config: filter
+                .includes(Section::Config)
+                .then(|| self.config.clone()),
+            terminals: self.scoped_terminal_text(filter),
+        }
+    }
+
+    /// The full visible text of the sessions the filter scopes in, keyed by
+    /// handle. Full text — `core` owns the `text_lines` truncation. A session
+    /// with no rendered screen yet is simply absent.
+    fn scoped_terminal_text(&self, filter: &SnapshotFilter) -> BTreeMap<u64, String> {
+        let handles: Vec<SessionId> = match &filter.terminals {
+            TerminalScope::None => return BTreeMap::new(),
+            TerminalScope::Focused => self.core.workspace.focused_session().into_iter().collect(),
+            TerminalScope::Only(handles) => handles
+                .iter()
+                .filter_map(|handle| NonZeroU64::new(*handle).map(SessionId))
+                .collect(),
+        };
+        handles
+            .into_iter()
+            .filter_map(|id| {
+                self.screens
+                    .get(&id)
+                    .map(|screen| (id.0.get(), screen.text()))
+            })
+            .collect()
     }
 
     /// Capture the current state for the AI dev loop: hand `core` the focused
