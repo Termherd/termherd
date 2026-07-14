@@ -160,7 +160,9 @@ impl Shell {
                     screen,
                     session,
                     link_modifier: self.link_modifier,
+                    shift: self.shift_modifier,
                     font_size: self.core.font_size(),
+                    dimmed: !self.core.window_focused(),
                 })
                 .width(Fill)
                 .height(Fill);
@@ -193,6 +195,7 @@ impl Shell {
         if !bordered {
             return inner;
         }
+        let window_focused = self.core.window_focused();
         container(inner)
             .width(Fill)
             .height(Fill)
@@ -201,9 +204,10 @@ impl Shell {
                 // Every split pane is outlined so the layout is legible; the
                 // focused one gets a thicker, accent-coloured border so which
                 // terminal holds the keyboard is unmistakable, the rest a thin
-                // muted one.
+                // muted one. An unfocused window mutes even the focus accent —
+                // no pane in it holds the keyboard.
                 let palette = theme.extended_palette();
-                let (color, width) = if is_focused {
+                let (color, width) = if is_focused && window_focused {
                     (palette.primary.strong.color, PANE_BORDER)
                 } else {
                     (palette.background.strong.color, PANE_BORDER / 2.0)

@@ -31,9 +31,15 @@ pub(in crate::shell) struct TerminalView<'a> {
     /// Whether the link-open modifier (Ctrl/Cmd) is held, so a hovered link
     /// highlights and a click opens it instead of selecting text.
     pub(in crate::shell) link_modifier: bool,
+    /// Whether Shift is held, so a click extends the existing selection to the
+    /// clicked cell (keep the anchor, move the head) instead of restarting it.
+    pub(in crate::shell) shift: bool,
     /// The effective terminal font size, from `core::App::font_size` —
     /// the glyph size, and (via [`cell_size`]) the wheel's line height.
     pub(in crate::shell) font_size: f32,
+    /// Whether the window has lost OS focus, so the grid renders dimmed and
+    /// the active window stands out among several.
+    pub(in crate::shell) dimmed: bool,
 }
 
 /// Per-canvas pointer state for the drag in progress and link hover. The
@@ -171,7 +177,25 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 if self.link_modifier
                     && let Some(link) = link_at(self.screen, col, row)
                 {
+                    // The click hands off to the OS (often stealing focus, so
+                    // no further pointer events arrive); drop the hover now so
+                    // the hand cursor and underline don't outlive the gesture.
+                    state.hover = None;
                     return Some(canvas::Action::publish(Message::OpenUrl(link.url)));
+                }
+                // Shift+click extends the existing selection: keep its anchor
+                // and move the head to the clicked cell, entering the drag
+                // state so the release copies the extended range. Only when a
+                // selection is visible — otherwise (nothing to extend, or it
+                // scrolled out of view) fall through to a normal press.
+                if self.shift && !self.screen.selection.is_empty() {
+                    state.selecting = true;
+                    state.dragged = true;
+                    let (line, col, side) = self.grid_point(cursor, bounds, col, row);
+                    return Some(canvas::Action::publish(Message::Select {
+                        session: self.session,
+                        op: SelectOp::Update { line, col, side },
+                    }));
                 }
                 // A double-click selects the whole word / filename under the
                 // pointer and copies it, like a terminal. iced's click
@@ -334,6 +358,19 @@ impl canvas::Program<Message> for TerminalView<'_> {
             );
         }
 
+        // An unfocused window renders behind a translucent scrim so the
+        // active window is visually obvious among several.
+        if self.dimmed {
+            frame.fill_rectangle(
+                Point::ORIGIN,
+                bounds.size(),
+                Color {
+                    a: 0.35,
+                    ..Color::BLACK
+                },
+            );
+        }
+
         vec![frame.into_geometry()]
     }
 
@@ -434,7 +471,9 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         // Pointer over the canvas → the scroll is published.
         let mut state = TermState::default();
@@ -459,7 +498,9 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
@@ -481,7 +522,9 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0)); // (0,0)
@@ -509,7 +552,9 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let _ = s1.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         let _ = s1.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
@@ -524,7 +569,9 @@ mod tests {
             screen: &screen,
             session: sid(2),
             link_modifier: false,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let _ = s2.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(2)));
@@ -577,12 +624,45 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: true,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let mut state = TermState::default();
         let action = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
         assert!(action.is_some(), "a link click yields an action");
         assert!(!state.selecting, "opening a link starts no drag-selection");
+    }
+
+    #[test]
+    fn modifier_click_on_a_link_drops_the_hover() {
+        // The OS handoff may steal focus, so no later pointer event can be
+        // relied on to reconcile the hover: the click itself must clear it,
+        // or the hand cursor and underline stick until an extra mouse move.
+        use canvas::Program;
+        let screen = screen_from("https://ex.io");
+        let len = "https://ex.io".len();
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: true,
+            shift: false,
+            font_size: 14.0,
+            dimmed: false,
+        };
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
+        assert!(
+            state.hover.is_some(),
+            "the link is hovered before the click"
+        );
+        let _ = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
+        assert!(state.hover.is_none(), "the click consumes the hover");
+        assert_ne!(
+            view.mouse_interaction(&state, test_bounds(), at_col(len, 2)),
+            mouse::Interaction::Pointer,
+            "opening a link must not leave a hand cursor behind"
+        );
     }
 
     #[test]
@@ -595,7 +675,9 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: true,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
@@ -615,7 +697,9 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: true,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let mut state = TermState::default();
         let _ = held.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
@@ -628,11 +712,63 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let mut state = TermState::default();
         let _ = bare.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
         assert!(state.hover.is_none());
+    }
+
+    #[test]
+    fn shift_click_extends_an_existing_selection() {
+        // With a selection on screen, Shift+click keeps its anchor and moves
+        // the head — entering the drag state so the release copies the range.
+        use canvas::Program;
+        let mut screen = test_screen();
+        screen.selection = vec![(0, 0, 1)];
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: false,
+            shift: true,
+            font_size: 14.0,
+            dimmed: false,
+        };
+        let mut state = TermState::default();
+        let action = view.update(&mut state, &press(), test_bounds(), at(60.0, 60.0));
+        assert!(action.is_some(), "the extend publishes a selection update");
+        assert!(
+            state.selecting && state.dragged,
+            "an extend behaves like a drag so the release copies it"
+        );
+        assert!(
+            view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0))
+                .is_some(),
+            "releasing the extend requests a copy"
+        );
+    }
+
+    #[test]
+    fn shift_click_without_a_selection_is_a_normal_press() {
+        // Nothing to extend → the press anchors a fresh selection as usual.
+        use canvas::Program;
+        let screen = test_screen();
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: false,
+            shift: true,
+            font_size: 14.0,
+            dimmed: false,
+        };
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
+        assert!(
+            state.selecting && !state.dragged,
+            "with no prior selection a Shift+click starts a fresh drag"
+        );
     }
 
     #[test]
@@ -646,7 +782,9 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let mut state = TermState::default();
         let cursor = at_col(line.len(), 8); // inside `src/main.rs` (cols 4..=14)
@@ -673,7 +811,9 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let mut state = TermState::default();
         let cursor = at_col(line.len(), 3);
@@ -693,7 +833,9 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            shift: false,
             font_size: 14.0,
+            dimmed: false,
         };
         let state = TermState::default();
         assert_eq!(

@@ -260,6 +260,9 @@ struct Shell {
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
     link_modifier: bool,
+    /// Whether Shift is currently held, handed to the terminal canvas so a
+    /// Shift+click extends the existing selection instead of restarting it.
+    shift_modifier: bool,
     /// An in-progress tab drag (FR5 reorder): the tab being dragged and
     /// the slot the pointer is currently over. `None` when no drag is active.
     /// Transient pointer state only — the tab order itself lives in `core`.
@@ -595,6 +598,7 @@ impl Shell {
             archiving: None,
             closing_window: None,
             link_modifier: false,
+            shift_modifier: false,
             tab_drag: None,
             exiting: false,
             record_config: startup.record,
@@ -1178,6 +1182,7 @@ impl Shell {
                 // reaches the terminal.
                 let modifiers = event_modifiers(&event);
                 self.link_modifier = modifiers.control() || modifiers.logo();
+                self.shift_modifier = modifiers.shift();
                 self.on_key(event)
             }
             Message::ImeCommit(text) => self.on_ime_commit(text),
@@ -1670,6 +1675,12 @@ impl Shell {
                 Task::none()
             }
             window::Event::Unfocused => {
+                // The modifier release can't reach an unfocused window (e.g.
+                // Ctrl let go while the browser a link click opened is in
+                // front), so treat it as released; winit re-reports the live
+                // modifiers when focus returns.
+                self.link_modifier = false;
+                self.shift_modifier = false;
                 let _ = self
                     .core
                     .apply(termherd_core::Event::WindowFocusChanged(false));
