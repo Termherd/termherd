@@ -15,8 +15,8 @@ pub mod record;
 pub mod workspace;
 
 pub use app::{
-    App, DEFAULT_FONT_SIZE, Effect, Event, Launch, LaunchSpec, LiveSession, ScrollTarget, SelectOp,
-    SelectSide, SessionStatus, SidebarFold, SpawnSpec, Zoom,
+    App, DEFAULT_FONT_SIZE, Effect, Event, Launch, LaunchSpec, LiveSession, McpConfig,
+    ScrollTarget, SelectOp, SelectSide, SessionStatus, SidebarFold, SpawnSpec, Zoom,
 };
 pub use browser::{ProjectGroup, SessionRecord};
 pub use capture::{CaptureDump, CaptureTab};

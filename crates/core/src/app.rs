@@ -35,7 +35,7 @@ use settings::FontState;
 
 pub use effects::Effect;
 pub use events::Event;
-pub use session::{Launch, LaunchSpec, LiveSession, SessionStatus, Sessions, SpawnSpec};
+pub use session::{Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
 

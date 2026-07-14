@@ -13,6 +13,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::JoinHandle;
 
@@ -28,7 +29,9 @@ use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, nativ
 use termherd_claude::osc::{OscSignal, decode_chunk};
 use termherd_core::ports::{PtyError, PtyHost};
 use termherd_core::workspace::SessionId;
-use termherd_core::{Launch, ScrollTarget, SelectOp, SelectSide, SessionStatus, SpawnSpec};
+use termherd_core::{
+    Launch, McpConfig, ScrollTarget, SelectOp, SelectSide, SessionStatus, SpawnSpec,
+};
 
 /// Read buffer for the per-session reader thread.
 const READ_BUF: usize = 8192;
@@ -375,13 +378,65 @@ fn fold_status(current: SessionStatus, signals: &[OscSignal]) -> SessionStatus {
 /// The line to type into the freshly spawned shell to start a [`Launch`], or
 /// `None` for a plain shell (the bare shell *is* the deliverable). Typing keeps
 /// `claude` resolution on the user's own shell + PATH, robust across platforms
-/// (FR4a). Pure so the three-mode contract is unit-tested without a real PTY.
-fn launch_command(launch: &Launch) -> Option<String> {
+/// (FR4a). `mcp_config`, when set, is the path to a written `mcpServers` file
+/// passed as `--mcp-config` so the session can reach termherd's live bridge —
+/// the path is on argv, but the token inside the file is not. Pure so the
+/// command contract is unit-tested without a real PTY.
+fn launch_command(launch: &Launch, mcp_config: Option<&Path>) -> Option<String> {
+    let mcp_flag = mcp_config
+        .map(|path| format!(" --mcp-config {}", path.display()))
+        .unwrap_or_default();
     match launch {
         Launch::Shell => None,
-        Launch::Claude { resume: None } => Some("claude\r".to_owned()),
-        Launch::Claude { resume: Some(id) } => Some(format!("claude --resume {id}\r")),
+        Launch::Claude { resume: None } => Some(format!("claude{mcp_flag}\r")),
+        Launch::Claude { resume: Some(id) } => Some(format!("claude{mcp_flag} --resume {id}\r")),
     }
+}
+
+/// Write the `mcpServers` config for a Claude launch and return its path, so
+/// `launch_command` can point `--mcp-config` at it. The file — not argv — holds
+/// the bearer token. Both fields are known-safe for a bare JSON string (a
+/// loopback url and a hex token), so no escaping is needed. `None` (logged, not
+/// fatal) if the write fails: the session then launches without the live bridge.
+fn write_mcp_config(session: SessionId, config: &McpConfig) -> Option<PathBuf> {
+    let path = std::env::temp_dir().join(format!("termherd-mcp-{}.json", session.0.get()));
+    let json = format!(
+        r#"{{"mcpServers":{{"termherd":{{"type":"http","url":"{}","headers":{{"Authorization":"Bearer {}"}}}}}}}}"#,
+        config.url, config.token
+    );
+    match write_private(&path, &json) {
+        Ok(()) => Some(path),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "failed to write mcp config; session launches without the live bridge"
+            );
+            None
+        }
+    }
+}
+
+/// Write `contents` to `path` readable only by the current user (`0o600` on
+/// Unix) — the file carries a bearer token, so a world-readable temp file would
+/// leak it to any other local user. On non-Unix the platform's per-user temp
+/// ACLs are relied on.
+#[cfg(unix)]
+fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(contents.as_bytes())
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+    std::fs::write(path, contents)
 }
 
 /// A sink for [`PtyEvent`]s. Cheap to clone, callable from the reader threads.
@@ -566,8 +621,13 @@ impl PtyHost for PtyManager {
 
         // Start Claude by typing into the fresh shell (see `launch_command`).
         // Shells buffer stdin, so writing immediately is safe even before the
-        // prompt appears.
-        if let Some(command) = launch_command(&spec.launch)
+        // prompt appears. A Claude launch with an mcp endpoint first writes the
+        // `mcpServers` config file `--mcp-config` points at.
+        let mcp_config_path = spec
+            .mcp
+            .as_ref()
+            .and_then(|config| write_mcp_config(spec.session, config));
+        if let Some(command) = launch_command(&spec.launch, mcp_config_path.as_deref())
             && let Ok(mut w) = writer.lock()
         {
             let _ = w.write_all(command.as_bytes());
@@ -1341,6 +1401,7 @@ mod tests {
             launch: Launch::Shell,
             cols: 80,
             rows: 24,
+            mcp: None,
         }
     }
 
@@ -1367,7 +1428,7 @@ mod tests {
 
     #[test]
     fn a_plain_shell_launch_types_nothing() {
-        assert_eq!(launch_command(&Launch::Shell), None);
+        assert_eq!(launch_command(&Launch::Shell, None), None);
     }
 
     #[test]
@@ -1375,17 +1436,40 @@ mod tests {
         // The 🤖 button must start Claude *fresh*, never with
         // a stray `--resume`.
         assert_eq!(
-            launch_command(&Launch::Claude { resume: None }),
+            launch_command(&Launch::Claude { resume: None }, None),
             Some("claude\r".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_claude_launch_with_an_mcp_config_passes_the_flag_before_resume() {
+        let path = Path::new("/tmp/termherd-mcp-3.json");
+        assert_eq!(
+            launch_command(&Launch::Claude { resume: None }, Some(path)),
+            Some("claude --mcp-config /tmp/termherd-mcp-3.json\r".to_owned()),
+            "a fresh Claude gets the mcp flag"
+        );
+        assert_eq!(
+            launch_command(
+                &Launch::Claude {
+                    resume: Some("abc-123".to_owned())
+                },
+                Some(path)
+            ),
+            Some("claude --mcp-config /tmp/termherd-mcp-3.json --resume abc-123\r".to_owned()),
+            "the mcp flag precedes --resume"
         );
     }
 
     #[test]
     fn a_resumed_claude_launch_types_resume_with_the_id() {
         assert_eq!(
-            launch_command(&Launch::Claude {
-                resume: Some("abc-123".to_owned())
-            }),
+            launch_command(
+                &Launch::Claude {
+                    resume: Some("abc-123".to_owned())
+                },
+                None
+            ),
             Some("claude --resume abc-123\r".to_owned())
         );
     }

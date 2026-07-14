@@ -33,7 +33,7 @@ use crate::record_config::RecordConfig;
 use crate::settings::{CloseSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
-mod bridge;
+pub(crate) mod bridge;
 mod docs;
 mod effects;
 mod geometry;
@@ -49,6 +49,18 @@ mod view;
 
 pub(crate) use bridge::{Requests as BridgeRequests, channel as bridge_channel};
 use docs::{DocFeedback, OpenDoc};
+
+/// The live-bridge runtime wiring handed to the shell, grouped so the
+/// constructor stays within argument bounds. Carries the subscription source
+/// that drains transport requests into the shell, plus the in-process MCP
+/// server's endpoint and its per-session token registry — endpoint `None` and
+/// tokens empty when the server did not bind.
+#[derive(Clone)]
+pub(crate) struct LiveBridge {
+    pub(crate) requests: BridgeRequests,
+    pub(crate) mcp_endpoint: Option<crate::mcp::Endpoint>,
+    pub(crate) mcp_tokens: crate::mcp::Tokens,
+}
 use input::event_modifiers;
 use record::RecordState;
 use streams::{PtyOutput, pty_stream, watch_stream};
@@ -121,7 +133,7 @@ pub fn run(
     watch_root: Option<PathBuf>,
     pty: Arc<dyn PtyHost>,
     pty_rx: UnboundedReceiver<PtyEvent>,
-    bridge_requests: BridgeRequests,
+    live_bridge: LiveBridge,
     startup: Startup,
 ) -> iced::Result {
     // Restore the saved bounds, but discard a position that now lands off every
@@ -142,7 +154,7 @@ pub fn run(
                 watch_root.clone(),
                 pty.clone(),
                 pty_output.clone(),
-                bridge_requests.clone(),
+                live_bridge.clone(),
                 Startup {
                     theme: startup.theme,
                     keymap: startup.keymap.clone(),
@@ -214,6 +226,16 @@ struct Shell {
     /// Drains async-bridge transport requests into the subscription (taken
     /// once), so an off-thread caller can read `core` state and get a reply.
     bridge_requests: BridgeRequests,
+    /// The loopback MCP server's endpoint, if it bound. A Claude launch injects
+    /// this url (plus a fresh token) into its `mcpServers` config. `None` when
+    /// the substrate runtime or the listener failed — the browser still runs.
+    mcp_endpoint: Option<crate::mcp::Endpoint>,
+    /// The MCP token registry shared with the loopback server: mint one per
+    /// Claude launch, revoke it when the session closes.
+    mcp_tokens: crate::mcp::Tokens,
+    /// The token minted for each live Claude session, so its `mcp_tokens` entry
+    /// can be revoked when the session ends.
+    mcp_session_tokens: HashMap<SessionId, String>,
     /// Latest rendered grid per session.
     screens: HashMap<SessionId, Screen>,
     /// Current keyboard target.
@@ -556,9 +578,14 @@ impl Shell {
         watch_root: Option<PathBuf>,
         pty: Arc<dyn PtyHost>,
         pty_output: PtyOutput,
-        bridge_requests: BridgeRequests,
+        live_bridge: LiveBridge,
         startup: Startup,
     ) -> Self {
+        let LiveBridge {
+            requests: bridge_requests,
+            mcp_endpoint,
+            mcp_tokens,
+        } = live_bridge;
         let mut core = termherd_core::App::new();
         core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
         core.apply(termherd_core::Event::CollapsedLoaded(startup.collapsed));
@@ -575,6 +602,9 @@ impl Shell {
             pty,
             pty_output,
             bridge_requests,
+            mcp_endpoint,
+            mcp_tokens,
+            mcp_session_tokens: HashMap::new(),
             screens: HashMap::new(),
             focus: Focus::Search,
             selection: None,
@@ -1291,6 +1321,17 @@ mod key_routing {
         }
     }
 
+    /// Live-bridge wiring for a test shell: a fresh request channel and no MCP
+    /// server (endpoint `None`), so tests that don't exercise the bridge are
+    /// unaffected. Tests that do set `shell.mcp_endpoint` afterwards.
+    fn test_live_bridge() -> LiveBridge {
+        LiveBridge {
+            requests: bridge::channel().1,
+            mcp_endpoint: None,
+            mcp_tokens: crate::mcp::Tokens::default(),
+        }
+    }
+
     /// A `Shell` over the given PTY host, with no terminal open yet.
     fn shell_over(pty: Arc<dyn PtyHost>) -> Shell {
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
@@ -1300,7 +1341,7 @@ mod key_routing {
             None,
             pty,
             PtyOutput::new(rx),
-            bridge::channel().1,
+            test_live_bridge(),
             test_startup(),
         )
     }
@@ -2487,7 +2528,7 @@ mod key_routing {
             None,
             pty.clone(),
             PtyOutput::new(rx),
-            bridge::channel().1,
+            test_live_bridge(),
             Startup {
                 theme: ThemeChoice::default(),
                 keymap: Keymap::defaults(),
@@ -2508,6 +2549,90 @@ mod key_routing {
     fn focused_cwd(shell: &Shell) -> Option<String> {
         let id = shell.core.workspace.focused_session()?;
         shell.core.sessions.get(&id)?.cwd.clone()
+    }
+
+    /// A `SpawnSpec` for `session` running `launch`, with no mcp config yet —
+    /// the shape `attach_mcp` receives from `core`.
+    fn bare_spawn(session: SessionId, launch: Launch) -> SpawnSpec {
+        SpawnSpec {
+            session,
+            cwd: None,
+            launch,
+            cols: 80,
+            rows: 24,
+            mcp: None,
+        }
+    }
+
+    fn session_id(n: u64) -> SessionId {
+        SessionId(std::num::NonZeroU64::new(n).expect("nonzero session id"))
+    }
+
+    #[test]
+    fn a_claude_spawn_gets_an_mcp_config_and_a_revocable_token() {
+        let (mut shell, _pty) = empty_shell();
+        shell.mcp_endpoint = Some(crate::mcp::Endpoint {
+            url: "http://127.0.0.1:9/mcp".into(),
+        });
+        let session = session_id(1);
+        let mut spec = bare_spawn(session, Launch::Claude { resume: None });
+
+        shell.attach_mcp(&mut spec);
+
+        let config = spec.mcp.expect("a Claude spawn carries an mcp config");
+        assert_eq!(
+            config.url, "http://127.0.0.1:9/mcp",
+            "the endpoint url is injected"
+        );
+        assert!(!config.token.is_empty(), "a per-session token is minted");
+        assert!(
+            shell.mcp_session_tokens.contains_key(&session),
+            "the token is remembered for later revocation"
+        );
+
+        shell.revoke_mcp(session);
+        assert!(
+            !shell.mcp_session_tokens.contains_key(&session),
+            "killing the session forgets its token"
+        );
+    }
+
+    #[test]
+    fn each_claude_spawn_gets_a_distinct_token() {
+        let (mut shell, _pty) = empty_shell();
+        shell.mcp_endpoint = Some(crate::mcp::Endpoint {
+            url: "http://127.0.0.1:9/mcp".into(),
+        });
+        let mut first = bare_spawn(session_id(1), Launch::Claude { resume: None });
+        let mut second = bare_spawn(session_id(2), Launch::Claude { resume: None });
+        shell.attach_mcp(&mut first);
+        shell.attach_mcp(&mut second);
+        assert_ne!(
+            first.mcp.expect("first token").token,
+            second.mcp.expect("second token").token,
+            "two sessions never share a token"
+        );
+    }
+
+    #[test]
+    fn a_shell_spawn_never_gets_an_mcp_config() {
+        let (mut shell, _pty) = empty_shell();
+        shell.mcp_endpoint = Some(crate::mcp::Endpoint {
+            url: "http://127.0.0.1:9/mcp".into(),
+        });
+        let mut spec = bare_spawn(session_id(1), Launch::Shell);
+        shell.attach_mcp(&mut spec);
+        assert!(spec.mcp.is_none(), "a plain shell never reaches the bridge");
+    }
+
+    #[test]
+    fn no_bound_server_means_no_mcp_config() {
+        // The server failed to bind (or no runtime): `mcp_endpoint` is `None`, so
+        // even a Claude launch goes out without the bridge rather than panicking.
+        let (mut shell, _pty) = empty_shell();
+        let mut spec = bare_spawn(session_id(1), Launch::Claude { resume: None });
+        shell.attach_mcp(&mut spec);
+        assert!(spec.mcp.is_none(), "no endpoint → no injection");
     }
 
     #[test]

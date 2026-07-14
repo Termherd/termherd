@@ -11,7 +11,7 @@ mod os;
 use std::time::SystemTime;
 
 use iced::{Task, window};
-use termherd_core::{CaptureDump, Effect};
+use termherd_core::{CaptureDump, Effect, Launch, McpConfig, SessionId, SpawnSpec};
 use termherd_pty::Screen;
 
 use super::{Message, Shell};
@@ -35,7 +35,10 @@ impl Shell {
     /// delegated to their owners.
     fn perform_one(&mut self, effect: Effect) -> Task<Message> {
         let outcome = match effect {
-            Effect::Spawn(spec) => self.pty.spawn(spec),
+            Effect::Spawn(mut spec) => {
+                self.attach_mcp(&mut spec);
+                self.pty.spawn(spec)
+            }
             Effect::Write { session, bytes } => self.pty.write(session, &bytes),
             Effect::Resize {
                 session,
@@ -45,7 +48,10 @@ impl Shell {
             Effect::Scroll { session, target } => self.pty.scroll(session, target),
             Effect::Select { session, op } => self.pty.select(session, op),
             Effect::CopyTerminalSelection { session } => self.pty.copy_selection(session),
-            Effect::Kill(session) => self.pty.kill(session),
+            Effect::Kill(session) => {
+                self.revoke_mcp(session);
+                self.pty.kill(session)
+            }
             // Metadata / fold state are file writes, not PTY calls.
             Effect::SaveMetadata(metadata) => {
                 crate::metadata_store::save(&metadata);
@@ -70,6 +76,36 @@ impl Shell {
             tracing::warn!(%error, "pty effect failed");
         }
         Task::none()
+    }
+
+    /// Enrich a Claude spawn with the live-bridge endpoint: mint a per-session
+    /// token, remember it (session → token, so it can be revoked when the
+    /// session ends), and set the spawn's mcp config so the pty injects
+    /// `mcpServers`. A no-op for a shell launch, or when no server bound —
+    /// `core` leaves `spec.mcp` `None` and it stays that way, so those sessions
+    /// simply launch without the bridge.
+    pub(super) fn attach_mcp(&mut self, spec: &mut SpawnSpec) {
+        let Some(endpoint) = &self.mcp_endpoint else {
+            return;
+        };
+        if !matches!(spec.launch, Launch::Claude { .. }) {
+            return;
+        }
+        let token = self.mcp_tokens.issue();
+        self.mcp_session_tokens.insert(spec.session, token.clone());
+        spec.mcp = Some(McpConfig {
+            url: endpoint.url.clone(),
+            token,
+        });
+    }
+
+    /// Revoke a session's MCP token once its PTY is killed, so a dead session's
+    /// token can't authorise against the live bridge. A no-op for a session that
+    /// never had one (a shell, or a launch before the server bound).
+    pub(super) fn revoke_mcp(&mut self, session: SessionId) {
+        if let Some(token) = self.mcp_session_tokens.remove(&session) {
+            self.mcp_tokens.revoke(&token);
+        }
     }
 
     /// The focused terminal's visible grid as text, for a capture. `None`
