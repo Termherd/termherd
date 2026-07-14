@@ -345,8 +345,11 @@ enum Message {
         session: SessionId,
         body: String,
     },
-    /// A session's process exited.
-    PtyExited(SessionId),
+    /// A session's process exited; `clean` mirrors [`PtyEvent::Exited`].
+    PtyExited {
+        session: SessionId,
+        clean: bool,
+    },
     /// A raw key press; routed to the focused terminal when it has focus.
     Key(keyboard::Event),
     /// IME-composed text (dead/accent keys, CJK) for the focused terminal.
@@ -1055,11 +1058,7 @@ impl Shell {
         // drag-noise discrimination; `usize::MAX` (the tab is gone) never
         // matches a real `TabDragStart`, so any interaction just commits.
         if let Some(anchor) = self.tab_rename.as_ref().map(|(a, _)| *a) {
-            let active = self
-                .core
-                .workspace
-                .tab_of_session(anchor)
-                .unwrap_or(usize::MAX);
+            let active = self.core.workspace.tab_of(anchor).unwrap_or(usize::MAX);
             if message.commits_tab_rename(active) {
                 self.commit_tab_rename();
             }
@@ -1152,9 +1151,26 @@ impl Shell {
                     .apply(termherd_core::Event::SessionNotified { session, body });
                 self.perform(effects)
             }
-            Message::PtyExited(session) => {
-                let _ = self.core.apply(termherd_core::Event::PtyExited(session));
-                Task::none()
+            Message::PtyExited { session, clean } => {
+                let tabs_before = self.core.workspace.tabs.len();
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::PtyExited { session, clean });
+                if effects.is_empty() {
+                    // No auto-close: the dead terminal stays on screen.
+                    Task::none()
+                } else {
+                    // The pane auto-closed on its clean shell exit — mirror
+                    // `close_tab`'s shell-side hygiene for the vanished session.
+                    self.screens.remove(&session);
+                    if self.core.workspace.tabs.len() != tabs_before {
+                        // Tab indices shifted under any pending close
+                        // confirmation; dropping the prompt is the safe
+                        // reaction (the user can re-request).
+                        self.closing = None;
+                    }
+                    Task::batch([self.perform(effects), self.resize_panes()])
+                }
             }
             Message::Key(event) => {
                 // Keep the link-open modifier state current regardless of focus,
@@ -1591,7 +1607,7 @@ impl Shell {
         let Some((anchor, title)) = self.tab_rename.take() else {
             return;
         };
-        let Some(index) = self.core.workspace.tab_of_session(anchor) else {
+        let Some(index) = self.core.workspace.tab_of(anchor) else {
             return;
         };
         let _ = self
@@ -1836,27 +1852,37 @@ mod key_routing {
         }
     }
 
-    /// A `Shell` with one terminal open and focused, plus its recording PTY.
-    fn shell_with_terminal() -> (Shell, Arc<RecordingPty>) {
-        let pty = Arc::new(RecordingPty::default());
+    /// The default startup payload the test shells boot with.
+    fn test_startup() -> Startup {
+        Startup {
+            theme: ThemeChoice::default(),
+            keymap: Keymap::defaults(),
+            metadata: Overlay::default(),
+            collapsed: HashSet::new(),
+            record: RecordConfig::default(),
+            session_limit: 0,
+            font_size: 14.0,
+            close: CloseSettings::default(),
+        }
+    }
+
+    /// A `Shell` over the given PTY host, with no terminal open yet.
+    fn shell_over(pty: Arc<dyn PtyHost>) -> Shell {
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
-        let mut shell = Shell::new(
+        Shell::new(
             WindowConfig::default(),
             Arc::new(EmptyScanner),
             None,
-            pty.clone(),
+            pty,
             PtyOutput::new(rx),
-            Startup {
-                theme: ThemeChoice::default(),
-                keymap: Keymap::defaults(),
-                metadata: Overlay::default(),
-                collapsed: HashSet::new(),
-                record: RecordConfig::default(),
-                session_limit: 0,
-                font_size: 14.0,
-                close: CloseSettings::default(),
-            },
-        );
+            test_startup(),
+        )
+    }
+
+    /// A `Shell` with one terminal open and focused, plus its recording PTY.
+    fn shell_with_terminal() -> (Shell, Arc<RecordingPty>) {
+        let pty = Arc::new(RecordingPty::default());
+        let mut shell = shell_over(pty.clone());
         let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
         assert!(
             shell.core.workspace.focused_session().is_some(),
@@ -2456,7 +2482,10 @@ mod key_routing {
         let _ = shell.update(Message::CancelClose);
         // …but once its session has exited, the close needs no prompt.
         let session = shell.core.workspace.focused_session().expect("focused");
-        let _ = shell.update(Message::PtyExited(session));
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
         let _ = shell.update(Message::RequestCloseTab(0));
         assert!(
             shell.closing.is_none(),
@@ -2542,7 +2571,7 @@ mod key_routing {
             .as_ref()
             .map(|(a, _)| *a)
             .expect("renaming");
-        assert_eq!(shell.core.workspace.tab_of_session(anchor), Some(1));
+        assert_eq!(shell.core.workspace.tab_of(anchor), Some(1));
 
         let _ = shell.update(Message::TabRenameInput("My work".to_string()));
         let _ = shell.update(Message::CommitTabRename);
@@ -2683,7 +2712,7 @@ mod key_routing {
         let idx = shell
             .core
             .workspace
-            .tab_of_session(anchor)
+            .tab_of(anchor)
             .expect("the anchored tab still exists");
         assert_eq!(shell.core.workspace.tabs[idx].display_title(), "Pinned");
         let renamed = shell
@@ -3156,12 +3185,100 @@ mod key_routing {
         let (mut shell, _pty) = shell_with_terminal();
         assert_eq!(shell.live_session_count(), 1, "a launched session is live");
         let session = shell.core.workspace.focused_session().expect("focused");
-        let _ = shell.update(Message::PtyExited(session));
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
         assert_eq!(
             shell.live_session_count(),
             0,
             "an exited session no longer counts as live to kill"
         );
+    }
+
+    /// End-to-end auto-close: a **real PTY** running the platform default
+    /// shell, a typed `exit`, and the real `update` loop — everything but the
+    /// iced runtime (whose event glue, [`streams::pty_message`], this test
+    /// shares). Regression guard for the ConPTY gap where a child's natural
+    /// exit never surfaced as reader EOF, so the tab silently stayed open.
+    #[test]
+    fn typing_exit_into_a_real_shell_closes_the_tab_end_to_end() {
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: termherd_pty::EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let pty = Arc::new(termherd_pty::PtyManager::new(
+            sink,
+            None,
+            termherd_pty::Palette::default(),
+        ));
+        let mut shell = shell_over(pty.clone());
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        let _ = shell.launch(cwd, Launch::Shell);
+        let session = shell.core.workspace.focused_session().expect("focused");
+
+        pty.write(session, b"exit\r\n").expect("type exit");
+
+        // Pump the adapter's events through the real update loop until the
+        // auto-close lands (or the deadline proves it never does).
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !shell.core.workspace.tabs.is_empty() && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(event) => {
+                    let _ = shell.update(streams::pty_message(event));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert!(
+            shell.core.workspace.tabs.is_empty(),
+            "typing `exit` into a real shell must auto-close its tab"
+        );
+        assert!(pty.is_empty(), "the dead session's PTY entry is released");
+    }
+
+    #[test]
+    fn a_clean_shell_exit_auto_closes_its_tab() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of("$ exit"));
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: true,
+        });
+        assert!(
+            shell.core.workspace.tabs.is_empty(),
+            "the tab closes by itself on a clean shell exit"
+        );
+        assert!(
+            !shell.screens.contains_key(&session),
+            "the cached screen is dropped with its session"
+        );
+        assert_eq!(
+            pty.kill_count(),
+            1,
+            "the dead session's PTY handles are released"
+        );
+    }
+
+    #[test]
+    fn a_dirty_exit_keeps_the_dead_tab_on_screen() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
+        assert_eq!(
+            shell.core.workspace.tabs.len(),
+            1,
+            "a failed exit's last screen stays readable"
+        );
+        assert_eq!(pty.kill_count(), 0);
     }
 
     #[test]
@@ -3208,7 +3325,10 @@ mod key_routing {
         // leave the process, holding the single-instance lock, behind.
         let (mut shell, _pty) = shell_with_terminal();
         let session = shell.core.workspace.focused_session().expect("focused");
-        let _ = shell.update(Message::PtyExited(session));
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
         assert_eq!(shell.live_session_count(), 0, "precondition: nothing live");
 
         let _ = shell.update(Message::Window(
@@ -3280,7 +3400,10 @@ mod key_routing {
         let (mut shell, _pty) = shell_with_terminal();
         shell.close_confirm.app = ConfirmClose::AlwaysConfirm;
         let session = shell.core.workspace.focused_session().expect("focused");
-        let _ = shell.update(Message::PtyExited(session));
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
         assert_eq!(shell.live_session_count(), 0, "precondition: nothing live");
         let _ = shell.update(Message::Window(
             window::Id::unique(),

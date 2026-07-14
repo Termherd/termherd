@@ -34,6 +34,21 @@ impl Hash for PtyOutput {
     }
 }
 
+/// The [`Message`] a [`PtyEvent`] becomes — the adapter→shell glue, shared by
+/// the subscription stream and the end-to-end tests that pump events by hand.
+pub(super) fn pty_message(event: PtyEvent) -> Message {
+    match event {
+        PtyEvent::Output { session, screen } => Message::PtyOutput { session, screen },
+        PtyEvent::Status { session, status } => Message::PtyStatus { session, status },
+        PtyEvent::Title { session, title } => Message::PtyTitle { session, title },
+        PtyEvent::Notification { session, body } => Message::PtyNotify { session, body },
+        PtyEvent::Exited { session, clean } => Message::PtyExited { session, clean },
+        // The clipboard is global, so the requesting session no longer
+        // matters — reuse the copy-to-clipboard path.
+        PtyEvent::SelectionCopied { text, .. } => Message::CopySelection(text),
+    }
+}
+
 /// One PTY-output stream: drains the receiver into [`Message`]s. The receiver
 /// is taken on first run; a duplicated subscription (there is only ever one)
 /// would idle forever rather than steal events.
@@ -45,25 +60,7 @@ pub(super) fn pty_stream(output: &PtyOutput) -> impl Stream<Item = Message> + us
             match taken {
                 Some(mut rx) => {
                     while let Some(event) = rx.next().await {
-                        let message = match event {
-                            PtyEvent::Output { session, screen } => {
-                                Message::PtyOutput { session, screen }
-                            }
-                            PtyEvent::Status { session, status } => {
-                                Message::PtyStatus { session, status }
-                            }
-                            PtyEvent::Title { session, title } => {
-                                Message::PtyTitle { session, title }
-                            }
-                            PtyEvent::Notification { session, body } => {
-                                Message::PtyNotify { session, body }
-                            }
-                            PtyEvent::Exited { session } => Message::PtyExited(session),
-                            // The clipboard is global, so the requesting session
-                            // no longer matters — reuse the copy-to-clipboard path.
-                            PtyEvent::SelectionCopied { text, .. } => Message::CopySelection(text),
-                        };
-                        if out.send(message).await.is_err() {
+                        if out.send(pty_message(event)).await.is_err() {
                             break;
                         }
                     }

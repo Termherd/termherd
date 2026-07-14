@@ -127,7 +127,10 @@ impl Workspace {
 
     /// Index of the tab hosting `session`, if any. A session lives in exactly
     /// one tab (possibly inside a split), so this lets the shell re-focus an
-    /// already-open session instead of launching a duplicate.
+    /// already-open session instead of launching a duplicate. Also a stable
+    /// handle for state that must survive tab reordering — an inline rename
+    /// anchors on it rather than a positional index, which a reorder or a
+    /// sibling close would shift.
     #[must_use]
     pub fn tab_of(&self, session: SessionId) -> Option<usize> {
         self.tabs
@@ -191,16 +194,6 @@ impl Workspace {
             Some(trimmed.to_owned())
         };
         Some(())
-    }
-
-    /// Index of the tab hosting `session`, if any — a stable handle for state
-    /// that must survive tab reordering (an inline rename anchors on it rather
-    /// than a positional index, which a reorder or a sibling close would shift).
-    #[must_use]
-    pub fn tab_of_session(&self, session: SessionId) -> Option<usize> {
-        self.tabs
-            .iter()
-            .position(|tab| tab.sessions().contains(&session))
     }
 
     /// Title of the tab hosting `session` — what the user sees for that
@@ -276,23 +269,47 @@ impl Workspace {
     /// subtree takes the split's place and gains focus. If the focused pane is
     /// the whole tab, the tab is closed (like [`Workspace::close_tab`]).
     pub fn close_focused(&mut self) -> Option<SessionId> {
-        let active = self.active;
+        let path = self.tabs.get(self.active)?.focus.clone();
+        self.close_leaf(self.active, path)
+    }
+
+    /// Close the leaf hosting `session`, wherever it lives — even an unfocused
+    /// pane in an inactive tab (the auto-close after a clean shell exit). Same
+    /// collapse rules as [`Workspace::close_focused`]. Returns the closed
+    /// session, or `None` when no tab hosts it.
+    pub fn close_pane_of(&mut self, session: SessionId) -> Option<SessionId> {
+        let index = self.tab_of(session)?;
+        let path = leaf_path_of(&self.tabs.get(index)?.root, session)?;
+        self.close_leaf(index, path)
+    }
+
+    /// Close the leaf at `path` in the tab at `index`: its parent split
+    /// collapses — the sibling subtree takes the split's place — or the whole
+    /// tab closes (like [`Workspace::close_tab`]) when the leaf is the root.
+    /// Focus follows the previously focused leaf through the collapse; when the
+    /// closed leaf held it, the sibling subtree's first leaf gains it. Returns
+    /// the removed session; `None` when `path` does not resolve to a leaf.
+    fn close_leaf(&mut self, index: usize, mut path: Vec<Branch>) -> Option<SessionId> {
         // Read what we need first, releasing the borrow before any `self.*`.
-        let (removed, is_root) = {
-            let tab = self.tabs.get(active)?;
-            let removed = match navigate(&tab.root, &tab.focus)? {
+        let (removed, focused) = {
+            let tab = self.tabs.get(index)?;
+            let removed = match navigate(&tab.root, &path)? {
                 Pane::Leaf(session) => *session,
                 Pane::Split { .. } => return None,
             };
-            (removed, tab.focus.is_empty())
+            let focused = match navigate(&tab.root, &tab.focus) {
+                Some(Pane::Leaf(session)) => Some(*session),
+                _ => None,
+            };
+            (removed, focused)
         };
-        if is_root {
-            self.close_tab(active);
+        if path.is_empty() {
+            self.close_tab(index);
             return Some(removed);
         }
-        let tab = self.tabs.get_mut(active)?;
-        let branch = tab.focus.pop()?;
-        let parent = navigate_mut(&mut tab.root, &tab.focus)?;
+        let tab = self.tabs.get_mut(index)?;
+        let branch = path.pop()?;
+        let parent = navigate_mut(&mut tab.root, &path)?;
         // Replace the parent split with the sibling subtree (the other branch).
         let taken = std::mem::replace(parent, Pane::Leaf(removed));
         if let Pane::Split { a, b, .. } = taken {
@@ -301,8 +318,17 @@ impl Workspace {
                 Branch::B => *a,
             };
         }
-        // Focus now points at the sibling subtree; descend to its first leaf.
-        focus_first_leaf(&tab.root, &mut tab.focus);
+        // A surviving focused leaf keeps focus through the collapse (its path
+        // may have shifted); the closed leaf hands it to the sibling subtree,
+        // descending to its first leaf.
+        tab.focus = focused
+            .filter(|f| *f != removed)
+            .and_then(|f| leaf_path_of(&tab.root, f))
+            .unwrap_or_else(|| {
+                let mut focus = path;
+                focus_first_leaf(&tab.root, &mut focus);
+                focus
+            });
         Some(removed)
     }
 
@@ -405,6 +431,22 @@ fn shift_index(i: usize, from: usize, to: usize) -> usize {
 fn focus_first_leaf(root: &Pane, focus: &mut Vec<Branch>) {
     while let Some(Pane::Split { .. }) = navigate(root, focus) {
         focus.push(Branch::A);
+    }
+}
+
+/// Path from `pane` down to the leaf holding `session`, if present.
+fn leaf_path_of(pane: &Pane, session: SessionId) -> Option<Vec<Branch>> {
+    match pane {
+        Pane::Leaf(s) => (*s == session).then(Vec::new),
+        Pane::Split { a, b, .. } => {
+            [(Branch::A, a), (Branch::B, b)]
+                .into_iter()
+                .find_map(|(branch, side)| {
+                    let mut path = leaf_path_of(side, session)?;
+                    path.insert(0, branch);
+                    Some(path)
+                })
+        }
     }
 }
 
@@ -612,12 +654,12 @@ mod tests {
     }
 
     #[test]
-    fn tab_of_session_locates_the_hosting_tab() {
+    fn tab_of_locates_the_hosting_tab_as_a_stable_rename_anchor() {
         let mut ws = Workspace::new();
         ws.open(sid(1), "a");
         ws.open(sid(2), "b");
-        assert_eq!(ws.tab_of_session(sid(2)), Some(1));
-        assert_eq!(ws.tab_of_session(sid(9)), None);
+        assert_eq!(ws.tab_of(sid(2)), Some(1));
+        assert_eq!(ws.tab_of(sid(9)), None);
     }
 
     #[test]
@@ -842,6 +884,58 @@ mod tests {
         // The sibling (sid 2) takes the inner split's place and is focused.
         assert_eq!(ws.focused_session(), Some(sid(2)));
         assert_eq!(ws.tabs[0].sessions(), vec![sid(1), sid(2)]);
+    }
+
+    #[test]
+    fn close_pane_of_collapses_an_unfocused_leaf_and_keeps_focus() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2)); // focus on B (sid 2)
+        // Closing the *unfocused* pane (sid 1) must not steal focus from sid 2.
+        assert_eq!(ws.close_pane_of(sid(1)), Some(sid(1)));
+        assert_eq!(ws.tabs[0].root, Pane::Leaf(sid(2)));
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+    }
+
+    #[test]
+    fn close_pane_of_the_focused_leaf_moves_focus_to_the_sibling() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2)); // focus on B (sid 2)
+        assert_eq!(ws.close_pane_of(sid(2)), Some(sid(2)));
+        assert_eq!(ws.tabs[0].root, Pane::Leaf(sid(1)));
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+    }
+
+    #[test]
+    fn close_pane_of_reaches_into_an_inactive_tab_without_switching() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+        ws.open(sid(3), "b"); // active tab is now "b"
+        assert_eq!(ws.close_pane_of(sid(2)), Some(sid(2)));
+        assert_eq!(ws.tabs[0].root, Pane::Leaf(sid(1)));
+        // The active tab and its focus are untouched.
+        assert_eq!(ws.active, 1);
+        assert_eq!(ws.focused_session(), Some(sid(3)));
+    }
+
+    #[test]
+    fn close_pane_of_a_root_leaf_closes_the_whole_tab() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.open(sid(2), "b");
+        assert_eq!(ws.close_pane_of(sid(1)), Some(sid(1)));
+        assert_eq!(ws.tabs.len(), 1);
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+    }
+
+    #[test]
+    fn close_pane_of_an_unknown_session_is_a_noop() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        assert_eq!(ws.close_pane_of(sid(9)), None);
+        assert_eq!(ws.tabs.len(), 1);
     }
 
     #[test]
