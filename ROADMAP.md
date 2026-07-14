@@ -292,11 +292,19 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   **read-only** stdio slice has landed: `crates/mcp` (`termherd-mcp`),
   `list_options` + schema resource, pure and unit-tested. Split into rungs, each
   shippable:
-  - [ ] `F-mcp-config-write` (#191) — `set_option` + `keys` on the stdio slice;
+  - [x] `F-mcp-config-write` (#191) — `set_option` + `keys` on the stdio slice;
     independent, deliverable now
-  - [ ] async transport substrate (#192, `tech-health`) — tokio + a bounded
-    round-trip through the iced loop; shared enabler, also unblocks
-    `F-mcp-ide-bridge`; relates to #167/#171
+  - [x] async transport substrate (#192, `tech-health`) — tokio runtime in the
+    composition root + a timeout-bounded request/reply primitive drained through
+    the iced loop into `core::App` (pure state read → reply). The bound covers
+    the enqueue too, so a full request channel can't hang the caller (Q7).
+    Substrate-only: proven end-to-end by an in-process test transport, no live
+    server yet. **Runtime = tokio** (MIT, ecosystem default; async-std is
+    deprecated), feature-frugal (`rt-multi-thread`/`sync`/`time`/`macros`); the
+    http/sse **server crate** pick (`tiny_http` vs `axum`/`hyper`) is deferred
+    to #193, when the real transport lands and can be measured against
+    MIT/no-FFI/frugal. Shared enabler, also unblocks `F-mcp-ide-bridge`;
+    relates to #167/#171
   - [ ] `F-mcp-live-bridge` (#193) — in-process http/sse + `mcpServers`
     injection + `list_sessions` spike (**the gate**); blocked by #167 + #169,
     depends on #192

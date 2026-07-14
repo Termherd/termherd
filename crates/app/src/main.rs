@@ -72,12 +72,45 @@ fn main() -> iced::Result {
     });
     let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink, shell, settings.palette()));
 
+    // Async transport substrate (composition root only): a tokio runtime to host
+    // future transport tasks, and the bridge channel that carries their requests
+    // into the shell. No transport is wired yet — this lays the runtime and the
+    // request path so the live bridge can attach to them without touching
+    // `core`. Both are held for the process lifetime, like the single-instance
+    // guard; a runtime that fails to build is non-fatal (the bridge is simply
+    // unavailable until the app is restarted).
+    let bridge_runtime = build_bridge_runtime();
+    let (bridge_handle, bridge_requests) = shell::bridge_channel();
+
     let startup =
         shell::Startup::from_settings(&settings, metadata_store::load(), collapsed_store::load());
-    let result = shell::run(scanner, watch_root, pty, pty_rx, startup);
-    // Keep the single-instance guard alive until the GUI exits.
+    let result = shell::run(scanner, watch_root, pty, pty_rx, bridge_requests, startup);
+    // Keep the single-instance guard and the async substrate alive until the GUI
+    // exits: dropping the bridge handle would close the request channel, and
+    // dropping the runtime would tear down any transport task hosted on it.
+    drop(bridge_handle);
+    drop(bridge_runtime);
     drop(instance);
     result
+}
+
+/// Build the tokio runtime that hosts the async transport tasks. One worker
+/// thread (the substrate is latency-bound plumbing, not throughput work) with
+/// the time driver enabled so `tokio::time::timeout` can bound every bridge
+/// call. `None` — logged, never fatal — when the runtime cannot be created.
+fn build_bridge_runtime() -> Option<tokio::runtime::Runtime> {
+    match tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_name("termherd-bridge")
+        .enable_time()
+        .build()
+    {
+        Ok(runtime) => Some(runtime),
+        Err(error) => {
+            warn!(%error, "async transport runtime unavailable; bridge disabled");
+            None
+        }
+    }
 }
 
 /// Fallback scanner when no home directory exists — an empty browser is
