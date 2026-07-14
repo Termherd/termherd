@@ -30,7 +30,8 @@ use termherd_core::{
 use termherd_pty::{PtyEvent, Screen};
 
 use crate::docs::DocEntry;
-use crate::record::{FrameStats, FrameThrottle, RecordConfig, Recorder};
+use crate::record::{FrameStats, FrameThrottle, Recorder};
+use crate::record_config::RecordConfig;
 use crate::settings::{CloseSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
@@ -88,6 +89,28 @@ pub struct Startup {
     pub close: CloseSettings,
 }
 
+impl Startup {
+    /// Bundle the sanitised settings with the other persisted state, so the
+    /// composition root passes one value instead of fanning fields by hand.
+    #[must_use]
+    pub fn from_settings(
+        settings: &crate::settings::Settings,
+        metadata: Overlay,
+        collapsed: HashSet<String>,
+    ) -> Self {
+        Self {
+            theme: settings.theme,
+            keymap: settings.keymap(),
+            metadata,
+            collapsed,
+            record: settings.record_config(),
+            session_limit: settings.session_limit(),
+            font_size: settings.font_size(),
+            close: settings.close,
+        }
+    }
+}
+
 pub fn run(
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
@@ -99,7 +122,7 @@ pub fn run(
     // connected monitor (e.g. a second screen that has since been unplugged), so
     // the window can't open out of reach.
     let config =
-        WindowConfig::load().with_onscreen_position(&crate::window_config::current_screens());
+        WindowConfig::load().with_onscreen_position(&crate::window_geometry::current_screens());
     let position = match (config.x, config.y) {
         (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
         _ => window::Position::Centered,
