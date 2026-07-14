@@ -1,8 +1,8 @@
 //! Walking a projects root into session records. Runs the two-pass port of
 //! upstream's `session-cache.readFolderFromFilesystem`: pass 1 derives (or
 //! reuses) each folder's cwd, pass 2 digests its direct session files,
-//! re-reading only the ones whose signature changed. Depends on [`crate::cache`]
-//! and [`crate::derive`]; an antigravity walk would be a sibling source reusing
+//! re-reading only the ones whose signature changed. Depends on `cache`
+//! and `derive`; an antigravity walk would be a sibling source reusing
 //! the same cache machinery.
 
 use std::fs;
