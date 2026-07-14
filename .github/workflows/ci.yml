@@ -53,13 +53,18 @@ jobs:
         id: filter
         with:
           filters: |
-            # `rust` = anything that can change build/lint/test output.
+            # `rust` = anything that can change build/lint/test output, plus
+            # the source-scanning architecture scripts (they read `.rs` and must
+            # re-run when their own rules change).
             rust:
               - '**/*.rs'
               - '**/Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - 'clippy.toml'
+              - 'scripts/check-module-boundaries.sh'
+              - 'scripts/check-os-cfg-containment.sh'
+              - 'scripts/report-file-length.sh'
             # `cargo` = the dependency graph / manifests only, for the
             # metadata-scan gates (deny / machete / dependency-rule). A pure
             # `.rs` change leaves the dep tree untouched and skips these.
@@ -197,6 +202,26 @@ jobs:
           toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
       - run: ./scripts/check-crate-deps.sh
 
+  intra-arch:
+    name: intra-crate-arch
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    # Intra-crate architecture fitness functions — one level below the
+    # crate dependency rule (`deps`). The split-up refactor (clusters A–E) built
+    # module walls *inside* crates; these keep them standing by construction.
+    # Pure grep/find over source — no build, no toolchain, ubuntu-only.
+    #   - module boundaries: leaf modules stay leaves, renderers don't reach
+    #     executors, core::app submodules go through the parent registry.
+    #   - OS-cfg containment: compile-time `#[cfg(target_os)]` stays in its
+    #     audited homes (same spirit as the `unsafe_code` quarantine).
+    #   - file-length: report-only signal (never fails), written to the summary.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: ./scripts/check-module-boundaries.sh
+      - run: ./scripts/check-os-cfg-containment.sh
+      - run: ./scripts/report-file-length.sh
+
   actionlint:
     name: actionlint
     needs: changes
@@ -253,7 +278,7 @@ jobs:
   ci-success:
     name: ci-success
     if: always()
-    needs: [changes, fmt, clippy, test, deny, machete, deps, actionlint, markdown]
+    needs: [changes, fmt, clippy, test, deny, machete, deps, intra-arch, actionlint, markdown]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required job failed or was cancelled
