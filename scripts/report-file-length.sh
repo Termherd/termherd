@@ -40,8 +40,9 @@ lines+=("| ---: | --- |")
 count=0
 flagged=0
 for entry in "${ranked[@]}"; do
-    n="$(awk '{print $1}' <<<"$entry")"
-    path="$(awk '{$1=""; sub(/^ /,""); print}' <<<"$entry")"
+    # Each entry is a `wc -l` line: "<count> <path>". Split in-process — no awk
+    # subshell — with `read`, which collapses the leading padding wc emits.
+    read -r n path <<<"$entry"
     mark=""
     if [[ "$n" -ge "$THRESHOLD" ]]; then
         mark=" ⚠️"

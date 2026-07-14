@@ -37,8 +37,8 @@ crates/pty/src/input.rs	^use (crate|super)::(events|grid|status|kill|session|man
 crates/pty/src/grid.rs	^use (crate|super)::(events|input|status|kill|session|manager)\b	pty::grid is the rendering leaf — it must not import a sibling module
 crates/pty/src/session.rs crates/pty/src/status.rs crates/pty/src/kill.rs crates/pty/src/events.rs	^use (crate::manager|super::manager)\b	nothing may import pty::manager — the PtyHost impl sits at the top; importing it back would form a cycle
 crates/core/src/app/*.rs	^use (crate::app|super)::(session|tabs|sidebar|metadata|capture|record|settings|notify|events|effects)::	core::app submodules share state through the parent App (and its Sessions registry), never by reaching into a sibling submodule
-crates/app/src/shell/view	^use (crate::shell::|super::)effects\b	shell::view renders — it must not reach into shell::effects (the executor); effects execute, views only read
-crates/app/src/shell/terminal	^use (crate::shell::|super::)effects\b	shell::terminal renders — it must not reach into shell::effects (the executor)
+crates/app/src/shell/view	^use (crate::shell::effects|(super::)+effects)\b	shell::view renders — it must not reach into shell::effects (the executor); effects execute, views only read
+crates/app/src/shell/terminal	^use (crate::shell::effects|(super::)+effects)\b	shell::terminal renders — it must not reach into shell::effects (the executor)
 RULES
 )
 
@@ -58,6 +58,9 @@ while IFS=$'\t' read -r files forbidden reason; do
             violations=$((violations + 1))
             continue
         fi
+        # An empty match (a directory rule over a dir with no .rs) leaves an
+        # empty array; guard it so `set -u` doesn't abort on the expansion.
+        [[ ${#targets[@]} -gt 0 ]] || continue
         for target in "${targets[@]}"; do
             while IFS= read -r hit; do
                 [[ -z "$hit" ]] && continue

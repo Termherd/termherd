@@ -40,12 +40,15 @@ declare -A allowed=(
 )
 
 # Attribute-form OS-cfg: `#[cfg(`, `#![cfg(`, `#[cfg_attr(` on a line naming a
-# platform predicate. `\b(unix|windows)\b` also catches `target_os = "windows"`
-# (still an OS fork — correct to flag), and `#[cfg(test)]` never matches (no
-# platform token). The `cfg!(…)` macro form is intentionally excluded (see the
-# header) — it compiles on every platform, so it hides nothing.
+# platform predicate. `unix` / `windows` match only as a bare predicate token —
+# bounded by `(`, `,` or space on both sides (`cfg(unix)`, `not(unix)`,
+# `any(unix, …)`) — so `feature = "windows-…"` (the word after a quote) is NOT a
+# false positive; `target_os = "windows"` is still flagged via `target_os`.
+# `#[cfg(test)]` never matches (no platform token). The `cfg!(…)` macro form is
+# intentionally excluded (see the header) — it compiles everywhere, hiding
+# nothing.
 cfg_re='#!?\[cfg[_a-z]*\('
-os_re='(target_os|target_family|target_arch|\b(unix|windows)\b)'
+os_re='(target_os|target_family|target_arch|[(,[:space:]](unix|windows)[),[:space:]])'
 
 violations=0
 while IFS= read -r file; do
