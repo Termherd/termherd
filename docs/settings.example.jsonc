@@ -1,0 +1,139 @@
+// TermHerd settings template — every option that exists today, with its
+// default value and what it does.
+//
+// Location: ~/.termherd/settings.json
+//           (%USERPROFILE%\.termherd\settings.json on Windows)
+//
+// ── IMPORTANT ──────────────────────────────────────────────────────────────
+// The real settings.json is STRICT JSON: no comments, no trailing commas.
+// This .jsonc file is documentation — copy the blocks you want into your
+// settings.json and strip the comments.
+//
+// ── Load behaviour ─────────────────────────────────────────────────────────
+// The file is read once at startup (edit + restart; no in-app panel yet).
+// Every field is optional: a missing file, a missing field, or a corrupt
+// file falls back to the built-in defaults — settings never block startup.
+// Out-of-range values clamp instead of failing the file, and one bad value
+// (a typo'd colour, an unknown key action) degrades alone with a logged
+// warning: the rest of the file still applies.
+//
+// The same options are exposed to a Claude session over MCP: the
+// `termherd-mcp` server's `list_options` / `set_option` tools read and write
+// this file (see "MCP control surface" in the README).
+{
+  // ── Shell ────────────────────────────────────────────────────────────────
+  // The shell launched for each session. Omit the whole block (or set it to
+  // null) to use the platform default login shell. `args` is optional.
+  "shell": {
+    "program": "pwsh",
+    "args": []
+  },
+
+  // ── Theme ────────────────────────────────────────────────────────────────
+  // GUI chrome theme (sidebar, tab strip, buttons): "dark" (default) or
+  // "light". The terminal grid keeps its own colours — see `terminal.colors`.
+  "theme": "dark",
+
+  // ── Close confirmation ──────────────────────────────────────────────────
+  // Whether closing prompts first, per action: `tab` (closing a tab) and
+  // `app` (quitting). Each takes one of:
+  //   "alwaysConfirm"     — always ask.
+  //   "confirmWhenActive" — ask only while a session runs a foreground
+  //                         process (a working shell or any live Claude);
+  //                         an all-idle target closes/quits silently.
+  //   "noConfirmation"    — never ask.
+  // Both default to "confirmWhenActive".
+  "close": {
+    "tab": "confirmWhenActive",
+    "app": "confirmWhenActive"
+  },
+
+  // ── Terminal appearance ──────────────────────────────────────────────────
+  "terminal": {
+    // Base font size in pixels (clamped to 6–40). The zoom shortcuts
+    // (Ctrl/Cmd + '+' / '-' / '0') step from here at runtime without
+    // touching this setting. Default: 14.
+    "font_size": 14,
+
+    // Terminal grid colours. Start from a named scheme, then override
+    // individual slots; every field is optional and a malformed colour
+    // degrades to its default alone.
+    "colors": {
+      // Built-in scheme the overrides start from: "solarized-dark",
+      // "solarized-light", "gruvbox-dark" or "gruvbox-light".
+      // Omit for the built-in default scheme.
+      "scheme": "solarized-dark",
+      // Default text / background / cursor-block colours, "#rrggbb"
+      // (the "#" is optional).
+      "foreground": "#839496",
+      "background": "#002b36",
+      "cursor": "#839496",
+      // The 16 ANSI colours: normal 0–7, then bright 8–15. Fewer than 16
+      // entries override the head; extras past 16 are ignored.
+      "palette": [
+        "#073642", "#dc322f", "#859900", "#b58900",
+        "#268bd2", "#d33682", "#2aa198", "#eee8d5",
+        "#002b36", "#cb4b16", "#586e75", "#657b83",
+        "#839496", "#6c71c4", "#93a1a1", "#fdf6e3"
+      ]
+    }
+  },
+
+  // ── Sidebar ──────────────────────────────────────────────────────────────
+  "sidebar": {
+    // Sessions shown per project before the tail folds behind a "N more"
+    // expander. 0 shows every session. Default: 5.
+    "session_limit": 5
+  },
+
+  // ── GIF screencast budget (Ctrl/Cmd+Shift+R) ────────────────────────────
+  // Defaults: 8 fps, 30 s cap, 0.5× scale. Values clamp into sane ranges
+  // (fps 1–60, max_seconds 1–600, scale 0.1–1.0).
+  "record": {
+    "fps": 8,
+    "max_seconds": 30,
+    "scale": 0.5
+  },
+
+  // ── Keyboard overrides ───────────────────────────────────────────────────
+  // Each entry binds an action to one chord or a list of chords and REPLACES
+  // that action's default; unlisted actions keep their per-platform default.
+  // Chords are case/order-insensitive: modifiers `ctrl`, `shift`, `alt`,
+  // `cmd`, plus a key ("ctrl+shift+c", "cmd+alt+t", "ctrl+tab"). Unknown
+  // actions and unparsable chords are logged and skipped.
+  //
+  // The full action vocabulary and its defaults ("mod" = Cmd on macOS,
+  // Ctrl elsewhere):
+  //
+  //   copy                      Cmd+C (macOS) / Ctrl+Shift+C
+  //   paste                     Cmd+V (macOS) / Ctrl+V, Ctrl+Shift+V
+  //   next-tab                  Ctrl+Tab
+  //   prev-tab                  Ctrl+Shift+Tab
+  //   activate-tab-1 … -9       mod+1 … mod+9 (physical number-row keys)
+  //   close-focused             mod+W
+  //   reopen-closed-tab         mod+Shift+T
+  //   new-shell-here            mod+T
+  //   new-claude-session-here   mod+Alt+T
+  //   open-new-session          (unbound)
+  //   split-vertical            mod+D
+  //   split-horizontal          mod+Shift+D
+  //   focus-left / -right       mod+Shift+Left / Right
+  //   focus-up / -down          mod+Shift+Up / Down
+  //   focus-next / focus-prev   (unbound)
+  //   focus-search              mod+F
+  //   toggle-sidebar            mod+B
+  //   scroll-top / -bottom      mod+Up / mod+Down
+  //   zoom-in                   mod+= / mod+plus / mod+Shift+plus
+  //   zoom-out                  mod+-
+  //   zoom-reset                mod+0
+  //   capture                   mod+Shift+S (state dump for an AI assistant)
+  //   toggle-record             mod+Shift+R (GIF screencast start/stop)
+  //
+  // Note: write concrete modifiers in your own chords — "mod" is only the
+  // shorthand used above to describe the defaults, not valid chord syntax.
+  "keys": {
+    "copy": "ctrl+y",
+    "paste": ["ctrl+shift+v", "shift+insert"],
+    "activate-tab-1": "alt+1"
+  }
+}
