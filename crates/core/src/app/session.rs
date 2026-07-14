@@ -1,6 +1,9 @@
 //! Session lifecycle: launching, splitting, PTY exit, and the running-process
-//! predicates the close/quit confirmations share.
+//! predicates the close/quit confirmations share. Also home to the
+//! [`Sessions`] registry — the one owner of the live-session map and the id
+//! source.
 
+use std::collections::HashMap;
 use std::num::NonZeroU64;
 
 use crate::workspace::SplitDir;
@@ -132,6 +135,80 @@ pub struct SpawnSpec {
     pub rows: u16,
 }
 
+/// The live-session registry: the single owner of the map from runtime id to
+/// [`LiveSession`] and the monotonic id source. It names the invariant three
+/// clusters used to poke a raw `HashMap` for — *a live session is registered
+/// here iff a pane hosts it* — so the terminal, tabs and pane clusters all go
+/// through one seam. Ids are minted here, single-threaded, before any PTY
+/// exists — the structural fix for the `realSessionId` race (Q6).
+#[derive(Debug, Default)]
+pub struct Sessions {
+    map: HashMap<SessionId, LiveSession>,
+    /// Monotonic id counter; never reused within a run.
+    next_id: u64,
+}
+
+impl Sessions {
+    /// Mint the next runtime session id. `None` only on u64 overflow (after
+    /// ~1.8e19 launches) — surfaced as a silent no-op upstream, never a panic.
+    pub(crate) fn allocate(&mut self) -> Option<SessionId> {
+        self.next_id = self.next_id.checked_add(1)?;
+        NonZeroU64::new(self.next_id).map(SessionId)
+    }
+
+    /// Register a live session under its own id.
+    pub(crate) fn insert(&mut self, session: LiveSession) {
+        self.map.insert(session.id, session);
+    }
+
+    /// Drop a session from the registry (its pane has gone).
+    pub(crate) fn remove(&mut self, session: &SessionId) -> Option<LiveSession> {
+        self.map.remove(session)
+    }
+
+    /// The live session for `id`, if registered.
+    #[must_use]
+    pub fn get(&self, session: &SessionId) -> Option<&LiveSession> {
+        self.map.get(session)
+    }
+
+    /// Mutable access to the live session for `id`, if registered.
+    pub(crate) fn get_mut(&mut self, session: &SessionId) -> Option<&mut LiveSession> {
+        self.map.get_mut(session)
+    }
+
+    /// Whether `id` is registered (its pane exists), regardless of PTY status.
+    #[must_use]
+    pub fn contains_key(&self, session: &SessionId) -> bool {
+        self.map.contains_key(session)
+    }
+
+    /// Every registered live session.
+    pub fn values(&self) -> impl Iterator<Item = &LiveSession> {
+        self.map.values()
+    }
+
+    /// How many sessions are registered.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Whether no session is registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+}
+
+impl std::ops::Index<&SessionId> for Sessions {
+    type Output = LiveSession;
+
+    fn index(&self, session: &SessionId) -> &LiveSession {
+        &self.map[session]
+    }
+}
+
 impl App {
     /// Emit `effect` only while `session` is still live; a stale id (its
     /// terminal already closed) drops the effect, so a late input/resize/scroll
@@ -148,18 +225,15 @@ impl App {
     /// spawn its PTY. Returns no effects if id allocation overflows (after
     /// ~1.8e19 launches) — surfaced as a silent no-op, never a panic (Q5).
     pub(super) fn launch(&mut self, spec: LaunchSpec) -> Vec<Effect> {
-        let Some(id) = self.allocate_session() else {
+        let Some(id) = self.sessions.allocate() else {
             return Vec::new();
         };
-        self.sessions.insert(
+        self.sessions.insert(LiveSession {
             id,
-            LiveSession {
-                id,
-                cwd: spec.cwd.clone(),
-                launch: spec.launch.clone(),
-                status: SessionStatus::Starting,
-            },
-        );
+            cwd: spec.cwd.clone(),
+            launch: spec.launch.clone(),
+            status: SessionStatus::Starting,
+        });
         self.workspace.open(id, spec.title);
         vec![Effect::Spawn(SpawnSpec {
             session: id,
@@ -174,7 +248,7 @@ impl App {
     /// working directory, wrap the leaf into a split, and spawn the new PTY.
     /// Yields no effects on id overflow or if the focus is not on a leaf.
     pub(super) fn split_focused(&mut self, dir: SplitDir) -> Vec<Effect> {
-        let Some(id) = self.allocate_session() else {
+        let Some(id) = self.sessions.allocate() else {
             return Vec::new();
         };
         // Inherit the cwd before the split moves focus to the new pane.
@@ -186,15 +260,12 @@ impl App {
         if self.workspace.split(dir, id).is_none() {
             return Vec::new();
         }
-        self.sessions.insert(
+        self.sessions.insert(LiveSession {
             id,
-            LiveSession {
-                id,
-                cwd: cwd.clone(),
-                launch: Launch::Shell,
-                status: SessionStatus::Starting,
-            },
-        );
+            cwd: cwd.clone(),
+            launch: Launch::Shell,
+            status: SessionStatus::Starting,
+        });
         vec![Effect::Spawn(SpawnSpec {
             session: id,
             cwd,
@@ -274,12 +345,6 @@ impl App {
     #[must_use]
     pub fn any_running_process(&self) -> bool {
         self.sessions.values().any(LiveSession::has_running_process)
-    }
-
-    /// Mint the next runtime session id. `None` only on u64 overflow.
-    pub(super) fn allocate_session(&mut self) -> Option<SessionId> {
-        self.next_session = self.next_session.checked_add(1)?;
-        NonZeroU64::new(self.next_session).map(SessionId)
     }
 
     /// True if the session exists and its PTY has not exited.

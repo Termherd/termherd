@@ -33,7 +33,7 @@ mod testsupport;
 
 pub use effects::Effect;
 pub use events::Event;
-pub use session::{Launch, LaunchSpec, LiveSession, SessionStatus, SpawnSpec};
+pub use session::{Launch, LaunchSpec, LiveSession, SessionStatus, Sessions, SpawnSpec};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::SidebarFold;
 
@@ -46,8 +46,9 @@ pub struct App {
     pub search: String,
     /// FR3 toggle: restrict matching to titles.
     pub search_titles_only: bool,
-    /// Live terminal sessions, keyed by their runtime id (FR4/FR7).
-    pub sessions: HashMap<SessionId, LiveSession>,
+    /// The live-session registry (FR4/FR7): the one owner of the id→session
+    /// map and the id source. See [`Sessions`].
+    pub sessions: Sessions,
     /// User overlay (star / archive / title) per Claude session id
     /// (`F-session-metadata`); persisted to `~/.termherd`.
     pub metadata: HashMap<String, SessionMeta>,
@@ -77,10 +78,6 @@ pub struct App {
     /// time so surplus presses at a bound don't accumulate as drift.
     /// Ephemeral — resets each launch.
     zoom_steps: i32,
-    /// Monotonic source of `SessionId`s; never reused within a run. This is
-    /// the structural fix for the `realSessionId` race (Q6) — ids are minted
-    /// here, single-threaded, before any PTY exists.
-    next_session: u64,
     /// LIFO stack of recently closed tabs, for reopen. Capped at
     /// `MAX_CLOSED_TABS` so a long session can't grow it without bound;
     /// closing past the cap drops the oldest entry.
