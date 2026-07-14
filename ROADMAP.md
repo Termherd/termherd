@@ -129,7 +129,9 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   invariant (#107) all landed. **P2 follow-ups — now filed** as the intra-crate
   refactor cluster #167–#173: the module-boundary/`cfg(target_os)`/file-length
   gate is #173, blocked by the god-object splits #167 (shell — **shipped**),
-  #168 and #169; cognitive-
+  #168 (terminal/view — **shipped**) and #169 (core `app/` split + `Sessions`
+  registry — A1–A3 **shipped**, A4 field-flatten deferred behind the in-flight
+  MCP work to avoid a public-API clash); cognitive-
   complexity (signal C) stays unfiled. **P3 / report-only** (blocked on a
   quality-report home): file length (signal A, folded into #173's report) and
   churn×size hotspots (signal J). Dropped: MSRV check,
