@@ -70,46 +70,34 @@ cargo run -p termherd-app
 
 Optional user settings live in `~/.termherd/settings.json` (on Windows,
 `%USERPROFILE%\.termherd\settings.json`). The file is read at startup; if it
-is missing or invalid, TermHerd falls back to defaults rather than refusing to
-start. There is no in-app settings panel yet — edit the file and restart.
+is missing or invalid, TermHerd falls back to defaults rather than refusing
+to start — out-of-range values clamp, and a single bad value (a typo'd
+colour, an unknown key action) degrades alone with a logged warning instead
+of resetting the rest of the file. There is no in-app settings panel yet —
+edit the file and restart.
 
-```json
-{
-  "shell": { "program": "pwsh", "args": [] },
-  "theme": "dark",
-  "close": { "tab": "confirmWhenActive", "app": "confirmWhenActive" },
-  "keys": {
-    "copy": "ctrl+c",
-    "paste": ["ctrl+v", "ctrl+shift+v"],
-    "next-tab": "ctrl+tab",
-    "activate-tab-1": "ctrl+1"
-  }
-}
-```
+The annotated reference template is
+[`docs/settings.example.jsonc`](docs/settings.example.jsonc): every option
+that exists today, with its default value and what it does. Copy the blocks
+you want and strip the comments (the real file is strict JSON). In short:
 
-- `shell` — the shell launched for each session. Omit it (or set it to `null`)
-  to use the platform default login shell; `args` is optional.
-- `theme` — `"dark"` (default) or `"light"`, for the GUI chrome (sidebar, tab
-  strip, buttons). The terminal grid keeps its own colours.
-- `close` — whether closing prompts first, set per action. `tab` (closing a
-  tab) and `app` (quitting) each take one of: `"alwaysConfirm"` (always ask),
-  `"confirmWhenActive"` (ask only while a session is running a foreground
-  process — a working shell or any live Claude; an idle shell closes/quits
-  silently), or `"noConfirmation"` (close immediately). Both default to
-  `"confirmWhenActive"`; either field may be omitted to keep its default.
-- `keys` — keyboard overrides. Each entry binds an action to one chord or a
-  list of chords (`"ctrl+shift+c"`, order/case-insensitive; modifiers `ctrl`,
-  `shift`, `alt`, `cmd`). An entry replaces that action's default; unspecified
-  actions keep their per-platform defaults. Unknown actions and bad chords are
-  ignored. Actions: `copy`, `paste`, `next-tab`, `prev-tab`, `close-focused`,
-  `focus-search`, `toggle-sidebar` (hide / restore the session browser,
-  Ctrl/Cmd+B), `scroll-top` / `scroll-bottom` (top / bottom of the scrollback,
-  Ctrl/Cmd+Up / Ctrl/Cmd+Down), `new-shell-here` (a shell in the focused
-  session's directory, or home when nothing is open, Ctrl/Cmd+T),
-  `new-claude-session-here` (a fresh Claude session in the focused session's
-  repo, Ctrl/Cmd+Alt+T), `reopen-closed-tab` (restore the last closed tab,
-  Ctrl/Cmd+Shift+T), and `activate-tab-1` … `activate-tab-9` (jump straight to
-  the Nth open tab).
+- `shell` — program + args launched for each session (default: the platform
+  login shell).
+- `theme` — `"dark"` (default) or `"light"` GUI chrome; the terminal grid
+  keeps its own colours.
+- `close` — per-action close confirmation (`tab`, `app`): always, only while
+  a foreground process runs (default), or never.
+- `terminal` — base `font_size` (the zoom shortcuts step from it) and grid
+  `colors` (a named scheme — Solarized / Gruvbox, dark or light — plus
+  per-slot overrides).
+- `sidebar` — sessions listed per project before the tail folds behind an
+  expander (`0` shows all).
+- `record` — the GIF screencast budget (fps, duration cap, frame scale).
+- `keys` — keyboard overrides, one chord or a list per action; the full
+  action vocabulary and its default chords are listed in the template.
+
+The same options are also readable and writable from inside a Claude session
+via the MCP control surface (below).
 
 Window size and position persist separately to `~/.termherd/window.json` (a
 position left off every connected monitor — e.g. on a screen since unplugged —
@@ -133,8 +121,13 @@ All shortcuts are configurable via the `keys` section of the config file
 | New shell here     | `Ctrl+T`                   | `Cmd+T`       |
 | New Claude here    | `Ctrl+Alt+T`               | `Cmd+Alt+T`   |
 | Reopen closed tab  | `Ctrl+Shift+T`             | `Cmd+Shift+T` |
-| Close tab          | `Ctrl+W`                   | `Cmd+W`       |
+| Close tab / pane   | `Ctrl+W`                   | `Cmd+W`       |
+| Split vert. / horiz. | `Ctrl+D` / `Ctrl+Shift+D` | `Cmd+D` / `Cmd+Shift+D` |
+| Focus pane         | `Ctrl+Shift+←↑↓→`          | `Cmd+Shift+←↑↓→` |
+| Zoom in / out / reset | `Ctrl` + `+` / `-` / `0` | `Cmd` + `+` / `-` / `0` |
 | Focus search       | `Ctrl+F`                   | `Cmd+F`       |
+| Capture state dump | `Ctrl+Shift+S`             | `Cmd+Shift+S` |
+| Record GIF (start/stop) | `Ctrl+Shift+R`        | `Cmd+Shift+R` |
 | Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C`      |
 
 Jump-to-tab (`Ctrl`/`Cmd`+`1`–`9`) is matched by physical key position, so it
@@ -150,11 +143,11 @@ description (the same card the sidebar shows).
 
 `termherd-mcp` is a small [MCP](https://modelcontextprotocol.io) server that
 exposes termherd's own configuration to a Claude session, so you can ask "what
-can I configure here?" from inside the conversation termherd already hosts. This
-first slice is **read-only**: one tool, `list_options`, and the option **schema**
-as a resource, both reflecting `~/.termherd/settings.json`. Writing settings
-(`set_option`) and workspace orchestration (open session, split, focus, …) are
-planned follow-ups (`F-mcp-control-surface`, [#90]).
+can I configure here?" — or "switch me to a light theme" — from inside the
+conversation termherd already hosts. It exposes two tools, `list_options`
+(read) and `set_option` (write), plus the option **schema** as a resource, all
+reflecting `~/.termherd/settings.json`. Workspace orchestration (open session,
+split, focus, …) is a planned follow-up (`F-mcp-control-surface`, [#90]).
 
 It speaks JSON-RPC over stdio. Register it with Claude Code by adding it to your
 `mcpServers` config (point `command` at the built binary):
