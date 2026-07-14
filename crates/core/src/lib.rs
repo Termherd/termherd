@@ -12,6 +12,7 @@ pub mod links;
 pub mod metadata;
 pub mod ports;
 pub mod record;
+pub mod snapshot;
 pub mod workspace;
 
 pub use app::{
@@ -23,4 +24,8 @@ pub use capture::{CaptureDump, CaptureTab};
 pub use keymap::{Action, ActionBinding, ChordError, KeyChord, Keymap, action_catalog};
 pub use metadata::{Overlay, RepoMeta, SessionMeta};
 pub use record::Recording;
+pub use snapshot::{
+    ConfigInput, ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section, SessionKind,
+    SidebarSnapshot, SnapshotFilter, SnapshotInputs, TabSnapshot, TerminalScope, WorkspaceSnapshot,
+};
 pub use workspace::{Branch, Pane, SessionId, SplitDir, Tab, Workspace};
