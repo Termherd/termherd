@@ -17,7 +17,13 @@ use crate::browser::{
 use crate::capture::{CaptureDump, CaptureTab};
 use crate::metadata::{Overlay, RepoMeta, SessionMeta};
 use crate::record::Recording;
-use crate::workspace::{Direction, SessionId, SplitDir, Workspace};
+use crate::workspace::{SessionId, SplitDir, Workspace};
+
+mod effects;
+mod events;
+
+pub use effects::Effect;
+pub use events::Event;
 
 /// Cell size a freshly launched PTY starts at, before the widget reports its
 /// real geometry via [`Event::TerminalResized`].
@@ -311,215 +317,6 @@ pub enum SelectOp {
     Clear,
 }
 
-#[derive(Debug, Clone)]
-pub enum Event {
-    /// A filesystem scan finished; replaces the whole browser state.
-    ScanCompleted(Vec<SessionRecord>),
-    /// The search box content changed (FR3).
-    SearchChanged(String),
-    /// The titles-only search toggle flipped (FR3).
-    SearchTitlesOnlyToggled(bool),
-    /// The user asked to open a session in a terminal (FR4).
-    LaunchSession(LaunchSpec),
-    /// The user typed into a terminal; bytes go to its PTY stdin.
-    TerminalInput {
-        session: SessionId,
-        bytes: Vec<u8>,
-    },
-    /// A terminal pane changed size (in cells); propagate to the PTY (FR4).
-    TerminalResized {
-        session: SessionId,
-        cols: u16,
-        rows: u16,
-    },
-    /// The user changed a terminal's text selection — a press, a drag, or a
-    /// clear. Anchored in the terminal grid so the highlight follows the text.
-    Select {
-        session: SessionId,
-        op: SelectOp,
-    },
-    /// Copy a terminal's current selection to the clipboard. The text is read
-    /// from the terminal's own selection (not a snapshot), so it is exact even
-    /// right after a fast drag whose highlight has not yet echoed back.
-    CopyTerminalSelection {
-        session: SessionId,
-    },
-    /// The user moved a terminal's viewport (FR4 scrollback): a relative wheel
-    /// delta, or an absolute jump to the top/bottom of the history.
-    ScrollViewport {
-        session: SessionId,
-        target: ScrollTarget,
-    },
-    /// The OSC decoder reclassified a session's activity (FR8).
-    StatusChanged {
-        session: SessionId,
-        status: SessionStatus,
-    },
-    /// A session's PTY process exited. `clean` is true when the adapter saw a
-    /// successful completion (exit code 0, no signal); false also covers an
-    /// unobservable status.
-    PtyExited {
-        session: SessionId,
-        clean: bool,
-    },
-    /// The session reported a new title over OSC; relabel its tab.
-    SessionTitleChanged {
-        session: SessionId,
-        title: String,
-    },
-    /// The user clicked a tab to bring it to the front (FR5).
-    ActivateTab(usize),
-    /// The user closed a tab (FR5); its sessions' PTYs are killed.
-    CloseTab(usize),
-    /// The user dragged the tab at `from` to rest at index `to` (FR5). A
-    /// pure reorder: no PTY is touched, so it yields no effects.
-    MoveTab {
-        from: usize,
-        to: usize,
-    },
-    /// Reopen the most recently closed tab, restoring its mode and
-    /// directory. A no-op when nothing has been closed.
-    ReopenClosedTab,
-    /// Give the tab at `index` a manual name, overriding its derived title
-    /// (FR5). A blank title clears the override; the manual name is never
-    /// clobbered by a later OSC/digest update. A pure relabel — no PTY touched.
-    RenameTab {
-        index: usize,
-        title: String,
-    },
-    /// Split the focused pane, opening a fresh session beside it (FR6).
-    SplitFocused(SplitDir),
-    /// Close the focused pane (FR6); its PTY is killed and the split collapses.
-    CloseFocusedPane,
-    /// Move focus to the next / previous pane in the active tab (FR6).
-    FocusNextPane,
-    FocusPrevPane,
-    /// Move focus to the pane hosting a session (click-to-focus, FR6).
-    FocusPane(SessionId),
-    /// Move pane focus one step in a spatial direction, cycling within its axis
-    /// (FR6).
-    FocusDir(Direction),
-    /// Persisted metadata loaded at startup (sessions + repos).
-    MetadataLoaded(Overlay),
-    /// Toggle a session's star, by Claude session id.
-    ToggleStar(String),
-    /// Toggle a repo's star, by real project path (`F-favorites`, repo-level).
-    ToggleRepoStar(String),
-    /// Toggle a session's archived flag, by Claude session id.
-    ToggleArchive(String),
-    /// Set (or clear, when empty) a session's custom title.
-    RenameSession {
-        session: String,
-        title: String,
-    },
-    /// Show or hide archived sessions in the browser.
-    ShowArchivedToggled(bool),
-    /// Collapse or restore the session-browser sidebar.
-    ToggleSidebar,
-    /// Persisted fold state loaded at startup: the folded project paths.
-    CollapsedLoaded(HashSet<String>),
-    /// Fold or unfold a project's session list in the sidebar, by path.
-    ToggleCollapsed(String),
-    /// The sidebar session limit from settings: sessions shown per
-    /// project before the tail folds behind an expander; `0` shows all.
-    SessionLimitLoaded(usize),
-    /// Unfold (or refold) a project's truncated session tail, by path.
-    ToggleExpanded(String),
-    /// The terminal base font size from settings.
-    FontSizeLoaded(f32),
-    /// Zoom the terminal font in/out/back to base.
-    Zoom(Zoom),
-    /// The user Ctrl/Cmd+clicked a detected link in a terminal.
-    OpenUrl(String),
-    /// A session emitted an OSC 9 notification — Claude wants the user.
-    /// `body` is the raw payload Claude sent ("needs your attention", a
-    /// permission prompt, …). Routed to the OS notification centre on top of
-    /// the in-app `Attention` status.
-    SessionNotified {
-        session: SessionId,
-        body: String,
-    },
-    /// Capture the current state for the AI dev loop (G1). The shell
-    /// injects the focused terminal's visible text (the grid lives in the `pty`
-    /// adapter, not here); `core` assembles the rest of the dump.
-    Capture {
-        focused_pty_text: Option<String>,
-    },
-    /// Start or stop the GIF screencast. Starting carries the frame cap
-    /// (`fps × max_seconds`) the app derives from settings; a no-op when the cap
-    /// is zero.
-    ToggleRecord {
-        max_frames: u32,
-    },
-    /// One frame tick from the app's record timer: capture a frame, and
-    /// auto-stop once the cap is reached. A no-op when not recording.
-    RecordTick,
-    /// The window gained (`true`) or lost (`false`) OS focus. Lets
-    /// [`App::notify_session`] tell a background-tab notification (surface
-    /// it) from one on the tab/pane the user is already looking at (skip the
-    /// OS banner — the per-window suppression the OS itself applies when
-    /// unfocused already covers that case).
-    WindowFocusChanged(bool),
-}
-
-/// Side effects the runtime must perform. The iced shell turns these into
-/// `pty`-adapter calls (`docs/ARCHITECTURE.md` §8).
-#[derive(Debug, Clone)]
-pub enum Effect {
-    /// Spawn a PTY for a freshly launched session.
-    Spawn(SpawnSpec),
-    /// Write bytes to a session's PTY stdin.
-    Write { session: SessionId, bytes: Vec<u8> },
-    /// Resize a session's PTY to the given cell geometry.
-    Resize {
-        session: SessionId,
-        cols: u16,
-        rows: u16,
-    },
-    /// Move a session's viewport: a relative line delta or an absolute jump to
-    /// the top/bottom of the scrollback.
-    Scroll {
-        session: SessionId,
-        target: ScrollTarget,
-    },
-    /// Apply a selection change to a session's terminal grid.
-    Select { session: SessionId, op: SelectOp },
-    /// Ask a session's terminal to copy its current selection — the text comes
-    /// back out-of-band (a PTY event), so it is read from the live selection.
-    CopyTerminalSelection { session: SessionId },
-    /// Terminate a session's PTY process.
-    Kill(SessionId),
-    /// Persist the whole metadata overlay (sessions + repos) as one file.
-    SaveMetadata(Overlay),
-    /// Persist the folded-project set.
-    SaveCollapsed(HashSet<String>),
-    /// Open a URL in the OS default handler; the shell performs it.
-    OpenUrl(String),
-    /// Post a desktop notification to the OS notification centre. The
-    /// shell performs it; `title` names the session/project that wants the
-    /// user, `body` is Claude's message.
-    Notify { title: String, body: String },
-    /// Write a captured state snapshot for the AI dev loop (G1). The shell
-    /// encodes it to `capture-<ts>.json` and takes the companion PNG; `core`
-    /// only builds the pure, diffable payload.
-    Capture(CaptureDump),
-    /// Begin a GIF screencast: the app opens the encoder and starts its
-    /// frame timer. `core` has already entered the recording state.
-    StartRecording,
-    /// Capture one screencast frame: the app screenshots the window and
-    /// appends it to the open encoder.
-    CaptureFrame,
-    /// Finalise the GIF screencast: the app flushes the encoder and writes
-    /// `capture-<ts>.gif`. `capped` names *why* it stopped — `true` when the frame
-    /// cap auto-stopped it, `false` on a manual ⌘⇧R stop — so the app logs the
-    /// reason from `core`'s decision rather than re-deriving it from the effect mix.
-    FinishRecording { capped: bool },
-    /// Abandon a screencast that captured no frames: the app drops the
-    /// encoder without writing a file. Emitted when a recording is stopped before
-    /// the first frame.
-    CancelRecording,
-}
-
 impl App {
     #[must_use]
     pub fn new() -> Self {
@@ -527,8 +324,9 @@ impl App {
     }
 
     /// Apply an event, returning the effects the runtime must carry out.
-    /// **Pure**: no I/O, no clock, no panic.
-    #[allow(clippy::too_many_lines)] // flat Event dispatcher; one match arm per variant
+    /// **Pure**: no I/O, no clock, no panic. A flat dispatcher: each arm is a
+    /// one-line delegate to a domain helper, or an inline field update that
+    /// yields no effect.
     pub fn apply(&mut self, event: Event) -> Vec<Effect> {
         match event {
             Event::ScanCompleted(records) => {
@@ -545,47 +343,26 @@ impl App {
             }
             Event::LaunchSession(spec) => self.launch(spec),
             Event::TerminalInput { session, bytes } => {
-                if self.is_live(session) {
-                    vec![Effect::Write { session, bytes }]
-                } else {
-                    Vec::new()
-                }
+                self.if_live(session, Effect::Write { session, bytes })
             }
             Event::TerminalResized {
                 session,
                 cols,
                 rows,
-            } => {
-                if self.is_live(session) {
-                    vec![Effect::Resize {
-                        session,
-                        cols,
-                        rows,
-                    }]
-                } else {
-                    Vec::new()
-                }
-            }
+            } => self.if_live(
+                session,
+                Effect::Resize {
+                    session,
+                    cols,
+                    rows,
+                },
+            ),
             Event::ScrollViewport { session, target } => {
-                if self.is_live(session) {
-                    vec![Effect::Scroll { session, target }]
-                } else {
-                    Vec::new()
-                }
+                self.if_live(session, Effect::Scroll { session, target })
             }
-            Event::Select { session, op } => {
-                if self.is_live(session) {
-                    vec![Effect::Select { session, op }]
-                } else {
-                    Vec::new()
-                }
-            }
+            Event::Select { session, op } => self.if_live(session, Effect::Select { session, op }),
             Event::CopyTerminalSelection { session } => {
-                if self.is_live(session) {
-                    vec![Effect::CopyTerminalSelection { session }]
-                } else {
-                    Vec::new()
-                }
+                self.if_live(session, Effect::CopyTerminalSelection { session })
             }
             Event::StatusChanged { session, status } => {
                 if let Some(s) = self.sessions.get_mut(&session)
@@ -652,29 +429,7 @@ impl App {
             Event::ToggleArchive(session) => {
                 self.update_meta(session, |meta| meta.archived = !meta.archived)
             }
-            Event::RenameSession { session, title } => {
-                let trimmed = title.trim().to_owned();
-                let effects = self.update_meta(session.clone(), |meta| {
-                    meta.title = (!trimmed.is_empty()).then(|| trimmed.clone());
-                });
-                // Keep a live tab in step with the sidebar (follow-up): an
-                // open session resuming this id is retitled too. A non-empty
-                // rename wins directly; clearing restores the digest-derived name
-                // when the session is still in the last scan.
-                if let Some(live) = self.open_session_for(&session) {
-                    let next = if trimmed.is_empty() {
-                        self.record_for(&session)
-                            .map(|record| self.session_title(record))
-                            .filter(|name| !name.trim().is_empty())
-                    } else {
-                        Some(trimmed)
-                    };
-                    if let Some(next) = next {
-                        self.workspace.set_session_title(live, next);
-                    }
-                }
-                effects
-            }
+            Event::RenameSession { session, title } => self.rename_session(session, title),
             Event::ShowArchivedToggled(show) => {
                 self.show_archived = show;
                 Vec::new()
@@ -692,16 +447,7 @@ impl App {
             Event::ToggleExpanded(path) => self.toggle_expanded(path),
             Event::FontSizeLoaded(size) => self.load_font_size(size),
             Event::Zoom(zoom) => self.zoom(zoom),
-            Event::OpenUrl(url) => {
-                let url = url.trim();
-                // Only well-formed schemes reach the OS handler; a blank or
-                // schemeless string is dropped rather than shelling out on it.
-                if url.is_empty() {
-                    Vec::new()
-                } else {
-                    vec![Effect::OpenUrl(url.to_owned())]
-                }
-            }
+            Event::OpenUrl(url) => Self::open_url(url),
             Event::SessionNotified { session, body } => self.notify_session(session, body),
             Event::Capture { focused_pty_text } => {
                 vec![Effect::Capture(self.build_capture(focused_pty_text))]
@@ -712,6 +458,53 @@ impl App {
                 self.window_focused = focused;
                 Vec::new()
             }
+        }
+    }
+
+    /// Emit `effect` only while `session` is still live; a stale id (its
+    /// terminal already closed) drops the effect, so a late input/resize/scroll
+    /// can never act on a dead session.
+    fn if_live(&self, session: SessionId, effect: Effect) -> Vec<Effect> {
+        if self.is_live(session) {
+            vec![effect]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Set (or clear, when blank) a session's custom title, persisting the
+    /// overlay, and keep a live tab resuming this id in step with the sidebar.
+    /// A non-empty rename wins directly; clearing restores the digest-derived
+    /// name when the session is still in the last scan.
+    fn rename_session(&mut self, session: String, title: String) -> Vec<Effect> {
+        let trimmed = title.trim().to_owned();
+        let effects = self.update_meta(session.clone(), |meta| {
+            meta.title = (!trimmed.is_empty()).then(|| trimmed.clone());
+        });
+        if let Some(live) = self.open_session_for(&session) {
+            let next = if trimmed.is_empty() {
+                self.record_for(&session)
+                    .map(|record| self.session_title(record))
+                    .filter(|name| !name.trim().is_empty())
+            } else {
+                Some(trimmed)
+            };
+            if let Some(next) = next {
+                self.workspace.set_session_title(live, next);
+            }
+        }
+        effects
+    }
+
+    /// Open a Ctrl/Cmd+clicked link in the OS default handler. Only a
+    /// non-blank string reaches the handler; a blank or schemeless one is
+    /// dropped rather than shelling out on it.
+    fn open_url(url: String) -> Vec<Effect> {
+        let url = url.trim();
+        if url.is_empty() {
+            Vec::new()
+        } else {
+            vec![Effect::OpenUrl(url.to_owned())]
         }
     }
 
