@@ -217,14 +217,17 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   / `mod+shift+d` split, `mod+shift+arrows` focus. What remains is **drag-resize
   (#55, blocked-by #54)** to flip the fixed ratio; `core::Workspace` stays the
   single source of truth throughout
-- [ ] `F-close-on-exit` — auto-close a shell pane/tab on clean exit (#185):
-  when a `Launch::Shell` session's process exits with code 0 (the user typed
-  `exit`), close its pane — collapse the split, or close the tab (onto the
-  reopen stack) when it was the last pane; an emptied workspace stays open,
-  termherd never quits. Non-zero/unknown exits keep today's dead-terminal
-  view so errors stay readable, and Claude sessions never auto-close. Needs
-  the exit status threaded through the `pty` adapter (currently discarded at
-  `child.wait()`) into `Event::PtyExited`. Fixed policy, no settings knob
+- [x] `F-close-on-exit` — auto-close a pane/tab on clean exit (#185, shipped
+  in #187): a PTY exiting with code 0 (the user typed `exit` at a prompt)
+  closes its pane — collapse the split, or close the tab (onto the reopen
+  stack) when it was the last pane; an emptied workspace stays open, termherd
+  never quits. Non-zero/unknown exits keep the dead-terminal view so errors
+  stay readable. Quitting Claude still never closes the tab — structurally:
+  `claude` is typed *into* a shell, so its exit returns to the prompt with
+  the PTY alive (the planned `Launch::Claude` gate proved redundant and was
+  dropped mid-review). Ship also fixed exit detection on Windows: ConPTY
+  never delivers reader EOF on a child's natural exit, so the `pty` adapter
+  reaps in a dedicated waiter thread. Fixed policy, no settings knob
 - [ ] `F-jsonl-viewer`
 - [ ] `F-terminal-images` — render images inline in the terminal (iTerm2 OSC
   1337 / Sixel / Kitty graphics), sibling to `F-jsonl-viewer` /
