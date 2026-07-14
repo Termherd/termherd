@@ -124,6 +124,18 @@ pub struct LaunchSpec {
     pub title: String,
 }
 
+/// How a launched Claude session reaches termherd's in-process MCP server: the
+/// loopback url and the per-session bearer token. Opaque plain data — `core`
+/// carries it from the adapter that mints it (the shell) to the adapter that
+/// consumes it (the pty), holding no url/token of its own and doing no I/O.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpConfig {
+    /// The loopback MCP server url an `mcpServers` entry points at.
+    pub url: String,
+    /// The per-session bearer token authorising this session against it.
+    pub token: String,
+}
+
 /// A spawn request handed to the `pty` adapter. The runtime id is already
 /// allocated, so the adapter never invents one.
 #[derive(Debug, Clone)]
@@ -133,6 +145,11 @@ pub struct SpawnSpec {
     pub launch: Launch,
     pub cols: u16,
     pub rows: u16,
+    /// The live-bridge endpoint to inject as `mcpServers`, for a Claude launch.
+    /// `core` always leaves this `None` — it has no server url or token; the
+    /// shell adapter fills it in when performing the spawn (it owns the loopback
+    /// endpoint and the token registry).
+    pub mcp: Option<McpConfig>,
 }
 
 /// The live-session registry: the single owner of the map from runtime id to
@@ -241,6 +258,7 @@ impl App {
             launch: spec.launch,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
+            mcp: None,
         })]
     }
 
@@ -272,6 +290,7 @@ impl App {
             launch: Launch::Shell,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
+            mcp: None,
         })]
     }
 
