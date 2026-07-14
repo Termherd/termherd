@@ -23,7 +23,7 @@ use alacritty_terminal::term::Config;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use termherd_claude::osc::{OscSignal, decode_chunk};
 use termherd_core::ports::{PtyError, PtyHost};
@@ -396,19 +396,43 @@ type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 /// report (`ESC[6n`). **ConPTY blocks startup until it gets that reply**, so
 /// dropping it (as `VoidListener` would) hangs every Windows session; this is
 /// also what lets programs query the terminal on every platform.
+///
+/// Colour queries (OSC 4/10/11/12) are answered from the session's palette:
+/// a CLI's theme auto-detection asks for the background (OSC 11) and picks
+/// light or dark from the reply — unanswered, it assumes dark.
 #[derive(Clone)]
 struct PtyResponder {
     writer: SharedWriter,
+    palette: Palette,
 }
 
 impl EventListener for PtyResponder {
     fn send_event(&self, event: Event) {
-        if let Event::PtyWrite(text) = event
-            && let Ok(mut w) = self.writer.lock()
-        {
-            let _ = w.write_all(text.as_bytes());
+        let reply = match event {
+            Event::PtyWrite(text) => text,
+            Event::ColorRequest(index, format) => match query_rgb(index, &self.palette) {
+                Some([r, g, b]) => format(Rgb { r, g, b }),
+                None => return,
+            },
+            _ => return,
+        };
+        if let Ok(mut w) = self.writer.lock() {
+            let _ = w.write_all(reply.as_bytes());
             let _ = w.flush();
         }
+    }
+}
+
+/// The palette colour a query index refers to: 0–255 the indexed palette,
+/// then the named foreground/background/cursor. The dim variants beyond have
+/// no query sequence, so they draw no reply.
+fn query_rgb(index: usize, palette: &Palette) -> Option<[u8; 3]> {
+    match index {
+        0..=255 => Some(indexed_rgb(index as u8, palette)),
+        i if i == NamedColor::Foreground as usize => Some(palette.foreground),
+        i if i == NamedColor::Background as usize => Some(palette.background),
+        i if i == NamedColor::Cursor as usize => Some(palette.cursor),
+        _ => None,
     }
 }
 
@@ -812,7 +836,10 @@ fn spawn_term(
             let mut term = Term::new(
                 Config::default(),
                 &TermSize::new(cols as usize, rows as usize),
-                PtyResponder { writer },
+                PtyResponder {
+                    writer,
+                    palette: palette.clone(),
+                },
             );
             let mut parser: Processor = Processor::new();
             let mut status = SessionStatus::Starting;
@@ -1743,6 +1770,72 @@ mod tests {
         assert!(snapshot(&term, &palette).bracketed_paste);
         parser.advance(&mut term, b"\x1b[?2004l");
         assert!(!snapshot(&term, &palette).bracketed_paste);
+    }
+
+    /// A writer that banks everything written, so a test can read back the
+    /// replies [`PtyResponder`] sends to the child process.
+    #[derive(Clone)]
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("capture lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_background_colour_query_is_answered_from_the_palette() {
+        // A CLI's theme auto-detection (Claude's `theme: auto`) sends OSC 11
+        // and picks light or dark from the reply; unanswered, it assumes
+        // dark — so a light palette must actually be reported.
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(captured.clone()))));
+        let palette = Palette::named("solarized-light").expect("known scheme");
+        let mut term = Term::new(
+            Config::default(),
+            &TermSize::new(20, 5),
+            PtyResponder {
+                writer,
+                palette: palette.clone(),
+            },
+        );
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"\x1b]11;?\x1b\\");
+        let reply =
+            String::from_utf8(captured.lock().expect("capture lock").clone()).expect("utf8 reply");
+        // Solarized-light background is 0xfdf6e3, reported in X11 rgb: form.
+        assert!(
+            reply.contains("rgb:fdfd/f6f6/e3e3"),
+            "OSC 11 must report the palette background, got {reply:?}"
+        );
+    }
+
+    #[test]
+    fn a_foreground_colour_query_is_answered_from_the_palette() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(captured.clone()))));
+        let palette = Palette::named("solarized-light").expect("known scheme");
+        let mut term = Term::new(
+            Config::default(),
+            &TermSize::new(20, 5),
+            PtyResponder {
+                writer,
+                palette: palette.clone(),
+            },
+        );
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"\x1b]10;?\x1b\\");
+        let reply =
+            String::from_utf8(captured.lock().expect("capture lock").clone()).expect("utf8 reply");
+        // Solarized-light foreground is 0x657b83.
+        assert!(
+            reply.contains("rgb:6565/7b7b/8383"),
+            "OSC 10 must report the palette foreground, got {reply:?}"
+        );
     }
 
     /// The bug behind reopening the "selection follows scroll" work: in the
