@@ -16,23 +16,42 @@ use super::Message;
 /// Quiet period before a burst of fs events triggers one rescan.
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
 
-/// Streams PTY output/exit into the subscription. Wraps the channel receiver
-/// so it can be moved into the stream once; the `Arc` identity makes the
-/// subscription stable across `view`/`update` cycles (it hashes by pointer).
-#[derive(Clone)]
-pub(super) struct PtyOutput(Arc<Mutex<Option<UnboundedReceiver<PtyEvent>>>>);
+/// A receiver wrapped so an iced `Subscription` can take it exactly once and
+/// stay stable across `view`/`update` cycles: the `Arc` identity is the hash
+/// (so the subscription is not recreated every cycle), and the receiver is
+/// moved out on the stream's first — and only — run. Shared by every
+/// single-consumer subscription source (PTY output here, the async bridge in
+/// [`super::bridge`]).
+pub struct TakeOnceSource<R>(Arc<Mutex<Option<R>>>);
 
-impl PtyOutput {
-    pub(super) fn new(rx: UnboundedReceiver<PtyEvent>) -> Self {
+impl<R> TakeOnceSource<R> {
+    pub(super) fn new(rx: R) -> Self {
         Self(Arc::new(Mutex::new(Some(rx))))
+    }
+
+    /// Take the receiver: `Some` on the first call, `None` after — a duplicated
+    /// subscription must idle rather than steal events.
+    pub(super) fn take(&self) -> Option<R> {
+        self.0.lock().ok().and_then(|mut slot| slot.take())
     }
 }
 
-impl Hash for PtyOutput {
+// Manual `Clone`/`Hash`: the receiver `R` is neither, but the wrapper only ever
+// clones the `Arc` and hashes its pointer, so no `R: Clone`/`R: Hash` bound.
+impl<R> Clone for TakeOnceSource<R> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<R> Hash for TakeOnceSource<R> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         (Arc::as_ptr(&self.0) as usize).hash(state);
     }
 }
+
+/// Streams PTY output/exit into the subscription.
+pub(super) type PtyOutput = TakeOnceSource<UnboundedReceiver<PtyEvent>>;
 
 /// The [`Message`] a [`PtyEvent`] becomes — the adapter→shell glue, shared by
 /// the subscription stream and the end-to-end tests that pump events by hand.
@@ -53,7 +72,7 @@ pub(super) fn pty_message(event: PtyEvent) -> Message {
 /// is taken on first run; a duplicated subscription (there is only ever one)
 /// would idle forever rather than steal events.
 pub(super) fn pty_stream(output: &PtyOutput) -> impl Stream<Item = Message> + use<> {
-    let taken = output.0.lock().ok().and_then(|mut slot| slot.take());
+    let taken = output.take();
     iced::stream::channel(
         64,
         |mut out: iced::futures::channel::mpsc::Sender<Message>| async move {

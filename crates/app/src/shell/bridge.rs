@@ -15,7 +15,6 @@
 //! runtimes meet only at the runtime-agnostic channels.
 
 use std::fmt;
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -24,10 +23,17 @@ use termherd_core::App;
 use tokio::sync::{mpsc, oneshot};
 
 use super::Message;
+use super::streams::TakeOnceSource;
 
-/// Bounded so a burst of transport requests applies backpressure to the caller
-/// instead of growing memory without limit.
-const CAPACITY: usize = 32;
+/// Depth of the transport→shell request channel. Bounded so a burst of requests
+/// applies backpressure to the caller instead of growing memory without limit —
+/// a wedged shell fills this and `BridgeHandle::call` then times out.
+const REQUEST_CHANNEL_CAPACITY: usize = 32;
+
+/// Buffer of the iced subscription stream that carries drained requests on to
+/// `update`. Independent of the transport channel depth above; sized only to
+/// smooth bursts between one `recv` and the next `view`/`update` cycle.
+const MESSAGE_STREAM_BUFFER: usize = 32;
 
 /// What an external transport can ask the running app. One read-only variant
 /// today — the substrate proves the round-trip and the timeout, not a rich
@@ -98,9 +104,9 @@ impl BridgeHandle {
     /// [`CallError::Timeout`], not a hang.
     ///
     /// The bound covers *both* the enqueue and the wait — a full request channel
-    /// (the shell wedged with `CAPACITY` requests already queued) would block the
-    /// send indefinitely, so timing only the reply would leave that path
-    /// unbounded, the very hang this exists to prevent.
+    /// (the shell wedged with `REQUEST_CHANNEL_CAPACITY` requests already queued)
+    /// blocks the send indefinitely, so timing only the reply would leave that
+    /// path unbounded, the very hang this exists to prevent.
     pub async fn call(&self, request: Request, timeout: Duration) -> Result<Reply, CallError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         let round_trip = async {
@@ -119,23 +125,9 @@ impl BridgeHandle {
     }
 }
 
-/// The receiver side, drained by the iced subscription. Wrapped like
-/// [`super::streams::PtyOutput`] so it is taken once into the stream and hashes
-/// by identity, keeping the subscription stable across `view`/`update` cycles.
-#[derive(Clone)]
-pub struct Requests(Arc<Mutex<Option<mpsc::Receiver<Envelope>>>>);
-
-impl Requests {
-    fn new(rx: mpsc::Receiver<Envelope>) -> Self {
-        Self(Arc::new(Mutex::new(Some(rx))))
-    }
-}
-
-impl Hash for Requests {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        (Arc::as_ptr(&self.0) as usize).hash(state);
-    }
-}
+/// The receiver side, drained by the iced subscription: the shared take-once
+/// source over the transport request channel.
+pub type Requests = TakeOnceSource<mpsc::Receiver<Envelope>>;
 
 /// The reply channel carried inside a [`Message::Bridge`]. `Message` must be
 /// `Clone`, but a `oneshot::Sender` is not — so it lives behind a shared
@@ -169,7 +161,7 @@ impl fmt::Debug for ReplyPort {
 /// Build a bridge: the caller half for transport tasks, the receiver half for
 /// the shell subscription.
 pub fn channel() -> (BridgeHandle, Requests) {
-    let (tx, rx) = mpsc::channel(CAPACITY);
+    let (tx, rx) = mpsc::channel(REQUEST_CHANNEL_CAPACITY);
     (BridgeHandle { tx }, Requests::new(rx))
 }
 
@@ -198,9 +190,9 @@ pub fn respond(core: &App, request: &Request) -> Reply {
 /// [`Message::Bridge`]s. Takes the receiver on first run; a duplicated
 /// subscription (there is only ever one) idles rather than stealing requests.
 pub(super) fn request_stream(source: &Requests) -> impl Stream<Item = Message> + use<> {
-    let taken = source.0.lock().ok().and_then(|mut slot| slot.take());
+    let taken = source.take();
     iced::stream::channel(
-        CAPACITY,
+        MESSAGE_STREAM_BUFFER,
         |mut out: iced::futures::channel::mpsc::Sender<Message>| async move {
             match taken {
                 Some(mut rx) => {
@@ -268,7 +260,7 @@ mod tests {
         let (handle, requests) = channel();
         // Stand in for the shell subscription: drain one request, answer it.
         let shell = tokio::spawn(async move {
-            let mut rx = requests.0.lock().expect("lock").take().expect("receiver");
+            let mut rx = requests.take().expect("receiver");
             let (request, reply_tx) = rx.recv().await.expect("one request");
             assert_eq!(request, Request::Snapshot);
             let _ = reply_tx.send(Reply::Snapshot(Snapshot {
@@ -297,7 +289,7 @@ mod tests {
         let (handle, requests) = channel();
         // Hold the request (and its reply channel) without answering.
         let _shell = tokio::spawn(async move {
-            let mut rx = requests.0.lock().expect("lock").take().expect("receiver");
+            let mut rx = requests.take().expect("receiver");
             let held = rx.recv().await.expect("one request");
             std::future::pending::<()>().await;
             drop(held);
@@ -315,7 +307,7 @@ mod tests {
     async fn call_errors_when_the_shell_drops_the_reply() {
         let (handle, requests) = channel();
         tokio::spawn(async move {
-            let mut rx = requests.0.lock().expect("lock").take().expect("receiver");
+            let mut rx = requests.take().expect("receiver");
             let (_request, reply_tx) = rx.recv().await.expect("one request");
             drop(reply_tx);
         });
