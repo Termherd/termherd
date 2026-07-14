@@ -34,7 +34,8 @@ themselves) and `markdownlint` (the prose).
 | Cross-OS clippy + tests | `ci` · `cross-os` | Same clippy + `nextest` on macOS & Windows | push→main, tag (skipped on PR) | mac · win | signal |
 | Licenses / CVEs / sources | `ci` · `cargo-deny` | Disallowed licences, RUSTSEC advisories, unknown registries | PR, push→main | ubuntu | yes |
 | Unused deps | `ci` · `cargo-machete` | Declared-but-unused dependencies | PR, push→main | ubuntu | yes |
-| Architecture | `ci` · `dependency-rule` | Hexagonal crate dep rule (deps point inward) | PR, push→main | ubuntu | yes |
+| Architecture (crates) | `ci` · `dependency-rule` | Hexagonal crate dep rule (deps point inward) | PR, push→main | ubuntu | yes |
+| Architecture (modules) | `ci` · `intra-crate-arch` | Intra-crate module boundaries + OS-cfg containment; file-length report | PR, push→main | ubuntu | yes (report-only length signal) |
 | Workflow lint | `ci` · `actionlint` | Valid, shellcheck-clean workflow YAML | PR, push→main | ubuntu | yes |
 | Docs lint | `ci` · `markdownlint` | 80-col Markdown prose | PR, push→main | ubuntu | yes |
 | Merge gate | `ci` · `ci-success` | Aggregates every PR job into one required check | PR, push→main | ubuntu | yes (the one required check) |
@@ -67,10 +68,10 @@ This is the cheapest place to catch a failure — do it before opening a PR.
 
 Everything fans out in parallel (no inter-job ordering):
 
-- **`ci`** — a `changes` classifier plus eight gate jobs (`fmt`, `clippy`,
-  `test`, `cargo-deny`, `cargo-machete`, `dependency-rule`, `actionlint`,
-  `markdownlint`), each gated on its file category and fanned into the
-  `ci-success` aggregator. Jobs whose category didn't change report `skipped`
+- **`ci`** — a `changes` classifier plus nine gate jobs (`fmt`, `clippy`,
+  `test`, `cargo-deny`, `cargo-machete`, `dependency-rule`, `intra-crate-arch`,
+  `actionlint`, `markdownlint`), each gated on its file category and fanned into
+  the `ci-success` aggregator. Jobs whose category didn't change report `skipped`
   (a docs-only PR skips all the Rust jobs) and `ci-success` still passes.
   `cross-os` is **skipped** on PRs. Branch protection requires only
   `ci-success`.
@@ -128,13 +129,13 @@ before you tag.
 
 Trigger: `push`→`main`, `push` release tag, `pull_request`→`main`,
 `workflow_dispatch`. A `changes` job classifies the diff (via
-`dorny/paths-filter`); the eight gate jobs each run **only when their category
+`dorny/paths-filter`); the nine gate jobs each run **only when their category
 changed**, then fan into one aggregator, plus a cross-OS signal:
 
 ```text
 changes  ── emits booleans: rust · cargo · markdown · workflows
    │
-   ├─ rust     → fmt   clippy   test          (skipped on a docs-only PR)
+   ├─ rust     → fmt   clippy   test   intra-crate-arch   (skipped on docs-only PR)
    ├─ cargo    → cargo-deny   cargo-machete   dependency-rule
    ├─ markdown → markdownlint
    └─ workflows→ actionlint
@@ -145,7 +146,7 @@ changes  ── emits booleans: rust · cargo · markdown · workflows
 cross-os (mac · win)  ← non-PR only, when rust changed (or a tag); signal only
 ```
 
-The eight gate jobs run ubuntu-only. `ci-success` (`if: always()`) `needs:`
+The nine gate jobs run ubuntu-only. `ci-success` (`if: always()`) `needs:`
 `changes` + all of them and is the single status check pinned in branch
 protection, so the required-checks list stays stable as jobs come and go.
 
@@ -227,9 +228,16 @@ Bundles are unsigned for now (signing/notarization pending certs, OQ5).
 - **"Is it formatted and readable?"** → `rustfmt`, `markdownlint`.
 - **"Is a function getting too complex?"** → `clippy::too_many_lines`
   (threshold 150 in `clippy.toml`), enforced inside the `clippy` job.
-- **"Does the architecture still hold?"** → `dependency-rule`
-  (`scripts/check-crate-deps.sh`): the hexagonal rule that adapters depend on
-  `core`, never the reverse, checked against an allow-list of internal edges.
+- **"Does the architecture still hold?"** → two fitness functions.
+  `dependency-rule` (`scripts/check-crate-deps.sh`): the hexagonal rule that
+  adapters depend on `core`, never the reverse, checked against an allow-list of
+  internal edges. `intra-crate-arch` guards the seams *inside* a crate: module
+  boundaries (`scripts/check-module-boundaries.sh` — leaf modules stay leaves,
+  renderers don't reach the executor, `core::app` submodules go through the
+  parent registry) and OS-cfg containment
+  (`scripts/check-os-cfg-containment.sh` — compile-time `#[cfg(target_os)]`
+  stays in its audited homes, same spirit as the `unsafe_code` quarantine). It
+  also prints a report-only file-length signal (never fails) to the job summary.
 - **"Are core/claude staying panic-free?"** → `clippy` denies `unwrap_used`,
   `expect_used`, `panic` in those two crates (their `Cargo.toml` lint
   tables); tests may use them (`clippy.toml`).
@@ -253,6 +261,7 @@ The toolchain is pinned to **Rust 1.95.0 / edition 2024**
 | `cargo-deny` | `cargo deny check` (needs `cargo-deny`) |
 | `cargo-machete` | `cargo machete` (needs `cargo-machete`) |
 | `dependency-rule` | `just check-deps` (or `./scripts/check-crate-deps.sh`) |
+| `intra-crate-arch` | `just check-arch` (module boundaries + OS-cfg + length report) |
 | `markdownlint` | `markdownlint-cli2` (uses `.markdownlint-cli2.jsonc`) |
 
 `actionlint` and `codeql` are not part of the routine local loop — they run
@@ -301,6 +310,15 @@ here so an exception is never a surprise:
 - **`unsafe`**: the only sanctioned block is `crates/app/src/macos.rs` (AppKit
   FFI for Cmd+Q), a `cfg`-gated module with a `#![allow(unsafe_code)]` and a
   `// SAFETY:` note per block. See `AGENTS.md` → Quality bar.
+- **OS-cfg homes** (`scripts/check-os-cfg-containment.sh` allow-list): the files
+  that may hold compile-time `#[cfg(target_os)]` / `#[cfg(unix)]` — `main.rs`
+  (macos-module gate), `instance.rs` (per-OS lock naming), `window_geometry.rs`
+  (Linux placement), `shell/effects/os.rs` (OS effect handoffs),
+  `shell/session_ops.rs` (macOS quit reroute), `pty/src/kill.rs` (kill
+  reconciliation), `pty/src/status.rs` (Unix-only mcp-config perms). The
+  runtime-boolean `cfg!(target_os = …)` form is unrestricted — it compiles on
+  every platform, so it hides nothing. Add a file (with its reason) only when a
+  new OS fork genuinely needs its own home.
 - **actionlint shellcheck noise**: `SHELLCHECK_OPTS: --severity=warning` drops
   SC2086/SC2129 info notes that the dist-generated `release.yml` trips and we
   don't own.

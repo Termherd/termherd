@@ -22,6 +22,14 @@ run-isolated:
 check-deps:
     ./scripts/check-crate-deps.sh
 
+# Assert the intra-crate architecture rules (module boundaries + OS-cfg
+# containment), then print the report-only file-length signal. Mirrors the
+# `intra-arch` CI job; run before pushing a new module or an OS-conditional cfg.
+check-arch:
+    ./scripts/check-module-boundaries.sh
+    ./scripts/check-os-cfg-containment.sh
+    ./scripts/report-file-length.sh
+
 # Build the shipping binary (host target) — the input the packager bundles.
 build-release:
     cargo build --release -p termherd-app

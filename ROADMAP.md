@@ -126,19 +126,28 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   brainstorm (`brainstorm/20260627-ci-quality-gates.md`). **P1 — shipped:**
   function length (#105), unused deps (#106), and the crate-level dependency
   rule as an architecture fitness function enforcing the hexagonal inward-only
-  invariant (#107) all landed. **P2 follow-ups — now filed** as the intra-crate
-  refactor cluster #167–#173: the module-boundary/`cfg(target_os)`/file-length
-  gate is #173, blocked by the god-object splits #167 (shell — **shipped**),
-  #168 (terminal/view — **shipped**) and #169 (core `app/` split + `Sessions`
-  registry + `Sidebar`/`FontState` field-flatten, A1–A4 — **shipped**). The
-  independent adapter splits: #170 (scan → `watch`/`cache`/`derive`/`walk`/`repo`
-  modules — **shipped**, the seam `F-antigravity-sessions` #160/#161 build on),
-  #172 (pty → `input`/`grid`/`events`/`status`/`session`/`kill`/`manager` —
-  **shipped**, the seam #143 foreground-process detection and #155 vim mouse
-  build on) shipped; #171 (F, json_store) still open. Cognitive-complexity
-  (signal C) stays unfiled. **P3 / report-only** (blocked on a
-  quality-report home): file length (signal A, folded into #173's report) and
-  churn×size hotspots (signal J). Dropped: MSRV check,
+  invariant (#107) all landed. **P2 follow-ups — shipped** as the intra-crate
+  refactor cluster #167–#173, now complete: the intra-crate architecture gate
+  (`intra-crate-arch`) is #173 — a module-boundary check
+  (`scripts/check-module-boundaries.sh`: leaf modules stay leaves, renderers
+  don't reach the executor, `core::app` submodules go through the parent
+  registry), an OS-cfg containment check
+  (`scripts/check-os-cfg-containment.sh`: compile-time `#[cfg(target_os)]` stays
+  in its audited homes, same spirit as the `unsafe_code` quarantine), and the
+  report-only file-length signal — fanned into `ci-success`, mirrored by
+  `just check-arch`. It followed the god-object splits #167 (shell —
+  **shipped**), #168 (terminal/view — **shipped**) and #169 (core `app/` split +
+  `Sessions` registry + `Sidebar`/`FontState` field-flatten, A1–A4 —
+  **shipped**), plus the independent adapter splits #170 (scan →
+  `watch`/`cache`/`derive`/`walk`/`repo` — **shipped**, the seam
+  `F-antigravity-sessions` #160/#161 build on), #171 (F, json_store —
+  **shipped**) and #172 (pty →
+  `input`/`grid`/`events`/`status`/`session`/`kill`/`manager` — **shipped**, the
+  seam #143 foreground-process detection and #155 vim mouse build on).
+  Cognitive-complexity (signal C) stays unfiled. **P3 / report-only** (was
+  blocked on a quality-report home): file length (signal A) now ships **inside
+  #173's gate** as a job-summary report; churn×size hotspots (signal J) stays
+  unfiled. Dropped: MSRV check,
   `todo!`→deny, PR-size warning (rationale in the report). `tech-health`
 - [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is
   a tab; a tab strip switches between them, each chip carrying its activity
