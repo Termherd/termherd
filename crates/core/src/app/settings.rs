@@ -31,7 +31,7 @@ impl App {
 
     /// The effective terminal font size: the configured base (or the
     /// built-in default before settings load) plus the zoom steps, clamped
-    /// into [`FONT_SIZE_RANGE`].
+    /// into `FONT_SIZE_RANGE`.
     #[must_use]
     pub fn font_size(&self) -> f32 {
         let base = self.font_base.unwrap_or(DEFAULT_FONT_SIZE);
