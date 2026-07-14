@@ -11,9 +11,9 @@
 //! and read models live in a submodule under `app/` (session, tabs, sidebar,
 //! metadata, capture, record, settings, notify).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use crate::browser::{ProjectGroup, group_projects};
+use crate::browser::group_projects;
 use crate::metadata::{RepoMeta, SessionMeta};
 use crate::record::Recording;
 use crate::workspace::{SessionId, Workspace};
@@ -31,21 +31,20 @@ mod tabs;
 #[cfg(test)]
 mod testsupport;
 
+use settings::FontState;
+
 pub use effects::Effect;
 pub use events::Event;
 pub use session::{Launch, LaunchSpec, LiveSession, SessionStatus, Sessions, SpawnSpec};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
-pub use sidebar::SidebarFold;
+pub use sidebar::{Sidebar, SidebarFold};
 
 #[derive(Debug, Default)]
 pub struct App {
     pub workspace: Workspace,
-    /// Sidebar state: projects grouped from the latest scan (FR1).
-    pub projects: Vec<ProjectGroup>,
-    /// Current search query (FR3); empty means no filtering.
-    pub search: String,
-    /// FR3 toggle: restrict matching to titles.
-    pub search_titles_only: bool,
+    /// Session-browser sidebar state: the grouped project list, search, fold /
+    /// truncation, and archive visibility (FR1/FR3). See [`Sidebar`].
+    pub sidebar: Sidebar,
     /// The live-session registry (FR4/FR7): the one owner of the id→session
     /// map and the id source. See [`Sessions`].
     pub sessions: Sessions,
@@ -55,29 +54,9 @@ pub struct App {
     /// User overlay (star) per real project path (`F-favorites`, repo-level);
     /// shares `~/.termherd/metadata.json` with [`Self::metadata`].
     pub repos: HashMap<String, RepoMeta>,
-    /// Whether archived sessions show in the browser.
-    pub show_archived: bool,
-    /// Whether the session-browser sidebar is collapsed to give the terminal
-    /// the full width. Ephemeral — resets to visible each launch.
-    pub sidebar_hidden: bool,
-    /// Project paths whose session list is folded shut in the sidebar;
-    /// persisted to `~/.termherd` so the fold survives a restart.
-    pub collapsed: HashSet<String>,
-    /// Sidebar truncation: sessions shown per project before the tail
-    /// folds behind an expander. `0` (the default) shows every session; the
-    /// user's setting arrives via [`Event::SessionLimitLoaded`].
-    pub session_limit: usize,
-    /// Projects whose truncated session tail is unfolded. Ephemeral —
-    /// unlike `collapsed`, it resets each launch and is never persisted.
-    pub expanded: HashSet<String>,
-    /// The configured terminal base font size, from settings via
-    /// [`Event::FontSizeLoaded`]; `None` until loaded (the built-in
-    /// [`DEFAULT_FONT_SIZE`] then applies).
-    font_base: Option<f32>,
-    /// Zoom steps on top of the base font: ±1 px each, clamped at event
-    /// time so surplus presses at a bound don't accumulate as drift.
-    /// Ephemeral — resets each launch.
-    zoom_steps: i32,
+    /// Terminal font sizing: the configured base plus zoom steps. Private —
+    /// the effective size is read through [`Self::font_size`]. See `FontState`.
+    font: FontState,
     /// LIFO stack of recently closed tabs, for reopen. Capped at
     /// `MAX_CLOSED_TABS` so a long session can't grow it without bound;
     /// closing past the cap drops the oldest entry.
@@ -160,15 +139,15 @@ impl App {
     pub fn apply(&mut self, event: Event) -> Vec<Effect> {
         match event {
             Event::ScanCompleted(records) => {
-                self.projects = group_projects(records);
+                self.sidebar.projects = group_projects(records);
                 Vec::new()
             }
             Event::SearchChanged(query) => {
-                self.search = query;
+                self.sidebar.search = query;
                 Vec::new()
             }
             Event::SearchTitlesOnlyToggled(titles_only) => {
-                self.search_titles_only = titles_only;
+                self.sidebar.search_titles_only = titles_only;
                 Vec::new()
             }
             Event::LaunchSession(spec) => self.launch(spec),
@@ -261,15 +240,15 @@ impl App {
             }
             Event::RenameSession { session, title } => self.rename_session(session, title),
             Event::ShowArchivedToggled(show) => {
-                self.show_archived = show;
+                self.sidebar.show_archived = show;
                 Vec::new()
             }
             Event::ToggleSidebar => {
-                self.sidebar_hidden = !self.sidebar_hidden;
+                self.sidebar.hidden = !self.sidebar.hidden;
                 Vec::new()
             }
             Event::CollapsedLoaded(paths) => {
-                self.collapsed = paths;
+                self.sidebar.collapsed = paths;
                 Vec::new()
             }
             Event::ToggleCollapsed(path) => self.toggle_collapsed(path),

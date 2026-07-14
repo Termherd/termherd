@@ -122,7 +122,7 @@ impl Shell {
     /// (only reserved while visible) and the fixed chrome. Floored at one cell
     /// so the grid math never goes negative on a tiny window.
     fn content_size(&self) -> (f32, f32) {
-        let sidebar = if self.core.sidebar_hidden {
+        let sidebar = if self.core.sidebar.hidden {
             HANDLE_W
         } else {
             SIDEBAR_W

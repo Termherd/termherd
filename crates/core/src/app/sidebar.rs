@@ -1,9 +1,40 @@
 //! Sidebar read models: the visible/filtered project list, favorites,
 //! per-project truncation and fold state, and the search/collision helpers.
 
-use crate::browser::{MatchSnippet, SessionRecord, content_snippet, filter_projects};
+use std::collections::HashSet;
+
+use crate::browser::{MatchSnippet, ProjectGroup, SessionRecord, content_snippet, filter_projects};
 
 use super::*;
+
+/// Session-browser sidebar state: the grouped project list plus the search,
+/// fold, truncation, and archive-visibility knobs that shape what it renders
+/// (FR1/FR3). Grouped into one struct so the field bag on [`App`] names the
+/// sidebar as a domain rather than scattering its eight fields.
+#[derive(Debug, Default)]
+pub struct Sidebar {
+    /// Projects grouped from the latest scan (FR1).
+    pub projects: Vec<ProjectGroup>,
+    /// Current search query (FR3); empty means no filtering.
+    pub search: String,
+    /// FR3 toggle: restrict matching to titles.
+    pub search_titles_only: bool,
+    /// Whether archived sessions show in the browser.
+    pub show_archived: bool,
+    /// Whether the sidebar is collapsed to give the terminal the full width.
+    /// Ephemeral — resets to visible each launch.
+    pub hidden: bool,
+    /// Project paths whose session list is folded shut; persisted to
+    /// `~/.termherd` so the fold survives a restart.
+    pub collapsed: HashSet<String>,
+    /// Truncation: sessions shown per project before the tail folds behind an
+    /// expander. `0` (the default) shows every session; the user's setting
+    /// arrives via [`Event::SessionLimitLoaded`].
+    pub session_limit: usize,
+    /// Projects whose truncated session tail is unfolded. Ephemeral — unlike
+    /// `collapsed`, it resets each launch and is never persisted.
+    pub expanded: HashSet<String>,
+}
 
 /// What the expander row under a project's truncated session list should show
 /// from [`App::sidebar_sessions`].
@@ -18,14 +49,18 @@ pub enum SidebarFold {
 impl App {
     /// The sidebar's view of the projects: search matches (FR3) with the
     /// metadata overlay applied (`F-session-metadata`) — archived sessions
-    /// hidden unless [`Self::show_archived`], starred sessions pinned to the
+    /// hidden unless [`Sidebar::show_archived`], starred sessions pinned to the
     /// top of their group, starred repos pinned to the top of the sidebar
     /// (`F-favorites`), and emptied groups dropped.
     #[must_use]
     pub fn visible_projects(&self) -> Vec<ProjectGroup> {
-        let mut groups = filter_projects(&self.projects, &self.search, self.search_titles_only);
+        let mut groups = filter_projects(
+            &self.sidebar.projects,
+            &self.sidebar.search,
+            self.sidebar.search_titles_only,
+        );
         for group in &mut groups {
-            if !self.show_archived {
+            if !self.sidebar.show_archived {
                 group.sessions.retain(|s| !self.is_archived(&s.session_id));
             }
             // Stable sort keeps recency order within each star bucket.
@@ -74,16 +109,16 @@ impl App {
         group: &'a ProjectGroup,
     ) -> (&'a [SessionRecord], Option<SidebarFold>) {
         let all = group.sessions.as_slice();
-        let searching = !self.search.trim().is_empty();
-        if searching || self.session_limit == 0 || all.len() <= self.session_limit {
+        let searching = !self.sidebar.search.trim().is_empty();
+        if searching || self.sidebar.session_limit == 0 || all.len() <= self.sidebar.session_limit {
             return (all, None);
         }
-        if self.expanded.contains(&group.path) {
+        if self.sidebar.expanded.contains(&group.path) {
             return (all, Some(SidebarFold::Expanded));
         }
-        let hidden = all.len() - self.session_limit;
+        let hidden = all.len() - self.sidebar.session_limit;
         (
-            &all[..self.session_limit],
+            &all[..self.sidebar.session_limit],
             Some(SidebarFold::Truncated(hidden)),
         )
     }
@@ -93,10 +128,10 @@ impl App {
     /// nothing in the content matched, so there is nothing to point at.
     #[must_use]
     pub fn search_snippet(&self, record: &SessionRecord) -> Option<MatchSnippet> {
-        if self.search_titles_only {
+        if self.sidebar.search_titles_only {
             return None;
         }
-        let needle = self.search.trim().to_lowercase();
+        let needle = self.sidebar.search.trim().to_lowercase();
         content_snippet(&record.digest, &needle)
     }
 
@@ -142,29 +177,29 @@ impl App {
     /// Whether a project's session list is folded shut in the sidebar.
     #[must_use]
     pub fn is_collapsed(&self, path: &str) -> bool {
-        self.collapsed.contains(path)
+        self.sidebar.collapsed.contains(path)
     }
 
     /// Flip a project's fold state and emit the persistence effect.
     pub(super) fn toggle_collapsed(&mut self, path: String) -> Vec<Effect> {
-        if !self.collapsed.remove(&path) {
-            self.collapsed.insert(path);
+        if !self.sidebar.collapsed.remove(&path) {
+            self.sidebar.collapsed.insert(path);
         }
-        vec![Effect::SaveCollapsed(self.collapsed.clone())]
+        vec![Effect::SaveCollapsed(self.sidebar.collapsed.clone())]
     }
 
     /// Unfold (or refold) a project's truncated session tail. Unlike
     /// [`Self::toggle_collapsed`], the state is ephemeral — no save effect.
     pub(super) fn toggle_expanded(&mut self, path: String) -> Vec<Effect> {
-        if !self.expanded.remove(&path) {
-            self.expanded.insert(path);
+        if !self.sidebar.expanded.remove(&path) {
+            self.sidebar.expanded.insert(path);
         }
         Vec::new()
     }
 
     /// Record the configured sidebar session limit, from settings.
     pub(super) fn load_session_limit(&mut self, limit: usize) -> Vec<Effect> {
-        self.session_limit = limit;
+        self.sidebar.session_limit = limit;
         Vec::new()
     }
 }
@@ -179,13 +214,13 @@ mod tests {
         let mut app = App::new();
         let effects = app.apply(Event::ScanCompleted(vec![record("abc", "/p", "hello")]));
         assert!(effects.is_empty());
-        assert_eq!(app.projects.len(), 1);
-        assert_eq!(app.projects[0].path, "/p");
+        assert_eq!(app.sidebar.projects.len(), 1);
+        assert_eq!(app.sidebar.projects[0].path, "/p");
 
         // A later scan replaces, not appends.
         let effects = app.apply(Event::ScanCompleted(vec![]));
         assert!(effects.is_empty());
-        assert!(app.projects.is_empty());
+        assert!(app.sidebar.projects.is_empty());
     }
 
     #[test]
@@ -294,7 +329,7 @@ mod tests {
             record("dup2", "/p", "vm tombée"),
             record("uniq", "/p", "something else"),
         ]));
-        let group = app.projects[0].clone();
+        let group = app.sidebar.projects[0].clone();
 
         let collisions = app.colliding_titles(&group);
         assert_eq!(
@@ -369,11 +404,11 @@ mod tests {
     #[test]
     fn toggle_sidebar_flips_and_starts_visible() {
         let mut app = App::new();
-        assert!(!app.sidebar_hidden, "sidebar is visible on launch");
+        assert!(!app.sidebar.hidden, "sidebar is visible on launch");
         assert!(app.apply(Event::ToggleSidebar).is_empty());
-        assert!(app.sidebar_hidden);
+        assert!(app.sidebar.hidden);
         app.apply(Event::ToggleSidebar);
-        assert!(!app.sidebar_hidden, "a second toggle restores it");
+        assert!(!app.sidebar.hidden, "a second toggle restores it");
     }
 
     #[test]

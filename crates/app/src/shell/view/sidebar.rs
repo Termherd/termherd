@@ -36,7 +36,7 @@ impl Shell {
     /// The per-section builders keep this dispatcher short; each returns the
     /// column it contributes so the length stays a proxy for real complexity.
     pub(super) fn sidebar(&self) -> Element<'_, Message> {
-        let search = text_input(strings::SEARCH_PLACEHOLDER, &self.core.search)
+        let search = text_input(strings::SEARCH_PLACEHOLDER, &self.core.sidebar.search)
             .id(search_id())
             .size(12)
             .padding(6);
@@ -57,12 +57,12 @@ impl Shell {
             ]
             .into()
         };
-        let titles_only = checkbox(self.core.search_titles_only)
+        let titles_only = checkbox(self.core.sidebar.search_titles_only)
             .label(strings::TITLES_ONLY)
             .on_toggle(Message::SearchTitlesOnly)
             .text_size(11)
             .size(14);
-        let show_archived = checkbox(self.core.show_archived)
+        let show_archived = checkbox(self.core.sidebar.show_archived)
             .label(strings::SHOW_ARCHIVED)
             .on_toggle(Message::ShowArchived)
             .text_size(11)
@@ -82,7 +82,7 @@ impl Shell {
         if let Some(error) = &self.scan_error {
             list = list.push(text(strings::scan_failed(error)).size(12));
         } else if visible.is_empty() {
-            let label = if self.core.search.trim().is_empty() {
+            let label = if self.core.sidebar.search.trim().is_empty() {
                 strings::NO_SESSIONS
             } else {
                 strings::NO_RESULTS

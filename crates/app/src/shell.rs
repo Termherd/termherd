@@ -641,7 +641,13 @@ impl Shell {
     /// unplugged network mount, a removed directory) that stat can block for
     /// tens of seconds, so it must never run on the UI thread.
     fn refresh_docs(&self) -> Task<Message> {
-        let paths: Vec<String> = self.core.projects.iter().map(|g| g.path.clone()).collect();
+        let paths: Vec<String> = self
+            .core
+            .sidebar
+            .projects
+            .iter()
+            .map(|g| g.path.clone())
+            .collect();
         Task::perform(
             async move { crate::docs::discover(&paths) },
             Message::DocsDiscovered,
@@ -2298,7 +2304,7 @@ mod key_routing {
         let resizes_before = pty.resizes().len();
 
         let _ = shell.toggle_sidebar();
-        assert!(shell.core.sidebar_hidden, "toggle should hide the sidebar");
+        assert!(shell.core.sidebar.hidden, "toggle should hide the sidebar");
 
         let resizes = pty.resizes();
         assert!(
