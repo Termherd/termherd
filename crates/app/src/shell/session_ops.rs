@@ -128,6 +128,12 @@ impl Shell {
                 self.perform(effects)
             }
             window::Event::Unfocused => {
+                // The modifier release can't reach an unfocused window (e.g.
+                // Ctrl let go while the browser a link click opened is in
+                // front), so treat it as released; winit re-reports the live
+                // modifiers when focus returns.
+                self.link_modifier = false;
+                self.shift_modifier = false;
                 let effects = self
                     .core
                     .apply(termherd_core::Event::WindowFocusChanged(false));

@@ -23,7 +23,7 @@ use alacritty_terminal::term::Config;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
 use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use termherd_claude::osc::{OscSignal, decode_chunk};
 use termherd_core::ports::{PtyError, PtyHost};
@@ -32,6 +32,10 @@ use termherd_core::{Launch, ScrollTarget, SelectOp, SelectSide, SessionStatus, S
 
 /// Read buffer for the per-session reader thread.
 const READ_BUF: usize = 8192;
+
+/// How long the terminal thread keeps draining trailing output after the
+/// waiter reported the process exit, before declaring the session over.
+const EOF_DRAIN_QUIET: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// What the adapter emits back to the runtime, out-of-band. The iced shell
 /// maps these onto `core` events.
@@ -51,8 +55,10 @@ pub enum PtyEvent {
     /// raw payload text, forwarded to the OS notification centre on top of the
     /// in-app `Attention` status (which `Status` already conveys).
     Notification { session: SessionId, body: String },
-    /// The session's PTY process exited.
-    Exited { session: SessionId },
+    /// The session's PTY process exited. `clean` is true when the child
+    /// reported successful completion (exit code 0, no signal); false also
+    /// covers a status the reaper could not observe.
+    Exited { session: SessionId, clean: bool },
     /// The text of the session's current selection, in response to a copy
     /// request — read from the live grid selection so it is exact even right
     /// after a fast drag. Absent (no event) when nothing is selected.
@@ -390,19 +396,43 @@ type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 /// report (`ESC[6n`). **ConPTY blocks startup until it gets that reply**, so
 /// dropping it (as `VoidListener` would) hangs every Windows session; this is
 /// also what lets programs query the terminal on every platform.
+///
+/// Colour queries (OSC 4/10/11/12) are answered from the session's palette:
+/// a CLI's theme auto-detection asks for the background (OSC 11) and picks
+/// light or dark from the reply — unanswered, it assumes dark.
 #[derive(Clone)]
 struct PtyResponder {
     writer: SharedWriter,
+    palette: Palette,
 }
 
 impl EventListener for PtyResponder {
     fn send_event(&self, event: Event) {
-        if let Event::PtyWrite(text) = event
-            && let Ok(mut w) = self.writer.lock()
-        {
-            let _ = w.write_all(text.as_bytes());
+        let reply = match event {
+            Event::PtyWrite(text) => text,
+            Event::ColorRequest(index, format) => match query_rgb(index, &self.palette) {
+                Some([r, g, b]) => format(Rgb { r, g, b }),
+                None => return,
+            },
+            _ => return,
+        };
+        if let Ok(mut w) = self.writer.lock() {
+            let _ = w.write_all(reply.as_bytes());
             let _ = w.flush();
         }
+    }
+}
+
+/// The palette colour a query index refers to: 0–255 the indexed palette,
+/// then the named foreground/background/cursor. The dim variants beyond have
+/// no query sequence, so they draw no reply.
+fn query_rgb(index: usize, palette: &Palette) -> Option<[u8; 3]> {
+    match index {
+        0..=255 => Some(indexed_rgb(index as u8, palette)),
+        i if i == NamedColor::Foreground as usize => Some(palette.foreground),
+        i if i == NamedColor::Background as usize => Some(palette.background),
+        i if i == NamedColor::Cursor as usize => Some(palette.cursor),
+        _ => None,
     }
 }
 
@@ -440,8 +470,9 @@ enum TermCmd {
     Select(SelectOp),
     /// Copy the current selection to the clipboard via a `SelectionCopied` event.
     CopySelection,
-    /// The PTY reached end of file; the process is gone.
-    Eof,
+    /// The PTY reached end of file; the process is gone. `clean` carries the
+    /// reaped exit status (see [`PtyEvent::Exited`]).
+    Eof { clean: bool },
 }
 
 /// The control-side handle to one session. The grid lives in the terminal
@@ -451,7 +482,7 @@ struct Session {
     writer: SharedWriter,
     killer: Box<dyn ChildKiller + Send + Sync>,
     /// Commands to the terminal thread (resize / scroll). The reader thread
-    /// holds the other clone for `Bytes`/`Eof`.
+    /// holds a clone for `Bytes`, the waiter thread one for `Eof`.
     ctrl: mpsc::Sender<TermCmd>,
     reader: Option<JoinHandle<()>>,
     term: Option<JoinHandle<()>>,
@@ -552,7 +583,10 @@ impl PtyHost for PtyManager {
             self.sink.clone(),
             self.palette.clone(),
         );
-        let reader = spawn_reader(spec.session, reader, child, ctrl.clone(), self.sink.clone());
+        let reader = spawn_reader(spec.session, reader, ctrl.clone());
+        // Detached from birth: it parks in `wait()` until the process ends,
+        // whether by the user's `exit` or a later kill.
+        let _ = spawn_waiter(spec.session, child, ctrl.clone(), self.sink.clone());
 
         let session = Session {
             master: pair.master,
@@ -654,9 +688,9 @@ impl PtyHost for PtyManager {
             .remove(&session)
             .ok_or(PtyError::NoSuchSession(session.0.get()))?;
         let result = s.killer.kill();
-        // Dropping the session drops the master/writer; the reader thread then
-        // sees EOF, reaps the child (`wait`) and signals the terminal thread,
-        // which emits `Exited` on its own.
+        // Dropping the session drops the master/writer, which unblocks the
+        // reader; the waiter thread reaps the killed child (`wait`) and signals
+        // the terminal thread, which emits `Exited` on its own.
         drop(s.reader.take());
         drop(s.term.take());
         // portable-pty's `WinChildKiller::kill` inverts its result — it
@@ -712,15 +746,15 @@ fn apply_terminal_env(cmd: &mut CommandBuilder) {
 }
 
 /// The PTY reader thread: blocking-reads bytes and forwards them to the
-/// terminal thread, then reaps the child and signals EOF. Reading is isolated
-/// here so the terminal thread can react to resize/scroll immediately, without
-/// waiting on a blocked `read` (FR4 scrollback).
+/// terminal thread. Reading is isolated here so the terminal thread can react
+/// to resize/scroll immediately, without waiting on a blocked `read` (FR4
+/// scrollback). End-of-session is *not* detected here: under ConPTY the output
+/// pipe only closes when the pseudo console itself is dropped, so a child's
+/// natural exit never surfaces as EOF — the waiter thread owns that signal.
 fn spawn_reader(
     session: SessionId,
     mut reader: Box<dyn Read + Send>,
-    mut child: Box<dyn Child + Send + Sync>,
     ctrl: mpsc::Sender<TermCmd>,
-    sink: EventSink,
 ) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name(format!("pty-rd-{}", session.0.get()))
@@ -740,13 +774,41 @@ fn spawn_reader(
                     }
                 }
             }
-            // Reap the child so it does not linger as a zombie, then tell the
-            // terminal thread the session is over.
-            let _ = child.wait();
-            let _ = ctrl.send(TermCmd::Eof);
+        })
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                %error,
+                session = session.0.get(),
+                "could not spawn the pty reader thread"
+            );
+            std::thread::spawn(|| {})
+        })
+}
+
+/// The child-waiter thread: blocks until the session's process exits, reaps it
+/// (no zombie), and tells the terminal thread the session is over — with
+/// whether it completed successfully, which drives the auto-close on a clean
+/// shell exit. Exit must be observed on the process itself, not as reader EOF
+/// (see [`spawn_reader`]).
+fn spawn_waiter(
+    session: SessionId,
+    mut child: Box<dyn Child + Send + Sync>,
+    ctrl: mpsc::Sender<TermCmd>,
+    sink: EventSink,
+) -> JoinHandle<()> {
+    std::thread::Builder::new()
+        .name(format!("pty-wt-{}", session.0.get()))
+        .spawn(move || {
+            let clean = child.wait().map(|status| status.success()).unwrap_or(false);
+            let _ = ctrl.send(TermCmd::Eof { clean });
         })
         .unwrap_or_else(|_| {
-            sink(PtyEvent::Exited { session });
+            // Without a waiter the exit would never be observed; declare the
+            // session over rather than leaving it undead.
+            sink(PtyEvent::Exited {
+                session,
+                clean: false,
+            });
             std::thread::spawn(|| {})
         })
 }
@@ -774,11 +836,17 @@ fn spawn_term(
             let mut term = Term::new(
                 Config::default(),
                 &TermSize::new(cols as usize, rows as usize),
-                PtyResponder { writer },
+                PtyResponder {
+                    writer,
+                    palette: palette.clone(),
+                },
             );
             let mut parser: Processor = Processor::new();
             let mut status = SessionStatus::Starting;
             let mut title: Option<String> = None;
+            // Stays false when the loop ends without an EOF (every sender
+            // dropped) — an unobserved exit is never a clean one.
+            let mut clean = false;
             while let Ok(cmd) = ctrl_rx.recv() {
                 match cmd {
                     TermCmd::Bytes(bytes) => {
@@ -860,17 +928,37 @@ fn spawn_term(
                             term_sink(PtyEvent::SelectionCopied { session, text });
                         }
                     }
-                    TermCmd::Eof => break,
+                    TermCmd::Eof { clean: c } => {
+                        clean = c;
+                        // The waiter races the reader: the exit is observed on
+                        // the process while the last output chunks may still be
+                        // in flight. Give them a short quiet window — a crash
+                        // message is exactly what the surviving screen must show.
+                        while let Ok(TermCmd::Bytes(bytes)) = ctrl_rx.recv_timeout(EOF_DRAIN_QUIET)
+                        {
+                            parser.advance(&mut term, &bytes);
+                        }
+                        break;
+                    }
                 }
                 term_sink(PtyEvent::Output {
                     session,
                     screen: snapshot(&term, &palette),
                 });
             }
-            term_sink(PtyEvent::Exited { session });
+            // A final snapshot so any drained bytes reach the screen the tab
+            // keeps showing on an unclean exit.
+            term_sink(PtyEvent::Output {
+                session,
+                screen: snapshot(&term, &palette),
+            });
+            term_sink(PtyEvent::Exited { session, clean });
         })
         .unwrap_or_else(|_| {
-            sink(PtyEvent::Exited { session });
+            sink(PtyEvent::Exited {
+                session,
+                clean: false,
+            });
             std::thread::spawn(|| {})
         })
 }
@@ -1366,6 +1454,38 @@ mod tests {
         mgr.kill(id).expect("kill");
     }
 
+    /// Type `exit` into a spawned shell and assert the adapter reaps it as a
+    /// *clean* exit — the signal the shell auto-close keys off.
+    #[test]
+    fn a_typed_exit_reports_a_clean_exit() {
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let mgr = PtyManager::new(sink, None, Palette::default());
+        let id = sid(2);
+        mgr.spawn(spec(id)).expect("spawn");
+        mgr.write(id, b"exit\r\n").expect("write");
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut reaped = None;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(PtyEvent::Exited { clean, .. }) => {
+                    reaped = Some(clean);
+                    break;
+                }
+                Ok(_) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            }
+        }
+        assert_eq!(reaped, Some(true), "a typed `exit` must reap as clean");
+        // The manager holds the dead session's handles until the kill —
+        // exactly what the auto-close's `Kill` effect releases.
+        mgr.kill(id).expect("kill releases the dead session");
+    }
+
     #[test]
     fn named_schemes_resolve_and_unknown_is_none() {
         // Two darks, two lights — fg/bg from each published specification.
@@ -1650,6 +1770,72 @@ mod tests {
         assert!(snapshot(&term, &palette).bracketed_paste);
         parser.advance(&mut term, b"\x1b[?2004l");
         assert!(!snapshot(&term, &palette).bracketed_paste);
+    }
+
+    /// A writer that banks everything written, so a test can read back the
+    /// replies [`PtyResponder`] sends to the child process.
+    #[derive(Clone)]
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("capture lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_background_colour_query_is_answered_from_the_palette() {
+        // A CLI's theme auto-detection (Claude's `theme: auto`) sends OSC 11
+        // and picks light or dark from the reply; unanswered, it assumes
+        // dark — so a light palette must actually be reported.
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(captured.clone()))));
+        let palette = Palette::named("solarized-light").expect("known scheme");
+        let mut term = Term::new(
+            Config::default(),
+            &TermSize::new(20, 5),
+            PtyResponder {
+                writer,
+                palette: palette.clone(),
+            },
+        );
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"\x1b]11;?\x1b\\");
+        let reply =
+            String::from_utf8(captured.lock().expect("capture lock").clone()).expect("utf8 reply");
+        // Solarized-light background is 0xfdf6e3, reported in X11 rgb: form.
+        assert!(
+            reply.contains("rgb:fdfd/f6f6/e3e3"),
+            "OSC 11 must report the palette background, got {reply:?}"
+        );
+    }
+
+    #[test]
+    fn a_foreground_colour_query_is_answered_from_the_palette() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(captured.clone()))));
+        let palette = Palette::named("solarized-light").expect("known scheme");
+        let mut term = Term::new(
+            Config::default(),
+            &TermSize::new(20, 5),
+            PtyResponder {
+                writer,
+                palette: palette.clone(),
+            },
+        );
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"\x1b]10;?\x1b\\");
+        let reply =
+            String::from_utf8(captured.lock().expect("capture lock").clone()).expect("utf8 reply");
+        // Solarized-light foreground is 0x657b83.
+        assert!(
+            reply.contains("rgb:6565/7b7b/8383"),
+            "OSC 10 must report the palette foreground, got {reply:?}"
+        );
     }
 
     /// The bug behind reopening the "selection follows scroll" work: in the

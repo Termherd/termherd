@@ -4,14 +4,13 @@
 //! own `window.json` (FR12).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use termherd_core::{Action, KeyChord, Keymap};
 use termherd_pty::Palette;
 use tracing::warn;
 
-use crate::record::RecordConfig;
+use crate::record_config::RecordConfig;
 
 /// The persisted user settings. Every field defaults, so a missing or partial
 /// file still yields a usable config — settings must never block startup.
@@ -93,8 +92,7 @@ pub struct RecordSettings {
 }
 
 impl Default for RecordSettings {
-    /// Mirrors [`RecordConfig::default`], so the two never drift (asserted in a
-    /// test).
+    /// Derived from [`RecordConfig::default`] directly, so the two can't drift.
     fn default() -> Self {
         let d = RecordConfig::default();
         Self {
@@ -426,23 +424,12 @@ impl Settings {
     /// defaults — a corrupt config must never prevent startup.
     #[must_use]
     pub fn load() -> Self {
-        let Some(path) = config_path() else {
-            return Self::default();
-        };
-        match std::fs::read_to_string(&path) {
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
-                warn!(error = %e, path = %path.display(), "invalid settings; using defaults");
-                Self::default()
-            }),
-            Err(_) => Self::default(),
-        }
+        crate::json_store::load_json(FILE)
     }
 }
 
 /// `~/.termherd/settings.json` — the app data dir from the PRD (§7).
-fn config_path() -> Option<PathBuf> {
-    Some(crate::paths::termherd_dir()?.join("settings.json"))
-}
+const FILE: &str = "settings.json";
 
 #[cfg(test)]
 mod tests {
@@ -464,17 +451,6 @@ mod tests {
         assert_eq!(shell.program, "pwsh");
         assert!(shell.args.is_empty());
         assert_eq!(s.theme, ThemeChoice::Dark);
-    }
-
-    #[test]
-    fn record_defaults_match_the_built_in_record_config() {
-        // The settings default must mirror RecordConfig::default so an absent
-        // `record` block changes nothing.
-        let from_settings = Settings::default().record_config();
-        let built_in = RecordConfig::default();
-        assert_eq!(from_settings.fps, built_in.fps);
-        assert_eq!(from_settings.max_seconds, built_in.max_seconds);
-        assert!((from_settings.scale - built_in.scale).abs() < f32::EPSILON);
     }
 
     #[test]

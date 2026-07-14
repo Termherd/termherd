@@ -10,7 +10,8 @@ use iced::{Task, window};
 use termherd_core::Effect;
 
 use super::{Message, Shell};
-use crate::record::{FrameStats, FrameThrottle, RecordConfig, Recorder};
+use crate::record::{FrameStats, FrameThrottle, Recorder};
+use crate::record_config::RecordConfig;
 
 /// The runtime state of the GIF screencast: the immutable frame budget plus
 /// everything an in-progress recording needs. Idle when `recorder` is `None`.
