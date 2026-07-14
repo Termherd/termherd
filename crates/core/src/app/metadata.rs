@@ -76,7 +76,8 @@ impl App {
     /// for a shell or a fresh, not-yet-scanned session.
     #[must_use]
     pub fn record_for(&self, claude_id: &str) -> Option<&SessionRecord> {
-        self.projects
+        self.sidebar
+            .projects
             .iter()
             .flat_map(|group| &group.sessions)
             .find(|record| record.session_id == claude_id)
@@ -329,14 +330,14 @@ mod tests {
             "/p",
             "derived summary",
         )]));
-        let derived = app.session_title(&app.projects[0].sessions[0].clone());
+        let derived = app.session_title(&app.sidebar.projects[0].sessions[0].clone());
 
         app.apply(Event::RenameSession {
             session: "a".into(),
             title: "  My Title  ".into(),
         });
         assert_eq!(
-            app.session_title(&app.projects[0].sessions[0].clone()),
+            app.session_title(&app.sidebar.projects[0].sessions[0].clone()),
             "My Title"
         );
 
@@ -349,7 +350,7 @@ mod tests {
             matches!(effects.as_slice(), [Effect::SaveMetadata(m)] if !m.sessions.contains_key("a"))
         );
         assert_eq!(
-            app.session_title(&app.projects[0].sessions[0].clone()),
+            app.session_title(&app.sidebar.projects[0].sessions[0].clone()),
             derived
         );
     }

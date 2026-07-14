@@ -68,6 +68,7 @@ impl Shell {
         let session = self.archiving.as_deref()?;
         let title = self
             .core
+            .sidebar
             .projects
             .iter()
             .flat_map(|group| &group.sessions)

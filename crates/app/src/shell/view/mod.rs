@@ -37,7 +37,7 @@ impl Shell {
         // always-present handle brings it back without needing the shortcut.
         // The handle is pinned to `HANDLE_W` so the grid reserves exactly what
         // it occupies — keeping the pane geometry honest rather than estimating.
-        let base: Element<'_, Message> = if self.core.sidebar_hidden {
+        let base: Element<'_, Message> = if self.core.sidebar.hidden {
             let handle = container(
                 button(text("▶").size(12))
                     .on_press(Message::ToggleSidebar)
@@ -79,11 +79,21 @@ impl Shell {
                     self.render_pane(&tab.root, focused, split)
                 }
                 None => {
-                    let total: usize = self.core.projects.iter().map(|g| g.sessions.len()).sum();
+                    let total: usize = self
+                        .core
+                        .sidebar
+                        .projects
+                        .iter()
+                        .map(|g| g.sessions.len())
+                        .sum();
                     iced::widget::center(
                         column![
                             text("TermHerd").size(40),
-                            text(strings::welcome_counts(total, self.core.projects.len())).size(14),
+                            text(strings::welcome_counts(
+                                total,
+                                self.core.sidebar.projects.len()
+                            ))
+                            .size(14),
                             text(strings::WELCOME_HINT_OPEN).size(13),
                             text(strings::WELCOME_HINT_RESUME).size(13),
                         ]
