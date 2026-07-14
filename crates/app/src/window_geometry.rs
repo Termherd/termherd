@@ -4,6 +4,8 @@
 //! owns the geometry, kept separate so the rules are unit-testable without a
 //! display server.
 
+// Only the real monitor enumeration warns; the Linux stub has nothing to log.
+#[cfg(not(target_os = "linux"))]
 use tracing::warn;
 
 use crate::window_config::WindowConfig;
