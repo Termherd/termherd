@@ -33,6 +33,7 @@ use crate::record_config::RecordConfig;
 use crate::settings::{CloseSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
+mod bridge;
 mod docs;
 mod effects;
 mod geometry;
@@ -46,6 +47,7 @@ mod streams;
 mod terminal;
 mod view;
 
+pub(crate) use bridge::{Requests as BridgeRequests, channel as bridge_channel};
 use docs::{DocFeedback, OpenDoc};
 use input::event_modifiers;
 use record::RecordState;
@@ -119,6 +121,7 @@ pub fn run(
     watch_root: Option<PathBuf>,
     pty: Arc<dyn PtyHost>,
     pty_rx: UnboundedReceiver<PtyEvent>,
+    bridge_requests: BridgeRequests,
     startup: Startup,
 ) -> iced::Result {
     // Restore the saved bounds, but discard a position that now lands off every
@@ -139,6 +142,7 @@ pub fn run(
                 watch_root.clone(),
                 pty.clone(),
                 pty_output.clone(),
+                bridge_requests.clone(),
                 Startup {
                     theme: startup.theme,
                     keymap: startup.keymap.clone(),
@@ -207,6 +211,9 @@ struct Shell {
     pty: Arc<dyn PtyHost>,
     /// Streams PTY output/exit into the subscription (taken once).
     pty_output: PtyOutput,
+    /// Drains async-bridge transport requests into the subscription (taken
+    /// once), so an off-thread caller can read `core` state and get a reply.
+    bridge_requests: BridgeRequests,
     /// Latest rendered grid per session.
     screens: HashMap<SessionId, Screen>,
     /// Current keyboard target.
@@ -476,6 +483,14 @@ enum Message {
     /// A recorded window screenshot is ready; hand it to the encoder
     /// thread.
     RecordFrame(window::Screenshot),
+    /// A transport task asked the running app something over the async bridge:
+    /// read the answer from `core` and send it back on `reply`. Every such call
+    /// is timeout-bounded on the caller's side, so a slow answer degrades that
+    /// one request, never the shell.
+    Bridge {
+        request: bridge::Request,
+        reply: bridge::ReplyPort,
+    },
 }
 
 impl Message {
@@ -541,6 +556,7 @@ impl Shell {
         watch_root: Option<PathBuf>,
         pty: Arc<dyn PtyHost>,
         pty_output: PtyOutput,
+        bridge_requests: BridgeRequests,
         startup: Startup,
     ) -> Self {
         let mut core = termherd_core::App::new();
@@ -558,6 +574,7 @@ impl Shell {
             scan_error: None,
             pty,
             pty_output,
+            bridge_requests,
             screens: HashMap::new(),
             focus: Focus::Search,
             selection: None,
@@ -1088,6 +1105,10 @@ impl Shell {
             }
             Message::RecordFrameTick(now) => self.on_record_frame_tick(now),
             Message::RecordFrame(screenshot) => self.record.on_frame(screenshot),
+            Message::Bridge { request, reply } => {
+                reply.answer(bridge::respond(&self.core, &request));
+                Task::none()
+            }
         }
     }
 
@@ -1130,6 +1151,10 @@ impl Shell {
             subs.push(Subscription::run_with(root.clone(), watch_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
+        subs.push(Subscription::run_with(
+            self.bridge_requests.clone(),
+            bridge::request_stream,
+        ));
         // The screencast is driven by the window's present clock while recording:
         // `window::frames()` yields one tick per present (self-sustaining,
         // since each tick requests the next redraw), which keeps an idle window
@@ -1269,6 +1294,7 @@ mod key_routing {
             None,
             pty,
             PtyOutput::new(rx),
+            bridge::channel().1,
             test_startup(),
         )
     }
@@ -2455,6 +2481,7 @@ mod key_routing {
             None,
             pty.clone(),
             PtyOutput::new(rx),
+            bridge::channel().1,
             Startup {
                 theme: ThemeChoice::default(),
                 keymap: Keymap::defaults(),

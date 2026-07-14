@@ -72,6 +72,11 @@ notify-rust = "4"
 # Typed save errors for the plans/memory write slice.
 thiserror = "2"
 gif = "0.14.2"
+# Async transport substrate: a tokio runtime hosts future transport tasks, and
+# every bridge round-trip is timeout-bounded (`tokio::time::timeout`) so a slow
+# reply can never hang the caller. Feature-frugal — no `net`/`io`/`fs`; just the
+# runtime, channels, and the time driver the timeout needs.
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 
 [dev-dependencies]
 # Temp dirs for the atomic-write round-trip tests.
