@@ -19,6 +19,7 @@ name = "termherd_mcp"
 path = "src/lib.rs"
 
 [dependencies]
+termherd-core = { path = "../core" }
 serde_json = "1"
 
 [lints]

@@ -109,6 +109,13 @@ pub enum Action {
     SplitVertical,
     FocusNext,
     FocusPrev,
+    /// Move pane focus one step in a spatial direction, cycling within the
+    /// move's axis (FR6). Left/Right traverse vertical splits, Up/Down
+    /// horizontal ones.
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
     NextTab,
     PrevTab,
     FocusSearch,
@@ -179,12 +186,12 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         action: Action::SplitHorizontal,
         name: "split-horizontal",
-        default_chords: &[],
+        default_chords: &["mod+shift+d"],
     },
     ActionDef {
         action: Action::SplitVertical,
         name: "split-vertical",
-        default_chords: &[],
+        default_chords: &["mod+d"],
     },
     ActionDef {
         action: Action::FocusNext,
@@ -195,6 +202,26 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::FocusPrev,
         name: "focus-prev",
         default_chords: &[],
+    },
+    ActionDef {
+        action: Action::FocusLeft,
+        name: "focus-left",
+        default_chords: &["mod+shift+left"],
+    },
+    ActionDef {
+        action: Action::FocusRight,
+        name: "focus-right",
+        default_chords: &["mod+shift+right"],
+    },
+    ActionDef {
+        action: Action::FocusUp,
+        name: "focus-up",
+        default_chords: &["mod+shift+up"],
+    },
+    ActionDef {
+        action: Action::FocusDown,
+        name: "focus-down",
+        default_chords: &["mod+shift+down"],
     },
     ActionDef {
         action: Action::NextTab,
@@ -302,6 +329,33 @@ impl Action {
             .find(|def| def.action == self)
             .map(|def| def.name)
     }
+}
+
+/// One entry of the public, read-only action vocabulary: a bindable action's
+/// kebab-case config name and its default chord specs (a `mod` token means the
+/// platform primary modifier — ⌘ on macOS, Ctrl elsewhere). This is the shape
+/// an out-of-crate surface enumerates; it does not expose the internal
+/// [`Action`] value.
+pub struct ActionBinding {
+    /// The kebab-case name the `keys` section of `settings.json` speaks.
+    pub name: &'static str,
+    /// Default chord specs for this action; empty means "no built-in binding".
+    pub default_chords: &'static [&'static str],
+}
+
+/// The bindable simple-action vocabulary with its defaults, in table order.
+/// Derives from the single [`ACTIONS`] source so a consumer (the MCP `keys`
+/// resource) never duplicates the table. The parameterized `activate-tab-N`
+/// family is named separately and is not included.
+#[must_use]
+pub fn action_catalog() -> Vec<ActionBinding> {
+    ACTIONS
+        .iter()
+        .map(|def| ActionBinding {
+            name: def.name,
+            default_chords: def.default_chords,
+        })
+        .collect()
 }
 
 /// Parse an `activate-tab-N` config name (N in `1..=NUMBER_ROW_TABS`) into the
@@ -533,6 +587,19 @@ mod tests {
                 def.action,
                 def.name,
             );
+        }
+    }
+
+    #[test]
+    fn action_catalog_mirrors_the_source_table() {
+        // The public catalogue is the read-only face of ACTIONS; it must expose
+        // every entry, name and defaults intact, so an out-of-crate consumer
+        // (the MCP `keys` resource) never drifts from the single source.
+        let catalog = action_catalog();
+        assert_eq!(catalog.len(), ACTIONS.len());
+        for (entry, def) in catalog.iter().zip(ACTIONS.iter()) {
+            assert_eq!(entry.name, def.name);
+            assert_eq!(entry.default_chords, def.default_chords);
         }
     }
 

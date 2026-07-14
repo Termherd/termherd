@@ -1,18 +1,21 @@
 //! termherd-mcp — the control-surface MCP server (`F-mcp-control-surface`).
 //!
-//! First, limited draft: a **read-only** view of termherd's configuration,
-//! spoken as MCP over stdio so an in-app Claude session can ask "what can I
-//! configure?" without leaving the conversation. It exposes one tool,
-//! [`list_options`](handle_message), and the option **schema** as a resource.
+//! A view of termherd's configuration, spoken as MCP over stdio so an in-app
+//! Claude session can ask "what can I configure?" — and now change it — without
+//! leaving the conversation. It exposes the [`list_options`](handle_message)
+//! and [`set_option`](handle_message) tools, the option **schema** resource,
+//! and the keymap **`keys`** catalogue as a resource.
 //!
-//! Writes (`set_option`), the keymap/`keys` surface and the workspace
-//! orchestration tools (open session, split, focus, …) are deliberately out of
-//! this draft — they land once the scope is settled (see the issue's phasing).
+//! Live workspace orchestration (open session, split, focus, …) needs the live
+//! transport and stays out of this stdio slice — those land as separate
+//! children of the control-surface split.
 //!
-//! This module is the **pure** half: JSON-RPC dispatch ([`handle_message`]) and
-//! option resolution ([`resolve_options`]) take the parsed request and the
-//! parsed `settings.json` value and return data — no I/O, no globals — so the
-//! protocol is unit-testable. The thin stdio loop lives in `main.rs`.
+//! This module is the **pure** half: JSON-RPC dispatch ([`handle_message`]),
+//! option resolution ([`resolve_options`]) and the [`set_option`] mutation take
+//! the parsed request and the parsed `settings.json` value and return data —
+//! no I/O, no globals — so the protocol is unit-testable. A write is *described*
+//! (the returned [`Reply::write_settings`]) here and *performed* by the thin
+//! stdio loop in `main.rs`, keeping the same Event→Effect split as `core`.
 
 use serde_json::{Value, json};
 
@@ -20,6 +23,8 @@ use serde_json::{Value, json};
 const DEFAULT_PROTOCOL_VERSION: &str = "2024-11-05";
 /// The URI the option schema is published under as an MCP resource.
 pub const SCHEMA_URI: &str = "termherd://options/schema";
+/// The URI the keymap (`keys`) catalogue is published under as an MCP resource.
+pub const KEYS_URI: &str = "termherd://keys/schema";
 
 /// One configurable option exposed over the control surface. `pointer` is a
 /// JSON Pointer (RFC 6901) into `settings.json`, so reading a value never needs
@@ -151,32 +156,164 @@ pub fn schema_resource() -> Value {
     json!({ "options": options })
 }
 
-/// Handle one decoded JSON-RPC message against the given `settings.json` value.
-/// Returns the response to write back, or `None` for a notification (a message
-/// with no `id`, e.g. `notifications/initialized`) which JSON-RPC never answers.
+/// The result of applying [`set_option`] purely: the mutated `settings.json`
+/// value plus any warnings for a value that does not match the option's
+/// declared shape. The value is written regardless — the read surface degrades
+/// an out-of-shape value on its own — so warnings inform, they do not block.
+pub struct SetOutcome {
+    /// The settings value with the one option applied.
+    pub settings: Value,
+    /// Human warnings about the applied value (empty when it fits the shape).
+    pub warnings: Vec<String>,
+}
+
+/// Apply `set_option` purely: resolve `id` against [`OPTIONS`], set its JSON
+/// pointer in a clone of `settings` (creating intermediate objects as needed),
+/// and collect a warning when `value` does not match the option's kind/choices.
+/// Returns `None` for an unknown `id` — there is no pointer to write, the only
+/// hard error — mirroring the "broken invariant → `None`" idiom in `core`.
 #[must_use]
-pub fn handle_message(message: &Value, settings: &Value) -> Option<Value> {
+pub fn set_option(settings: &Value, id: &str, value: &Value) -> Option<SetOutcome> {
+    let spec = OPTIONS.iter().find(|spec| spec.id == id)?;
+    let warnings = shape_warnings(spec, value);
+    let mut new_settings = settings.clone();
+    set_pointer(&mut new_settings, spec.pointer, value.clone());
+    Some(SetOutcome {
+        settings: new_settings,
+        warnings,
+    })
+}
+
+/// Warn when `value` does not match `spec`'s declared shape. `null` is always
+/// accepted (it unsets the option — the read side reports absent and null
+/// alike). Warnings inform only: the value is written regardless, and the read
+/// surface degrades an out-of-shape value on its own.
+fn shape_warnings(spec: &OptionSpec, value: &Value) -> Vec<String> {
+    if value.is_null() {
+        return Vec::new();
+    }
+    let mismatch = match spec.kind {
+        "enum" => value
+            .as_str()
+            .is_none_or(|s| !spec.choices.contains(&s))
+            .then(|| {
+                format!(
+                    "value {value} is not one of the allowed choices for {}: {}",
+                    spec.id,
+                    spec.choices.join(", ")
+                )
+            }),
+        "string" => (!value.is_string())
+            .then(|| format!("option {} expects a string, got {value}", spec.id)),
+        "array" => {
+            (!value.is_array()).then(|| format!("option {} expects an array, got {value}", spec.id))
+        }
+        _ => None,
+    };
+    mismatch.into_iter().collect()
+}
+
+/// Set `value` at a JSON Pointer (RFC 6901) in `root`, creating intermediate
+/// objects for any missing path segments (`serde_json::pointer_mut` only walks
+/// existing ones). A non-object met mid-path is replaced with an object, so a
+/// well-formed catalog pointer — all escape-free (`/terminal/colors/…`) — always
+/// lands. An empty pointer (the whole document) is a no-op; the catalog has none.
+fn set_pointer(root: &mut Value, pointer: &str, value: Value) {
+    let Some(path) = pointer.strip_prefix('/') else {
+        return;
+    };
+    let segments: Vec<&str> = path.split('/').collect();
+    let Some((last, parents)) = segments.split_last() else {
+        return;
+    };
+    let mut cursor = root;
+    for segment in parents {
+        if !cursor.is_object() {
+            *cursor = json!({});
+        }
+        let Some(map) = cursor.as_object_mut() else {
+            return;
+        };
+        cursor = map.entry((*segment).to_owned()).or_insert(Value::Null);
+    }
+    if !cursor.is_object() {
+        *cursor = json!({});
+    }
+    if let Some(map) = cursor.as_object_mut() {
+        map.insert((*last).to_owned(), value);
+    }
+}
+
+/// The keymap catalogue served as the `keys` resource: every bindable action
+/// with its default chords and the chord(s) currently bound in `settings.json`
+/// (`null` when unbound). Read-only for now — rebinding is a later slice.
+#[must_use]
+pub fn keys_resource(settings: &Value) -> Value {
+    let actions: Vec<Value> = termherd_core::action_catalog()
+        .into_iter()
+        .map(|binding| {
+            // Current binding: whatever the `keys` section holds for this action
+            // (a string or an array of chords), or `null` when unbound.
+            let current = settings
+                .pointer(&format!("/keys/{}", binding.name))
+                .cloned()
+                .unwrap_or(Value::Null);
+            json!({
+                "name": binding.name,
+                "default": binding.default_chords,
+                "current": current,
+            })
+        })
+        .collect();
+    json!({ "actions": actions })
+}
+
+/// What one decoded JSON-RPC message resolves to: the response to write back
+/// (`None` for a notification) and, optionally, a `settings.json` mutation the
+/// transport must persist. Keeps `handle_message` pure — it *describes* the
+/// write; `main.rs` performs it (the same Event→Effect split as `core`).
+#[derive(Debug, Default)]
+pub struct Reply {
+    /// The JSON-RPC response, or `None` for a notification (no `id`).
+    pub response: Option<Value>,
+    /// A `settings.json` value to persist, or `None` when nothing changed.
+    pub write_settings: Option<Value>,
+}
+
+/// Handle one decoded JSON-RPC message against the given `settings.json` value.
+/// Returns a [`Reply`]: the response to write back plus any settings mutation to
+/// persist. A message with no `id` is a notification — no response, no write.
+#[must_use]
+pub fn handle_message(message: &Value, settings: &Value) -> Reply {
     // A message without an `id` is a notification: act if needed, never reply.
-    let id = message.get("id")?.clone();
+    let Some(id) = message.get("id").cloned() else {
+        return Reply::default();
+    };
     let method = message
         .get("method")
         .and_then(Value::as_str)
         .unwrap_or_default();
 
+    // A tool call may carry a settings mutation to persist alongside its result.
+    let mut write_settings = None;
     let outcome = match method {
         "initialize" => Ok(initialize_result(message)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(tools_list_result()),
-        "tools/call" => tool_call_result(message, settings),
+        "tools/call" => tool_call_result(message, settings, &mut write_settings),
         "resources/list" => Ok(resources_list_result()),
-        "resources/read" => resource_read_result(message),
+        "resources/read" => resource_read_result(message, settings),
         other => Err(error_object(-32601, &format!("method not found: {other}"))),
     };
 
-    Some(match outcome {
+    let response = match outcome {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
         Err(error) => json!({ "jsonrpc": "2.0", "id": id, "error": error }),
-    })
+    };
+    Reply {
+        response: Some(response),
+        write_settings,
+    }
 }
 
 /// The `initialize` handshake result, echoing the client's requested protocol
@@ -193,19 +330,41 @@ fn initialize_result(message: &Value) -> Value {
     })
 }
 
-/// The single tool this draft exposes: `list_options`, which takes no arguments.
+/// The tools this slice exposes: `list_options` (no arguments) and `set_option`
+/// (an option `id` plus a new `value`).
 fn tools_list_result() -> Value {
     json!({
-        "tools": [{
-            "name": "list_options",
-            "description": "List termherd's configurable options with their current values.",
-            "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-        }],
+        "tools": [
+            {
+                "name": "list_options",
+                "description": "List termherd's configurable options with their current values.",
+                "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+            },
+            {
+                "name": "set_option",
+                "description": "Set one termherd option by id; the change lands in settings.json and applies on restart.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "string", "description": "The option id, e.g. \"theme\"." },
+                        "value": { "description": "The new value (type per the option's schema)." },
+                    },
+                    "required": ["id", "value"],
+                    "additionalProperties": false,
+                },
+            },
+        ],
     })
 }
 
-/// Dispatch a `tools/call`. Only `list_options` is known in this draft.
-fn tool_call_result(message: &Value, settings: &Value) -> Result<Value, Value> {
+/// Dispatch a `tools/call`. `list_options` reads; `set_option` resolves the
+/// mutation and, on success, records the settings to persist in `write_settings`
+/// so the transport can write them.
+fn tool_call_result(
+    message: &Value,
+    settings: &Value,
+    write_settings: &mut Option<Value>,
+) -> Result<Value, Value> {
     let name = message
         .pointer("/params/name")
         .and_then(Value::as_str)
@@ -219,35 +378,79 @@ fn tool_call_result(message: &Value, settings: &Value) -> Result<Value, Value> {
                 "isError": false,
             }))
         }
+        "set_option" => set_option_call(message, settings, write_settings),
         other => Err(error_object(-32602, &format!("unknown tool: {other}"))),
     }
 }
 
-/// Advertise the one resource: the option schema.
+/// The `set_option` tool call: read `id`/`value` from the arguments, apply the
+/// pure mutation, and — when the `id` is known — stage the new settings for the
+/// transport to persist. An unknown `id` is a tool error (no pointer to write).
+fn set_option_call(
+    message: &Value,
+    settings: &Value,
+    write_settings: &mut Option<Value>,
+) -> Result<Value, Value> {
+    let id = message
+        .pointer("/params/arguments/id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let value = message
+        .pointer("/params/arguments/value")
+        .cloned()
+        .unwrap_or(Value::Null);
+
+    let Some(outcome) = set_option(settings, id, &value) else {
+        return Err(error_object(-32602, &format!("unknown option: {id}")));
+    };
+    *write_settings = Some(outcome.settings);
+    let text = if outcome.warnings.is_empty() {
+        format!("set {id}")
+    } else {
+        format!("set {id} (with warnings: {})", outcome.warnings.join("; "))
+    };
+    Ok(json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+    }))
+}
+
+/// Advertise the resources: the option schema and the keymap (`keys`) catalogue.
 fn resources_list_result() -> Value {
     json!({
-        "resources": [{
-            "uri": SCHEMA_URI,
-            "name": "Option schema",
-            "description": "The schema of termherd's configurable options.",
-            "mimeType": "application/json",
-        }],
+        "resources": [
+            {
+                "uri": SCHEMA_URI,
+                "name": "Option schema",
+                "description": "The schema of termherd's configurable options.",
+                "mimeType": "application/json",
+            },
+            {
+                "uri": KEYS_URI,
+                "name": "Keymap catalogue",
+                "description": "The bindable actions with their default and current key chords.",
+                "mimeType": "application/json",
+            },
+        ],
     })
 }
 
-/// Serve a `resources/read` for the schema URI; any other URI is an error.
-fn resource_read_result(message: &Value) -> Result<Value, Value> {
+/// Serve a `resources/read` for the schema or `keys` URI; any other URI is an
+/// error. The `keys` payload reflects the current `settings.json` bindings.
+fn resource_read_result(message: &Value, settings: &Value) -> Result<Value, Value> {
     let uri = message
         .pointer("/params/uri")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if uri != SCHEMA_URI {
-        return Err(error_object(-32602, &format!("unknown resource: {uri}")));
-    }
-    let text = serde_json::to_string_pretty(&schema_resource()).unwrap_or_default();
+    let body = match uri {
+        SCHEMA_URI => schema_resource(),
+        KEYS_URI => keys_resource(settings),
+        other => return Err(error_object(-32602, &format!("unknown resource: {other}"))),
+    };
+    let text = serde_json::to_string_pretty(&body).unwrap_or_default();
     Ok(json!({
         "contents": [{
-            "uri": SCHEMA_URI,
+            "uri": uri,
             "mimeType": "application/json",
             "text": text,
         }],
@@ -265,6 +468,14 @@ mod tests {
 
     fn settings() -> Value {
         json!({ "theme": "light", "shell": { "program": "pwsh", "args": ["-NoLogo"] } })
+    }
+
+    /// Drive `handle_message` and unwrap its response — for tests that only care
+    /// about the reply, not the write side.
+    fn respond(message: &Value, settings: &Value) -> Value {
+        handle_message(message, settings)
+            .response
+            .expect("a response")
     }
 
     #[test]
@@ -297,7 +508,7 @@ mod tests {
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": { "protocolVersion": "2025-06-18" }
         });
-        let resp = handle_message(&req, &json!({})).expect("a response");
+        let resp = respond(&req, &json!({}));
         assert_eq!(resp["result"]["protocolVersion"], json!("2025-06-18"));
         assert_eq!(resp["result"]["serverInfo"]["name"], json!("termherd-mcp"));
         assert!(resp["result"]["capabilities"].get("tools").is_some());
@@ -306,7 +517,7 @@ mod tests {
     #[test]
     fn initialize_without_a_version_falls_back_to_the_default() {
         let req = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" });
-        let resp = handle_message(&req, &json!({})).expect("a response");
+        let resp = respond(&req, &json!({}));
         assert_eq!(
             resp["result"]["protocolVersion"],
             json!(DEFAULT_PROTOCOL_VERSION)
@@ -314,12 +525,22 @@ mod tests {
     }
 
     #[test]
-    fn tools_list_advertises_list_options() {
+    fn tools_list_advertises_read_and_write_tools() {
         let req = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
-        let resp = handle_message(&req, &json!({})).expect("a response");
+        let resp = respond(&req, &json!({}));
         let tools = resp["result"]["tools"].as_array().expect("tools array");
-        assert_eq!(tools.len(), 1);
-        assert_eq!(tools[0]["name"], json!("list_options"));
+        let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert!(names.contains(&"list_options"), "reads stay advertised");
+        assert!(
+            names.contains(&"set_option"),
+            "the write tool is advertised"
+        );
+        // `set_option` declares its required arguments so the model calls it right.
+        let set = tools
+            .iter()
+            .find(|t| t["name"] == "set_option")
+            .expect("set_option tool");
+        assert_eq!(set["inputSchema"]["required"], json!(["id", "value"]));
     }
 
     #[test]
@@ -328,7 +549,7 @@ mod tests {
             "jsonrpc": "2.0", "id": 3, "method": "tools/call",
             "params": { "name": "list_options", "arguments": {} }
         });
-        let resp = handle_message(&req, &settings()).expect("a response");
+        let resp = respond(&req, &settings());
         assert_eq!(resp["result"]["isError"], json!(false));
         let text = resp["result"]["content"][0]["text"]
             .as_str()
@@ -345,9 +566,9 @@ mod tests {
     fn an_unknown_tool_is_an_error_not_a_panic() {
         let req = json!({
             "jsonrpc": "2.0", "id": 4, "method": "tools/call",
-            "params": { "name": "set_option", "arguments": {} }
+            "params": { "name": "frobnicate", "arguments": {} }
         });
-        let resp = handle_message(&req, &json!({})).expect("a response");
+        let resp = respond(&req, &json!({}));
         assert_eq!(resp["error"]["code"], json!(-32602));
     }
 
@@ -357,7 +578,7 @@ mod tests {
             "jsonrpc": "2.0", "id": 5, "method": "resources/read",
             "params": { "uri": SCHEMA_URI }
         });
-        let resp = handle_message(&ok, &json!({})).expect("a response");
+        let resp = respond(&ok, &json!({}));
         let text = resp["result"]["contents"][0]["text"]
             .as_str()
             .expect("schema text");
@@ -368,21 +589,160 @@ mod tests {
             "jsonrpc": "2.0", "id": 6, "method": "resources/read",
             "params": { "uri": "termherd://nope" }
         });
-        let resp = handle_message(&bad, &json!({})).expect("a response");
+        let resp = respond(&bad, &json!({}));
         assert_eq!(resp["error"]["code"], json!(-32602));
     }
 
     #[test]
     fn an_unknown_method_returns_method_not_found() {
         let req = json!({ "jsonrpc": "2.0", "id": 7, "method": "frobnicate" });
-        let resp = handle_message(&req, &json!({})).expect("a response");
+        let resp = respond(&req, &json!({}));
         assert_eq!(resp["error"]["code"], json!(-32601));
     }
 
     #[test]
-    fn a_notification_yields_no_response() {
-        // No `id` → JSON-RPC notification; we must not reply.
+    fn a_notification_yields_no_response_and_no_write() {
+        // No `id` → JSON-RPC notification; we must neither reply nor write.
         let note = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-        assert!(handle_message(&note, &json!({})).is_none());
+        let reply = handle_message(&note, &json!({}));
+        assert!(reply.response.is_none());
+        assert!(reply.write_settings.is_none());
+    }
+
+    // --- set_option (the write half) --------------------------------------
+
+    #[test]
+    fn set_option_sets_a_known_option_value() {
+        let outcome = set_option(&settings(), "theme", &json!("dark")).expect("known option");
+        assert_eq!(outcome.settings.pointer("/theme"), Some(&json!("dark")));
+        assert!(outcome.warnings.is_empty(), "a valid choice warns nothing");
+    }
+
+    #[test]
+    fn set_option_creates_missing_parent_objects() {
+        // `terminal.colors.background` is nested; none of it exists yet.
+        let outcome = set_option(&json!({}), "terminal.colors.background", &json!("#101010"))
+            .expect("known option");
+        assert_eq!(
+            outcome.settings.pointer("/terminal/colors/background"),
+            Some(&json!("#101010"))
+        );
+    }
+
+    #[test]
+    fn set_option_leaves_sibling_config_untouched() {
+        let outcome = set_option(&settings(), "theme", &json!("dark")).expect("known option");
+        // The shell block set in `settings()` must survive the theme write.
+        assert_eq!(
+            outcome.settings.pointer("/shell/program"),
+            Some(&json!("pwsh"))
+        );
+    }
+
+    #[test]
+    fn set_option_on_an_unknown_id_is_none() {
+        assert!(set_option(&settings(), "no.such.option", &json!("x")).is_none());
+    }
+
+    #[test]
+    fn set_option_writes_an_out_of_choices_enum_but_warns() {
+        // "banana" is not a theme choice: written anyway (the read side degrades
+        // it), with a warning so the agent knows.
+        let outcome = set_option(&settings(), "theme", &json!("banana")).expect("known option");
+        assert_eq!(outcome.settings.pointer("/theme"), Some(&json!("banana")));
+        assert!(
+            !outcome.warnings.is_empty(),
+            "an out-of-choices value warns"
+        );
+    }
+
+    #[test]
+    fn set_option_warns_on_a_type_mismatch() {
+        // `shell.args` is an array; a string is the wrong shape.
+        let outcome =
+            set_option(&settings(), "shell.args", &json!("not-an-array")).expect("known option");
+        assert!(!outcome.warnings.is_empty(), "a wrong-typed value warns");
+    }
+
+    #[test]
+    fn tools_call_set_option_stages_the_write() {
+        let req = json!({
+            "jsonrpc": "2.0", "id": 8, "method": "tools/call",
+            "params": { "name": "set_option", "arguments": { "id": "theme", "value": "dark" } }
+        });
+        let reply = handle_message(&req, &settings());
+        let resp = reply.response.expect("a response");
+        assert_eq!(resp["result"]["isError"], json!(false));
+        // The transport is handed the mutated settings to persist.
+        let write = reply.write_settings.expect("a staged write");
+        assert_eq!(write.pointer("/theme"), Some(&json!("dark")));
+    }
+
+    #[test]
+    fn tools_call_set_option_unknown_id_errors_and_stages_no_write() {
+        let req = json!({
+            "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+            "params": { "name": "set_option", "arguments": { "id": "nope", "value": 1 } }
+        });
+        let reply = handle_message(&req, &settings());
+        let resp = reply.response.expect("a response");
+        assert_eq!(resp["error"]["code"], json!(-32602));
+        assert!(
+            reply.write_settings.is_none(),
+            "an unknown id writes nothing"
+        );
+    }
+
+    // --- keys resource (the read-only keymap catalogue) -------------------
+
+    #[test]
+    fn keys_resource_lists_the_action_catalogue_with_current_bindings() {
+        let cfg = json!({ "keys": { "copy": "ctrl+y" } });
+        let keys = keys_resource(&cfg);
+        let actions = keys["actions"].as_array().expect("actions array");
+        // The catalogue mirrors core's bindable vocabulary, not an empty list.
+        assert_eq!(actions.len(), termherd_core::action_catalog().len());
+        let copy = actions
+            .iter()
+            .find(|a| a["name"] == "copy")
+            .expect("copy action");
+        assert_eq!(copy["current"], json!("ctrl+y"), "the override is surfaced");
+        let toggle = actions
+            .iter()
+            .find(|a| a["name"] == "toggle-sidebar")
+            .expect("toggle-sidebar action");
+        assert_eq!(toggle["current"], Value::Null, "an unbound action is null");
+        assert!(
+            toggle["default"].as_array().is_some_and(|d| !d.is_empty()),
+            "defaults come through from core"
+        );
+    }
+
+    #[test]
+    fn keys_resource_is_served_over_resources_read() {
+        let req = json!({
+            "jsonrpc": "2.0", "id": 10, "method": "resources/read",
+            "params": { "uri": KEYS_URI }
+        });
+        let resp = respond(&req, &json!({}));
+        let text = resp["result"]["contents"][0]["text"]
+            .as_str()
+            .expect("keys text");
+        let keys: Value = serde_json::from_str(text).expect("keys payload is JSON");
+        assert!(keys["actions"].is_array());
+    }
+
+    #[test]
+    fn resources_list_advertises_both_the_schema_and_keys() {
+        let req = json!({ "jsonrpc": "2.0", "id": 11, "method": "resources/list" });
+        let resp = respond(&req, &json!({}));
+        let uris: Vec<&str> = resp["result"]["resources"]
+            .as_array()
+            .expect("resources array")
+            .iter()
+            .filter_map(|r| r["uri"].as_str())
+            .collect();
+        assert!(uris.contains(&SCHEMA_URI));
+        assert!(uris.contains(&KEYS_URI));
     }
 }

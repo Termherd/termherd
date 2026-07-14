@@ -9,14 +9,13 @@ use iced::advanced::text::Shaping;
 use iced::widget::canvas::{self, Frame, Geometry, Text};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme, mouse};
 use termherd_core::workspace::SessionId;
+use termherd_core::{SelectOp, SelectSide};
 use termherd_pty::Screen;
 
 use crate::shell::Message;
 
 use super::cell_size;
-use super::selection::{
-    HoverLink, abs_line, cell_at, link_at, selection_text, visible_spans, word_at,
-};
+use super::selection::{HoverLink, cell_at, cell_side, link_at, word_at, word_text};
 
 /// A canvas program that draws the visible terminal grid with per-cell colour
 /// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
@@ -25,8 +24,9 @@ use super::selection::{
 pub(in crate::shell) struct TerminalView<'a> {
     pub(in crate::shell) screen: &'a Screen,
     /// The session this canvas is currently showing. The canvas widget is
-    /// reused across tabs, so the selection state is tagged with its owner to
-    /// keep a selection from bleeding onto another tab.
+    /// reused across tabs, so the live-drag state is tagged with its owner to
+    /// keep a drag from carrying onto another tab (the selection itself lives
+    /// per-session in the terminal).
     pub(in crate::shell) session: SessionId,
     /// Whether the link-open modifier (Ctrl/Cmd) is held, so a hovered link
     /// highlights and a click opens it instead of selecting text.
@@ -36,20 +36,20 @@ pub(in crate::shell) struct TerminalView<'a> {
     pub(in crate::shell) font_size: f32,
 }
 
-/// Per-canvas selection state: the drag in progress, the last range, and the
-/// session it belongs to. The canvas widget is shared across tabs (iced keys
-/// program state by tree position), so `owner` scopes the selection to one
-/// session.
+/// Per-canvas pointer state for the drag in progress and link hover. The
+/// selection itself lives in the terminal (`termherd_pty` owns it and rotates it
+/// on scroll) and rides back on each [`Screen`]; this only tracks the live drag.
+/// The canvas widget is shared across tabs (iced keys program state by tree
+/// position), so `owner` scopes the drag state to one session.
 /// `pub(in crate::shell)` to match [`TerminalView`]: it is that widget's
 /// `canvas::Program::State`, so it is as reachable as the widget itself.
 #[derive(Default)]
 pub(in crate::shell) struct TermState {
+    /// A left-drag is in progress; each pointer move extends the selection.
     selecting: bool,
-    /// Selection endpoints as `(col, absolute scrollback line)` — see
-    /// [`selection::abs_line`]. Anchoring to the absolute line (not a viewport
-    /// row) lets the highlight follow the text through scroll.
-    anchor: Option<(u16, i32)>,
-    head: Option<(u16, i32)>,
+    /// The pointer moved off its press cell during the drag, so a release copies
+    /// the selection; a bare click (press and release on one cell) clears it.
+    dragged: bool,
     owner: Option<SessionId>,
     /// The link currently under the pointer while the modifier is held:
     /// its row, column span `[start, end)`, and the URL to open on click.
@@ -96,43 +96,22 @@ impl ScrollAccumulator {
     }
 }
 
-impl TermState {
-    /// Drop any selection, keeping the owning session.
-    fn clear_selection(&mut self) {
-        self.selecting = false;
-        self.anchor = None;
-        self.head = None;
-    }
-
-    /// The current selection range, only when it spans more than one cell — a
-    /// bare click (anchor == head) is not a selection.
-    fn range(&self) -> Option<((u16, i32), (u16, i32))> {
-        match (self.anchor, self.head) {
-            (Some(a), Some(b)) if a != b => Some((a, b)),
-            _ => None,
-        }
-    }
-}
-
 impl TerminalView<'_> {
-    /// The highlighted spans to paint for the current selection: `(row, c0, c1)`
-    /// with inclusive columns, one per visible row the selection covers. Empty
-    /// unless this canvas owns a real (multi-cell) selection, so the highlight
-    /// neither bleeds across tabs nor paints a bare click. This is the seam the
-    /// draw pass and the selection tests share.
-    fn visible_selection(&self, state: &TermState) -> Vec<(u16, u16, u16)> {
-        if state.owner != Some(self.session) {
-            return Vec::new();
-        }
-        let Some((a, b)) = state.range() else {
-            return Vec::new();
-        };
-        visible_spans(
-            a,
-            b,
-            self.screen.display_offset,
-            self.screen.cols,
-            self.screen.rows,
+    /// The grid line and selection side for the pointer's cell — the coordinate
+    /// the terminal anchors a selection to. `line = row - display_offset` matches
+    /// the snapshot's cell mapping, so it survives scroll.
+    fn grid_point(
+        &self,
+        cursor: mouse::Cursor,
+        bounds: Rectangle,
+        col: u16,
+        row: u16,
+    ) -> (i32, usize, SelectSide) {
+        let line = i32::from(row) - self.screen.display_offset as i32;
+        (
+            line,
+            usize::from(col),
+            cell_side(cursor, bounds, self.screen.cols),
         )
     }
 }
@@ -164,8 +143,9 @@ impl canvas::Program<Message> for TerminalView<'_> {
             // sees wheel events even while hovering the sidebar, so without
             // this guard scrolling the session list also scrolls the PTY.
             mouse::Event::WheelScrolled { delta } if cursor.position_in(bounds).is_some() => {
-                // The selection is anchored to absolute scrollback lines, so it
-                // rides with the text as the viewport moves — no need to drop it.
+                // The terminal owns the selection and rotates it on every scroll,
+                // so the highlight rides with the text — the wheel need not drop
+                // it (the fix for a selection freezing over a repainting TUI).
                 let lines = delta_to_lines(delta, cell_size(self.font_size).1);
                 let step = state.scroll.step(lines);
                 // The pointer cell rides along so a mouse-mode app (Claude's TUI)
@@ -196,34 +176,45 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 // A double-click selects the whole word / filename under the
                 // pointer and copies it, like a terminal. iced's click
                 // tracker classifies the press from the previous one's time and
-                // distance.
+                // distance. The word range drives a native selection so the
+                // highlight persists and rides scroll; the text is read now, off
+                // the current screen, since the selection lands on a later frame.
                 let clicked = Click::new(position, mouse::Button::Left, state.last_click);
                 state.last_click = Some(clicked);
-                let offset = self.screen.display_offset;
+                let off = self.screen.display_offset as i32;
                 if clicked.kind() == click::Kind::Double
                     && let Some((anchor, head)) = word_at(self.screen, col, row)
                 {
-                    let (anchor, head) = (
-                        (anchor.0, abs_line(anchor.1, offset)),
-                        (head.0, abs_line(head.1, offset)),
-                    );
                     state.selecting = false;
-                    state.anchor = Some(anchor);
-                    state.head = Some(head);
-                    return Some(canvas::Action::publish(Message::CopySelection(
-                        selection_text(self.screen, anchor, head),
-                    )));
+                    return Some(canvas::Action::publish(Message::SelectAndCopy {
+                        session: self.session,
+                        op: SelectOp::Range {
+                            line0: i32::from(anchor.1) - off,
+                            col0: usize::from(anchor.0),
+                            line1: i32::from(head.1) - off,
+                            col1: usize::from(head.0),
+                        },
+                        text: word_text(self.screen, anchor, head),
+                    }));
                 }
+                // Begin a drag-selection at the press cell; the terminal owns the
+                // selection from here, extended on each move and copied on release.
                 state.selecting = true;
-                let cell = (col, abs_line(row, offset));
-                state.anchor = Some(cell);
-                state.head = Some(cell);
-                Some(canvas::Action::request_redraw())
+                state.dragged = false;
+                let (line, col, side) = self.grid_point(cursor, bounds, col, row);
+                Some(canvas::Action::publish(Message::Select {
+                    session: self.session,
+                    op: SelectOp::Start { line, col, side },
+                }))
             }
             mouse::Event::CursorMoved { .. } if state.selecting => {
                 cell_at(cursor, bounds, self.screen).map(|(col, row)| {
-                    state.head = Some((col, abs_line(row, self.screen.display_offset)));
-                    canvas::Action::request_redraw()
+                    state.dragged = true;
+                    let (line, col, side) = self.grid_point(cursor, bounds, col, row);
+                    canvas::Action::publish(Message::Select {
+                        session: self.session,
+                        op: SelectOp::Update { line, col, side },
+                    })
                 })
             }
             // Track the link under the pointer while the modifier is held so the
@@ -240,17 +231,24 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 })
             }
             mouse::Event::ButtonReleased(mouse::Button::Left) if state.selecting => {
+                let dragged = state.dragged;
                 state.selecting = false;
-                // Only a real drag is a selection; a bare click clears it so a
-                // single click can't leave an undismissable highlight.
-                match state.range() {
-                    Some((a, b)) => Some(canvas::Action::publish(Message::CopySelection(
-                        selection_text(self.screen, a, b),
-                    ))),
-                    None => {
-                        state.clear_selection();
-                        Some(canvas::Action::request_redraw())
-                    }
+                state.dragged = false;
+                if dragged {
+                    // A real drag: ask the terminal to copy its selection. The
+                    // text is read from the live grid selection (not this
+                    // possibly-lagged snapshot), so a fast flick copies exactly
+                    // what was dragged; an empty selection simply copies nothing.
+                    Some(canvas::Action::publish(Message::RequestCopySelection {
+                        session: self.session,
+                    }))
+                } else {
+                    // A bare click clears any selection, so a single click can't
+                    // leave an undismissable highlight.
+                    Some(canvas::Action::publish(Message::Select {
+                        session: self.session,
+                        op: SelectOp::Clear,
+                    }))
                 }
             }
             _ => None,
@@ -295,8 +293,9 @@ impl canvas::Program<Message> for TerminalView<'_> {
         }
 
         // Translucent overlay over the selected range, one rectangle per
-        // visible row (the owner/real-selection gating lives in the seam).
-        for (r, c0, c1) in self.visible_selection(state) {
+        // visible row. The terminal owns the selection and carries the spans on
+        // the snapshot, already clipped to the viewport and rotated for scroll.
+        for &(r, c0, c1) in &self.screen.selection {
             let x = c0 as f32 * cell_w;
             let w = (c1.saturating_sub(c0) + 1) as f32 * cell_w;
             frame.fill_rectangle(
@@ -391,6 +390,7 @@ mod tests {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            selection: Vec::new(),
             default_bg: [0x11, 0x13, 0x18],
             cursor_color: [0xd0, 0xd0, 0xd0],
         }
@@ -463,9 +463,14 @@ mod tests {
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
-        let _ = view.update(&mut state, &release(), test_bounds(), at(10.0, 10.0));
-        assert!(state.range().is_none(), "a click is not a selection");
-        assert!(state.anchor.is_none() && state.head.is_none());
+        let action = view.update(&mut state, &release(), test_bounds(), at(10.0, 10.0));
+        assert!(
+            !state.selecting && !state.dragged,
+            "a click leaves no live drag"
+        );
+        // The release still fires — it publishes a clear so no stale highlight
+        // lingers from an earlier selection.
+        assert!(action.is_some(), "a bare click publishes a selection clear");
     }
 
     #[test]
@@ -481,11 +486,16 @@ mod tests {
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0)); // (0,0)
         let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0)); // (2,1)
-        assert!(state.range().is_some());
-        // A real drag publishes a copy on release.
+        assert!(
+            state.selecting && state.dragged,
+            "a moved drag is a live selection"
+        );
+        // Releasing a drag requests a copy from the terminal (which reads its own
+        // live selection), independent of what this snapshot happens to hold.
         assert!(
             view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0))
-                .is_some()
+                .is_some(),
+            "releasing a drag requests a copy"
         );
     }
 
@@ -504,135 +514,23 @@ mod tests {
         let _ = s1.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         let _ = s1.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(1)));
-        assert!(state.range().is_some());
-        // The canvas now shows session 2; its first event drops the stale one.
+        assert!(
+            state.selecting && state.dragged,
+            "session 1 has a live drag"
+        );
+        // The canvas now shows session 2; its first event resets the stale drag
+        // state so a session-1 drag can't keep extending under session 2.
         let s2 = TerminalView {
             screen: &screen,
             session: sid(2),
             link_modifier: false,
             font_size: 14.0,
         };
-        let _ = s2.update(&mut state, &release(), test_bounds(), at(60.0, 60.0));
+        let _ = s2.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(2)));
         assert!(
-            state.range().is_none(),
-            "selection must not carry to another session"
-        );
-    }
-
-    // --- the selection follows the text through scroll ---------------------
-
-    /// A blank 4×`rows` screen scrolled up `offset` lines into scrollback.
-    fn screen_rows(rows: u16, offset: usize) -> Screen {
-        use termherd_pty::ScreenCell;
-        let cell = ScreenCell {
-            c: ' ',
-            fg: [0, 0, 0],
-            bg: [0, 0, 0],
-            bold: false,
-        };
-        Screen {
-            cols: 4,
-            rows,
-            lines: vec![vec![cell; 4]; rows as usize],
-            cursor: None,
-            scrolled: offset > 0,
-            display_offset: offset,
-            bracketed_paste: false,
-            default_bg: [0x11, 0x13, 0x18],
-            cursor_color: [0xd0, 0xd0, 0xd0],
-        }
-    }
-
-    /// A cursor over the centre of grid cell `(col, row)` on a 4×`rows` grid
-    /// filling the 100×100 test bounds.
-    fn at_cell(col: u16, row: u16, rows: u16) -> mouse::Cursor {
-        let cw = 100.0 / 4.0;
-        let ch = 100.0 / rows as f32;
-        at((col as f32 + 0.5) * cw, (row as f32 + 0.5) * ch)
-    }
-
-    /// The viewport rows a set of highlighted spans covers.
-    fn rows_of(spans: &[(u16, u16, u16)]) -> Vec<u16> {
-        spans.iter().map(|s| s.0).collect()
-    }
-
-    fn view_of(screen: &Screen) -> TerminalView<'_> {
-        TerminalView {
-            screen,
-            session: sid(1),
-            link_modifier: false,
-            font_size: 14.0,
-        }
-    }
-
-    #[test]
-    fn selection_survives_a_wheel_scroll() {
-        // A wheel scroll must keep the selection, re-anchored to the text,
-        // rather than dropping it (the old viewport-coordinate behaviour).
-        use canvas::Program;
-        let screen = test_screen();
-        let view = view_of(&screen);
-        let mut state = TermState::default();
-        let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
-        let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
-        assert!(state.range().is_some());
-        let action = view.update(&mut state, &wheel(), test_bounds(), at(50.0, 50.0));
-        assert!(
-            state.range().is_some(),
-            "a wheel scroll must keep the selection anchored to the text"
-        );
-        assert!(
-            action.is_some(),
-            "the wheel still drives the terminal scroll"
-        );
-    }
-
-    #[test]
-    fn the_highlight_follows_the_text_through_scroll() {
-        // Select viewport row 1 at the live tail, then scroll up one line: the
-        // same text is now one row lower, so the highlight must ride down to it.
-        use canvas::Program;
-        let screen0 = screen_rows(3, 0);
-        let view0 = view_of(&screen0);
-        let mut state = TermState::default();
-        let _ = view0.update(&mut state, &press(), test_bounds(), at_cell(0, 1, 3));
-        let _ = view0.update(&mut state, &moved(), test_bounds(), at_cell(3, 1, 3));
-        assert_eq!(
-            rows_of(&view0.visible_selection(&state)),
-            vec![1],
-            "highlighted at row 1 before scroll"
-        );
-        let screen1 = screen_rows(3, 1);
-        let view1 = view_of(&screen1);
-        assert_eq!(
-            rows_of(&view1.visible_selection(&state)),
-            vec![2],
-            "the highlight rides down to row 2 with the text after scrolling up one line"
-        );
-    }
-
-    #[test]
-    fn a_selection_scrolled_off_the_top_is_clipped() {
-        // Select while already scrolled up two lines, then return to the live
-        // tail: the selected text is now above the viewport and its highlight
-        // must clip out entirely rather than staying pinned to a row.
-        use canvas::Program;
-        let scrolled = screen_rows(3, 2);
-        let view = view_of(&scrolled);
-        let mut state = TermState::default();
-        let _ = view.update(&mut state, &press(), test_bounds(), at_cell(0, 0, 3));
-        let _ = view.update(&mut state, &moved(), test_bounds(), at_cell(3, 0, 3));
-        assert_eq!(
-            rows_of(&view.visible_selection(&state)),
-            vec![0],
-            "highlighted at row 0 while scrolled"
-        );
-        let tail = screen_rows(3, 0);
-        let view_tail = view_of(&tail);
-        assert!(
-            view_tail.visible_selection(&state).is_empty(),
-            "a selection scrolled off the top is clipped out of the viewport"
+            !state.selecting && !state.dragged,
+            "the drag must not carry to another session"
         );
     }
 
@@ -656,6 +554,7 @@ mod tests {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            selection: Vec::new(),
             default_bg: [0x11, 0x13, 0x18],
             cursor_color: [0xd0, 0xd0, 0xd0],
         }
@@ -683,7 +582,7 @@ mod tests {
         let mut state = TermState::default();
         let action = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
         assert!(action.is_some(), "a link click yields an action");
-        assert!(!state.selecting && state.anchor.is_none());
+        assert!(!state.selecting, "opening a link starts no drag-selection");
     }
 
     #[test]
@@ -700,7 +599,10 @@ mod tests {
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
-        assert!(state.selecting && state.anchor.is_some());
+        assert!(
+            state.selecting,
+            "a press off any link starts a drag-selection"
+        );
     }
 
     #[test]
@@ -750,13 +652,14 @@ mod tests {
         let cursor = at_col(line.len(), 8); // inside `src/main.rs` (cols 4..=14)
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
         let action = view.update(&mut state, &press(), test_bounds(), cursor);
-        assert_eq!(state.anchor, Some((4, 0)));
-        assert_eq!(state.head, Some((14, 0)));
         assert!(
             !state.selecting,
             "a word selection is settled, not a live drag"
         );
-        assert!(action.is_some(), "double-click publishes a copy");
+        assert!(
+            action.is_some(),
+            "double-click publishes the word selection and its copy"
+        );
     }
 
     #[test]
@@ -777,8 +680,7 @@ mod tests {
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
         assert!(state.selecting, "a blank double-click is a normal press");
-        assert_eq!(state.anchor, Some((3, 0)));
-        assert_eq!(state.head, Some((3, 0)));
+        assert!(!state.dragged, "a fresh press has not dragged yet");
     }
 
     #[test]

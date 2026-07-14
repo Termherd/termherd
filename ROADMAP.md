@@ -10,13 +10,14 @@ gist `d1d02e5`).
 The MoSCoW buckets below stay tied to PRD §5; this block is just the order to
 pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 
-> **Reprioritization (2026-07-05).** The board had flattened at P2; a fresh
-> pass differentiated it. Current **P1**: #102 (scroll-drift correctness bug),
-> #54 (split-pane UI — the release headline), #79 + #80 (confirm-on-running-
-> process guards), #119 (reflect Claude's own `/rename` in the tab), plus the
-> `F-quality-gates` slices #105/#106/#107. All three code-signing paths dropped
-> to **P3**. #90 stays P2 but is marked `needs-design`; #55 is blocked-by #54.
-> #110 closed — rung 2 shipped as #124/#126.
+> **Reprioritization (2026-07-12).** Supersedes the 2026-07-05 pass. Closed
+> since: #79 + #80 (confirm-on-running guards → `F-close-confirm-policy`),
+> #56 + #57 (favorites → `F-favorites`), #86 (background notifications), and the
+> `F-quality-gates` P1 slices #105/#106/#107. Current **P1**: #102 (scroll-drift
+> correctness bug), #54 (split-pane UI — the release headline), #119 (reflect
+> Claude's own `/rename` in the tab), plus the intra-crate refactor cluster
+> #167–#169 (P1 `tech-health`). All three code-signing paths are **P3**. #90
+> stays P2 but is marked `needs-design`; #55 is blocked-by #54.
 
 1. **Finish the Musts** (`v0.1.0` milestone) — macOS ships **unsigned**
    (`.dmg` + manual `xattr`); **Linux** signed checksums (#52, done) and the
@@ -30,13 +31,15 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
    `F-packaging-ci.md`.
 2. **P1 — correctness + the headline feature:** #102 (scroll-drift property
    failure — the one open correctness bug), #54 (fixed-ratio split-pane UI —
-   cheapest large/visible feature, core already landed), #79/#80 (don't kill a
-   running Claude by accident), #119 (live tab name), and `F-quality-gates`
-   #105/#106/#107.
+   cheapest large/visible feature, core already landed), #119 (live tab name),
+   and the intra-crate refactor cluster #167–#169 (`tech-health`). Done since
+   the last pass: #79/#80 (running-process guards) and the `F-quality-gates`
+   P1 slices #105/#106/#107.
 3. **P2 — polish:** #36 (copy-on-select), #55 (drag-resize, **blocked-by #54**),
-   #56/#57 (favorites), #59 (modifier bypass), #37 (settings template), #84
-   (OSC 8 links), #85 (inline images), #86 (bg notifications), #82 (link-cursor
-   bug), #90 (MCP control surface, **`needs-design`**), #114 (Cmd+M minimize).
+   #59 (modifier bypass), #37 (settings template), #84 (OSC 8 links), #85
+   (inline images), #82 (link-cursor bug), #90 (MCP control surface,
+   **`needs-design`**), #114 (Cmd+M minimize). Done since the last pass:
+   #56/#57 (favorites) and #86 (bg notifications).
 4. **P3 — parked / not actionable now:** code signing — #51, #61, #62.
 5. **Design-first backlog** — see below; don't code until scoped.
 
@@ -62,7 +65,14 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   updates (debounced `notify`, FR2); a per-project disclosure triangle folds
   its session list, persisted to `~/.termherd/collapsed.json` (#22); long
   groups list only the N most recent sessions with a "… N more" expander
-  (`sidebar.session_limit` in `settings.json`, default 5, 0 = all; #131)
+  (`sidebar.session_limit` in `settings.json`, default 5, 0 = all; #131).
+  Section headers fold on a title click, not only the disclosure triangle —
+  the Favorites and Plans & mémoire titles gained the parity a project header
+  already had, via a shared `section_header` builder (#146). Thin theme-aware
+  rules separate the sidebar sections (Favorites / Plans & mémoire / Projects)
+  so the grouping reads at a glance (#150). The sidebar view was extracted to
+  its own `shell/view/sidebar.rs` with per-section row builders, dropping the
+  `too_many_lines` allow (C2 of the intra-crate refactor, #168)
 - [x] `F-builtin-terminal` — PTY + native terminal widget (M2):
   `termherd-pty` adapter (`portable-pty` + `alacritty_terminal`,
   reader + terminal thread per session, cursor-report reply for ConPTY);
@@ -111,13 +121,15 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
 - [ ] `F-quality-gates` — intrinsic-quality CI gates beyond the existing
   fmt/clippy/test/deny set, targeting the structural/maintainability axis
   (complexity, domain boundaries, merge-conflict risk). Scoped from a
-  brainstorm (`brainstorm/20260627-ci-quality-gates.md`). **P1:** function
-  length (#105), unused deps (#106), and the crate-level dependency rule as an
-  architecture fitness function enforcing the hexagonal inward-only invariant
-  (#107). **P2 follow-ups** (not yet filed): intra-crate module rules (D
-  phase 2, `cargo-modules`/archtest) and cognitive-complexity (signal C).
-  **P3 / report-only** (blocked on a quality-report home): file length
-  (signal A) and churn×size hotspots (signal J). Dropped: MSRV check,
+  brainstorm (`brainstorm/20260627-ci-quality-gates.md`). **P1 — shipped:**
+  function length (#105), unused deps (#106), and the crate-level dependency
+  rule as an architecture fitness function enforcing the hexagonal inward-only
+  invariant (#107) all landed. **P2 follow-ups — now filed** as the intra-crate
+  refactor cluster #167–#173: the module-boundary/`cfg(target_os)`/file-length
+  gate is #173, blocked by the god-object splits #167/#168/#169; cognitive-
+  complexity (signal C) stays unfiled. **P3 / report-only** (blocked on a
+  quality-report home): file length (signal A, folded into #173's report) and
+  churn×size hotspots (signal J). Dropped: MSRV check,
   `todo!`→deny, PR-size warning (rationale in the report). `tech-health`
 - [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is
   a tab; a tab strip switches between them, each chip carrying its activity
@@ -196,14 +208,15 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   unrelated session, so two real files read alike — handled not by fork
   detection but by the summary disambiguator (#93), not a fork
 - [ ] `F-terminal-split` — split panes (h/v), focus, resize (moved from Must,
-  PRD rev. 5): the pure pane-tree core already landed — `Workspace::split` /
-  `close_focused` / `focus_next`/`prev` and the `App` events
-  `SplitFocused`/`CloseFocusedPane`/`FocusNextPane`/`Prev`, all unit-tested,
-  plus the `split-*` / `focus-*` keymap actions. What remains is the iced
-  recursive pane rendering, click-to-focus, and per-pane PTY geometry — #54
-  (MVP: fixed-ratio split; `core::Workspace` stays the single source of truth)
-  with drag-resize as fast-follow #55. Note: the keymap actions are currently
-  dropped at `shell.rs:721` (`=> Task::none()`) — wiring them is step one
+  PRD rev. 5): the **#54 MVP shipped** — the `split-*`/`focus-*`/`close-focused`
+  keymap actions now drive `core` (recursive iced pane rendering from the
+  `Workspace` tree, fixed-ratio 50/50 splits, per-leaf PTY geometry), plus
+  click-to-focus (`Event::FocusPane`) and directional keyboard focus that
+  cycles within its axis (`Event::FocusDir`, `mod+shift+arrows`); `mod+w`
+  collapses the focused pane rather than the whole tab. Default binds: `mod+d`
+  / `mod+shift+d` split, `mod+shift+arrows` focus. What remains is **drag-resize
+  (#55, blocked-by #54)** to flip the fixed ratio; `core::Workspace` stays the
+  single source of truth throughout
 - [ ] `F-close-on-exit` — auto-close a shell pane/tab on clean exit (#185):
   when a `Launch::Shell` session's process exits with code 0 (the user typed
   `exit`), close its pane — collapse the split, or close the tab (onto the
@@ -264,17 +277,32 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
 - [ ] `F-mcp-ide-bridge` — live MCP/IDE bridge to Claude (moved from Unsure,
   PRD rev. 6); decoupled from the still-Unsure diff panel
 - [ ] `F-mcp-control-surface` — termherd *exposes* an MCP server over its own
-  control/config surface (`list_options`/`set_option` + schema resource, plus
-  orchestration tools: open session, split pane, focus, rename tab, run in
-  another session), driven by the in-app Claude sessions. Inverse of
-  `F-mcp-ide-bridge` (termherd is the server, the session is the client).
-  Filed as #90; still design-first — needs a `/feature-torture` pass to settle
-  the full scope before the remaining slices become standalone issues. A first,
-  limited slice has landed: `crates/mcp` (`termherd-mcp`), a **read-only** stdio
-  MCP server exposing `list_options` + the option schema resource over the
-  existing `settings.json`, with the protocol/option logic pure and unit-tested.
-  `set_option` (writes), the `keys` surface and the orchestration tools
-  (open session / split / focus / rename / run-in-session) are still to come
+  control/config + orchestration surface, driven by the in-app Claude sessions
+  (termherd is the server, the session is the client). Inverse of
+  `F-mcp-ide-bridge`. Filed as #90 (now the **tracking epic**). Tortured 🧬
+  **split** (feature-torture `F-mcp-control-surface.md`; design brainstorm
+  `brainstorm/20260713-mcp-agent-terminal-interaction.md`): the entry hid
+  multiple features separated by the **transport** — config is *stateless* (a
+  file), orchestration/perception/synchro need the live `core::App` → an
+  in-process **http/sse** server (supersedes the earlier per-session-WS
+  assumption; Claude's MCP client speaks `stdio | http/sse`). A first,
+  **read-only** stdio slice has landed: `crates/mcp` (`termherd-mcp`),
+  `list_options` + schema resource, pure and unit-tested. Split into rungs, each
+  shippable:
+  - [ ] `F-mcp-config-write` (#191) — `set_option` + `keys` on the stdio slice;
+    independent, deliverable now
+  - [ ] async transport substrate (#192, `tech-health`) — tokio + a bounded
+    round-trip through the iced loop; shared enabler, also unblocks
+    `F-mcp-ide-bridge`; relates to #167/#171
+  - [ ] `F-mcp-live-bridge` (#193) — in-process http/sse + `mcpServers`
+    injection + `list_sessions` spike (**the gate**); blocked by #167 + #169,
+    depends on #192
+  - [ ] `F-mcp-orchestration` (#194) — open/split/focus/rename/run-in-session;
+    depends on #193
+  - [ ] `F-mcp-terminal-sync` (#195) — `wait_for_status` (OSC) + `read_terminal`;
+    depends on #193
+  - [ ] `F-mcp-agent-loop` (#196) — `type_into_terminal` + prompt→wait→read,
+    opt-in; depends on #195; product-scope question open (may be cut)
 
 - [x] `F-terminal-palette` — configurable terminal colours (#181, shipped
   in #183; tortured 👍, feature-torture `F-terminal-palette.md`): an optional

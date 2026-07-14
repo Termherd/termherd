@@ -5,35 +5,38 @@
 //! live in [`modals`]. No state transitions live here — those are in the
 //! parent module.
 
-use std::collections::HashMap;
 use std::time::SystemTime;
 
 use iced::widget::canvas::Canvas;
-use iced::widget::{
-    button, checkbox, column, container, mouse_area, row, scrollable, stack, text, text_editor,
-    text_input, tooltip,
-};
-use iced::{Color, Element, Fill, Font, Size};
+use iced::widget::{button, column, container, mouse_area, row, text};
+use iced::{Border, Color, Element, Fill, Length, Size};
 use termherd_core::SessionRecord;
 use termherd_core::SessionStatus;
-use termherd_core::browser::{project_label, relative_age};
+use termherd_core::browser::relative_age;
+use termherd_core::workspace::{Pane, SessionId, SplitDir};
 
+use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD};
 use super::ime::ime_area;
 use super::terminal::{TerminalView, cell_size};
-use super::{DocFeedback, Focus, HANDLE_W, Message, OpenDoc, Shell, rename_id, search_id};
+use super::{Message, Shell};
 use crate::strings;
 
+mod doc_editor;
 mod modals;
+mod sidebar;
+mod style;
 mod tabs;
 
+use doc_editor::doc_editor;
 use modals::modal;
+use style::{card_secondary_text, card_style, clip, mix, sidebar_secondary_text, status_color};
 
 impl Shell {
     pub(super) fn view(&self) -> Element<'_, Message> {
         // Hiding the sidebar hands its width to the terminal; a slim
         // always-present handle brings it back without needing the shortcut.
         // The handle is pinned to `HANDLE_W` so the grid reserves exactly what
-        // it occupies — keeping `grid_size` honest rather than estimating.
+        // it occupies — keeping the pane geometry honest rather than estimating.
         let base: Element<'_, Message> = if self.core.sidebar_hidden {
             let handle = container(
                 button(text("▶").size(12))
@@ -56,339 +59,6 @@ impl Shell {
         }
     }
 
-    /// The session browser (FR1 + FR3): search box, then projects by recency.
-    /// Clicking a project opens a fresh shell; clicking a session resumes it.
-    // Length is the layout tree built inline (nested iced column/row builders),
-    // not branching complexity. Tracked as a refactor candidate (extract the
-    // project/session row builders) rather than blocking the gate.
-    #[allow(clippy::too_many_lines)]
-    fn sidebar(&self) -> Element<'_, Message> {
-        let search = text_input(strings::SEARCH_PLACEHOLDER, &self.core.search)
-            .id(search_id())
-            .size(12)
-            .padding(6);
-        // The box only accepts input while it owns the keyboard; otherwise a
-        // typed key must reach the terminal, not the search. But a disabled
-        // `text_input` still *captures* any click over it (iced 0.14), so a
-        // plain `mouse_area` wrapper never sees the press and clicking the box
-        // could not restore focus. A transparent catcher stacked on top wins
-        // the press instead (a Stack dispatches topmost-first) and hands the
-        // keyboard back.
-        let search: Element<'_, Message> = if self.focus == Focus::Search {
-            search.on_input(Message::SearchChanged).into()
-        } else {
-            stack![
-                search,
-                mouse_area(iced::widget::Space::new().width(Fill).height(Fill))
-                    .on_press(Message::FocusSearch)
-            ]
-            .into()
-        };
-        let titles_only = checkbox(self.core.search_titles_only)
-            .label(strings::TITLES_ONLY)
-            .on_toggle(Message::SearchTitlesOnly)
-            .text_size(11)
-            .size(14);
-        let show_archived = checkbox(self.core.show_archived)
-            .label(strings::SHOW_ARCHIVED)
-            .on_toggle(Message::ShowArchived)
-            .text_size(11)
-            .size(14);
-
-        // Live activity, keyed by the Claude session id each terminal resumed,
-        // so a browsed row can show its current status (FR8). If the same
-        // session is open twice, the most urgent status wins.
-        let mut live: HashMap<&str, SessionStatus> = HashMap::new();
-        for s in self.core.sessions.values() {
-            if let Some(resume) = s.launch.resume_id() {
-                live.entry(resume)
-                    .and_modify(|cur| {
-                        if s.status.urgency() > cur.urgency() {
-                            *cur = s.status;
-                        }
-                    })
-                    .or_insert(s.status);
-            }
-        }
-
-        let visible = self.core.visible_projects();
-        // One wall-clock read per render drives every relative "last activity"
-        // age in the sidebar (row disambiguator + tooltip). The app layer owns
-        // the clock; core stays pure.
-        let now = std::time::SystemTime::now();
-        let mut list = column![].spacing(16).padding(12);
-        if let Some(error) = &self.scan_error {
-            list = list.push(text(strings::scan_failed(error)).size(12));
-        } else if visible.is_empty() {
-            let label = if self.core.search.trim().is_empty() {
-                strings::NO_SESSIONS
-            } else {
-                strings::NO_RESULTS
-            };
-            list = list.push(text(label).size(12));
-        }
-        // Cross-project Favorites (F-favorites): every starred session in one
-        // place, most-recent-first. Coexists with the in-group star pin — a
-        // favourite is a shortcut, not a move. Folds like the other sections.
-        let favorites = self.core.favorite_sessions(&visible);
-        if !favorites.is_empty() {
-            let collapsed = self.core.is_collapsed(FAVORITES_SECTION_KEY);
-            let header = row![
-                fold_toggle(FAVORITES_SECTION_KEY, collapsed),
-                text(strings::FAVORITES).size(12)
-            ]
-            .spacing(6)
-            .align_y(iced::Center);
-            let mut fav_col = column![header].spacing(4);
-            if !collapsed {
-                for (path, s) in &favorites {
-                    let id = s.session_id.as_str();
-                    // ★ (filled) unstars — which also removes it from here.
-                    let star = button(text("★").size(12))
-                        .on_press(Message::ToggleStar(s.session_id.clone()))
-                        .style(button::text)
-                        .padding(0);
-                    let mut label_row = row![].spacing(6).align_y(iced::Center);
-                    if let Some(status) = live.get(id) {
-                        label_row = label_row.push(text("●").size(9).color(status_color(*status)));
-                    }
-                    let title = self.core.session_title(s);
-                    // The project label tells cross-project favourites apart.
-                    label_row = label_row.push(
-                        text(format!("{}  ·  {}", clip(&title, 22), project_label(path))).size(11),
-                    );
-                    let open = button(label_row)
-                        .on_press(Message::LaunchSession {
-                            cwd: (*path).to_owned(),
-                            resume: s.session_id.clone(),
-                        })
-                        .style(button::text)
-                        .padding(0)
-                        .width(Fill);
-                    fav_col = fav_col.push(row![star, open].spacing(6).align_y(iced::Center));
-                }
-            }
-            list = list.push(fav_col);
-        }
-        // Plans & memory docs (F-plans-memory), above the project list. Its
-        // header folds shut too, keyed like a project group.
-        if !self.docs.is_empty() {
-            let collapsed = self.core.is_collapsed(PLANS_SECTION_KEY);
-            let header = row![
-                fold_toggle(PLANS_SECTION_KEY, collapsed),
-                text(strings::PLANS_AND_MEMORY).size(12)
-            ]
-            .spacing(6)
-            .align_y(iced::Center);
-            let mut docs_col = column![header].spacing(4);
-            if !collapsed {
-                for doc in &self.docs {
-                    docs_col = docs_col.push(
-                        button(text(clip(&doc.label, 34)).size(11))
-                            .on_press(Message::OpenDoc {
-                                label: doc.label.clone(),
-                                path: doc.path.clone(),
-                            })
-                            .style(button::text)
-                            .padding(0),
-                    );
-                }
-            }
-            list = list.push(docs_col);
-        }
-        for group in &visible {
-            let collapsed = self.core.is_collapsed(&group.path);
-            // The disclosure triangle and the name both fold the session list —
-            // a tree header should fold, not launch. Launching moved
-            // to two explicit buttons beside it: `$` opens a plain shell, 🤖 a
-            // fresh Claude session, both in the repo dir (FR4a).
-            let fold = fold_toggle(&group.path, collapsed);
-            // A repo star pins the whole project group to the top of the sidebar
-            // (F-favorites), mirroring the per-session star below.
-            let repo_starred = self.core.is_repo_starred(&group.path);
-            let repo_star = button(text(if repo_starred { "★" } else { "☆" }).size(12))
-                .on_press(Message::ToggleRepoStar(group.path.clone()))
-                .style(button::text)
-                .padding(0);
-            let name = button(text(project_label(&group.path).to_owned()).size(14))
-                .on_press(Message::ToggleCollapsed(group.path.clone()))
-                .style(button::text)
-                .padding(0)
-                .width(Fill);
-            let launch_shell = launch_button(
-                "$",
-                strings::SIDEBAR_LAUNCH_SHELL,
-                Message::LaunchProject(group.path.clone()),
-            );
-            let launch_claude = launch_button(
-                "🤖",
-                strings::SIDEBAR_LAUNCH_CLAUDE,
-                Message::LaunchClaude(group.path.clone()),
-            );
-            let header = row![fold, repo_star, name, launch_shell, launch_claude]
-                .spacing(6)
-                .align_y(iced::Center);
-            let mut g = column![header].spacing(4);
-            // A folded project shows only its header, hiding the session list.
-            if collapsed {
-                list = list.push(g);
-                continue;
-            }
-            // Rows whose title repeats within this project get a relative
-            // last-activity age appended, so duplicates stay distinguishable
-            // The unique case keeps the clean `{title} · {count}` line.
-            let collisions = self.core.colliding_titles(group);
-            // Long groups fold their tail behind an expander; search
-            // and the user's unfold both surface it (`sidebar_sessions`).
-            let (sessions, fold) = self.core.sidebar_sessions(group);
-            for s in sessions {
-                let id = s.session_id.as_str();
-                let starred = self.core.is_starred(id);
-                let archived = self.core.is_archived(id);
-
-                // Star toggles the pin; archive hides/shows (F-session-metadata).
-                let star = button(text(if starred { "★" } else { "☆" }).size(12))
-                    .on_press(Message::ToggleStar(s.session_id.clone()))
-                    .style(button::text)
-                    .padding(0);
-
-                let mut content = row![].spacing(6).align_y(iced::Center);
-                // A coloured dot marks a session already open in TermHerd and
-                // carries its live activity (FR8).
-                if let Some(status) = live.get(id) {
-                    content = content.push(text("●").size(9).color(status_color(*status)));
-                }
-                let title = self.core.session_title(s);
-                let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);
-
-                // The middle is an edit field while renaming this row, else the
-                // clickable title that resumes the session.
-                let middle: Element<'_, Message> = if renaming_this {
-                    let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
-                    text_input(strings::RENAME_PLACEHOLDER, buffer)
-                        .id(rename_id())
-                        .on_input(Message::RenameInput)
-                        .on_submit(Message::CommitRename)
-                        .size(11)
-                        .padding(2)
-                        .width(Fill)
-                        .into()
-                } else {
-                    // Colliding rows carry a disambiguator so duplicate titles
-                    // stay distinguishable. When a custom/AI title masks a
-                    // different real conversation (the /clear title-carryover)
-                    // the divergent summary tells them apart by content;
-                    // otherwise we fall back to the last-activity age.
-                    let mut label = format!("{}  ·  {}", clip(&title, 26), s.digest.message_count);
-                    if collisions.contains(id) {
-                        if let Some(summary) = self.core.collision_subtitle(s) {
-                            label.push_str("  ·  ");
-                            label.push_str(&clip(&summary, 28));
-                        } else if let Some(age) =
-                            s.modified.and_then(|m| now.duration_since(m).ok())
-                        {
-                            label.push_str("  ·  ");
-                            label.push_str(&relative_age(age));
-                        }
-                    }
-                    content = content.push(text(label).size(11));
-                    let launch = button(content)
-                        .on_press(Message::LaunchSession {
-                            cwd: group.path.clone(),
-                            resume: s.session_id.clone(),
-                        })
-                        .style(button::text)
-                        .padding(0)
-                        .width(Fill);
-                    // The narrow row clips the title; hover reveals a richer
-                    // card — full title, last activity + message count, and the
-                    // last few transcript lines so the session is recognisable
-                    // without opening it.
-                    tooltip(
-                        launch,
-                        session_card(title.clone(), s, now),
-                        tooltip::Position::Right,
-                    )
-                    .into()
-                };
-
-                // ✎ starts the rename; ✓ commits it.
-                let rename = if renaming_this {
-                    button(text("✓").size(12))
-                        .on_press(Message::CommitRename)
-                        .style(button::text)
-                        .padding(0)
-                } else {
-                    button(text("✎").size(12))
-                        .on_press(Message::StartRename {
-                            session: s.session_id.clone(),
-                            current: title.clone(),
-                        })
-                        .style(button::text)
-                        .padding(0)
-                };
-
-                // Archiving is deliberate: arm the confirmation bar.
-                // Un-archiving is a harmless restore, so it stays one-click.
-                let archive_msg = if archived {
-                    Message::ToggleArchive(s.session_id.clone())
-                } else {
-                    Message::RequestArchive(s.session_id.clone())
-                };
-                let archive = button(text(if archived { "⊞" } else { "⊟" }).size(12))
-                    .on_press(archive_msg)
-                    .style(button::text)
-                    .padding(0);
-
-                let entry = row![star, middle, rename, archive]
-                    .spacing(6)
-                    .align_y(iced::Center);
-                // A content hit shows its matched line in muted text beneath the
-                // row, so search reveals *what* matched, not merely *that* it did.
-                // Title-only hits return `None` and stay single-line. The
-                // core windows the line around the hit; we clip to the sidebar.
-                g = match self.core.search_snippet(s) {
-                    Some(snip) => g.push(
-                        column![
-                            entry,
-                            text(clip(&snip.line, 44))
-                                .size(10)
-                                .style(sidebar_secondary_text),
-                        ]
-                        .spacing(1),
-                    ),
-                    None => g.push(entry),
-                };
-            }
-            // The expander row under a truncated list: unfold the hidden
-            // tail, or fold it back once expanded.
-            if let Some(fold) = fold {
-                let label = match fold {
-                    termherd_core::SidebarFold::Truncated(hidden) => strings::sidebar_more(hidden),
-                    termherd_core::SidebarFold::Expanded => strings::SIDEBAR_SHOW_LESS.to_owned(),
-                };
-                g = g.push(
-                    button(text(label).size(11).style(sidebar_secondary_text))
-                        .on_press(Message::ToggleExpanded(group.path.clone()))
-                        .style(button::text)
-                        .padding(0),
-                );
-            }
-            list = list.push(g);
-        }
-        // A handle to collapse the sidebar, mirroring the one that
-        // restores it from the main pane.
-        let hide = button(text("◀ Masquer le panneau").size(11))
-            .on_press(Message::ToggleSidebar)
-            .style(button::text)
-            .padding(0);
-        let chrome = column![hide, search, titles_only, show_archived].spacing(8);
-        container(chrome.push(scrollable(list).height(Fill)).padding(8))
-            .width(300)
-            .style(container::rounded_box)
-            .into()
-    }
-
     /// The focused terminal: a status badge, then its grid drawn on a canvas.
     /// With no session open, a short summary of what the browser found.
     fn main_pane(&self) -> Element<'_, Message> {
@@ -399,53 +69,31 @@ impl Shell {
         }
 
         let focused = self.core.workspace.focused_session();
-        let screen = focused.and_then(|id| self.screens.get(&id).map(|s| (id, s)));
 
-        let body: Element<'_, Message> = match screen {
-            Some((session, screen)) => {
-                let canvas = Canvas::new(TerminalView {
-                    screen,
-                    session,
-                    link_modifier: self.link_modifier,
-                    font_size: self.core.font_size(),
-                })
-                .width(Fill)
-                .height(Fill);
-                // Wrap the grid so the platform IME is on while the terminal is
-                // focused — without it dead/accent keys never compose. Off while
-                // an overlay (the inline rename field, or a quit / tab-close /
-                // archive confirmation modal) is up, so its own field owns
-                // composition and a dead key can't leak to the PTY; focus stays
-                // `Terminal` underneath those, so they must be excluded
-                // explicitly — the same guard `on_key` applies.
-                let composed = ime_area(
-                    canvas,
-                    self.accepts_terminal_input(),
-                    screen.cursor,
-                    {
-                        let (cw, ch) = cell_size(self.core.font_size());
-                        Size::new(cw, ch)
-                    },
-                    Message::ImeCommit,
-                );
-                mouse_area(composed).on_press(Message::FocusTerminal).into()
-            }
-            None => {
-                let total: usize = self.core.projects.iter().map(|g| g.sessions.len()).sum();
-                iced::widget::center(
-                    column![
-                        text("TermHerd").size(40),
-                        text(strings::welcome_counts(total, self.core.projects.len())).size(14),
-                        text(strings::WELCOME_HINT_OPEN).size(13),
-                        text(strings::WELCOME_HINT_RESUME).size(13),
-                    ]
-                    .spacing(8)
-                    .align_x(iced::Center),
-                )
-                .height(Fill)
-                .into()
-            }
-        };
+        let body: Element<'_, Message> =
+            match self.core.workspace.tabs.get(self.core.workspace.active) {
+                // A lone terminal needs no focus border — nothing to
+                // disambiguate — so only a split renders bordered.
+                Some(tab) => {
+                    let split = matches!(tab.root, Pane::Split { .. });
+                    self.render_pane(&tab.root, focused, split)
+                }
+                None => {
+                    let total: usize = self.core.projects.iter().map(|g| g.sessions.len()).sum();
+                    iced::widget::center(
+                        column![
+                            text("TermHerd").size(40),
+                            text(strings::welcome_counts(total, self.core.projects.len())).size(14),
+                            text(strings::WELCOME_HINT_OPEN).size(13),
+                            text(strings::WELCOME_HINT_RESUME).size(13),
+                        ]
+                        .spacing(8)
+                        .align_x(iced::Center),
+                    )
+                    .height(Fill)
+                    .into()
+                }
+            };
 
         let mut pane = column![].spacing(8).padding(8);
         if let Some(bar) = self.tab_bar() {
@@ -458,6 +106,118 @@ impl Shell {
             pane = pane.push(status_badge(status.status));
         }
         container(pane.push(body)).width(Fill).height(Fill).into()
+    }
+
+    /// Render the pane tree (FR6): a leaf is its terminal; a split becomes a
+    /// `row!` (vertical divider) or `column!` (horizontal) sharing space at its
+    /// ratio. Derived from the `core` tree each frame, so it can't drift.
+    fn render_pane(
+        &self,
+        pane: &Pane,
+        focused: Option<SessionId>,
+        bordered: bool,
+    ) -> Element<'_, Message> {
+        match pane {
+            Pane::Leaf(session) => {
+                self.terminal_leaf(*session, focused == Some(*session), bordered)
+            }
+            Pane::Split { dir, ratio, a, b } => {
+                let a_el = self.render_pane(a, focused, bordered);
+                let b_el = self.render_pane(b, focused, bordered);
+                let pa = ((ratio * 100.0).round() as u16).clamp(1, 99);
+                let pb = 100 - pa;
+                // No inter-pane spacing: the per-pane borders already separate
+                // them, and a gap here would be geometry `resize_panes` cannot
+                // see, drifting the PTY grid from the visible canvas.
+                match dir {
+                    SplitDir::Vertical => row![
+                        container(a_el).width(Length::FillPortion(pa)),
+                        container(b_el).width(Length::FillPortion(pb)),
+                    ]
+                    .into(),
+                    SplitDir::Horizontal => column![
+                        container(a_el).height(Length::FillPortion(pa)),
+                        container(b_el).height(Length::FillPortion(pb)),
+                    ]
+                    .into(),
+                }
+            }
+        }
+    }
+
+    /// One leaf: its terminal, click-to-focus, and (in a split) a focus border.
+    /// The focused leaf carries the IME so composition follows the keyboard; a
+    /// pane with no output yet holds an empty slot to keep the layout stable.
+    fn terminal_leaf(
+        &self,
+        session: SessionId,
+        is_focused: bool,
+        bordered: bool,
+    ) -> Element<'_, Message> {
+        let inner: Element<'_, Message> = match self.screens.get(&session) {
+            Some(screen) => {
+                let canvas = Canvas::new(TerminalView {
+                    screen,
+                    session,
+                    link_modifier: self.link_modifier,
+                    font_size: self.core.font_size(),
+                })
+                .width(Fill)
+                .height(Fill);
+                // IME only on the focused leaf, and only when no overlay owns
+                // the keyboard — the same guard `on_key` applies. Others just
+                // take a click to focus.
+                if is_focused {
+                    let composed = ime_area(
+                        canvas,
+                        self.accepts_terminal_input(),
+                        screen.cursor,
+                        {
+                            let (cw, ch) = cell_size(self.core.font_size());
+                            Size::new(cw, ch)
+                        },
+                        Message::ImeCommit,
+                    );
+                    mouse_area(composed)
+                        .on_press(Message::FocusPane(session))
+                        .into()
+                } else {
+                    mouse_area(canvas)
+                        .on_press(Message::FocusPane(session))
+                        .into()
+                }
+            }
+            None => container(text("")).width(Fill).height(Fill).into(),
+        };
+        // A lone pane needs no frame — nothing to distinguish it from.
+        if !bordered {
+            return inner;
+        }
+        container(inner)
+            .width(Fill)
+            .height(Fill)
+            .padding(PANE_PAD)
+            .style(move |theme: &iced::Theme| {
+                // Every split pane is outlined so the layout is legible; the
+                // focused one gets a thicker, accent-coloured border so which
+                // terminal holds the keyboard is unmistakable, the rest a thin
+                // muted one.
+                let palette = theme.extended_palette();
+                let (color, width) = if is_focused {
+                    (palette.primary.strong.color, PANE_BORDER)
+                } else {
+                    (palette.background.strong.color, PANE_BORDER / 2.0)
+                };
+                container::Style {
+                    border: Border {
+                        color,
+                        width,
+                        radius: 3.0.into(),
+                    },
+                    ..container::Style::default()
+                }
+            })
+            .into()
     }
 
     /// The `● REC n/cap` indicator shown while a GIF screencast records,
@@ -481,78 +241,6 @@ impl Shell {
     }
 }
 
-/// Render an open plan/memory doc: a header (label, save state, actions) above
-/// the editable text area (F-plans-memory). A read-only doc omits the Save
-/// control; the header always carries a close button.
-fn doc_editor(doc: &OpenDoc) -> Element<'_, Message> {
-    let mut header = row![text(&doc.label).size(13)]
-        .spacing(12)
-        .align_y(iced::Center);
-
-    if doc.writable {
-        // A disabled button (no `on_press`) reads as "nothing to save".
-        let mut save = button(text(strings::DOC_SAVE).size(12))
-            .style(button::text)
-            .padding(0);
-        if doc.dirty {
-            save = save.on_press(Message::SaveDoc);
-        }
-        header = header.push(save);
-    }
-
-    if let Some(note) = save_note(doc) {
-        header = header.push(note);
-    }
-
-    header = header.push(
-        button(text(strings::DOC_CLOSE).size(12))
-            .on_press(Message::CloseDoc)
-            .style(button::text)
-            .padding(0),
-    );
-
-    let editor = text_editor(&doc.content)
-        .on_action(Message::DocEdit)
-        .font(Font::MONOSPACE)
-        .size(12)
-        .height(Fill);
-
-    container(column![header, editor].spacing(8).padding(8))
-        .width(Fill)
-        .height(Fill)
-        .into()
-}
-
-/// The save-state note for the editor header: the last save outcome if there is
-/// one, else a "modified" hint while there are unsaved edits, else nothing.
-fn save_note(doc: &OpenDoc) -> Option<Element<'_, Message>> {
-    const SAVED: Color = Color::from_rgb(0.3, 0.8, 0.4);
-    const ERROR: Color = Color::from_rgb(0.95, 0.35, 0.35);
-    const DIRTY: Color = Color::from_rgb(0.6, 0.6, 0.6);
-
-    match &doc.feedback {
-        Some(DocFeedback::Saved) => Some(text(strings::DOC_SAVED).size(11).color(SAVED).into()),
-        Some(DocFeedback::Error(message)) => {
-            Some(text(message.clone()).size(11).color(ERROR).into())
-        }
-        None if doc.dirty => Some(text(strings::DOC_MODIFIED).size(11).color(DIRTY).into()),
-        None => None,
-    }
-}
-
-/// The dot colour for an activity status (FR8). Shared by the focused-terminal
-/// badge and the sidebar's per-session dot so both stay in sync; the matching
-/// label lives in [`strings::status_label`].
-pub(super) fn status_color(status: SessionStatus) -> Color {
-    match status {
-        SessionStatus::Starting => Color::from_rgb(0.55, 0.55, 0.6),
-        SessionStatus::Busy => Color::from_rgb(0.95, 0.7, 0.2),
-        SessionStatus::Idle => Color::from_rgb(0.3, 0.8, 0.4),
-        SessionStatus::Attention => Color::from_rgb(0.95, 0.35, 0.35),
-        SessionStatus::Exited => Color::from_rgb(0.5, 0.5, 0.5),
-    }
-}
-
 /// A small per-session activity badge (FR8): a coloured dot + label for the
 /// focused terminal. The same dot annotates live rows in the sidebar and each
 /// tab in the tab strip.
@@ -564,105 +252,6 @@ fn status_badge(status: SessionStatus) -> Element<'static, Message> {
     .spacing(6)
     .align_y(iced::Center)
     .into()
-}
-
-/// Fold key for the Plans & mémoire section. Project groups key their
-/// fold by real (always absolute) path; this reserved, non-path key shares the
-/// same persisted set without ever colliding with a project.
-const PLANS_SECTION_KEY: &str = "plans-memory";
-
-/// Fold key for the cross-project Favorites section. Like [`PLANS_SECTION_KEY`],
-/// a reserved non-path key sharing the persisted fold set without colliding with
-/// a real project path.
-const FAVORITES_SECTION_KEY: &str = "favorites";
-
-/// The disclosure triangle that folds a sidebar section: ▾ when open, ▸
-/// when folded, toggling the fold for `key`. Shared by the project headers and
-/// the Plans & mémoire section so the two can't drift apart.
-fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
-    button(text(if collapsed { "▸" } else { "▾" }).size(12))
-        .on_press(Message::ToggleCollapsed(key.to_owned()))
-        .style(button::text)
-        .padding(0)
-        .into()
-}
-
-/// An icon button beside a project header that launches a session in the repo
-/// dir (FR4a): the glyph is the affordance, the tooltip spells it out.
-/// Built once so the `$` (shell) and 🤖 (Claude) buttons can't drift in style.
-fn launch_button(
-    icon: &'static str,
-    tip: &'static str,
-    on_press: Message,
-) -> Element<'static, Message> {
-    tooltip(
-        button(text(icon).size(14))
-            .on_press(on_press)
-            .style(button::text)
-            .padding(0),
-        container(text(tip).size(12))
-            .padding(4)
-            .style(container::rounded_box),
-        tooltip::Position::Bottom,
-    )
-    .into()
-}
-
-/// Background for the session hover card — a step away from the surrounding
-/// surface (the `strong` palette tier rather than the default `weak`) so the
-/// card reads as a distinct floating layer, with a thin border to seal it.
-/// Everything is pulled from the theme palette, so it tracks the theme system
-/// once that lands rather than baking in a colour.
-pub(super) fn card_style(theme: &iced::Theme) -> container::Style {
-    let surface = card_surface(theme);
-    container::Style {
-        background: Some(surface.color.into()),
-        text_color: Some(surface.text),
-        border: iced::Border {
-            color: theme.extended_palette().background.weak.color,
-            width: 1.0,
-            radius: 6.0.into(),
-        },
-        ..container::Style::default()
-    }
-}
-
-/// Dimmed secondary text for the sidebar — search-match snippets. Mixes
-/// the normal text toward the background so it reads muted, theme-aware rather
-/// than a hardcoded grey.
-fn sidebar_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
-    let palette = theme.extended_palette();
-    iced::widget::text::Style {
-        color: Some(mix(
-            palette.background.base.text,
-            palette.background.base.color,
-            0.4,
-        )),
-    }
-}
-
-pub(super) fn card_secondary_text(theme: &iced::Theme) -> iced::widget::text::Style {
-    let surface = card_surface(theme);
-    iced::widget::text::Style {
-        color: Some(mix(surface.text, surface.color, 0.35)),
-    }
-}
-
-/// The palette tier the hover card paints on — its surface colour and the text
-/// colour meant to sit on it. Single-sourced so the "which tier" choice (and
-/// the eventual theme-system wiring) lives in one place.
-fn card_surface(theme: &iced::Theme) -> iced::theme::palette::Pair {
-    theme.extended_palette().background.strong
-}
-
-/// Linear blend from `a` to `b` by `t` in `[0, 1]`.
-pub(super) fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color::from_rgba(
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-        a.a + (b.a - a.a) * t,
-    )
 }
 
 /// The hover card for a session row: full title, a muted line with relative
@@ -700,16 +289,4 @@ pub(super) fn session_card(
         .max_width(360.0)
         .style(card_style)
         .into()
-}
-
-/// Collapse newlines to spaces and truncate to `max` characters with an ellipsis.
-pub(super) fn clip(s: &str, max: usize) -> String {
-    let cleaned: String = s.chars().map(|c| if c == '\n' { ' ' } else { c }).collect();
-    if cleaned.chars().count() <= max {
-        cleaned
-    } else {
-        let mut out: String = cleaned.chars().take(max.saturating_sub(1)).collect();
-        out.push('…');
-        out
-    }
 }

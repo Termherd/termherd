@@ -16,7 +16,7 @@ use crate::browser::{
 use crate::capture::{CaptureDump, CaptureTab};
 use crate::metadata::{Overlay, RepoMeta, SessionMeta};
 use crate::record::Recording;
-use crate::workspace::{SessionId, SplitDir, Workspace};
+use crate::workspace::{Direction, SessionId, SplitDir, Workspace};
 
 /// Cell size a freshly launched PTY starts at, before the widget reports its
 /// real geometry via [`Event::TerminalResized`].
@@ -272,6 +272,44 @@ pub enum ScrollTarget {
     Wheel { col: u16, row: u16, lines: i32 },
 }
 
+/// Which edge of a cell a selection endpoint sits on, so a press on a cell's
+/// right half extends past it — the terminal's own notion of a selection side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectSide {
+    Left,
+    Right,
+}
+
+/// A change to a session's text selection, applied to the terminal's own
+/// grid-anchored selection so the highlight rides the text through scroll. The
+/// `line` is an absolute grid line (viewport row minus the scroll offset) and
+/// `col` a 0-based column — the coordinate the emulator rotates on every scroll.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectOp {
+    /// Begin (or restart) a selection at a grid point.
+    Start {
+        line: i32,
+        col: usize,
+        side: SelectSide,
+    },
+    /// Extend the in-progress selection to a grid point.
+    Update {
+        line: i32,
+        col: usize,
+        side: SelectSide,
+    },
+    /// Select a whole range at once, both endpoints given — a double-click word,
+    /// whose boundaries the caller resolves (filenames/paths included).
+    Range {
+        line0: i32,
+        col0: usize,
+        line1: i32,
+        col1: usize,
+    },
+    /// Drop the selection — a bare click, or an explicit clear.
+    Clear,
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     /// A filesystem scan finished; replaces the whole browser state.
@@ -292,6 +330,18 @@ pub enum Event {
         session: SessionId,
         cols: u16,
         rows: u16,
+    },
+    /// The user changed a terminal's text selection — a press, a drag, or a
+    /// clear. Anchored in the terminal grid so the highlight follows the text.
+    Select {
+        session: SessionId,
+        op: SelectOp,
+    },
+    /// Copy a terminal's current selection to the clipboard. The text is read
+    /// from the terminal's own selection (not a snapshot), so it is exact even
+    /// right after a fast drag whose highlight has not yet echoed back.
+    CopyTerminalSelection {
+        session: SessionId,
     },
     /// The user moved a terminal's viewport (FR4 scrollback): a relative wheel
     /// delta, or an absolute jump to the top/bottom of the history.
@@ -343,6 +393,11 @@ pub enum Event {
     /// Move focus to the next / previous pane in the active tab (FR6).
     FocusNextPane,
     FocusPrevPane,
+    /// Move focus to the pane hosting a session (click-to-focus, FR6).
+    FocusPane(SessionId),
+    /// Move pane focus one step in a spatial direction, cycling within its axis
+    /// (FR6).
+    FocusDir(Direction),
     /// Persisted metadata loaded at startup (sessions + repos).
     MetadataLoaded(Overlay),
     /// Toggle a session's star, by Claude session id.
@@ -426,6 +481,11 @@ pub enum Effect {
         session: SessionId,
         target: ScrollTarget,
     },
+    /// Apply a selection change to a session's terminal grid.
+    Select { session: SessionId, op: SelectOp },
+    /// Ask a session's terminal to copy its current selection — the text comes
+    /// back out-of-band (a PTY event), so it is read from the live selection.
+    CopyTerminalSelection { session: SessionId },
     /// Terminate a session's PTY process.
     Kill(SessionId),
     /// Persist the whole metadata overlay (sessions + repos) as one file.
@@ -512,6 +572,20 @@ impl App {
                     Vec::new()
                 }
             }
+            Event::Select { session, op } => {
+                if self.is_live(session) {
+                    vec![Effect::Select { session, op }]
+                } else {
+                    Vec::new()
+                }
+            }
+            Event::CopyTerminalSelection { session } => {
+                if self.is_live(session) {
+                    vec![Effect::CopyTerminalSelection { session }]
+                } else {
+                    Vec::new()
+                }
+            }
             Event::StatusChanged { session, status } => {
                 if let Some(s) = self.sessions.get_mut(&session)
                     && s.status != SessionStatus::Exited
@@ -553,6 +627,14 @@ impl App {
             }
             Event::FocusPrevPane => {
                 self.workspace.focus_prev();
+                Vec::new()
+            }
+            Event::FocusPane(session) => {
+                self.workspace.focus_pane_of(session);
+                Vec::new()
+            }
+            Event::FocusDir(dir) => {
+                self.workspace.focus_dir(dir);
                 Vec::new()
             }
             Event::MetadataLoaded(overlay) => {
@@ -1487,6 +1569,34 @@ mod tests {
                 assert_eq!((spec.cols, spec.rows), (DEFAULT_COLS, DEFAULT_ROWS));
             }
             other => panic!("expected one Spawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn select_on_a_live_session_forwards_the_op_to_its_terminal() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Shell,
+            title: "proj".into(),
+        }));
+        let id = app.workspace.focused_session().expect("a focused session");
+        let op = SelectOp::Start {
+            line: 2,
+            col: 4,
+            side: SelectSide::Left,
+        };
+        match app.apply(Event::Select { session: id, op }).as_slice() {
+            [
+                Effect::Select {
+                    session,
+                    op: forwarded,
+                },
+            ] => {
+                assert_eq!(*session, id);
+                assert_eq!(*forwarded, op);
+            }
+            other => panic!("expected one Select effect, got {other:?}"),
         }
     }
 

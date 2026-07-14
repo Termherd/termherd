@@ -24,40 +24,28 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Action, CaptureDump, Effect, Keymap, Launch, LaunchSpec, Overlay, ScrollTarget, SessionRecord,
-    SessionStatus,
+    CaptureDump, Effect, Keymap, Launch, LaunchSpec, Overlay, ScrollTarget, SelectOp,
+    SessionRecord, SessionStatus,
 };
-use termherd_pty::{PtyEvent, Screen, TermKey};
+use termherd_pty::{PtyEvent, Screen};
 
 use crate::docs::DocEntry;
 use crate::record::{FrameStats, FrameThrottle, RecordConfig, Recorder};
 use crate::settings::{CloseSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
+mod geometry;
 mod ime;
 mod input;
+mod routing;
 mod streams;
 mod terminal;
 mod view;
 
-use input::{chord_of, event_modifiers, key_mods, numpad_char, to_term_key};
+use input::event_modifiers;
 use streams::{PtyOutput, pty_stream, watch_stream};
 use termherd_core::browser::project_label;
-use terminal::{cell_size, notify, open_url};
-
-/// Sidebar width and the chrome reserved around the terminal, in logical px.
-/// Combined with the zoom-derived cell metrics ([`terminal::cell_size`])
-/// to size the
-/// PTY grid to the window (FR4 resize).
-const SIDEBAR_W: f32 = 300.0;
-/// Width the collapsed sidebar still occupies: just the slim "▶" handle.
-/// The grid reserves this instead of `SIDEBAR_W` when hidden, so the reclaimed
-/// space becomes columns rather than stretched cells. The view pins the
-/// handle to exactly this width (`view::view`), so it is a contract the layout
-/// honours, not an estimate that can silently drift.
-pub(super) const HANDLE_W: f32 = 28.0;
-const H_CHROME: f32 = 40.0;
-const V_CHROME: f32 = 84.0;
+use terminal::{notify, open_url};
 
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
@@ -366,9 +354,12 @@ enum Message {
     Key(keyboard::Event),
     /// IME-composed text (dead/accent keys, CJK) for the focused terminal.
     ImeCommit(String),
-    /// Give keyboard focus to the terminal / the search box.
-    FocusTerminal,
+    /// Give keyboard focus to the search box.
     FocusSearch,
+    /// Click-to-focus the pane hosting a session (FR6): moves pane focus there
+    /// and gives the keyboard to the terminal. A lone terminal is the one-leaf
+    /// case, focused the same way.
+    FocusPane(SessionId),
     /// The mouse wheel turned over a terminal: the session under the pointer
     /// (not necessarily the focused one — splits), the pointer cell, and a line
     /// delta, so a mouse-mode app gets the wheel as input and a plain shell gets
@@ -378,6 +369,25 @@ enum Message {
         col: u16,
         row: u16,
         lines: i32,
+    },
+    /// Change a terminal's grid-anchored selection — press, drag, or clear — so
+    /// the highlight follows the text through scroll (FR4).
+    Select {
+        session: SessionId,
+        op: SelectOp,
+    },
+    /// Set a terminal's selection (a double-click word) and copy it at once, so
+    /// the highlight persists and tracks while the word lands on the clipboard.
+    SelectAndCopy {
+        session: SessionId,
+        op: SelectOp,
+        text: String,
+    },
+    /// Ask a terminal to copy its current selection (a drag release). The text
+    /// is read from the live grid selection and returned out-of-band, so it is
+    /// exact even right after a fast drag whose highlight has not echoed back.
+    RequestCopySelection {
+        session: SessionId,
     },
     /// Copy the given text (a terminal selection) to the clipboard (FR4).
     CopySelection(String),
@@ -502,8 +512,8 @@ impl Message {
                 | Self::SearchTitlesOnly(_)
                 | Self::LaunchProject(_)
                 | Self::LaunchSession { .. }
-                | Self::FocusTerminal
                 | Self::FocusSearch
+                | Self::FocusPane(_)
                 | Self::TermScroll { .. }
                 | Self::Paste(_)
                 | Self::TabDragStart(_)
@@ -660,6 +670,8 @@ impl Shell {
                     rows,
                 } => self.pty.resize(session, cols, rows),
                 Effect::Scroll { session, target } => self.pty.scroll(session, target),
+                Effect::Select { session, op } => self.pty.select(session, op),
+                Effect::CopyTerminalSelection { session } => self.pty.copy_selection(session),
                 Effect::Kill(session) => self.pty.kill(session),
                 // Metadata persistence is a file write, not a PTY call.
                 Effect::SaveMetadata(metadata) => {
@@ -738,7 +750,7 @@ impl Shell {
         // no longer in view.
         self.closing = None;
         self.archiving = None;
-        Task::batch([spawn, self.resize_focused()])
+        Task::batch([spawn, self.resize_panes()])
     }
 
     /// The working directory of the focused session, if one is open and its cwd
@@ -783,7 +795,7 @@ impl Shell {
         self.focus = Focus::Terminal;
         self.closing = None;
         self.archiving = None;
-        Task::batch([spawn, self.resize_focused()])
+        Task::batch([spawn, self.resize_panes()])
     }
 
     /// The focused terminal's visible grid as text, for a capture. `None`
@@ -1025,74 +1037,6 @@ impl Shell {
         Task::none()
     }
 
-    /// Move the focused terminal's viewport: the mouse wheel sends a
-    /// relative delta, the scroll-top/bottom shortcuts an absolute jump. Shared
-    /// so both paths go through the one `Event::ScrollViewport`.
-    fn scroll_focused(&mut self, target: ScrollTarget) -> Task<Message> {
-        let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
-        };
-        self.scroll_session(session, target)
-    }
-
-    /// Move a specific session's viewport. The wheel targets the pane under the
-    /// pointer, which need not be the focused one in a split layout.
-    fn scroll_session(&mut self, session: SessionId, target: ScrollTarget) -> Task<Message> {
-        let effects = self
-            .core
-            .apply(termherd_core::Event::ScrollViewport { session, target });
-        self.perform(effects)
-    }
-
-    /// Tell the focused session's PTY to match the current pane geometry.
-    fn resize_focused(&mut self) -> Task<Message> {
-        let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
-        };
-        let (cols, rows) = self.grid_size();
-        let effects = self.core.apply(termherd_core::Event::TerminalResized {
-            session,
-            cols,
-            rows,
-        });
-        self.perform(effects)
-    }
-
-    /// Collapse or restore the sidebar, then resize the focused terminal
-    /// so the grid re-derives its column count for the new width — without this
-    /// the cells just stretch to fill the reclaimed space. Shared by the
-    /// button (`Message::ToggleSidebar`) and the keymap (`Action::ToggleSidebar`).
-    fn toggle_sidebar(&mut self) -> Task<Message> {
-        let _ = self.core.apply(termherd_core::Event::ToggleSidebar);
-        self.resize_focused()
-    }
-
-    /// Zoom the terminal font, then resize the focused terminal so the
-    /// grid re-derives its cols/rows for the new cell box — the same pattern
-    /// as [`Self::toggle_sidebar`].
-    fn zoom(&mut self, zoom: termherd_core::Zoom) -> Task<Message> {
-        let _ = self.core.apply(termherd_core::Event::Zoom(zoom));
-        self.resize_focused()
-    }
-
-    /// The terminal grid size (cols, rows) that fits the current window. The
-    /// sidebar's width is only reserved while it's visible; collapsing it
-    /// hands that space to the grid as extra columns instead of stretching the
-    /// existing cells.
-    fn grid_size(&self) -> (u16, u16) {
-        let sidebar = if self.core.sidebar_hidden {
-            HANDLE_W
-        } else {
-            SIDEBAR_W
-        };
-        let (cell_w, cell_h) = cell_size(self.core.font_size());
-        let avail_w = (self.bounds.width - sidebar - H_CHROME).max(cell_w);
-        let avail_h = (self.bounds.height - V_CHROME).max(cell_h);
-        let cols = (avail_w / cell_w).floor().clamp(20.0, 500.0) as u16;
-        let rows = (avail_h / cell_h).floor().clamp(5.0, 200.0) as u16;
-        (cols, rows)
-    }
-
     // The iced `update` is a flat `match` over every `Message` variant — the
     // app's central event dispatcher. Length here is breadth (one arm per
     // message), not nested complexity; splitting it would scatter the dispatch.
@@ -1225,7 +1169,7 @@ impl Shell {
                         // reaction (the user can re-request).
                         self.closing = None;
                     }
-                    Task::batch([self.perform(effects), self.resize_focused()])
+                    Task::batch([self.perform(effects), self.resize_panes()])
                 }
             }
             Message::Key(event) => {
@@ -1237,9 +1181,10 @@ impl Shell {
                 self.on_key(event)
             }
             Message::ImeCommit(text) => self.on_ime_commit(text),
-            Message::FocusTerminal => {
+            Message::FocusPane(session) => {
                 self.focus = Focus::Terminal;
-                Task::none()
+                let effects = self.core.apply(termherd_core::Event::FocusPane(session));
+                self.perform(effects)
             }
             Message::FocusSearch => {
                 self.focus = Focus::Search;
@@ -1251,6 +1196,30 @@ impl Shell {
                 row,
                 lines,
             } => self.scroll_session(session, ScrollTarget::Wheel { col, row, lines }),
+            Message::Select { session, op } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::Select { session, op });
+                self.perform(effects)
+            }
+            Message::SelectAndCopy { session, op, text } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::Select { session, op });
+                let select = self.perform(effects);
+                if text.is_empty() {
+                    select
+                } else {
+                    self.selection = Some(text.clone());
+                    Task::batch([select, iced::clipboard::write(text)])
+                }
+            }
+            Message::RequestCopySelection { session } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::CopyTerminalSelection { session });
+                self.perform(effects)
+            }
             Message::CopySelection(text) => {
                 if text.is_empty() {
                     Task::none()
@@ -1602,7 +1571,7 @@ impl Shell {
             self.screens.remove(&id);
         }
         let kill = self.perform(effects);
-        Task::batch([kill, self.resize_focused()])
+        Task::batch([kill, self.resize_panes()])
     }
 
     /// Copy the last terminal selection to the clipboard, if any (FR4).
@@ -1622,7 +1591,7 @@ impl Shell {
         self.focus = Focus::Terminal;
         self.closing = None;
         self.archiving = None;
-        self.resize_focused()
+        self.resize_panes()
     }
 
     /// Apply the pending tab rename to the core and clear the edit. The core's
@@ -1657,212 +1626,6 @@ impl Shell {
         self.activate_tab(next)
     }
 
-    /// Run a keymap [`Action`] (FR9). Clipboard actions become iced tasks; tab
-    /// actions drive `core`. Actions without a surface yet are no-ops.
-    fn run_action(&mut self, action: Action) -> Task<Message> {
-        match action {
-            Action::Copy => self.copy_selection(),
-            Action::Paste => iced::clipboard::read().map(Message::Paste),
-            Action::NextTab => self.cycle_tab(1),
-            Action::PrevTab => self.cycle_tab(-1),
-            Action::CloseFocused => self.request_close(self.core.workspace.active),
-            Action::FocusSearch => {
-                self.focus = Focus::Search;
-                operate(focusable::focus(search_id()))
-            }
-            Action::ToggleSidebar => self.toggle_sidebar(),
-            Action::ScrollTop => self.scroll_focused(ScrollTarget::Top),
-            Action::ScrollBottom => self.scroll_focused(ScrollTarget::Bottom),
-            // New shell / Claude session in the focused context, and
-            // reopen the last closed tab.
-            Action::NewShellHere => self.new_shell_here(),
-            Action::NewClaudeSessionHere => self.new_claude_here(),
-            Action::ReopenClosedTab => self.reopen_closed_tab(),
-            // Capture the current state for the AI dev loop.
-            Action::Capture => self.capture(),
-            // Start / stop the GIF screencast.
-            Action::ToggleRecord => self.toggle_record(),
-            // Zoom re-derives the grid geometry, so the focused terminal is
-            // resized like on a window resize; other tabs catch up on
-            // focus, the existing convention.
-            Action::ZoomIn => self.zoom(termherd_core::Zoom::In),
-            Action::ZoomOut => self.zoom(termherd_core::Zoom::Out),
-            Action::ZoomReset => self.zoom(termherd_core::Zoom::Reset),
-            // Number-row jump straight to a tab. An index past the
-            // open tabs is absorbed by `core` as a no-op.
-            Action::ActivateTab(index) => self.activate_tab(index),
-            Action::OpenNewSession
-            | Action::SplitHorizontal
-            | Action::SplitVertical
-            | Action::FocusNext
-            | Action::FocusPrev => Task::none(),
-        }
-    }
-
-    /// Route a key press to the focused terminal's PTY (FR4). Ignored unless a
-    /// terminal holds focus, so the search box keeps its own typing.
-    fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
-        // While renaming a tab inline, the text field owns the keyboard —
-        // except Escape, which abandons the edit (Enter commits via the field's
-        // own submit; a blur commits through `commits_tab_rename`).
-        if self.tab_rename.is_some() {
-            if let keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(keyboard::key::Named::Escape),
-                ..
-            } = &event
-            {
-                return self.update(Message::CancelTabRename);
-            }
-            return Task::none();
-        }
-        // While renaming inline, let the text field own the keyboard.
-        if self.renaming.is_some() {
-            return Task::none();
-        }
-        // The quit modal owns the keyboard while it is up: Enter quits, Escape
-        // cancels, every other key is swallowed. Checked first so it wins over
-        // the tab/archive prompts beneath it.
-        if self.quit_pending() {
-            if let keyboard::Event::KeyPressed { key, .. } = &event {
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        return self.update(Message::ConfirmCloseWindow);
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                        self.closing_window = None;
-                    }
-                    _ => {}
-                }
-            }
-            return Task::none();
-        }
-        // A pending close confirmation captures the keyboard: Enter
-        // confirms, Escape cancels, and every other key is swallowed so a
-        // keystroke can't slip past to the terminal while the prompt is up.
-        if let Some(index) = self.closing {
-            if let keyboard::Event::KeyPressed { key, .. } = &event {
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        return self.close_tab(index);
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                        self.closing = None;
-                    }
-                    _ => {}
-                }
-            }
-            return Task::none();
-        }
-        // A pending archive confirmation likewise owns the keyboard:
-        // Enter archives, Escape cancels, other keys are swallowed.
-        if self.archiving.is_some() {
-            if let keyboard::Event::KeyPressed { key, .. } = &event {
-                match key {
-                    keyboard::Key::Named(keyboard::key::Named::Enter) => {
-                        return self.update(Message::ConfirmArchive);
-                    }
-                    keyboard::Key::Named(keyboard::key::Named::Escape) => {
-                        self.archiving = None;
-                    }
-                    _ => {}
-                }
-            }
-            return Task::none();
-        }
-        // An open doc owns the keyboard: the text editor handles keys itself, so
-        // swallow them here (never leak to the terminal underneath), but honour
-        // the save chord (Cmd/Ctrl+S).
-        if self.open_doc.is_some() {
-            if let keyboard::Event::KeyPressed { key, modifiers, .. } = &event
-                && modifiers.command()
-                && matches!(key, keyboard::Key::Character(c) if c.as_str() == "s")
-            {
-                return self.save_open_doc();
-            }
-            return Task::none();
-        }
-        let keyboard::Event::KeyPressed {
-            key,
-            physical_key,
-            modifiers,
-            text,
-            location,
-            ..
-        } = event
-        else {
-            return Task::none();
-        };
-        // A configured shortcut wins over raw terminal input: build the chord
-        // and run its action if the keymap binds one (FR9). Resolved before the
-        // terminal-focus guard so command chords are global — `mod+T` opens the
-        // first shell even from an empty workspace with the search box focused.
-        // Run-action handlers that need a session guard for one
-        // themselves. Unbound keys fall through to the terminal, so plain Ctrl+C
-        // stays the interrupt signal.
-        if let Some(chord) = chord_of(&key, &physical_key, modifiers)
-            && let Some(action) = self.keymap.lookup(&chord)
-        {
-            return self.run_action(action);
-        }
-        if self.focus != Focus::Terminal {
-            return Task::none();
-        }
-        let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
-        };
-        // A numpad key with NumLock on reports its un-locked name (`End`, arrows,
-        // …) but carries the digit/operator in `text`; type that instead of the
-        // navigation sequence its name would otherwise produce. Other keys map
-        // by name as usual.
-        let term_key = numpad_char(location, text.as_deref())
-            .map(TermKey::Char)
-            .or_else(|| to_term_key(&key));
-        let Some(term_key) = term_key else {
-            return Task::none();
-        };
-        let Some(bytes) = termherd_pty::key_bytes(term_key, key_mods(modifiers), text.as_deref())
-        else {
-            return Task::none();
-        };
-        let effects = self
-            .core
-            .apply(termherd_core::Event::TerminalInput { session, bytes });
-        self.perform(effects)
-    }
-
-    /// Whether raw keyboard / IME input should reach the focused terminal: it
-    /// holds focus and no overlay (inline rename, close confirmation) is up.
-    /// Focus stays `Terminal` while those overlays are open, so they have to be
-    /// excluded explicitly — this is the predicate [`Shell::on_key`] enforces
-    /// step by step, shared so the IME path can't drift from it.
-    fn accepts_terminal_input(&self) -> bool {
-        self.focus == Focus::Terminal
-            && self.renaming.is_none()
-            && self.tab_rename.is_none()
-            && self.closing.is_none()
-            && self.archiving.is_none()
-            && self.open_doc.is_none()
-            && !self.quit_pending()
-    }
-
-    /// Route IME-composed text (dead/accent keys, CJK) to the focused terminal
-    /// as typed bytes. A commit only fires while the terminal accepts
-    /// input (see [`Shell::accepts_terminal_input`]), but guard anyway so a
-    /// composing overlay (rename / close confirmation) keeps its own typing.
-    fn on_ime_commit(&mut self, text: String) -> Task<Message> {
-        if !self.accepts_terminal_input() || text.is_empty() {
-            return Task::none();
-        }
-        let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
-        };
-        let effects = self.core.apply(termherd_core::Event::TerminalInput {
-            session,
-            bytes: text.into_bytes(),
-        });
-        self.perform(effects)
-    }
-
     fn on_window_event(&mut self, id: window::Id, event: window::Event) -> Task<Message> {
         match event {
             window::Event::Opened { .. } => {
@@ -1894,7 +1657,7 @@ impl Shell {
             window::Event::Resized(size) => {
                 self.bounds.width = size.width;
                 self.bounds.height = size.height;
-                self.resize_focused()
+                self.resize_panes()
             }
             window::Event::CloseRequested => {
                 self.bounds.save();
@@ -1996,8 +1759,8 @@ mod key_routing {
     use iced::keyboard::key::{Named, NativeCode, Physical};
     use iced::keyboard::{Key, Location, Modifiers};
     use std::sync::Mutex as StdMutex;
-    use termherd_core::SpawnSpec;
     use termherd_core::ports::{PtyError, ScanError};
+    use termherd_core::{Action, SelectSide, SpawnSpec};
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]
@@ -2008,6 +1771,8 @@ mod key_routing {
         launches: StdMutex<Vec<Launch>>,
         resizes: StdMutex<Vec<(u16, u16)>>,
         scrolls: StdMutex<Vec<ScrollTarget>>,
+        selects: StdMutex<Vec<SelectOp>>,
+        copies: StdMutex<usize>,
     }
 
     impl RecordingPty {
@@ -2030,6 +1795,12 @@ mod key_routing {
         }
         fn scrolls(&self) -> Vec<ScrollTarget> {
             self.scrolls.lock().expect("scrolls lock").clone()
+        }
+        fn selects(&self) -> Vec<SelectOp> {
+            self.selects.lock().expect("selects lock").clone()
+        }
+        fn copy_count(&self) -> usize {
+            *self.copies.lock().expect("copies lock")
         }
     }
 
@@ -2058,6 +1829,14 @@ mod key_routing {
         }
         fn scroll(&self, _: SessionId, target: ScrollTarget) -> Result<(), PtyError> {
             self.scrolls.lock().expect("scrolls lock").push(target);
+            Ok(())
+        }
+        fn select(&self, _: SessionId, op: SelectOp) -> Result<(), PtyError> {
+            self.selects.lock().expect("selects lock").push(op);
+            Ok(())
+        }
+        fn copy_selection(&self, _: SessionId) -> Result<(), PtyError> {
+            *self.copies.lock().expect("copies lock") += 1;
             Ok(())
         }
         fn kill(&self, _: SessionId) -> Result<(), PtyError> {
@@ -2127,6 +1906,95 @@ mod key_routing {
     }
 
     #[test]
+    fn a_drag_selection_reaches_the_pty_as_grid_anchored_ops() {
+        // The canvas turns a press-then-drag into Select ops; the shell must
+        // route them through core to the PTY, which owns the grid selection so
+        // the highlight follows the text through scroll.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::Select {
+            session,
+            op: SelectOp::Start {
+                line: 0,
+                col: 0,
+                side: SelectSide::Left,
+            },
+        });
+        let _ = shell.update(Message::Select {
+            session,
+            op: SelectOp::Update {
+                line: 0,
+                col: 5,
+                side: SelectSide::Right,
+            },
+        });
+        assert_eq!(
+            pty.selects(),
+            vec![
+                SelectOp::Start {
+                    line: 0,
+                    col: 0,
+                    side: SelectSide::Left
+                },
+                SelectOp::Update {
+                    line: 0,
+                    col: 5,
+                    side: SelectSide::Right
+                },
+            ],
+            "press and drag reach the PTY as grid-anchored selection ops"
+        );
+    }
+
+    #[test]
+    fn a_double_click_selects_the_word_and_copies_it() {
+        // SelectAndCopy sets the native word selection *and* lands the text on
+        // the clipboard in one step.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::SelectAndCopy {
+            session,
+            op: SelectOp::Range {
+                line0: 0,
+                col0: 4,
+                line1: 0,
+                col1: 14,
+            },
+            text: "src/main.rs".to_string(),
+        });
+        assert_eq!(
+            pty.selects(),
+            vec![SelectOp::Range {
+                line0: 0,
+                col0: 4,
+                line1: 0,
+                col1: 14
+            }],
+            "the word range is applied to the terminal selection"
+        );
+        assert_eq!(
+            shell.selection.as_deref(),
+            Some("src/main.rs"),
+            "the word is remembered as the last copy"
+        );
+    }
+
+    #[test]
+    fn a_drag_release_asks_the_pty_to_copy_its_live_selection() {
+        // The copy reads the terminal's own selection (returned out-of-band), so
+        // it is exact even right after a fast drag — not the possibly-lagged
+        // snapshot the shell last rendered.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::RequestCopySelection { session });
+        assert_eq!(
+            pty.copy_count(),
+            1,
+            "a drag release asks the terminal to copy its selection"
+        );
+    }
+
+    #[test]
     fn the_claude_button_launches_a_fresh_claude_session() {
         let (mut shell, pty) = shell_with_terminal();
         let before = pty.launches().len();
@@ -2179,6 +2047,74 @@ mod key_routing {
         let _ = shell
             .core
             .apply(termherd_core::Event::ScanCompleted(vec![record]));
+    }
+
+    /// The sidebar was split into per-section row builders; render it with every
+    /// section live — a starred favorite (so its section and leading divider
+    /// appear), the Plans & mémoire docs, and a project group whose two rows
+    /// collide on title — to prove the split assembles a valid tree across all
+    /// branches without dropping or panicking on one.
+    #[test]
+    fn the_split_sidebar_renders_every_section() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let row = |id: &str| SessionRecord {
+            session_id: id.to_string(),
+            project_path: "/tmp/alpha".to_string(),
+            digest: termherd_claude::digest::SessionDigest {
+                summary: "shared title".to_string(),
+                message_count: 1,
+                text_content: String::new(),
+                slug: None,
+                custom_title: None,
+                ai_title: None,
+                tail: Vec::new(),
+            },
+            modified: None,
+        };
+        let _ = shell.core.apply(termherd_core::Event::ScanCompleted(vec![
+            row("sess-a"),
+            row("sess-b"),
+        ]));
+        // Star one so the Favorites section — and the divider before it — shows.
+        let _ = shell.update(Message::ToggleStar("sess-a".to_string()));
+        assert!(
+            !shell
+                .core
+                .favorite_sessions(&shell.core.visible_projects())
+                .is_empty(),
+            "a starred session should surface as a favorite",
+        );
+        // Populate the Plans & mémoire section.
+        shell.docs = vec![DocEntry {
+            kind: crate::docs::DocKind::Plan,
+            label: "PRD.md".to_string(),
+            path: std::path::PathBuf::from("/tmp/PRD.md"),
+        }];
+        // Building the whole tree must not panic across favorites + plans +
+        // projects and their dividers.
+        let _ = shell.view();
+    }
+
+    /// With no browsable projects the sidebar shows a status line, then the
+    /// Plans & mémoire section — the branch where the first section's leading
+    /// divider is suppressed so it does not underline the status. Render it to
+    /// prove that path assembles without panicking.
+    #[test]
+    fn the_sidebar_renders_a_status_line_above_a_lone_section() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(Vec::new()));
+        shell.docs = vec![DocEntry {
+            kind: crate::docs::DocKind::Plan,
+            label: "PRD.md".to_string(),
+            path: std::path::PathBuf::from("/tmp/PRD.md"),
+        }];
+        assert!(
+            shell.core.visible_projects().is_empty(),
+            "no scanned sessions should leave the project list empty",
+        );
+        let _ = shell.view();
     }
 
     #[test]
@@ -2397,6 +2333,7 @@ mod key_routing {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            selection: Vec::new(),
             default_bg: [0x11, 0x13, 0x18],
             cursor_color: [0xd0, 0xd0, 0xd0],
         }
@@ -2931,26 +2868,30 @@ mod key_routing {
         // width becomes columns), and the toggle must push that wider size to
         // the PTY rather than leaving cols stale (which stretched the cells).
         let (mut shell, pty) = shell_with_terminal();
-        let (cols_visible, _) = shell.grid_size();
+        // The launch resizes the lone pane once; read the visible-sidebar cols
+        // straight off that recorded resize rather than an internal helper.
+        let cols_visible = pty
+            .resizes()
+            .last()
+            .map(|(cols, _)| *cols)
+            .expect("the launch resizes the pane once");
         let resizes_before = pty.resizes().len();
 
         let _ = shell.toggle_sidebar();
         assert!(shell.core.sidebar_hidden, "toggle should hide the sidebar");
 
-        let (cols_hidden, _) = shell.grid_size();
-        assert!(
-            cols_hidden > cols_visible,
-            "hiding the sidebar must add columns (was {cols_visible}, now {cols_hidden})"
-        );
         let resizes = pty.resizes();
         assert!(
             resizes.len() > resizes_before,
-            "toggling the sidebar must resize the focused PTY"
+            "toggling the sidebar must resize the PTY"
         );
-        assert_eq!(
-            resizes.last().map(|(cols, _)| *cols),
-            Some(cols_hidden),
-            "the resize must carry the new, wider column count"
+        let cols_hidden = resizes
+            .last()
+            .map(|(cols, _)| *cols)
+            .expect("the toggle resizes the pane");
+        assert!(
+            cols_hidden > cols_visible,
+            "hiding the sidebar must add columns (was {cols_visible}, now {cols_hidden})"
         );
     }
 
@@ -2985,6 +2926,127 @@ mod key_routing {
                     lines: 3
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn split_action_opens_a_new_pane_beside_the_focused_one() {
+        // The `split-*` keymap action must reach `core` (it is dropped on the
+        // floor today), minting a second session in the active tab and spawning
+        // its PTY while the original pane stays open.
+        let (mut shell, pty) = shell_with_terminal();
+        let spawns_before = pty.spawn_count();
+        let original = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("a launched terminal is focused");
+
+        let _ = shell.run_action(Action::SplitVertical);
+
+        let active = shell.core.workspace.active;
+        let sessions = shell.core.workspace.tabs[active].sessions();
+        assert_eq!(
+            sessions.len(),
+            2,
+            "splitting must add a second pane to the active tab"
+        );
+        assert!(
+            sessions.contains(&original),
+            "the original pane stays open beside the new one"
+        );
+        assert_eq!(
+            pty.spawn_count(),
+            spawns_before + 1,
+            "the new pane spawns its own PTY"
+        );
+    }
+
+    #[test]
+    fn close_focused_closes_only_the_focused_pane_in_a_split() {
+        // `mod+w` in a split must collapse just the focused pane, not the whole
+        // tab: the sibling survives, the tab stays open, one PTY is killed.
+        let (mut shell, pty) = shell_with_terminal();
+        let original = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("a launched terminal is focused");
+        let _ = shell.run_action(Action::SplitVertical);
+        let new_pane = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("the new split pane is focused");
+        let active = shell.core.workspace.active;
+        assert_eq!(shell.core.workspace.tabs[active].sessions().len(), 2);
+
+        let kills_before = pty.kill_count();
+        let _ = shell.run_action(Action::CloseFocused);
+
+        assert_eq!(shell.core.workspace.tabs.len(), 1, "the tab stays open");
+        let active = shell.core.workspace.active;
+        let sessions = shell.core.workspace.tabs[active].sessions();
+        assert_eq!(sessions, vec![original], "only the original pane remains");
+        assert!(
+            !sessions.contains(&new_pane),
+            "the focused pane was the one closed"
+        );
+        assert_eq!(
+            pty.kill_count(),
+            kills_before + 1,
+            "exactly the closed pane's PTY is killed"
+        );
+    }
+
+    #[test]
+    fn focus_prev_returns_to_the_original_pane_after_a_split() {
+        // Splitting focuses the new pane; `focus-prev` must cycle back — the
+        // `focus-*` actions are dropped on the floor today.
+        let (mut shell, _pty) = shell_with_terminal();
+        let original = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("a launched terminal is focused");
+
+        let _ = shell.run_action(Action::SplitVertical);
+        let new_pane = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("the new split pane is focused");
+        assert_ne!(
+            new_pane, original,
+            "a split focuses the freshly minted pane"
+        );
+
+        let _ = shell.run_action(Action::FocusPrev);
+        assert_eq!(
+            shell.core.workspace.focused_session(),
+            Some(original),
+            "focus-prev walks back to the original pane"
+        );
+    }
+
+    #[test]
+    fn a_window_resize_resizes_every_split_pane() {
+        // Per-leaf PTY geometry: a resize must size *each* pane to its own
+        // sub-rect, not just the focused one — two panes, two resizes.
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.run_action(Action::SplitVertical);
+        let resizes_before = pty.resizes().len();
+
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::Resized(Size::new(1600.0, 900.0)),
+        ));
+
+        assert!(
+            pty.resizes().len() >= resizes_before + 2,
+            "each of the two split panes must be resized to its own geometry \
+             (was {resizes_before}, now {})",
+            pty.resizes().len()
         );
     }
 
