@@ -32,9 +32,11 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 2. **P1 — correctness + the headline feature:** #102 (scroll-drift property
    failure — the one open correctness bug), #54 (fixed-ratio split-pane UI —
    cheapest large/visible feature, core already landed), #119 (live tab name),
-   and the intra-crate refactor cluster #167–#169 (`tech-health`). Done since
-   the last pass: #79/#80 (running-process guards) and the `F-quality-gates`
-   P1 slices #105/#106/#107.
+   and the intra-crate refactor splits #168/#169 (`tech-health`). Done since
+   the last pass: #54 (split-pane UI), the shell god-object split #167 (cluster
+   B: effects/record/launch/session_ops/docs modules + queries pushed to core),
+   #79/#80 (running-process guards) and the `F-quality-gates` P1 slices
+   #105/#106/#107.
 3. **P2 — polish:** #36 (copy-on-select), #55 (drag-resize, **blocked-by #54**),
    #59 (modifier bypass), #37 (settings template), #84 (OSC 8 links), #85
    (inline images), #82 (link-cursor bug), #90 (MCP control surface,
@@ -126,7 +128,8 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   rule as an architecture fitness function enforcing the hexagonal inward-only
   invariant (#107) all landed. **P2 follow-ups — now filed** as the intra-crate
   refactor cluster #167–#173: the module-boundary/`cfg(target_os)`/file-length
-  gate is #173, blocked by the god-object splits #167/#168/#169; cognitive-
+  gate is #173, blocked by the god-object splits #167 (shell — **shipped**),
+  #168 and #169; cognitive-
   complexity (signal C) stays unfiled. **P3 / report-only** (blocked on a
   quality-report home): file length (signal A, folded into #173's report) and
   churn×size hotspots (signal J). Dropped: MSRV check,

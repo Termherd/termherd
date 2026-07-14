@@ -24,32 +24,34 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    CaptureDump, Effect, Keymap, Launch, LaunchSpec, Overlay, ScrollTarget, SelectOp,
-    SessionRecord, SessionStatus,
+    Keymap, Launch, Overlay, ScrollTarget, SelectOp, SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
 use crate::docs::DocEntry;
-use crate::record::{FrameStats, FrameThrottle, Recorder};
 use crate::record_config::RecordConfig;
 use crate::settings::{CloseSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
 mod bridge;
+mod docs;
+mod effects;
 mod geometry;
 mod ime;
 mod input;
+mod launch;
+mod record;
 mod routing;
+mod session_ops;
 mod streams;
 mod terminal;
 mod view;
 
 pub(crate) use bridge::{Requests as BridgeRequests, channel as bridge_channel};
-
+use docs::{DocFeedback, OpenDoc};
 use input::event_modifiers;
+use record::RecordState;
 use streams::{PtyOutput, pty_stream, watch_stream};
-use termherd_core::browser::project_label;
-use terminal::{notify, open_url};
 
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
@@ -198,34 +200,6 @@ enum Focus {
     Search,
 }
 
-/// A plan / memory document open in the main pane (F-plans-memory). Holds the
-/// editable buffer plus the state the save path needs: where it lives, whether
-/// it is in the writable scope, and the mtime captured at load for the
-/// concurrency guard.
-struct OpenDoc {
-    /// Sidebar label, shown in the editor header.
-    label: String,
-    /// File on disk; the scope predicate and save are measured against it.
-    path: PathBuf,
-    /// The editable text buffer (iced text editor state).
-    content: text_editor::Content,
-    /// mtime captured at load; the baseline for the concurrent-write guard.
-    /// `None` if it could not be read (then no conflict can be detected).
-    loaded_mtime: Option<SystemTime>,
-    /// Whether the write-scope predicate permits saving this path.
-    writable: bool,
-    /// Unsaved edits since load or the last successful save.
-    dirty: bool,
-    /// Transient feedback after a save attempt.
-    feedback: Option<DocFeedback>,
-}
-
-/// The outcome of the last save attempt, surfaced in the editor header.
-enum DocFeedback {
-    Saved,
-    Error(String),
-}
-
 struct Shell {
     /// The headless core; all browser and session state lives there.
     core: termherd_core::App,
@@ -304,29 +278,9 @@ struct Shell {
     /// `exit_on_close_request(false)` keeps the runtime alive), so the process
     /// would otherwise survive Cmd+Q and hold the single-instance lock.
     exiting: bool,
-    /// The GIF screencast budget: fps / duration cap / frame scale.
-    /// Default for now; `settings.json` configurability is a follow-up.
-    record_config: RecordConfig,
-    /// The recorder thread for an in-progress screencast, or `None`. The
-    /// encoder lives off the UI thread; the shell only feeds it frames.
-    recorder: Option<Recorder>,
-    /// Frame screenshots requested but not yet handed to the recorder.
-    /// A stop waits for this to drain so the final frames aren't lost.
-    record_inflight: u32,
-    /// A finish is pending until the last in-flight frame is handed off.
-    record_finish_pending: bool,
-    /// When the in-progress recording started — the origin for the
-    /// throttle's logical timeline. `None` when not recording.
-    record_started: Option<Instant>,
-    /// Throttles the window's present-rate frame source down to the configured
-    /// fps. `None` when not recording.
-    record_throttle: Option<FrameThrottle>,
-    /// When the previous frame was handed to the encoder, so each frame's
-    /// on-screen duration is the real wall-clock gap since the last one.
-    record_last_frame: Option<Instant>,
-    /// Per-frame gap statistics for the in-progress recording — logged at
-    /// stop to evidence real-time capture (vs the idle-window time-lapse).
-    record_stats: FrameStats,
+    /// The GIF screencast (F-capture rung 2): the recording budget and the
+    /// in-progress encoder state, encapsulated so the shell holds one field.
+    record: RecordState,
 }
 
 /// A tab drag in flight: the index the drag started on and the slot the
@@ -642,14 +596,7 @@ impl Shell {
             shift_modifier: false,
             tab_drag: None,
             exiting: false,
-            record_config: startup.record,
-            recorder: None,
-            record_inflight: 0,
-            record_finish_pending: false,
-            record_started: None,
-            record_throttle: None,
-            record_last_frame: None,
-            record_stats: FrameStats::default(),
+            record: RecordState::new(startup.record),
         }
     }
 
@@ -701,391 +648,12 @@ impl Shell {
         )
     }
 
-    /// Carry out the effects `core` asked for, against the adapters. The PTY
-    /// calls are quick (channel sends / a spawn); failures are logged, never
-    /// fatal — a dead terminal must not take the app down (Q3).
-    fn perform(&self, effects: Vec<Effect>) -> Task<Message> {
-        for effect in effects {
-            let outcome = match effect {
-                Effect::Spawn(spec) => self.pty.spawn(spec),
-                Effect::Write { session, bytes } => self.pty.write(session, &bytes),
-                Effect::Resize {
-                    session,
-                    cols,
-                    rows,
-                } => self.pty.resize(session, cols, rows),
-                Effect::Scroll { session, target } => self.pty.scroll(session, target),
-                Effect::Select { session, op } => self.pty.select(session, op),
-                Effect::CopyTerminalSelection { session } => self.pty.copy_selection(session),
-                Effect::Kill(session) => self.pty.kill(session),
-                // Metadata persistence is a file write, not a PTY call.
-                Effect::SaveMetadata(metadata) => {
-                    crate::metadata_store::save(&metadata);
-                    Ok(())
-                }
-                // Fold state is a file write too.
-                Effect::SaveCollapsed(collapsed) => {
-                    crate::collapsed_store::save(&collapsed);
-                    Ok(())
-                }
-                // Opening a link is an OS handoff, not a PTY call.
-                Effect::OpenUrl(url) => open_url(&url),
-                // A desktop notification is an OS handoff too.
-                Effect::Notify { title, body } => notify(&title, &body),
-                // Capture is performed by `Shell::capture`, not here: the JSON
-                // dump and the PNG must share one timestamp, and the PNG needs
-                // an async `window::screenshot` follow-up this fire-and-forget
-                // loop can't return. Reaching this arm is unexpected — log it.
-                Effect::Capture(_) => {
-                    tracing::warn!("Effect::Capture routed through perform; ignored");
-                    Ok(())
-                }
-                // Record effects are performed by `Shell::run_record_effects`,
-                // not here: `CaptureFrame` needs an async `window::screenshot`
-                // follow-up this loop can't return, and start/finish manage the
-                // encoder thread. Reaching this arm is unexpected — log it.
-                Effect::StartRecording
-                | Effect::CaptureFrame
-                | Effect::FinishRecording { .. }
-                | Effect::CancelRecording => {
-                    tracing::warn!("record effect routed through perform; ignored");
-                    Ok(())
-                }
-            };
-            if let Err(error) = outcome {
-                tracing::warn!(%error, "pty effect failed");
-            }
-        }
-        Task::none()
-    }
-
-    /// Launch a terminal: register it in `core`, perform the spawn, focus it,
-    /// and size its PTY to the current pane (FR4).
-    fn launch(&mut self, cwd: String, launch: Launch) -> Task<Message> {
-        // The kind is shown as a suffix so a shell tab and a Claude tab for the
-        // same repo stay distinct. Resuming a known session takes its real
-        // name from the scanned digest — current Claude renders status
-        // in-band and emits no OSC title, so the live override never fires;
-        // without this every resumed tab in a repo would read alike. A fresh or
-        // unscanned session keeps the kind label; an OSC title still wins later.
-        let label = project_label(&cwd);
-        let title = match &launch {
-            Launch::Shell => format!("{label} $"),
-            Launch::Claude {
-                resume: Some(claude_id),
-            } => self
-                .core
-                .record_for(claude_id)
-                .map(|record| self.core.session_title(record))
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| format!("{label} 🤖")),
-            Launch::Claude { resume: None } => format!("{label} 🤖"),
-        };
-        let effects = self
-            .core
-            .apply(termherd_core::Event::LaunchSession(LaunchSpec {
-                cwd: Some(cwd),
-                launch,
-                title,
-            }));
-        let spawn = self.perform(effects);
-        self.focus = Focus::Terminal;
-        // Opening another session drops any pending confirmation: a
-        // stray Enter in the terminal must not confirm a sidebar prompt that's
-        // no longer in view.
-        self.closing = None;
-        self.archiving = None;
-        Task::batch([spawn, self.resize_panes()])
-    }
-
-    /// The working directory of the focused session, if one is open and its cwd
-    /// is known. The anchor for the "new in context" shortcuts.
-    fn focused_cwd(&self) -> Option<String> {
-        let id = self.core.workspace.focused_session()?;
-        self.core.sessions.get(&id)?.cwd.clone()
-    }
-
-    /// Open a fresh shell in the focused session's directory, or in the
-    /// home directory when nothing is open — so the shortcut still works from an
-    /// empty workspace.
-    fn new_shell_here(&mut self) -> Task<Message> {
-        let cwd = self.focused_cwd().unwrap_or_else(home_dir);
-        self.launch(cwd, Launch::Shell)
-    }
-
-    /// Open a fresh Claude session in the repo containing the focused session.
-    /// Walks up to the repo root so a session running in a subdirectory
-    /// still lands at the repo. Inert when nothing is open — there is no context
-    /// to derive a repo from.
-    fn new_claude_here(&mut self) -> Task<Message> {
-        let Some(cwd) = self.focused_cwd() else {
-            return Task::none();
-        };
-        let root = termherd_scan::repo_root(std::path::Path::new(&cwd))
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or(cwd);
-        self.launch(root, Launch::Claude { resume: None })
-    }
-
-    /// Reopen the most recently closed tab, restoring its mode and
-    /// directory. The reopen lives in `core`; here we just perform the spawn and
-    /// focus the restored terminal, mirroring [`Self::launch`]. A no-op when the
-    /// close stack is empty (`core` yields no effects).
-    fn reopen_closed_tab(&mut self) -> Task<Message> {
-        let effects = self.core.apply(termherd_core::Event::ReopenClosedTab);
-        if effects.is_empty() {
-            return Task::none();
-        }
-        let spawn = self.perform(effects);
-        self.focus = Focus::Terminal;
-        self.closing = None;
-        self.archiving = None;
-        Task::batch([spawn, self.resize_panes()])
-    }
-
-    /// The focused terminal's visible grid as text, for a capture. `None`
-    /// when nothing is focused or its screen has not rendered yet — `core` then
-    /// records a focus-less dump.
-    fn focused_pty_text(&self) -> Option<String> {
-        let id = self.core.workspace.focused_session()?;
-        self.screens.get(&id).map(Screen::text)
-    }
-
-    /// Capture the current state for the AI dev loop: hand `core` the
-    /// focused terminal's text, then write the JSON dump and take the PNG into
-    /// `~/.termherd/captures/`. A no-op when no home directory is set.
-    fn capture(&mut self) -> Task<Message> {
-        let Some(dir) = crate::capture::captures_dir() else {
-            tracing::warn!("no home directory; capture skipped");
-            return Task::none();
-        };
-        let focused_pty_text = self.focused_pty_text();
-        let effects = self
-            .core
-            .apply(termherd_core::Event::Capture { focused_pty_text });
-        for effect in effects {
-            if let Effect::Capture(dump) = effect {
-                return self.perform_capture(&dir, dump);
-            }
-        }
-        Task::none()
-    }
-
-    /// Write the rung-0 JSON dump into `dir` now and schedule the rung-1 PNG.
-    /// Both share one timestamp so the pair is easy to find; the JSON is written
-    /// synchronously (cheap), the PNG follows once iced returns the window
-    /// screenshot. `dir` is a seam: production passes `~/.termherd/captures`,
-    /// tests a throwaway. Any I/O failure is logged, never fatal — a missed
-    /// capture must not take the app down.
-    fn perform_capture(&self, dir: &std::path::Path, dump: CaptureDump) -> Task<Message> {
-        if let Err(error) = std::fs::create_dir_all(dir) {
-            tracing::warn!(%error, "could not create captures dir; capture skipped");
-            return Task::none();
-        }
-        let stamp = crate::capture::stamp(SystemTime::now());
-        match crate::capture::write_dump(dir, &stamp, &dump) {
-            Ok(path) => tracing::info!(path = %path.display(), "capture dump written"),
-            Err(error) => tracing::warn!(%error, "could not write capture dump"),
-        }
-        let png_path = crate::capture::png_path(dir, &stamp);
-        // Screenshot the live window (rung 1), then encode + write the PNG.
-        // `Task::<Option>::and_then` only fires for `Some`, so a window-less run
-        // simply skips the PNG and the JSON dump still stands.
-        window::latest()
-            .and_then(window::screenshot)
-            .map(move |screenshot| Message::CaptureScreenshot {
-                screenshot,
-                png_path: png_path.clone(),
-            })
-    }
-
-    /// Start or stop the GIF screencast: hand `core` the frame cap from
-    /// the record budget and perform whatever effects it returns. Ignored while a
-    /// previous recording is still draining, so a back-to-back ⌘⇧R can't
-    /// replace the recorder mid-finish.
-    fn toggle_record(&mut self) -> Task<Message> {
-        if self.record_toggle_blocked() {
-            tracing::info!("record toggle ignored: previous screencast still finishing");
-            return Task::none();
-        }
-        let max_frames = self.record_config.max_frames();
-        let effects = self
-            .core
-            .apply(termherd_core::Event::ToggleRecord { max_frames });
-        self.run_record_effects(effects)
-    }
-
-    /// Whether a ⌘⇧R press must be ignored because the previous recording is
-    /// still draining its in-flight frames (problem 2). `core` has already
-    /// returned to idle by the time a finish is pending, so without this guard a
-    /// back-to-back start replaces `self.recorder` mid-finish — orphaning the
-    /// first GIF (it finalises via `Drop`, but logs no `screencast written` and
-    /// may be truncated).
-    fn record_toggle_blocked(&self) -> bool {
-        self.record_finish_pending
-    }
-
-    /// Perform the record effects `core` returned: open/feed/finish the
-    /// encoder thread. `CaptureFrame` is the only one with an async follow-up —
-    /// it screenshots the window, the result arriving as [`Message::RecordFrame`].
-    fn run_record_effects(&mut self, effects: Vec<Effect>) -> Task<Message> {
-        let mut task = Task::none();
-        for effect in effects {
-            match effect {
-                Effect::StartRecording => self.start_recording(),
-                Effect::CaptureFrame => {
-                    self.record_inflight += 1;
-                    task = window::latest()
-                        .and_then(window::screenshot)
-                        .map(Message::RecordFrame);
-                }
-                // `core` names the stop reason; logged the moment it happens (not
-                // after the encoder drains) so start↔stop is unambiguous in the
-                // trace.
-                Effect::FinishRecording { capped } => {
-                    let reason = if capped { "cap reached" } else { "manual" };
-                    tracing::info!(reason, "screencast recording stopped");
-                    self.request_finish_recording();
-                }
-                Effect::CancelRecording => {
-                    tracing::info!("screencast recording cancelled (no frames captured)");
-                    self.cancel_recording();
-                }
-                _ => {}
-            }
-        }
-        task
-    }
-
-    /// Open the recorder thread for a new screencast, writing to
-    /// `capture-<ts>.gif` in the capture dir. A missing home dir or an
-    /// uncreatable dir aborts the start — logged, never fatal.
-    fn start_recording(&mut self) {
-        self.record_inflight = 0;
-        self.record_finish_pending = false;
-        // Fresh timing state for the throttle, the per-frame gap, and the stats.
-        self.record_started = Some(Instant::now());
-        self.record_throttle = Some(FrameThrottle::new(self.record_config.frame_interval()));
-        self.record_last_frame = None;
-        self.record_stats = FrameStats::default();
-        let Some(dir) = crate::capture::captures_dir() else {
-            tracing::warn!("no home directory; recording skipped");
-            return;
-        };
-        if let Err(error) = std::fs::create_dir_all(&dir) {
-            tracing::warn!(%error, "could not create captures dir; recording skipped");
-            return;
-        }
-        let stamp = crate::capture::stamp(SystemTime::now());
-        let path = dir.join(format!("capture-{stamp}.gif"));
-        self.recorder = Some(Recorder::start(path, self.record_config));
-        tracing::info!(
-            fps = self.record_config.fps,
-            cap_frames = self.record_config.max_frames(),
-            "screencast recording started"
-        );
-    }
-
-    /// A window present arrived while recording: throttle the present rate
-    /// down to the configured fps and, on a kept tick, ask `core` for the next
-    /// frame / auto-stop decision. Skipped ticks are dropped — they only served
-    /// to keep the window presenting so the screenshot pipeline stays real-time.
-    fn on_record_frame_tick(&mut self, now: Instant) -> Task<Message> {
-        let (Some(started), Some(throttle)) = (self.record_started, self.record_throttle.as_mut())
-        else {
-            return Task::none();
-        };
-        if !throttle.should_capture(now.saturating_duration_since(started)) {
-            return Task::none();
-        }
-        let effects = self.core.apply(termherd_core::Event::RecordTick);
-        self.run_record_effects(effects)
-    }
-
-    /// Finish the screencast once every in-flight frame screenshot has been
-    /// handed to the encoder, so a stop never drops the final frames. If
-    /// none are in flight (a manual stop), finish straight away.
-    fn request_finish_recording(&mut self) {
-        if self.record_inflight == 0 {
-            self.finish_recorder();
-        } else {
-            self.record_finish_pending = true;
-        }
-    }
-
-    /// Flush and close the encoder thread, logging the frame-gap spread
-    /// — the evidence that capture ran in real time (gaps ≈ the interval)
-    /// rather than time-lapsed (gaps ballooning past it).
-    fn finish_recorder(&mut self) {
-        if let Some(recorder) = self.recorder.take() {
-            recorder.finish();
-        }
-        if let Some(summary) = self.record_stats.summary() {
-            tracing::info!(
-                frames = summary.gaps,
-                min_ms = summary.min.as_millis(),
-                max_ms = summary.max.as_millis(),
-                mean_ms = summary.mean.as_millis(),
-                "screencast frame gaps"
-            );
-        }
-        self.reset_record_state();
-    }
-
-    /// Abandon the screencast, deleting any partial file — the zero-frame
-    /// stop.
-    fn cancel_recording(&mut self) {
-        if let Some(recorder) = self.recorder.take() {
-            recorder.cancel();
-        }
-        self.reset_record_state();
-    }
-
-    /// Clear the per-recording runtime state once the encoder is done,
-    /// returning the shell to idle.
-    fn reset_record_state(&mut self) {
-        self.record_inflight = 0;
-        self.record_finish_pending = false;
-        self.record_started = None;
-        self.record_throttle = None;
-        self.record_last_frame = None;
-        self.record_stats = FrameStats::default();
-    }
-
-    /// Hand one recorded window screenshot to the encoder thread, then
-    /// finish if this was the last frame a stop was waiting on. The gap since the
-    /// previous handed frame becomes this frame's on-screen duration, and
-    /// is folded into the stats — the gaps are the present-gating measurement.
-    fn on_record_frame(&mut self, screenshot: window::Screenshot) -> Task<Message> {
-        let now = Instant::now();
-        let previous = self.record_last_frame;
-        // The first frame has no predecessor, so it shows for the nominal
-        // interval; later frames show for the real gap since the last one.
-        let gap = previous.map_or_else(
-            || self.record_config.frame_interval(),
-            |last| now.saturating_duration_since(last),
-        );
-        if let Some(recorder) = self.recorder.as_ref() {
-            let (width, height) = (screenshot.size.width, screenshot.size.height);
-            recorder.frame(screenshot.rgba.to_vec(), width, height, gap);
-            // Only *measured* gaps count toward the benchmark — the first frame's
-            // nominal interval isn't a real arrival gap and would skew min/mean.
-            if previous.is_some() {
-                self.record_stats.record_gap(gap);
-            }
-            self.record_last_frame = Some(now);
-        }
-        self.record_inflight = self.record_inflight.saturating_sub(1);
-        if self.record_finish_pending && self.record_inflight == 0 {
-            self.finish_recorder();
-        }
-        Task::none()
-    }
-
     // The iced `update` is a flat `match` over every `Message` variant — the
-    // app's central event dispatcher. Length here is breadth (one arm per
-    // message), not nested complexity; splitting it would scatter the dispatch.
-    // Tracked as a refactor candidate (shell.rs is the god-object signal A).
+    // app's central event dispatcher, whose arms delegate to the domain modules
+    // (launch, session_ops, effects, geometry, routing, …). The length here is
+    // breadth (one arm per message), not nested complexity, and splitting the
+    // dispatch itself would only scatter it — the allow is by design, not a
+    // deferred cleanup.
     #[allow(clippy::too_many_lines)]
     fn update(&mut self, message: Message) -> Task<Message> {
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
@@ -1145,14 +713,14 @@ impl Shell {
                 self.rescan()
             }
             Message::SearchChanged(query) => {
-                let _ = self.core.apply(termherd_core::Event::SearchChanged(query));
-                Task::none()
+                let effects = self.core.apply(termherd_core::Event::SearchChanged(query));
+                self.perform(effects)
             }
             Message::SearchTitlesOnly(titles_only) => {
-                let _ = self
+                let effects = self
                     .core
                     .apply(termherd_core::Event::SearchTitlesOnlyToggled(titles_only));
-                Task::none()
+                self.perform(effects)
             }
             Message::LaunchProject(cwd) => self.launch(cwd, Launch::Shell),
             Message::LaunchClaude(cwd) => self.launch(cwd, Launch::Claude { resume: None }),
@@ -1177,16 +745,16 @@ impl Shell {
                 Task::none()
             }
             Message::PtyStatus { session, status } => {
-                let _ = self
+                let effects = self
                     .core
                     .apply(termherd_core::Event::StatusChanged { session, status });
-                Task::none()
+                self.perform(effects)
             }
             Message::PtyTitle { session, title } => {
-                let _ = self
+                let effects = self
                     .core
                     .apply(termherd_core::Event::SessionTitleChanged { session, title });
-                Task::none()
+                self.perform(effects)
             }
             Message::PtyNotify { session, body } => {
                 // Unlike status/title, this yields an `Effect::Notify` that the
@@ -1317,10 +885,10 @@ impl Shell {
             Message::TabDragEnd => match self.tab_drag.take() {
                 // A real drag (the pointer crossed onto another tab): reorder.
                 Some(TabDrag { from, over }) if from != over => {
-                    let _ = self
+                    let effects = self
                         .core
                         .apply(termherd_core::Event::MoveTab { from, to: over });
-                    Task::none()
+                    self.perform(effects)
                 }
                 // No movement — the press/release was a plain click: activate.
                 Some(TabDrag { from, .. }) => self.activate_tab(from),
@@ -1393,7 +961,7 @@ impl Shell {
                 // Only archive a session still on the scanned list: a rescan
                 // could have dropped it while the prompt was up, and toggling a
                 // vanished id would persist phantom metadata for it.
-                Some(session) if self.is_browsable(&session) => {
+                Some(session) if self.core.is_browsable(&session) => {
                     let effects = self
                         .core
                         .apply(termherd_core::Event::ToggleArchive(session));
@@ -1406,18 +974,18 @@ impl Shell {
                 Task::none()
             }
             Message::ShowArchived(show) => {
-                let _ = self
+                let effects = self
                     .core
                     .apply(termherd_core::Event::ShowArchivedToggled(show));
-                Task::none()
+                self.perform(effects)
             }
             Message::ToggleCollapsed(path) => {
                 let effects = self.core.apply(termherd_core::Event::ToggleCollapsed(path));
                 self.perform(effects)
             }
             Message::ToggleExpanded(path) => {
-                let _ = self.core.apply(termherd_core::Event::ToggleExpanded(path));
-                Task::none()
+                let effects = self.core.apply(termherd_core::Event::ToggleExpanded(path));
+                self.perform(effects)
             }
             Message::ToggleSidebar => self.toggle_sidebar(),
             Message::StartRename { session, current } => {
@@ -1536,92 +1104,12 @@ impl Shell {
                 Task::none()
             }
             Message::RecordFrameTick(now) => self.on_record_frame_tick(now),
-            Message::RecordFrame(screenshot) => self.on_record_frame(screenshot),
+            Message::RecordFrame(screenshot) => self.record.on_frame(screenshot),
             Message::Bridge { request, reply } => {
                 reply.answer(bridge::respond(&self.core, &request));
                 Task::none()
             }
         }
-    }
-
-    /// Save the open doc off-thread, if there is one with unsaved edits in the
-    /// writable scope. A no-op otherwise, so the save chord/button is harmless
-    /// when nothing needs writing.
-    fn save_open_doc(&self) -> Task<Message> {
-        let Some(doc) = &self.open_doc else {
-            return Task::none();
-        };
-        if !doc.writable || !doc.dirty {
-            return Task::none();
-        }
-        let path = doc.path.clone();
-        let contents = doc.content.text();
-        let open_mtime = doc.loaded_mtime;
-        Task::perform(
-            async move { crate::docs::save(&path, &contents, open_mtime) },
-            Message::DocSaved,
-        )
-    }
-
-    /// Whether a session id is still on the scanned project list — used to
-    /// guard the archive confirmation against a session a rescan removed while
-    /// the prompt was up.
-    fn is_browsable(&self, session: &str) -> bool {
-        self.core
-            .projects
-            .iter()
-            .any(|group| group.sessions.iter().any(|s| s.session_id == session))
-    }
-
-    /// Handle a request to close the tab at `index`. The configured `close.tab`
-    /// policy decides: arm the confirmation bar or close straight away.
-    /// `confirmWhenActive` (the default) keys off the core
-    /// `tab_has_running_process` predicate — an idle tab has nothing to lose and
-    /// closes silently, a running one confirms; `alwaysConfirm` / `noConfirmation`
-    /// override that. No-op for an out-of-range index, so a stale request can
-    /// never close the wrong tab.
-    fn request_close(&mut self, index: usize) -> Task<Message> {
-        // A pending confirmation owns the interaction (like the keyboard in
-        // `on_key`): while one is up, ignore a close request for another tab so
-        // it can't silently close that tab and drop the unanswered prompt.
-        if self.closing.is_some() {
-            return Task::none();
-        }
-        if index >= self.core.workspace.tabs.len() {
-            return Task::none();
-        }
-        if self
-            .close_confirm
-            .tab
-            .confirms(self.core.tab_has_running_process(index))
-        {
-            self.closing = Some(index);
-            Task::none()
-        } else {
-            self.close_tab(index)
-        }
-    }
-
-    /// Close the tab at `index`, killing its session(s) (FR5). Reached only
-    /// after the confirmation is accepted: the close button and the
-    /// `CloseFocused` keymap action both arm `closing` first.
-    fn close_tab(&mut self, index: usize) -> Task<Message> {
-        self.closing = None;
-        // Capture the sessions about to die so their cached screens don't
-        // outlive them in the shell.
-        let dying = self
-            .core
-            .workspace
-            .tabs
-            .get(index)
-            .map(|tab| tab.sessions())
-            .unwrap_or_default();
-        let effects = self.core.apply(termherd_core::Event::CloseTab(index));
-        for id in dying {
-            self.screens.remove(&id);
-        }
-        let kill = self.perform(effects);
-        Task::batch([kill, self.resize_panes()])
     }
 
     /// Copy the last terminal selection to the clipboard, if any (FR4).
@@ -1630,18 +1118,6 @@ impl Shell {
             Some(sel) if !sel.is_empty() => iced::clipboard::write(sel.clone()),
             _ => Task::none(),
         }
-    }
-
-    /// Switch to the tab at `index` and return focus to the terminal. Switching
-    /// drops any pending confirmation. An out-of-range index is a
-    /// silent no-op in `core`, so a number key with no matching tab does
-    /// nothing.
-    fn activate_tab(&mut self, index: usize) -> Task<Message> {
-        let _ = self.core.apply(termherd_core::Event::ActivateTab(index));
-        self.focus = Focus::Terminal;
-        self.closing = None;
-        self.archiving = None;
-        self.resize_panes()
     }
 
     /// Apply the pending tab rename to the core and clear the edit. The core's
@@ -1660,127 +1136,10 @@ impl Shell {
         let Some(index) = self.core.workspace.tab_of(anchor) else {
             return;
         };
-        let _ = self
+        let effects = self
             .core
             .apply(termherd_core::Event::RenameTab { index, title });
-    }
-
-    /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
-    /// `PrevTab`). No-op when nothing is open.
-    fn cycle_tab(&mut self, delta: i32) -> Task<Message> {
-        let count = self.core.workspace.tabs.len();
-        if count == 0 {
-            return Task::none();
-        }
-        let next = (self.core.workspace.active as i32 + delta).rem_euclid(count as i32) as usize;
-        self.activate_tab(next)
-    }
-
-    fn on_window_event(&mut self, id: window::Id, event: window::Event) -> Task<Message> {
-        match event {
-            window::Event::Opened { .. } => {
-                // Reroute the macOS menu Quit item (and ⌘Q) through the iced
-                // runtime. Done here, not in the boot closure: iced constructs
-                // the app state *before* `run_app`, so the boot closure runs
-                // ahead of winit's `applicationDidFinishLaunching` (where the
-                // default menu is installed). By the time the window is `Opened`
-                // the event loop is running and the menu exists, and we are on
-                // the main thread. Fires once (single window); no-op on other
-                // platforms.
-                #[cfg(target_os = "macos")]
-                match objc2_foundation::MainThreadMarker::new() {
-                    Some(mtm) => crate::macos::route_quit_through_close(mtm),
-                    // We expect to be on the main thread here; if not, skipping
-                    // would silently leave Cmd+Q on AppKit's hard-kill
-                    // `terminate:` with no trace explaining why. Log it.
-                    None => tracing::warn!(
-                        "window Opened off the main thread; Cmd+Q stays on AppKit terminate:"
-                    ),
-                }
-                Task::none()
-            }
-            window::Event::Moved(position) => {
-                self.bounds.x = Some(position.x);
-                self.bounds.y = Some(position.y);
-                Task::none()
-            }
-            window::Event::Resized(size) => {
-                self.bounds.width = size.width;
-                self.bounds.height = size.height;
-                self.resize_panes()
-            }
-            window::Event::CloseRequested => {
-                self.bounds.save();
-                self.request_quit(id)
-            }
-            window::Event::Focused => {
-                let _ = self
-                    .core
-                    .apply(termherd_core::Event::WindowFocusChanged(true));
-                Task::none()
-            }
-            window::Event::Unfocused => {
-                // The modifier release can't reach an unfocused window (e.g.
-                // Ctrl let go while the browser a link click opened is in
-                // front), so treat it as released; winit re-reports the live
-                // modifiers when focus returns.
-                self.link_modifier = false;
-                self.shift_modifier = false;
-                let _ = self
-                    .core
-                    .apply(termherd_core::Event::WindowFocusChanged(false));
-                Task::none()
-            }
-            _ => Task::none(),
-        }
-    }
-
-    /// The single convergence point for every way the user can quit TermHerd.
-    /// All three macOS triggers — the window-close button, the menu Quit item,
-    /// and Cmd+Q — arrive here as a `CloseRequested` window event: the menu
-    /// Quit action is repointed from AppKit's `terminate:` to `performClose:`
-    /// at startup (`crate::macos`), so it routes through winit's
-    /// `windowShouldClose:` like the close button instead of terminating the
-    /// process out from under us. Keeping one seam is the structural fix — a
-    /// second, unguarded quit path is exactly the defect this prevents.
-    ///
-    /// A quit hard-kills every live session's foreground process. Whether it
-    /// confirms first is the configured app policy: `confirmWhenActive` (the
-    /// default) confirms only while some session is still running work — the
-    /// core `any_running_process` predicate, the app-wide sibling of the one the
-    /// tab close uses — so an all-idle app quits silently; `alwaysConfirm` /
-    /// `noConfirmation` override that. `iced::exit` (not `window::close`) is what
-    /// actually ends the process: on macOS winit cancels the OS terminate and
-    /// `exit_on_close_request(false)` keeps the runtime alive, so a mere window
-    /// close would survive.
-    fn request_quit(&mut self, id: window::Id) -> Task<Message> {
-        if self
-            .close_confirm
-            .app
-            .confirms(self.core.any_running_process())
-        {
-            self.closing_window = Some(id);
-            Task::none()
-        } else {
-            tracing::info!("quit needs no confirmation; exiting");
-            self.exiting = true;
-            iced::exit()
-        }
-    }
-
-    /// Whether a quit is awaiting confirmation (the modal is up).
-    fn quit_pending(&self) -> bool {
-        self.closing_window.is_some()
-    }
-
-    /// Count of sessions whose PTY is still running — the ones a quit would
-    /// hard-kill. Exited sessions linger in the map but cost nothing to drop.
-    fn live_session_count(&self) -> usize {
-        self.core
-            .sessions
-            .values()
-            .filter(|s| s.status != SessionStatus::Exited)
-            .count()
+        debug_assert!(effects.is_empty());
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -3245,14 +2604,18 @@ mod key_routing {
     #[test]
     fn live_session_count_excludes_exited_sessions() {
         let (mut shell, _pty) = shell_with_terminal();
-        assert_eq!(shell.live_session_count(), 1, "a launched session is live");
+        assert_eq!(
+            shell.core.live_session_count(),
+            1,
+            "a launched session is live"
+        );
         let session = shell.core.workspace.focused_session().expect("focused");
         let _ = shell.update(Message::PtyExited {
             session,
             clean: false,
         });
         assert_eq!(
-            shell.live_session_count(),
+            shell.core.live_session_count(),
             0,
             "an exited session no longer counts as live to kill"
         );
@@ -3391,7 +2754,11 @@ mod key_routing {
             session,
             clean: false,
         });
-        assert_eq!(shell.live_session_count(), 0, "precondition: nothing live");
+        assert_eq!(
+            shell.core.live_session_count(),
+            0,
+            "precondition: nothing live"
+        );
 
         let _ = shell.update(Message::Window(
             window::Id::unique(),
@@ -3445,7 +2812,7 @@ mod key_routing {
             "precondition: the launched shell is idle, nothing running"
         );
         assert_eq!(
-            shell.live_session_count(),
+            shell.core.live_session_count(),
             1,
             "…but it is still a live session"
         );
@@ -3466,7 +2833,11 @@ mod key_routing {
             session,
             clean: false,
         });
-        assert_eq!(shell.live_session_count(), 0, "precondition: nothing live");
+        assert_eq!(
+            shell.core.live_session_count(),
+            0,
+            "precondition: nothing live"
+        );
         let _ = shell.update(Message::Window(
             window::Id::unique(),
             window::Event::CloseRequested,
@@ -3736,15 +3107,15 @@ mod key_routing {
         let (mut shell, _pty) = shell_with_terminal();
         // Idle: a toggle is free to start a recording.
         assert!(
-            !shell.record_toggle_blocked(),
+            !shell.record.toggle_blocked(),
             "an idle shell accepts a record toggle"
         );
         // Mid-drain: a finish is pending on in-flight frame screenshots. A new
         // ⌘⇧R must be ignored, not replace the recorder under the encoder.
-        shell.record_finish_pending = true;
-        shell.record_inflight = 1;
+        shell.record.finish_pending = true;
+        shell.record.inflight = 1;
         assert!(
-            shell.record_toggle_blocked(),
+            shell.record.toggle_blocked(),
             "a draining recorder blocks a new toggle"
         );
     }
