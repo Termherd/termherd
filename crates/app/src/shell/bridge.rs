@@ -21,6 +21,7 @@ use std::time::Duration;
 use iced::futures::{SinkExt, Stream};
 use termherd_core::{
     App, Launch, LiveSession, SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot,
+    workspace::SplitDir,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -51,6 +52,73 @@ pub enum Request {
     Snapshot(SnapshotFilter),
     /// Every live session, for the `list_sessions` MCP tool.
     ListSessions,
+    /// A workspace mutation, for the orchestration MCP tools. Unlike the two
+    /// read requests it is answered off `respond` — the shell applies it through
+    /// `App::apply` and performs the effects, since it needs `&mut` state.
+    Act(Action),
+}
+
+/// A workspace mutation an MCP client asks termherd to perform. Each variant
+/// maps onto one or more existing core [`Event`](termherd_core::Event)s applied
+/// through `App::apply` — the orchestration surface never bypasses the state
+/// machine (the #90 constraint). A `session`/`pane` field is the stable handle
+/// as [`SessionInfo::handle`] reports it, resolved to a live `SessionId` before
+/// anything is applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    /// Open a new session in `project` (or the home dir when `None`), running
+    /// `kind`. → `Event::LaunchSession`, via the shell's own launch path.
+    Open {
+        project: Option<String>,
+        kind: SessionKind,
+    },
+    /// Split a pane, opening a fresh session beside it. Splits the focused pane,
+    /// or `pane` when given (focused first). → `[FocusPane +] SplitFocused`.
+    Split { pane: Option<u64>, dir: SplitDir },
+    /// Move focus to the pane hosting `session`. → `Event::FocusPane`.
+    Focus { session: u64 },
+    /// Give the tab at `tab` a manual name (blank reverts to the derived title,
+    /// core's rule). → `Event::RenameTab`.
+    Rename { tab: usize, title: String },
+    /// Close a pane — the focused one, or `pane` when given (focused first). A
+    /// lone pane closes its whole tab (core collapses to `close_tab`, killing the
+    /// PTY). → `[FocusPane +] CloseFocusedPane`.
+    Close { pane: Option<u64> },
+    /// Type `bytes` into a session's PTY without waiting (waiting is a later
+    /// rung). → `Event::TerminalInput`.
+    Run { session: u64, bytes: Vec<u8> },
+}
+
+/// The result of an [`Action`]. `error` is `Some` only when the action was
+/// rejected before touching state — an unknown handle or an out-of-range tab —
+/// in which case nothing was applied. Otherwise `focused` reports the session
+/// handle that holds focus once the action settled (the new pane after
+/// open/split, the target after focus), so an agent gets act→observe in one
+/// round trip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionOutcome {
+    /// The resulting focused session handle, or `None` when nothing is focused.
+    pub focused: Option<String>,
+    /// Why the action was rejected, or `None` when it applied.
+    pub error: Option<String>,
+}
+
+impl ActionOutcome {
+    /// A rejection that touched no state — an unresolved handle / index.
+    pub fn rejected(reason: impl Into<String>) -> Self {
+        Self {
+            focused: None,
+            error: Some(reason.into()),
+        }
+    }
+
+    /// An applied action, reporting the resulting focused handle.
+    pub fn applied(focused: Option<String>) -> Self {
+        Self {
+            focused,
+            error: None,
+        }
+    }
 }
 
 /// The app's answer to a [`Request`].
@@ -58,6 +126,7 @@ pub enum Request {
 pub enum Reply {
     Snapshot(WorkspaceSnapshot),
     Sessions(Vec<SessionInfo>),
+    Acted(ActionOutcome),
 }
 
 /// The kind of program a session runs, as an MCP client sees it. Distinct from
@@ -231,6 +300,12 @@ pub fn respond(core: &App, request: &Request, inputs: &SnapshotInputs) -> Reply 
     match request {
         Request::Snapshot(filter) => Reply::Snapshot(core.snapshot(filter, inputs)),
         Request::ListSessions => Reply::Sessions(list_sessions(core)),
+        // Actions mutate, so they can't answer off a `&App`; the shell branches
+        // them to `perform_action` before reaching here. This arm is the
+        // defensive default should that routing ever be bypassed.
+        Request::Act(_) => Reply::Acted(ActionOutcome::rejected(
+            "an action reached the read-only responder; the shell must apply it",
+        )),
     }
 }
 
