@@ -24,7 +24,7 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    Keymap, Launch, Overlay, ScrollTarget, SelectOp, SessionRecord, SessionStatus,
+    ConfigInput, Keymap, Launch, Overlay, ScrollTarget, SelectOp, SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
@@ -104,6 +104,9 @@ pub struct Startup {
     pub font_size: f32,
     /// Close-confirmation policy for tab close and app quit.
     pub close: CloseSettings,
+    /// Adapter-owned config bits for the MCP `snapshot` tool's config section
+    /// (the live font size is stamped by `core`, not carried here).
+    pub config: ConfigInput,
 }
 
 impl Startup {
@@ -115,15 +118,22 @@ impl Startup {
         metadata: Overlay,
         collapsed: HashSet<String>,
     ) -> Self {
+        let record = settings.record_config();
         Self {
             theme: settings.theme,
             keymap: settings.keymap(),
             metadata,
             collapsed,
-            record: settings.record_config(),
             session_limit: settings.session_limit(),
             font_size: settings.font_size(),
             close: settings.close,
+            config: ConfigInput {
+                terminal_scheme: settings.terminal.colors.scheme.clone(),
+                record_fps: record.fps,
+                record_scale: record.scale,
+                keymap_overrides: settings.keys.len(),
+            },
+            record,
         }
     }
 }
@@ -164,6 +174,7 @@ pub fn run(
                     session_limit: startup.session_limit,
                     font_size: startup.font_size,
                     close: startup.close,
+                    config: startup.config.clone(),
                 },
             );
             let initial_scan = shell.rescan();
@@ -236,6 +247,10 @@ struct Shell {
     /// The token minted for each live Claude session, so its `mcp_tokens` entry
     /// can be revoked when the session ends.
     mcp_session_tokens: HashMap<SessionId, String>,
+    /// Adapter-owned config bits for the MCP `snapshot` tool's config section —
+    /// the settings the pure `core` cannot read (scheme, record budget, keymap);
+    /// the live font size is stamped by `core` at snapshot time.
+    config: ConfigInput,
     /// Latest rendered grid per session.
     screens: HashMap<SessionId, Screen>,
     /// Current keyboard target.
@@ -627,6 +642,7 @@ impl Shell {
             tab_drag: None,
             exiting: false,
             record: RecordState::new(startup.record),
+            config: startup.config,
         }
     }
 
@@ -1142,7 +1158,8 @@ impl Shell {
             Message::RecordFrameTick(now) => self.on_record_frame_tick(now),
             Message::RecordFrame(screenshot) => self.record.on_frame(screenshot),
             Message::Bridge { request, reply } => {
-                reply.answer(bridge::respond(&self.core, &request));
+                let inputs = self.snapshot_inputs(&request);
+                reply.answer(bridge::respond(&self.core, &request, &inputs));
                 Task::none()
             }
         }
@@ -1318,6 +1335,18 @@ mod key_routing {
             session_limit: 0,
             font_size: 14.0,
             close: CloseSettings::default(),
+            config: test_config_input(),
+        }
+    }
+
+    /// A neutral config input for test shells — the snapshot tool's config
+    /// section is exercised in the `core` builder tests, not here.
+    fn test_config_input() -> ConfigInput {
+        ConfigInput {
+            terminal_scheme: None,
+            record_fps: 8,
+            record_scale: 0.5,
+            keymap_overrides: 0,
         }
     }
 
@@ -1370,6 +1399,41 @@ mod key_routing {
             status: SessionStatus::Busy,
         });
         (shell, pty)
+    }
+
+    #[test]
+    fn snapshot_inputs_gather_config_when_asked_and_scope_terminal_text() {
+        use super::bridge::Request;
+        use termherd_core::{Section, SnapshotFilter, TerminalScope};
+
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of("$ cargo test"));
+        let handle = session.0.get();
+
+        // Config section on, and the focused handle's terminal text requested.
+        let inputs = shell.snapshot_inputs(&Request::Snapshot(SnapshotFilter {
+            sections: vec![Section::Config],
+            terminals: TerminalScope::Only(vec![handle]),
+            text_lines: 40,
+        }));
+        assert!(inputs.config.is_some(), "the config section was requested");
+        assert!(
+            inputs
+                .terminals
+                .get(&handle)
+                .is_some_and(|text| text.contains("cargo test")),
+            "the scoped terminal's text is gathered from its screen"
+        );
+
+        // Config section off and no terminal scope: nothing gathered.
+        let bare = shell.snapshot_inputs(&Request::Snapshot(SnapshotFilter {
+            sections: vec![Section::Tabs],
+            terminals: TerminalScope::None,
+            text_lines: 40,
+        }));
+        assert!(bare.config.is_none(), "config off → not gathered");
+        assert!(bare.terminals.is_empty(), "no terminal scope → no text");
     }
 
     #[test]
@@ -2538,6 +2602,7 @@ mod key_routing {
                 session_limit: 0,
                 font_size: 14.0,
                 close: CloseSettings::default(),
+                config: test_config_input(),
             },
         );
         assert!(shell.core.workspace.focused_session().is_none());

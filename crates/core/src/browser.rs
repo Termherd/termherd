@@ -140,7 +140,11 @@ pub fn filter_projects(
         .collect()
 }
 
-fn session_matches(session: &SessionRecord, needle_lower: &str, titles_only: bool) -> bool {
+pub(crate) fn session_matches(
+    session: &SessionRecord,
+    needle_lower: &str,
+    titles_only: bool,
+) -> bool {
     if session
         .digest
         .display_title(None)

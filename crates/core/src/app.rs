@@ -27,6 +27,7 @@ mod record;
 mod session;
 mod settings;
 mod sidebar;
+mod snapshot;
 mod tabs;
 #[cfg(test)]
 mod testsupport;

@@ -19,7 +19,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
-use termherd_core::{App, Launch, LiveSession, SessionStatus};
+use termherd_core::{
+    App, Launch, LiveSession, SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use super::Message;
@@ -35,26 +37,26 @@ const REQUEST_CHANNEL_CAPACITY: usize = 32;
 /// smooth bursts between one `recv` and the next `view`/`update` cycle.
 const MESSAGE_STREAM_BUFFER: usize = 32;
 
-/// What an external transport can ask the running app. One read-only variant
-/// today — the substrate proves the round-trip and the timeout, not a rich
-/// surface; the live bridge grows this later.
-// Caller-side substrate: constructed and called by tests now, and in production
-// by the live-bridge transport wired next — so it reads as dead in the binary
-// until that transport lands. The receiver half (`respond`, `snapshot`,
-// `request_stream`) is already live via the subscription and `update`.
+/// What an external transport can ask the running app: a read-only, filterable
+/// workspace snapshot, or the live-session list. Both answer straight from the
+/// state the shell already owns.
+// Caller-side substrate: the `Request`/`BridgeHandle::call` half is driven by
+// tests and by the MCP tools in production; it reads as dead in the binary only
+// where a variant is not yet built by a tool. The receiver half (`respond`,
+// `request_stream`) is live via the subscription and `update`.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    /// A read-only snapshot of the workspace.
-    Snapshot,
-    /// Every live session, for the `list_sessions` MCP tool (the spike).
+    /// A filterable, read-only snapshot of the workspace.
+    Snapshot(SnapshotFilter),
+    /// Every live session, for the `list_sessions` MCP tool.
     ListSessions,
 }
 
 /// The app's answer to a [`Request`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Reply {
-    Snapshot(Snapshot),
+    Snapshot(WorkspaceSnapshot),
     Sessions(Vec<SessionInfo>),
 }
 
@@ -89,14 +91,6 @@ pub struct SessionInfo {
     pub resume_id: Option<String>,
     /// Current activity (FR8).
     pub status: SessionStatus,
-}
-
-/// A minimal read of the workspace: how many tabs are open and which one is
-/// active (`None` when the workspace is empty).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Snapshot {
-    pub tab_count: usize,
-    pub active_tab: Option<usize>,
 }
 
 /// Why a bridge call returned no reply. Kept distinct so a caller can tell a
@@ -201,19 +195,6 @@ pub fn channel() -> (BridgeHandle, Requests) {
     (BridgeHandle { tx }, Requests::new(rx))
 }
 
-/// Read the workspace snapshot from `core`. Pure — no mutation, no I/O — so the
-/// shell can answer a `Snapshot` request straight from the state it already
-/// owns.
-pub fn snapshot(core: &App) -> Snapshot {
-    let tabs = &core.workspace.tabs;
-    Snapshot {
-        tab_count: tabs.len(),
-        // `active` is only meaningful when a tab exists; an empty workspace has
-        // no active tab.
-        active_tab: (!tabs.is_empty()).then_some(core.workspace.active),
-    }
-}
-
 /// Every live session as a stable-handle [`SessionInfo`] list, sorted by handle
 /// so the external surface is deterministic. Pure read of the registry `core`
 /// already owns.
@@ -242,11 +223,13 @@ pub fn list_sessions(core: &App) -> Vec<SessionInfo> {
         .collect()
 }
 
-/// Answer one request from the state `core` already holds. The shell calls this
-/// on the UI thread inside `update`, so it stays pure and cheap.
-pub fn respond(core: &App, request: &Request) -> Reply {
+/// Answer one request from the state `core` already holds, plus the
+/// adapter-owned `inputs` (config + terminal text) the shell gathered for a
+/// snapshot. The shell calls this on the UI thread inside `update`, so it stays
+/// pure and cheap; `inputs` is empty for requests that need no injection.
+pub fn respond(core: &App, request: &Request, inputs: &SnapshotInputs) -> Reply {
     match request {
-        Request::Snapshot => Reply::Snapshot(snapshot(core)),
+        Request::Snapshot(filter) => Reply::Snapshot(core.snapshot(filter, inputs)),
         Request::ListSessions => Reply::Sessions(list_sessions(core)),
     }
 }
@@ -299,7 +282,7 @@ pub(crate) fn spawn_test_shell(
 mod tests {
     use super::*;
     use std::time::Duration;
-    use termherd_core::{Event, Launch, LaunchSpec, SessionStatus};
+    use termherd_core::{Event, Launch, LaunchSpec, SessionStatus, SnapshotFilter, SnapshotInputs};
 
     /// Open `n` shell tabs in a fresh `App`, so a snapshot has real workspace
     /// state to read.
@@ -313,28 +296,6 @@ mod tests {
             }));
         }
         app
-    }
-
-    #[test]
-    fn snapshot_reads_tab_count_and_active_tab() {
-        let app = app_with_tabs(3);
-        let snap = snapshot(&app);
-        assert_eq!(snap.tab_count, 3, "three tabs were opened");
-        assert_eq!(
-            snap.active_tab,
-            Some(app.workspace.active),
-            "active tab mirrors the workspace"
-        );
-    }
-
-    #[test]
-    fn snapshot_of_an_empty_workspace_has_no_active_tab() {
-        let snap = snapshot(&App::new());
-        assert_eq!(snap.tab_count, 0);
-        assert_eq!(
-            snap.active_tab, None,
-            "an empty workspace has no active tab"
-        );
     }
 
     /// Launch one Claude session (fresh or resumed) in `app`, returning its
@@ -420,9 +381,21 @@ mod tests {
     fn respond_answers_list_sessions_with_the_same_list() {
         let app = app_with_tabs(2);
         assert_eq!(
-            respond(&app, &Request::ListSessions),
+            respond(&app, &Request::ListSessions, &SnapshotInputs::default()),
             Reply::Sessions(list_sessions(&app)),
             "respond forwards the live-session list unchanged"
+        );
+    }
+
+    #[test]
+    fn respond_answers_snapshot_with_the_core_snapshot() {
+        let app = app_with_tabs(2);
+        let filter = SnapshotFilter::default();
+        let inputs = SnapshotInputs::default();
+        assert_eq!(
+            respond(&app, &Request::Snapshot(filter.clone()), &inputs),
+            Reply::Snapshot(app.snapshot(&filter, &inputs)),
+            "respond forwards the core snapshot unchanged"
         );
     }
 
@@ -434,23 +407,14 @@ mod tests {
         let shell = tokio::spawn(async move {
             let mut rx = requests.take().expect("receiver");
             let (request, reply_tx) = rx.recv().await.expect("one request");
-            assert_eq!(request, Request::Snapshot);
-            let _ = reply_tx.send(Reply::Snapshot(Snapshot {
-                tab_count: 2,
-                active_tab: Some(1),
-            }));
+            assert_eq!(request, Request::ListSessions);
+            let _ = reply_tx.send(Reply::Sessions(Vec::new()));
         });
         let reply = handle
-            .call(Request::Snapshot, Duration::from_secs(1))
+            .call(Request::ListSessions, Duration::from_secs(1))
             .await
             .expect("a reply within the bound");
-        assert_eq!(
-            reply,
-            Reply::Snapshot(Snapshot {
-                tab_count: 2,
-                active_tab: Some(1),
-            })
-        );
+        assert_eq!(reply, Reply::Sessions(Vec::new()));
         shell.await.expect("shell task");
     }
 
@@ -467,7 +431,7 @@ mod tests {
             drop(held);
         });
         let err = handle
-            .call(Request::Snapshot, Duration::from_millis(50))
+            .call(Request::ListSessions, Duration::from_millis(50))
             .await
             .expect_err("no answer means an error");
         assert_eq!(err, CallError::Timeout(Duration::from_millis(50)));
@@ -484,7 +448,7 @@ mod tests {
             drop(reply_tx);
         });
         let err = handle
-            .call(Request::Snapshot, Duration::from_secs(5))
+            .call(Request::ListSessions, Duration::from_secs(5))
             .await
             .expect_err("a dropped reply is an error");
         assert_eq!(err, CallError::Dropped);
@@ -497,7 +461,7 @@ mod tests {
         let (handle, requests) = channel();
         drop(requests);
         let err = handle
-            .call(Request::Snapshot, Duration::from_secs(5))
+            .call(Request::ListSessions, Duration::from_secs(5))
             .await
             .expect_err("no receiver is an error");
         assert_eq!(err, CallError::Closed);
@@ -514,14 +478,18 @@ mod tests {
         let mut queued = 0;
         loop {
             let (reply_tx, _reply_rx) = oneshot::channel();
-            if handle.tx.try_send((Request::Snapshot, reply_tx)).is_err() {
+            if handle
+                .tx
+                .try_send((Request::ListSessions, reply_tx))
+                .is_err()
+            {
                 break;
             }
             queued += 1;
         }
         assert!(queued >= 1, "the channel accepted at least one request");
         let err = handle
-            .call(Request::Snapshot, Duration::from_millis(50))
+            .call(Request::ListSessions, Duration::from_millis(50))
             .await
             .expect_err("a full channel still bounds the caller");
         assert_eq!(err, CallError::Timeout(Duration::from_millis(50)));
@@ -538,14 +506,14 @@ mod tests {
         let (reply_tx, _reply_rx) = oneshot::channel();
         handle
             .tx
-            .try_send((Request::Snapshot, reply_tx))
+            .try_send((Request::ListSessions, reply_tx))
             .expect("queue one request");
         // Close the sender so the stream ends after draining the one request.
         drop(handle);
         let mut stream = Box::pin(request_stream(&requests));
         let message = iced::futures::executor::block_on(stream.next()).expect("one message");
         match message {
-            Message::Bridge { request, .. } => assert_eq!(request, Request::Snapshot),
+            Message::Bridge { request, .. } => assert_eq!(request, Request::ListSessions),
             other => panic!("expected a bridge message, got {other:?}"),
         }
     }
@@ -554,10 +522,7 @@ mod tests {
     fn reply_port_answers_at_most_once() {
         let (tx, rx) = oneshot::channel();
         let port = ReplyPort::new(tx);
-        let snap = Reply::Snapshot(Snapshot {
-            tab_count: 0,
-            active_tab: None,
-        });
+        let snap = Reply::Sessions(Vec::new());
         port.answer(snap.clone());
         // A second answer (e.g. a duplicated message) is a no-op, not a panic.
         port.answer(snap.clone());
