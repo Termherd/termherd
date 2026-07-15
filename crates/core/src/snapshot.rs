@@ -44,7 +44,8 @@ pub enum TerminalScope {
     None,
     /// Only the focused pane's text.
     Focused,
-    /// Only these session handles' text, in the order given.
+    /// Only these session handles' text. The resulting `terminals` map is keyed
+    /// (and so ordered) by handle, not by the order requested here.
     Only(Vec<u64>),
 }
 
