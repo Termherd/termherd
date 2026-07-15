@@ -13,10 +13,11 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
 > **Reprioritization (2026-07-12).** Supersedes the 2026-07-05 pass. Closed
 > since: #79 + #80 (confirm-on-running guards → `F-close-confirm-policy`),
 > #56 + #57 (favorites → `F-favorites`), #86 (background notifications), and the
-> `F-quality-gates` P1 slices #105/#106/#107. Current **P1**: #102 (scroll-drift
-> correctness bug), #54 (split-pane UI — the release headline), #119 (reflect
-> Claude's own `/rename` in the tab), plus the intra-crate refactor cluster
-> #167–#169 (P1 `tech-health`). All three code-signing paths are **P3**. #90
+> `F-quality-gates` P1 slices #105/#106/#107, plus the **complete intra-crate
+> refactor #167–#173** (clusters A–G — the god-object splits and the CI lock-in
+> gate `intra-crate-arch`). Current **P1**: #102 (scroll-drift correctness bug),
+> #54 (split-pane UI — the release headline), #119 (reflect Claude's own
+> `/rename` in the tab). All three code-signing paths are **P3**. #90
 > stays P2 but is marked `needs-design`; #55 is blocked-by #54.
 
 1. **Finish the Musts** (`v0.1.0` milestone) — macOS ships **unsigned**
@@ -31,10 +32,10 @@ pick work in. GH `P0`/`P1`/`P2` labels mirror it.
    `F-packaging-ci.md`.
 2. **P1 — correctness + the headline feature:** #102 (scroll-drift property
    failure — the one open correctness bug), #54 (fixed-ratio split-pane UI —
-   cheapest large/visible feature, core already landed), #119 (live tab name),
-   and the intra-crate refactor splits #168/#169 (`tech-health`). Done since
-   the last pass: #54 (split-pane UI), the shell god-object split #167 (cluster
-   B: effects/record/launch/session_ops/docs modules + queries pushed to core),
+   cheapest large/visible feature, core already landed), #119 (live tab name).
+   Done since the last pass: #54 (split-pane UI), the **complete intra-crate
+   refactor #167–#173** (`tech-health` — the shell/terminal/core/scan/pty
+   god-object splits, clusters B/C/A/E/F/D, plus the CI lock-in gate G #173),
    #79/#80 (running-process guards) and the `F-quality-gates` P1 slices
    #105/#106/#107.
 3. **P2 — polish:** #36 (copy-on-select), #55 (drag-resize, **blocked-by #54**),
