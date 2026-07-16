@@ -5,7 +5,7 @@
 //! status-dot, hover-card and text helpers live in the parent [`super`]; the
 //! row builders that keep [`Shell::sidebar`] under the length gate live here.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::SystemTime;
 
 use iced::widget::{
@@ -272,15 +272,15 @@ impl Shell {
         if collapsed {
             return g.into();
         }
-        // Rows whose title repeats within this project get a relative
-        // last-activity age appended, so duplicates stay distinguishable
-        // The unique case keeps the clean `{title} · {count}` line.
-        let collisions = self.core.colliding_titles(group);
+        // Rows whose title repeats within this project get a disambiguator
+        // appended, so duplicates stay distinguishable. The unique case keeps
+        // the clean `{title} · {count}` line.
+        let disambiguators = self.core.session_disambiguators(group);
         // Long groups fold their tail behind an expander; search
         // and the user's unfold both surface it (`sidebar_sessions`).
         let (sessions, fold) = self.core.sidebar_sessions(group);
         for s in sessions {
-            g = g.push(self.session_row(s, &group.path, &collisions, live, now));
+            g = g.push(self.session_row(s, &group.path, &disambiguators, live, now));
         }
         // The expander row under a truncated list: unfold the hidden
         // tail, or fold it back once expanded.
@@ -306,7 +306,7 @@ impl Shell {
         &self,
         s: &SessionRecord,
         group_path: &str,
-        collisions: &HashSet<String>,
+        disambiguators: &HashMap<String, Option<String>>,
         live: &HashMap<&str, SessionStatus>,
         now: SystemTime,
     ) -> Element<'_, Message> {
@@ -342,19 +342,21 @@ impl Shell {
                 .width(Fill)
                 .into()
         } else {
-            // Colliding rows carry a disambiguator so duplicate titles
-            // stay distinguishable. When a custom/AI title masks a
-            // different real conversation (the /clear title-carryover)
-            // the divergent summary tells them apart by content;
-            // otherwise we fall back to the last-activity age.
+            // Colliding rows carry a disambiguator so duplicate titles stay
+            // distinguishable: the real summary when it separates them by
+            // content, else the last-activity age.
             let mut label = format!("{}  ·  {}", clip(&title, 26), s.digest.message_count);
-            if collisions.contains(id) {
-                if let Some(summary) = self.core.collision_subtitle(s) {
+            if let Some(subtitle) = disambiguators.get(id) {
+                let extra = match subtitle {
+                    Some(summary) => Some(clip(summary, 28)),
+                    None => s
+                        .modified
+                        .and_then(|m| now.duration_since(m).ok())
+                        .map(relative_age),
+                };
+                if let Some(extra) = extra {
                     label.push_str("  ·  ");
-                    label.push_str(&clip(&summary, 28));
-                } else if let Some(age) = s.modified.and_then(|m| now.duration_since(m).ok()) {
-                    label.push_str("  ·  ");
-                    label.push_str(&relative_age(age));
+                    label.push_str(&extra);
                 }
             }
             content = content.push(text(label).size(11));

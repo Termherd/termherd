@@ -135,43 +135,52 @@ impl App {
         content_snippet(&record.digest, &needle)
     }
 
-    /// Session ids in `group` whose resolved [`Self::session_title`] is shared
-    /// by another session in the same group — the rows that need a
-    /// disambiguator in the sidebar. Collision is checked on the *final*
-    /// title (rename/metadata included), so two rows renamed alike still count.
-    /// The common, unique case returns an empty set, so callers leave it clean.
+    /// The sidebar disambiguators for `group`, keyed by session id. An entry
+    /// exists for every session whose resolved [`Self::session_title`] is
+    /// shared by another session in the same group — the rows that need help
+    /// telling them apart. Collision is checked on the *final* title
+    /// (rename/metadata included), so two rows renamed alike still count. The
+    /// common, unique case returns an empty map, so callers leave the rows
+    /// clean.
+    ///
+    /// The value is the session's real first-prompt `summary`, but only when
+    /// that summary actually *separates* this row from the ones it collides
+    /// with: a custom/AI title or rename can mask a completely different
+    /// conversation — Claude Code carries a custom title across `/clear` into a
+    /// fresh, unrelated session — and there the summary tells them apart by
+    /// content, where the last-activity age only tells them apart by time.
+    /// `None` means the summary would separate nothing: it is absent, it *is*
+    /// the title, or the colliding rows share it too (the same question asked
+    /// twice, which the CLI titles alike). The caller then falls back to the
+    /// age, which always differs.
     #[must_use]
-    pub fn colliding_titles(&self, group: &ProjectGroup) -> HashSet<String> {
-        let titled: Vec<(&str, String)> = group
+    pub fn session_disambiguators(&self, group: &ProjectGroup) -> HashMap<String, Option<String>> {
+        let rows: Vec<(&str, String, &str)> = group
             .sessions
             .iter()
-            .map(|s| (s.session_id.as_str(), self.session_title(s)))
+            .map(|s| {
+                (
+                    s.session_id.as_str(),
+                    self.session_title(s),
+                    s.digest.summary.as_str(),
+                )
+            })
             .collect();
-        let mut counts: HashMap<&str, usize> = HashMap::new();
-        for (_, title) in &titled {
-            *counts.entry(title.as_str()).or_default() += 1;
+        let mut titles: HashMap<&str, usize> = HashMap::new();
+        let mut pairs: HashMap<(&str, &str), usize> = HashMap::new();
+        for (_, title, summary) in &rows {
+            *titles.entry(title.as_str()).or_default() += 1;
+            *pairs.entry((title.as_str(), summary)).or_default() += 1;
         }
-        titled
-            .iter()
-            .filter(|(_, title)| counts.get(title.as_str()).copied().unwrap_or(0) > 1)
-            .map(|(id, _)| (*id).to_owned())
+        rows.iter()
+            .filter(|(_, title, _)| titles.get(title.as_str()).copied().unwrap_or(0) > 1)
+            .map(|(id, title, summary)| {
+                let separates = !summary.is_empty()
+                    && summary != title
+                    && pairs.get(&(title.as_str(), *summary)).copied().unwrap_or(0) == 1;
+                ((*id).to_owned(), separates.then(|| (*summary).to_owned()))
+            })
             .collect()
-    }
-
-    /// The content disambiguator for a row whose title collides with another
-    /// in its group: the session's real first-prompt `summary` when it
-    /// *diverges* from the shown title. A custom/AI title or rename can mask a
-    /// completely different conversation — Claude Code carries a custom title
-    /// across `/clear` into a fresh, unrelated session, so two rows read
-    /// identically while their summaries differ. Surfacing the summary tells
-    /// them apart by content, where the last-activity age only tells them apart
-    /// by time. `None` when the title *is* the summary (no masking), so the
-    /// caller falls back to the age disambiguator.
-    #[must_use]
-    pub fn collision_subtitle(&self, record: &SessionRecord) -> Option<String> {
-        let title = self.session_title(record);
-        let summary = record.digest.summary.as_str();
-        (!summary.is_empty() && summary != title).then(|| summary.to_owned())
     }
 
     /// Whether a project's session list is folded shut in the sidebar.
@@ -322,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn colliding_titles_flags_only_shared_titles_and_a_rename_resolves_it() {
+    fn disambiguators_flag_only_shared_titles_and_a_rename_resolves_it() {
         let mut app = App::new();
         app.apply(Event::ScanCompleted(vec![
             record("dup1", "/p", "vm tombée"),
@@ -331,23 +340,27 @@ mod tests {
         ]));
         let group = app.sidebar.projects[0].clone();
 
-        let collisions = app.colliding_titles(&group);
+        let rows = app.session_disambiguators(&group);
         assert_eq!(
-            collisions,
+            rows.keys().cloned().collect::<HashSet<_>>(),
             HashSet::from(["dup1".to_owned(), "dup2".to_owned()])
         );
+        // Both rows show their title *as* their summary, so nothing separates
+        // them by content — the caller keeps the age disambiguator.
+        assert_eq!(rows.get("dup1"), Some(&None));
+        assert_eq!(rows.get("dup2"), Some(&None));
 
         // Renaming one of the pair to a unique title clears the collision for
-        // both — the set is checked on the resolved title.
+        // both — the map is keyed on the resolved title.
         app.apply(Event::RenameSession {
             session: "dup1".into(),
             title: "the original".into(),
         });
-        assert!(app.colliding_titles(&group).is_empty());
+        assert!(app.session_disambiguators(&group).is_empty());
     }
 
     #[test]
-    fn collision_subtitle_surfaces_a_masked_summary_but_not_a_plain_one() {
+    fn a_masked_summary_disambiguates_but_a_shared_one_does_not() {
         let mut app = App::new();
         // Two sessions Claude Code gave the same custom title (the /clear
         // title-carryover), masking two different real first prompts.
@@ -355,33 +368,54 @@ mod tests {
         carried.digest.custom_title = Some("login/logout petit souci".into());
         let mut original = record("orig", "/p", "ouvre un worktree auth/login");
         original.digest.custom_title = Some("login/logout petit souci".into());
-        app.apply(Event::ScanCompleted(vec![
-            carried.clone(),
-            original.clone(),
-        ]));
+        app.apply(Event::ScanCompleted(vec![carried, original]));
+        let group = app.sidebar.projects[0].clone();
 
-        // Each colliding row falls back to its real summary, so the two are
+        // Each colliding row surfaces its real summary, so the two are
         // distinguishable by content, not just by age.
+        let rows = app.session_disambiguators(&group);
         assert_eq!(
-            app.collision_subtitle(&carried).as_deref(),
-            Some("regardons les soucis du ROR")
+            rows.get("clr"),
+            Some(&Some("regardons les soucis du ROR".to_owned()))
         );
         assert_eq!(
-            app.collision_subtitle(&original).as_deref(),
-            Some("ouvre un worktree auth/login")
+            rows.get("orig"),
+            Some(&Some("ouvre un worktree auth/login".to_owned()))
         );
 
-        // A row whose title *is* its summary (no masking) has nothing extra to
-        // show — the caller keeps the age disambiguator.
-        let plain = record("plain", "/p", "vm tombée");
-        assert_eq!(app.collision_subtitle(&plain), None);
-
-        // A user rename that matches the summary is likewise not a divergence.
+        // Renaming one to its own summary makes its title unique: the pair no
+        // longer collides at all.
         app.apply(Event::RenameSession {
             session: "clr".into(),
             title: "regardons les soucis du ROR".into(),
         });
-        assert_eq!(app.collision_subtitle(&carried), None);
+        assert!(app.session_disambiguators(&group).is_empty());
+    }
+
+    #[test]
+    fn the_same_question_asked_twice_falls_back_to_the_age() {
+        let mut app = App::new();
+        // The same prompt in one project twice: the CLI derives the same
+        // ai-title for both, and the summaries match too. Showing the summary
+        // would repeat identical text on both rows and separate nothing.
+        let mut first = record("a", "/p", "c'est quoi les vignettes ?");
+        first.digest.ai_title = Some("Comprendre les vignettes".into());
+        let mut second = record("b", "/p", "c'est quoi les vignettes ?");
+        second.digest.ai_title = Some("Comprendre les vignettes".into());
+        // A third row shares the summary but not the title — it must not make
+        // the other two look ambiguous.
+        let mut renamed = record("c", "/p", "c'est quoi les vignettes ?");
+        renamed.digest.ai_title = Some("Vignettes, la suite".into());
+        app.apply(Event::ScanCompleted(vec![first, second, renamed]));
+        let group = app.sidebar.projects[0].clone();
+
+        let rows = app.session_disambiguators(&group);
+        assert_eq!(
+            rows.keys().cloned().collect::<HashSet<_>>(),
+            HashSet::from(["a".to_owned(), "b".to_owned()])
+        );
+        assert_eq!(rows.get("a"), Some(&None));
+        assert_eq!(rows.get("b"), Some(&None));
     }
 
     #[test]
