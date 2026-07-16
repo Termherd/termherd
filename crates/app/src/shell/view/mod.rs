@@ -11,7 +11,6 @@ use iced::widget::canvas::Canvas;
 use iced::widget::{button, column, container, mouse_area, row, text};
 use iced::{Border, Color, Element, Fill, Length, Size};
 use termherd_core::SessionRecord;
-use termherd_core::SessionStatus;
 use termherd_core::browser::relative_age;
 use termherd_core::workspace::{Pane, SessionId, SplitDir};
 
@@ -59,7 +58,7 @@ impl Shell {
         }
     }
 
-    /// The focused terminal: a status badge, then its grid drawn on a canvas.
+    /// The focused terminal: its tab strip, then its grid drawn on a canvas.
     /// With no session open, a short summary of what the browser found.
     fn main_pane(&self) -> Element<'_, Message> {
         // A plan / memory doc, when one is open, takes over the main pane for
@@ -101,9 +100,6 @@ impl Shell {
         }
         if let Some(indicator) = self.recording_indicator() {
             pane = pane.push(indicator);
-        }
-        if let Some(status) = focused.and_then(|id| self.core.sessions.get(&id)) {
-            pane = pane.push(status_badge(status.status));
         }
         container(pane.push(body)).width(Fill).height(Fill).into()
     }
@@ -243,19 +239,6 @@ impl Shell {
                 .into(),
         )
     }
-}
-
-/// A small per-session activity badge (FR8): a coloured dot + label for the
-/// focused terminal. The same dot annotates live rows in the sidebar and each
-/// tab in the tab strip.
-fn status_badge(status: SessionStatus) -> Element<'static, Message> {
-    row![
-        text("●").size(13).color(status_color(status)),
-        text(strings::status_label(status)).size(13)
-    ]
-    .spacing(6)
-    .align_y(iced::Center)
-    .into()
 }
 
 /// The hover card for a session row: full title, a muted line with relative
