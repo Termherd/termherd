@@ -4,7 +4,6 @@
 //! Pure of any real PTY, so the command/env contract and the status fold are
 //! unit-tested directly.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
@@ -83,6 +82,7 @@ pub(crate) fn write_mcp_config(session: SessionId, config: &McpConfig) -> Option
 #[cfg(unix)]
 fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::fs::OpenOptions;
+    use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
 
     let mut file = OpenOptions::new()
