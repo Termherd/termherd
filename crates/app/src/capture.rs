@@ -124,8 +124,8 @@ impl<'a> From<&'a CaptureDump> for DumpDto<'a> {
                 .map(|tab| TabDto {
                     active: tab.active,
                     title: &tab.title,
-                    // The same vocabulary the UI badge shows (`strings::status_label`),
-                    // so the dump and the PNG read alike — one stringification, no drift.
+                    // The word form of the status the UI only paints as a dot
+                    // colour, so a reader of the dump needs no colour key.
                     status: tab.status.map(crate::strings::status_label),
                     sessions: &tab.sessions,
                     focus_session: tab.focus_session,
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(json["active_tab"], 1);
         assert_eq!(json["focused_pty"], "$ cargo test");
         assert_eq!(json["tabs"][0]["title"], "proj $");
-        // Status uses the UI vocabulary (`status_label`): Idle renders "ready".
+        // Status is stringified through `status_label`: Idle renders "ready".
         assert_eq!(json["tabs"][0]["status"], "ready");
         // focus_session is omitted on the inactive tab, present on the active.
         assert!(json["tabs"][0].get("focus_session").is_none());

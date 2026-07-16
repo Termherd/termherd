@@ -98,7 +98,9 @@ pub fn quit_prompt(live: usize) -> String {
 }
 
 // --- Activity status (FR8) ---
-/// The short label for a session's activity status.
+/// The short label for a session's activity status. The UI itself only paints
+/// the status as a dot colour ([`crate::shell::view`]); this word form exists
+/// for the capture dump, where a colour carries nothing.
 #[must_use]
 pub fn status_label(status: SessionStatus) -> &'static str {
     match status {
