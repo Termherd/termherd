@@ -19,9 +19,10 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
+use termherd_core::workspace::SplitDir;
 use termherd_core::{Section, SessionStatus, SnapshotFilter, TerminalScope, WorkspaceSnapshot};
 
-use crate::shell::bridge::{BridgeHandle, Reply, Request, SessionInfo, SessionKind};
+use crate::shell::bridge::{Action, BridgeHandle, Reply, Request, SessionInfo, SessionKind};
 
 /// How long a tool waits for the shell to answer before failing the caller.
 /// Bounds the whole round-trip (enqueue + reply) via [`BridgeHandle::call`], so
@@ -106,6 +107,155 @@ impl TermherdMcp {
         };
         let value = serde_json::to_value(SnapshotDto::from(&snapshot))
             .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        Ok(CallToolResult::structured(value))
+    }
+
+    /// Open a new terminal session and focus it. → `open_session`.
+    #[tool(
+        name = "open_session",
+        description = "Open a new terminal session and focus it. Args: `project` \
+                       (working directory; omit for the home dir), `kind` \
+                       (\"shell\" or \"claude\", default \"shell\"). Returns the \
+                       new session's `focused_handle`."
+    )]
+    async fn open_session(
+        &self,
+        Parameters(args): Parameters<OpenArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let action = Action::Open {
+            project: args.project,
+            kind: match args.kind.as_deref() {
+                None | Some("shell") => SessionKind::Shell,
+                Some("claude") => SessionKind::Claude,
+                Some(other) => {
+                    return Err(ErrorData::invalid_params(
+                        format!("unknown kind {other:?}; expected \"shell\" or \"claude\""),
+                        None,
+                    ));
+                }
+            },
+        };
+        self.act(action).await
+    }
+
+    /// Split a pane, opening a fresh session beside it. → `split_pane`.
+    #[tool(
+        name = "split_pane",
+        description = "Split a pane, opening a fresh shell beside it and focusing \
+                       it. Args: `direction` (\"vertical\" = side by side, \
+                       \"horizontal\" = stacked; default \"vertical\"), `pane` \
+                       (session handle to split; omit for the focused pane). \
+                       Returns the new pane's `focused_handle`."
+    )]
+    async fn split_pane(
+        &self,
+        Parameters(args): Parameters<SplitArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let dir = match args.direction.as_deref() {
+            None | Some("vertical") | Some("v") => SplitDir::Vertical,
+            Some("horizontal") | Some("h") => SplitDir::Horizontal,
+            Some(other) => {
+                return Err(ErrorData::invalid_params(
+                    format!("unknown direction {other:?}; expected \"vertical\" or \"horizontal\""),
+                    None,
+                ));
+            }
+        };
+        let pane = parse_optional_handle(args.pane)?;
+        self.act(Action::Split { pane, dir }).await
+    }
+
+    /// Move focus to the pane hosting a session. → `focus_pane`.
+    #[tool(
+        name = "focus_pane",
+        description = "Move focus to the pane hosting a session, and hand it the \
+                       keyboard. Args: `session` (its stable handle). Returns the \
+                       resulting `focused_handle`."
+    )]
+    async fn focus_pane(
+        &self,
+        Parameters(args): Parameters<FocusArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+        self.act(Action::Focus { session }).await
+    }
+
+    /// Give a tab a manual name. → `rename_tab`.
+    #[tool(
+        name = "rename_tab",
+        description = "Give the tab at `tab` (0-based index, as `snapshot` reports \
+                       tab order) a manual name. A blank `title` reverts to the \
+                       derived title. Returns the current `focused_handle`."
+    )]
+    async fn rename_tab(
+        &self,
+        Parameters(args): Parameters<RenameArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.act(Action::Rename {
+            tab: args.tab,
+            title: args.title,
+        })
+        .await
+    }
+
+    /// Close a pane; a lone pane closes its whole tab. → `close_pane`.
+    #[tool(
+        name = "close_pane",
+        description = "Close a pane and kill its terminal. Args: `pane` (session \
+                       handle to close; omit for the focused pane). A lone pane is \
+                       its whole tab, which closes. Returns the resulting \
+                       `focused_handle` (null when the workspace is now empty)."
+    )]
+    async fn close_pane(
+        &self,
+        Parameters(args): Parameters<CloseArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let pane = parse_optional_handle(args.pane)?;
+        self.act(Action::Close { pane }).await
+    }
+
+    /// Type text into a session's terminal without waiting. → `run_in_session`.
+    #[tool(
+        name = "run_in_session",
+        description = "Type text into a session's terminal, as if typed at the \
+                       keyboard — does not wait for it to finish (read the result \
+                       with `snapshot`'s scoped terminal text). Include a trailing \
+                       newline in `text` to submit a command. Args: `session` (its \
+                       stable handle), `text`. Returns the `focused_handle`."
+    )]
+    async fn run_in_session(
+        &self,
+        Parameters(args): Parameters<RunArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+        self.act(Action::Run {
+            session,
+            bytes: args.text.into_bytes(),
+        })
+        .await
+    }
+}
+
+impl TermherdMcp {
+    /// Send an [`Action`] over the bridge and shape its [`ActionOutcome`] into a
+    /// tool result: a rejection (unknown handle / out-of-range tab) becomes an
+    /// `invalid_params` error, an applied action a `{ focused_handle }` object.
+    async fn act(&self, action: Action) -> Result<CallToolResult, ErrorData> {
+        let reply = self
+            .bridge
+            .call(Request::Act(action), CALL_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Acted(outcome) = reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        if let Some(reason) = outcome.error {
+            return Err(ErrorData::invalid_params(reason, None));
+        }
+        let value = serde_json::json!({ "focused_handle": outcome.focused });
         Ok(CallToolResult::structured(value))
     }
 }
@@ -219,6 +369,80 @@ impl SnapshotArgs {
             text_lines: self.text_lines.unwrap_or(default.text_lines),
         }
     }
+}
+
+/// Arguments for `open_session`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct OpenArgs {
+    /// Working directory for the new session. Omit for the home directory.
+    #[serde(default)]
+    project: Option<String>,
+    /// `"shell"` (default) or `"claude"`.
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+/// Arguments for `split_pane`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct SplitArgs {
+    /// `"vertical"` (default, side by side) or `"horizontal"` (stacked).
+    #[serde(default)]
+    direction: Option<String>,
+    /// Session handle to split. Omit for the focused pane.
+    #[serde(default)]
+    pane: Option<String>,
+}
+
+/// Arguments for `focus_pane`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct FocusArgs {
+    /// The stable handle of the session to focus.
+    session: String,
+}
+
+/// Arguments for `rename_tab`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct RenameArgs {
+    /// 0-based tab index, as `snapshot` reports tab order.
+    tab: usize,
+    /// The new manual title; blank reverts to the derived title.
+    title: String,
+}
+
+/// Arguments for `close_pane`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct CloseArgs {
+    /// Session handle to close. Omit for the focused pane.
+    #[serde(default)]
+    pane: Option<String>,
+}
+
+/// Arguments for `run_in_session`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct RunArgs {
+    /// The stable handle of the target session.
+    session: String,
+    /// Text to type; include a trailing newline to submit a command.
+    text: String,
+}
+
+/// Parse a stable handle string (as `list_sessions` / `snapshot` report it) to
+/// its numeric id, surfacing a non-numeric handle as an `invalid_params` error.
+fn parse_handle(handle: &str) -> Result<u64, ErrorData> {
+    handle
+        .parse()
+        .map_err(|_| ErrorData::invalid_params(format!("handle {handle:?} is not a number"), None))
+}
+
+/// Parse an optional handle: absent stays absent, present is validated.
+fn parse_optional_handle(handle: Option<String>) -> Result<Option<u64>, ErrorData> {
+    handle.map(|h| parse_handle(&h)).transpose()
 }
 
 /// The on-the-wire snapshot: `core`'s model flattened to string-typed enums an
@@ -523,6 +747,236 @@ mod tests {
         drop(requests);
         let error = TermherdMcp::new(handle)
             .snapshot(Parameters(SnapshotArgs::default()))
+            .await
+            .expect_err("a closed bridge is a tool error");
+        assert!(error.message.contains("closed"), "got: {}", error.message);
+    }
+
+    // ---- Orchestration tools (F-mcp-orchestration) ----------------------
+
+    use crate::shell::bridge::{Action, ActionOutcome};
+
+    /// Run `call` against a shell that records the request and answers it with an
+    /// applied outcome; return the `Action` the tool built.
+    async fn action_of<F, Fut>(call: F) -> Action
+    where
+        F: FnOnce(TermherdMcp) -> Fut,
+        Fut: std::future::Future<Output = Result<CallToolResult, ErrorData>>,
+    {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(
+            requests,
+            Reply::Acted(ActionOutcome::applied(Some("2".into()))),
+        );
+        call(TermherdMcp::new(handle))
+            .await
+            .expect("the tool returns a result");
+        match shell.await.expect("shell task") {
+            Request::Act(action) => action,
+            other => panic!("expected an action request, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn open_session_tool_builds_an_open_action() {
+        let action = action_of(|mcp| async move {
+            mcp.open_session(Parameters(OpenArgs {
+                project: Some("/proj".into()),
+                kind: Some("claude".into()),
+            }))
+            .await
+        })
+        .await;
+        assert_eq!(
+            action,
+            Action::Open {
+                project: Some("/proj".into()),
+                kind: SessionKind::Claude,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn open_session_tool_defaults_kind_to_shell() {
+        let action =
+            action_of(|mcp| async move { mcp.open_session(Parameters(OpenArgs::default())).await })
+                .await;
+        assert_eq!(
+            action,
+            Action::Open {
+                project: None,
+                kind: SessionKind::Shell,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn open_session_tool_rejects_an_unknown_kind() {
+        let (handle, requests) = channel();
+        drop(requests); // never reached: the arg is rejected before the bridge.
+        let error = TermherdMcp::new(handle)
+            .open_session(Parameters(OpenArgs {
+                project: None,
+                kind: Some("wizard".into()),
+            }))
+            .await
+            .expect_err("an unknown kind is an invalid_params error");
+        assert!(error.message.contains("wizard"), "got: {}", error.message);
+    }
+
+    #[tokio::test]
+    async fn split_pane_tool_maps_direction_and_target() {
+        let action = action_of(|mcp| async move {
+            mcp.split_pane(Parameters(SplitArgs {
+                direction: Some("horizontal".into()),
+                pane: Some("5".into()),
+            }))
+            .await
+        })
+        .await;
+        assert_eq!(
+            action,
+            Action::Split {
+                pane: Some(5),
+                dir: SplitDir::Horizontal,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn split_pane_tool_defaults_to_a_vertical_split_of_the_focused_pane() {
+        let action =
+            action_of(|mcp| async move { mcp.split_pane(Parameters(SplitArgs::default())).await })
+                .await;
+        assert_eq!(
+            action,
+            Action::Split {
+                pane: None,
+                dir: SplitDir::Vertical,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn focus_and_run_tools_carry_the_parsed_handle() {
+        let focus = action_of(|mcp| async move {
+            mcp.focus_pane(Parameters(FocusArgs {
+                session: "3".into(),
+            }))
+            .await
+        })
+        .await;
+        assert_eq!(focus, Action::Focus { session: 3 });
+
+        let run = action_of(|mcp| async move {
+            mcp.run_in_session(Parameters(RunArgs {
+                session: "3".into(),
+                text: "ls\n".into(),
+            }))
+            .await
+        })
+        .await;
+        assert_eq!(
+            run,
+            Action::Run {
+                session: 3,
+                bytes: b"ls\n".to_vec(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn run_in_session_tool_rejects_a_non_numeric_handle() {
+        let (handle, requests) = channel();
+        drop(requests);
+        let error = TermherdMcp::new(handle)
+            .run_in_session(Parameters(RunArgs {
+                session: "not-a-number".into(),
+                text: "x".into(),
+            }))
+            .await
+            .expect_err("a non-numeric handle is rejected before the bridge");
+        assert!(
+            error.message.contains("not-a-number"),
+            "got: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn rename_and_close_tools_build_their_actions() {
+        let rename = action_of(|mcp| async move {
+            mcp.rename_tab(Parameters(RenameArgs {
+                tab: 1,
+                title: "build".into(),
+            }))
+            .await
+        })
+        .await;
+        assert_eq!(
+            rename,
+            Action::Rename {
+                tab: 1,
+                title: "build".into(),
+            }
+        );
+
+        let close = action_of(|mcp| async move {
+            mcp.close_pane(Parameters(CloseArgs {
+                pane: Some("4".into()),
+            }))
+            .await
+        })
+        .await;
+        assert_eq!(close, Action::Close { pane: Some(4) });
+    }
+
+    #[tokio::test]
+    async fn a_tool_surfaces_a_rejected_action_as_invalid_params() {
+        // The shell answers with a rejection (unknown handle); the tool must
+        // relay it as an error, not a success with a null handle.
+        let (handle, requests) = channel();
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Acted(ActionOutcome::rejected("no live session with handle 9")),
+        );
+        let error = TermherdMcp::new(handle)
+            .focus_pane(Parameters(FocusArgs {
+                session: "9".into(),
+            }))
+            .await
+            .expect_err("a rejected action is a tool error");
+        assert!(
+            error.message.contains("handle 9"),
+            "the rejection reason is relayed, got: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tool_reports_the_resulting_focus_on_success() {
+        let (handle, requests) = channel();
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Acted(ActionOutcome::applied(Some("2".into()))),
+        );
+        let result = TermherdMcp::new(handle)
+            .split_pane(Parameters(SplitArgs::default()))
+            .await
+            .expect("the tool returns a result");
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(
+            value["focused_handle"], "2",
+            "the new pane's handle is returned"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tool_surfaces_a_bridge_failure_as_an_error() {
+        let (handle, requests) = channel();
+        drop(requests);
+        let error = TermherdMcp::new(handle)
+            .close_pane(Parameters(CloseArgs::default()))
             .await
             .expect_err("a closed bridge is a tool error");
         assert!(error.message.contains("closed"), "got: {}", error.message);

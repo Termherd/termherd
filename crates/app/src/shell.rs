@@ -40,6 +40,7 @@ mod geometry;
 mod ime;
 mod input;
 mod launch;
+mod orchestrate;
 mod record;
 mod routing;
 mod session_ops;
@@ -1157,11 +1158,21 @@ impl Shell {
             }
             Message::RecordFrameTick(now) => self.on_record_frame_tick(now),
             Message::RecordFrame(screenshot) => self.record.on_frame(screenshot),
-            Message::Bridge { request, reply } => {
-                let inputs = self.snapshot_inputs(&request);
-                reply.answer(bridge::respond(&self.core, &request, &inputs));
-                Task::none()
-            }
+            Message::Bridge { request, reply } => match request {
+                // Actions mutate, so they can't answer off a `&App`: apply them
+                // and perform the effects here, where the shell owns both.
+                bridge::Request::Act(action) => {
+                    let (outcome, task) = self.perform_action(action);
+                    reply.answer(bridge::Reply::Acted(outcome));
+                    task
+                }
+                // The two read requests answer straight from owned state.
+                read => {
+                    let inputs = self.snapshot_inputs(&read);
+                    reply.answer(bridge::respond(&self.core, &read, &inputs));
+                    Task::none()
+                }
+            },
         }
     }
 
@@ -1434,6 +1445,198 @@ mod key_routing {
         }));
         assert!(bare.config.is_none(), "config off → not gathered");
         assert!(bare.terminals.is_empty(), "no terminal scope → no text");
+    }
+
+    // ---- Orchestration actions (F-mcp-orchestration) --------------------
+    //
+    // Each MCP action is a thin wrapper over an existing core event. These
+    // pin the shell-side seam: handle resolution, the applied mutation, and
+    // the reported resulting focus.
+
+    // `Action`/`SessionKind` already name the `termherd_core` types in this
+    // module, so the bridge's carry a `Bridge` prefix here.
+    use super::bridge::{Action as BridgeAction, SessionKind as BridgeKind};
+    use termherd_core::workspace::SplitDir;
+
+    /// The focused session's handle string, or `None` when nothing is focused.
+    fn focused(shell: &Shell) -> Option<String> {
+        shell
+            .core
+            .workspace
+            .focused_session()
+            .map(|id| id.0.get().to_string())
+    }
+
+    #[test]
+    fn open_action_launches_and_focuses_a_new_pane() {
+        let pty = Arc::new(RecordingPty::default());
+        let mut shell = shell_over(pty.clone());
+        let (outcome, _task) = shell.perform_action(BridgeAction::Open {
+            project: Some("/tmp/x".into()),
+            kind: BridgeKind::Shell,
+        });
+        assert_eq!(outcome.error, None, "opening a session never rejects");
+        assert_eq!(
+            outcome.focused,
+            focused(&shell),
+            "the outcome reports the newly focused pane"
+        );
+        assert!(outcome.focused.is_some(), "the new pane holds focus");
+        assert_eq!(pty.spawn_count(), 1, "one PTY was spawned");
+        assert_eq!(pty.launches(), vec![Launch::Shell]);
+    }
+
+    #[test]
+    fn open_action_defaults_to_the_home_dir_and_kind_claude() {
+        let pty = Arc::new(RecordingPty::default());
+        let mut shell = shell_over(pty.clone());
+        let (outcome, _task) = shell.perform_action(BridgeAction::Open {
+            project: None,
+            kind: BridgeKind::Claude,
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(
+            pty.launches(),
+            vec![Launch::Claude { resume: None }],
+            "a fresh Claude session, no project → home dir"
+        );
+    }
+
+    #[test]
+    fn run_action_writes_the_bytes_to_the_target_pty() {
+        let (mut shell, pty) = shell_with_terminal();
+        let handle = focused(&shell).expect("a focused session");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Run {
+            session: handle.parse().expect("numeric handle"),
+            bytes: b"ls\n".to_vec(),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(pty.writes(), vec![b"ls\n".to_vec()], "the bytes were typed");
+    }
+
+    #[test]
+    fn run_action_rejects_an_unknown_handle_without_writing() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Run {
+            session: 999,
+            bytes: b"rm -rf /\n".to_vec(),
+        });
+        assert!(
+            outcome.error.is_some_and(|e| e.contains("999")),
+            "an unknown handle is rejected, naming it"
+        );
+        assert!(pty.writes().is_empty(), "nothing was typed into any PTY");
+    }
+
+    #[test]
+    fn focus_action_rejects_an_unknown_handle() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let before = focused(&shell);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Focus { session: 999 });
+        assert!(outcome.error.is_some(), "an unknown handle is rejected");
+        assert_eq!(focused(&shell), before, "focus is untouched");
+    }
+
+    #[test]
+    fn focus_action_moves_focus_to_the_target_pane_in_a_split() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let first = focused(&shell).expect("first pane");
+        // Split so the tab holds two panes; the new one takes focus.
+        let (split, _task) = shell.perform_action(BridgeAction::Split {
+            pane: None,
+            dir: SplitDir::Vertical,
+        });
+        assert_eq!(split.error, None);
+        assert_ne!(
+            focused(&shell),
+            Some(first.clone()),
+            "the new pane is focused"
+        );
+        // Focus back to the first pane by its handle.
+        let (outcome, _task) = shell.perform_action(BridgeAction::Focus {
+            session: first.parse().expect("numeric handle"),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(focused(&shell), Some(first), "focus returned to the target");
+    }
+
+    #[test]
+    fn split_action_opens_and_focuses_a_pane_beside_the_focused_one() {
+        let (mut shell, pty) = shell_with_terminal();
+        let first = focused(&shell).expect("first pane");
+        let spawns_before = pty.spawn_count();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Split {
+            pane: None,
+            dir: SplitDir::Horizontal,
+        });
+        assert_eq!(outcome.error, None);
+        let active = shell.core.workspace.active;
+        assert_eq!(
+            shell.core.workspace.tabs[active].sessions().len(),
+            2,
+            "the tab now hosts two panes"
+        );
+        assert_eq!(
+            outcome.focused,
+            focused(&shell),
+            "the outcome reports the new focus"
+        );
+        assert_ne!(outcome.focused, Some(first), "the fresh pane holds focus");
+        assert_eq!(pty.spawn_count(), spawns_before + 1, "one more PTY spawned");
+    }
+
+    #[test]
+    fn split_action_rejects_an_unknown_target_pane() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Split {
+            pane: Some(999),
+            dir: SplitDir::Vertical,
+        });
+        assert!(
+            outcome.error.is_some(),
+            "an unknown target pane is rejected"
+        );
+        assert_eq!(
+            shell.core.workspace.tabs[shell.core.workspace.active]
+                .sessions()
+                .len(),
+            1,
+            "no split happened"
+        );
+    }
+
+    #[test]
+    fn rename_action_relabels_the_tab() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "build".into(),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(shell.core.workspace.tabs[0].display_title(), "build");
+    }
+
+    #[test]
+    fn rename_action_rejects_an_out_of_range_tab() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 9,
+            title: "nope".into(),
+        });
+        assert!(outcome.error.is_some(), "a missing tab is rejected");
+    }
+
+    #[test]
+    fn close_action_closes_a_lone_pane_tab_and_kills_its_pty() {
+        let (mut shell, pty) = shell_with_terminal();
+        assert_eq!(shell.core.workspace.tabs.len(), 1);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: None });
+        assert_eq!(outcome.error, None);
+        assert!(
+            shell.core.workspace.tabs.is_empty(),
+            "the lone tab is closed"
+        );
+        assert_eq!(pty.kill_count(), 1, "its PTY was killed");
     }
 
     #[test]
