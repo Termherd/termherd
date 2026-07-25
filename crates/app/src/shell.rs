@@ -806,7 +806,7 @@ impl Shell {
                 let effects = self
                     .core
                     .apply(termherd_core::Event::StatusChanged { session, status });
-                self.settle_waiters(session, status);
+                self.settle_waiters(session);
                 self.perform(effects)
             }
             Message::PtyTitle { session, title } => {
@@ -831,7 +831,7 @@ impl Shell {
                 // An exit is the other way a session's activity settles: a crash
                 // records `Exited` without emitting a status change, and a clean
                 // exit takes the session out of the registry entirely.
-                self.settle_waiters(session, SessionStatus::Exited);
+                self.settle_waiters(session);
                 if effects.is_empty() {
                     // No auto-close: the dead terminal stays on screen.
                     Task::none()
@@ -3834,6 +3834,122 @@ mod key_routing {
         assert!(
             shell.waiters.is_empty(),
             "an abandoned waiter is swept on the next status event"
+        );
+    }
+
+    #[test]
+    fn wait_answers_at_once_for_a_session_that_already_exited() {
+        // `Exited` is terminal in core — it refuses to overwrite it — so a wait
+        // parked on a dead session could never be woken by a status event. It
+        // has to be answered on the spot instead.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
+
+        let mut rx = serve(&mut shell, wait_for(session.0.get()));
+        assert_eq!(
+            waited(&mut rx),
+            Some(WaitOutcome {
+                status: Some(SessionStatus::Exited),
+                error: None,
+            })
+        );
+        assert!(shell.waiters.is_empty(), "nothing parked");
+    }
+
+    #[test]
+    fn a_status_still_in_flight_when_the_exit_lands_settles_as_exited() {
+        // The PTY task can emit a status the exit overtakes. Core drops it (a
+        // dead session stays dead); the wait must report what core recorded,
+        // not the message, or the client is told a crashed session went idle.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        let mut rx = serve(&mut shell, wait_for(session.0.get()));
+
+        // The exit lands first and settles the waiter...
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
+        assert_eq!(
+            waited(&mut rx).and_then(|outcome| outcome.status),
+            Some(SessionStatus::Exited)
+        );
+
+        // ...and a late Idle must not resurrect it for a second waiter either.
+        let mut late = serve(&mut shell, wait_for(session.0.get()));
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Idle,
+        });
+        assert_eq!(
+            waited(&mut late).and_then(|outcome| outcome.status),
+            Some(SessionStatus::Exited),
+            "core kept the session dead, so the wait reports dead"
+        );
+    }
+
+    #[test]
+    fn a_wait_on_a_session_closed_from_the_ui_is_settled_on_the_next_request() {
+        // Closing a tab drops its sessions without any PTY exit reaching
+        // `update`, so nothing would settle the waiter. The next served request
+        // sweeps it rather than leaving the caller parked on a ghost.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        let mut rx = serve(&mut shell, wait_for(session.0.get()));
+        assert_eq!(waited(&mut rx), None, "parked while busy");
+
+        let effects = shell.core.apply(termherd_core::Event::CloseTab(0));
+        let _ = shell.perform(effects);
+        assert!(
+            !shell.core.sessions.contains_key(&session),
+            "the close took the session out of the registry"
+        );
+
+        // Any request re-enters `serve`, which sweeps first.
+        drop(serve(&mut shell, BridgeRequest::ListSessions));
+        assert_eq!(
+            waited(&mut rx).and_then(|outcome| outcome.status),
+            Some(SessionStatus::Exited)
+        );
+        assert!(shell.waiters.is_empty());
+    }
+
+    #[test]
+    fn abandoned_waiters_are_swept_on_a_quiet_workspace() {
+        // Without a sweep on the request path, a quiet workspace never drops
+        // the waiters of callers that timed out, and the list grows unbounded.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        // Ten timed-out waits in a row on a session that never moves: the list
+        // must not accumulate them, since each `serve` sweeps before parking.
+        for _ in 0..10 {
+            drop(serve(&mut shell, wait_for(session.0.get())));
+            assert!(
+                shell.waiters.len() <= 1,
+                "at most the wait just parked, never a backlog"
+            );
+        }
+
+        drop(serve(&mut shell, BridgeRequest::ListSessions));
+        assert!(
+            shell.waiters.is_empty(),
+            "no status event fired, yet the dead waiters are gone"
         );
     }
 

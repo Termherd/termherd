@@ -39,6 +39,11 @@ const DEFAULT_WAIT_MS: u64 = 30_000;
 /// that no bridge call can park a caller indefinitely.
 const MAX_WAIT_MS: u64 = 300_000;
 
+/// Bound on the status read-back after a wait timed out. Deliberately short: it
+/// is a courtesy on top of an answer the caller has already earned, so it must
+/// barely extend the wait it follows.
+const READ_BACK_TIMEOUT: Duration = Duration::from_millis(250);
+
 /// The live-bridge MCP server handler. Holds only the bridge into the shell —
 /// cloned fresh per session by the transport's service factory.
 #[derive(Clone)]
@@ -290,7 +295,7 @@ impl TermherdMcp {
             // rather than a bare failure: an agent that waited 30s needs the
             // current status to decide whether to keep waiting or give up.
             Err(CallError::Timeout(_)) => {
-                let status = self.current_status(session).await?;
+                let status = self.current_status(session).await;
                 Ok(CallToolResult::structured(serde_json::json!({
                     "status": status,
                     "timed_out": true,
@@ -339,25 +344,27 @@ impl TermherdMcp {
 }
 
 impl TermherdMcp {
-    /// A session's current activity, read back after a wait timed out. A handle
-    /// that no longer resolves (the session died meanwhile) reports `None`
-    /// rather than failing — the caller asked about waiting, not existence.
-    async fn current_status(&self, session: u64) -> Result<Option<&'static str>, ErrorData> {
-        let reply = self
+    /// A session's current activity, read back after a wait timed out. Best
+    /// effort by design: `None` covers a handle that no longer resolves *and* a
+    /// read-back that failed. The likeliest cause of the original timeout is a
+    /// wedged shell, which would fail this call too — and turning that into an
+    /// error would swallow the `timed_out` answer the caller is owed.
+    async fn current_status(&self, session: u64) -> Option<&'static str> {
+        match self
             .bridge
-            .call(Request::ListSessions, CALL_TIMEOUT)
+            .call(Request::ListSessions, READ_BACK_TIMEOUT)
             .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        let Reply::Sessions(sessions) = reply else {
-            return Err(ErrorData::internal_error(
-                "bridge answered the wrong reply kind",
-                None,
-            ));
-        };
-        Ok(sessions
-            .iter()
-            .find(|info| info.handle == session.to_string())
-            .map(|info| status_str(info.status)))
+        {
+            Ok(Reply::Sessions(sessions)) => sessions
+                .iter()
+                .find(|info| info.handle == session.to_string())
+                .map(|info| status_str(info.status)),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::debug!(%error, "could not read the status back after a wait timeout");
+                None
+            }
+        }
     }
 
     /// Send an [`Action`] over the bridge and shape its [`ActionOutcome`] into a
@@ -1182,6 +1189,32 @@ mod tests {
         let seen = shell.await.expect("shell task");
         assert_eq!(seen.len(), 2, "the wait, then the status read-back");
         assert_eq!(seen[1], Request::ListSessions);
+    }
+
+    #[tokio::test]
+    async fn a_wait_that_times_out_still_answers_when_the_read_back_fails() {
+        // The likeliest cause of the original timeout is a wedged shell, which
+        // fails the status read-back too. That must not swallow the `timed_out`
+        // answer the caller already earned — it is the whole point of the path.
+        let (handle, requests) = channel();
+        // Neither the wait nor the read-back is ever answered.
+        let shell = spawn_test_shell_seq(requests, vec![None, None]);
+        let args = WaitArgs {
+            session: "7".into(),
+            timeout_ms: Some(50),
+            ..WaitArgs::default()
+        };
+        let result = TermherdMcp::new(handle)
+            .wait_for_status(Parameters(args))
+            .await
+            .expect("a wedged shell still yields the timeout answer");
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(value["timed_out"], true);
+        assert!(
+            value["status"].is_null(),
+            "an unreadable status is null, not an error"
+        );
+        drop(shell);
     }
 
     #[test]
