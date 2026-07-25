@@ -19,6 +19,7 @@ mod record;
 mod record_config;
 mod settings;
 mod shell;
+mod snapshot_dto;
 mod strings;
 mod tracing_init;
 mod window_config;
