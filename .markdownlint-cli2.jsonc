@@ -9,6 +9,15 @@
   // Lint every doc by default, so a bare `markdownlint-cli2` mirrors CI
   // (whose action passes the same glob explicitly).
   "globs": ["**/*.md"],
-  // CLAUDE.md is only an `@AGENTS.md` import pointer, not prose.
-  "ignores": ["target/**", "node_modules/**", "CLAUDE.md"]
+  // CLAUDE.md is only an `@AGENTS.md` import pointer, not prose. `.personal/`
+  // and `.local/` are gitignored working notes: CI never sees them (fresh
+  // clone), so linting them locally only reports errors no one can act on and
+  // teaches you to skim past the summary line.
+  "ignores": [
+    "target/**",
+    "node_modules/**",
+    "CLAUDE.md",
+    ".personal/**",
+    ".local/**"
+  ]
 }
