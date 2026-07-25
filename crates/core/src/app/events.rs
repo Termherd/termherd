@@ -95,8 +95,14 @@ pub enum Event {
     /// Move focus to the next / previous pane in the active tab (FR6).
     FocusNextPane,
     FocusPrevPane,
-    /// Move focus to the pane hosting a session (click-to-focus, FR6).
+    /// Move focus to the pane hosting a session *in the active tab*
+    /// (click-to-focus, FR6). A pane in another tab is out of a click's reach —
+    /// address it with [`Event::RevealPane`].
     FocusPane(SessionId),
+    /// Bring the pane hosting a session into view wherever it lives, activating
+    /// its tab first (FR6). What a caller holding only a session handle — the
+    /// MCP control surface — needs, since it is not bound to the active tab.
+    RevealPane(SessionId),
     /// Move pane focus one step in a spatial direction, cycling within its axis
     /// (FR6).
     FocusDir(Direction),

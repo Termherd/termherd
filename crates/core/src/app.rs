@@ -221,6 +221,10 @@ impl App {
                 self.workspace.focus_pane_of(session);
                 Vec::new()
             }
+            Event::RevealPane(session) => {
+                self.workspace.reveal_pane_of(session);
+                Vec::new()
+            }
             Event::FocusDir(dir) => {
                 self.workspace.focus_dir(dir);
                 Vec::new()
