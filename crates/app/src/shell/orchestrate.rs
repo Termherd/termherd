@@ -149,7 +149,7 @@ impl Shell {
 
     /// Resolve a stable handle to a live [`SessionId`], or `None` when no session
     /// carries it (already closed, or never existed).
-    fn resolve(&self, handle: u64) -> Option<SessionId> {
+    pub(super) fn resolve(&self, handle: u64) -> Option<SessionId> {
         let id = NonZeroU64::new(handle).map(SessionId)?;
         self.core.sessions.contains_key(&id).then_some(id)
     }
