@@ -43,6 +43,7 @@ mod launch;
 mod orchestrate;
 mod record;
 mod routing;
+mod serve;
 mod session_ops;
 mod streams;
 mod terminal;
@@ -254,6 +255,9 @@ struct Shell {
     config: ConfigInput,
     /// Latest rendered grid per session.
     screens: HashMap<SessionId, Screen>,
+    /// Bridge callers parked on a session reaching a target activity — the one
+    /// request kind whose reply lands in a later `update` (see `shell::serve`).
+    waiters: Vec<serve::StatusWaiter>,
     /// Current keyboard target.
     focus: Focus,
     /// Last non-empty terminal selection, for the keyboard copy shortcut (FR4).
@@ -622,6 +626,7 @@ impl Shell {
             mcp_tokens,
             mcp_session_tokens: HashMap::new(),
             screens: HashMap::new(),
+            waiters: Vec::new(),
             focus: Focus::Search,
             selection: None,
             theme: startup.theme.to_iced(),
@@ -801,6 +806,7 @@ impl Shell {
                 let effects = self
                     .core
                     .apply(termherd_core::Event::StatusChanged { session, status });
+                self.settle_waiters(session);
                 self.perform(effects)
             }
             Message::PtyTitle { session, title } => {
@@ -822,6 +828,10 @@ impl Shell {
                 let effects = self
                     .core
                     .apply(termherd_core::Event::PtyExited { session, clean });
+                // An exit is the other way a session's activity settles: a crash
+                // records `Exited` without emitting a status change, and a clean
+                // exit takes the session out of the registry entirely.
+                self.settle_waiters(session);
                 if effects.is_empty() {
                     // No auto-close: the dead terminal stays on screen.
                     Task::none()
@@ -1158,21 +1168,7 @@ impl Shell {
             }
             Message::RecordFrameTick(now) => self.on_record_frame_tick(now),
             Message::RecordFrame(screenshot) => self.record.on_frame(screenshot),
-            Message::Bridge { request, reply } => match request {
-                // Actions mutate, so they can't answer off a `&App`: apply them
-                // and perform the effects here, where the shell owns both.
-                bridge::Request::Act(action) => {
-                    let (outcome, task) = self.perform_action(action);
-                    reply.answer(bridge::Reply::Acted(outcome));
-                    task
-                }
-                // The two read requests answer straight from owned state.
-                read => {
-                    let inputs = self.snapshot_inputs(&read);
-                    reply.answer(bridge::respond(&self.core, &read, &inputs));
-                    Task::none()
-                }
-            },
+            Message::Bridge { request, reply } => self.serve(request, reply),
         }
     }
 
@@ -3635,6 +3631,410 @@ mod key_routing {
         assert!(
             shell.record.toggle_blocked(),
             "a draining recorder blocks a new toggle"
+        );
+    }
+
+    // --- The terminal-sync rung: wait_for_status + read_terminal ---
+
+    use super::bridge::{
+        Reply as BridgeReply, ReplyPort, Request as BridgeRequest, TerminalRead, WaitOutcome,
+    };
+    use tokio::sync::oneshot::error::TryRecvError;
+
+    /// Serve `request` through the bridge seam and hand back the caller's reply
+    /// receiver. A parked request leaves it empty — that emptiness is the
+    /// assertion a wait test needs.
+    fn serve(
+        shell: &mut Shell,
+        request: BridgeRequest,
+    ) -> tokio::sync::oneshot::Receiver<BridgeReply> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let _ = shell.serve(request, ReplyPort::new(tx));
+        rx
+    }
+
+    /// The `WaitOutcome` a served wait answered with, or `None` while it parks.
+    fn waited(rx: &mut tokio::sync::oneshot::Receiver<BridgeReply>) -> Option<WaitOutcome> {
+        match rx.try_recv() {
+            Ok(BridgeReply::Waited(outcome)) => Some(outcome),
+            Ok(other) => panic!("expected a Waited reply, got {other:?}"),
+            Err(TryRecvError::Empty) => None,
+            Err(error) => panic!("the reply channel closed: {error}"),
+        }
+    }
+
+    /// The `TerminalRead` a served read answered with. A read never parks, so an
+    /// empty channel is a failure, not a state.
+    fn read_back(rx: &mut tokio::sync::oneshot::Receiver<BridgeReply>) -> TerminalRead {
+        match rx.try_recv() {
+            Ok(BridgeReply::Terminal(read)) => read,
+            Ok(other) => panic!("expected a Terminal reply, got {other:?}"),
+            Err(error) => panic!("a read must answer in the same update: {error}"),
+        }
+    }
+
+    /// Wait for the two statuses `wait_for_status` exists for.
+    fn wait_for(session: u64) -> BridgeRequest {
+        BridgeRequest::WaitForStatus {
+            session,
+            targets: vec![SessionStatus::Idle, SessionStatus::Attention],
+        }
+    }
+
+    #[test]
+    fn wait_answers_at_once_when_the_session_already_holds_a_target_status() {
+        // A session sitting on the target must not park: an agent that asks
+        // "tell me when it's idle" about an idle session would otherwise hang
+        // until its own timeout, having already missed the transition.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Idle,
+        });
+
+        let mut rx = serve(&mut shell, wait_for(session.0.get()));
+        assert_eq!(
+            waited(&mut rx),
+            Some(WaitOutcome {
+                status: Some(SessionStatus::Idle),
+                error: None,
+            })
+        );
+    }
+
+    #[test]
+    fn wait_parks_until_the_status_change_arrives() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+
+        let mut rx = serve(&mut shell, wait_for(session.0.get()));
+        assert_eq!(
+            waited(&mut rx),
+            None,
+            "a busy session leaves the wait parked"
+        );
+
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Idle,
+        });
+        assert_eq!(
+            waited(&mut rx),
+            Some(WaitOutcome {
+                status: Some(SessionStatus::Idle),
+                error: None,
+            }),
+            "the status change settles the parked wait"
+        );
+    }
+
+    #[test]
+    fn wait_stays_parked_through_a_non_target_status() {
+        // Busy -> Starting is a change, but not the one asked for; waking on it
+        // would report "done" while the command is still running.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        let mut rx = serve(&mut shell, wait_for(session.0.get()));
+
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Starting,
+        });
+        assert_eq!(waited(&mut rx), None);
+    }
+
+    #[test]
+    fn wait_ignores_a_status_change_on_another_session() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let watched = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session: watched,
+            status: SessionStatus::Busy,
+        });
+        let _ = shell.launch("/tmp/other".to_string(), Launch::Shell);
+        let other = shell.core.workspace.focused_session().expect("focused");
+        assert_ne!(other, watched);
+
+        let mut rx = serve(&mut shell, wait_for(watched.0.get()));
+        let _ = shell.update(Message::PtyStatus {
+            session: other,
+            status: SessionStatus::Idle,
+        });
+        assert_eq!(
+            waited(&mut rx),
+            None,
+            "another pane going idle must not settle this wait"
+        );
+    }
+
+    #[test]
+    fn wait_rejects_an_unknown_handle_without_parking() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let mut rx = serve(&mut shell, wait_for(9_999));
+        let outcome = waited(&mut rx).expect("an unknown handle answers immediately");
+        assert_eq!(outcome.status, None);
+        assert!(
+            outcome.error.is_some(),
+            "an unknown handle is rejected, not awaited forever"
+        );
+    }
+
+    #[test]
+    fn wait_is_settled_by_an_unclean_pty_exit() {
+        // A crashed session emits no status change — only an exit. Without this
+        // the caller would wait out its whole bound on a dead terminal.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        let mut rx = serve(&mut shell, wait_for(session.0.get()));
+
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
+        assert_eq!(
+            waited(&mut rx),
+            Some(WaitOutcome {
+                status: Some(SessionStatus::Exited),
+                error: None,
+            }),
+            "an exit settles the wait with the status it ended on"
+        );
+    }
+
+    #[test]
+    fn a_waiter_whose_caller_gave_up_is_dropped() {
+        // The caller timed out and dropped its end; the shell must not keep the
+        // entry alive for a session that may never reach the target.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        drop(serve(&mut shell, wait_for(session.0.get())));
+        assert_eq!(shell.waiters.len(), 1, "the wait parked");
+
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Starting,
+        });
+        assert!(
+            shell.waiters.is_empty(),
+            "an abandoned waiter is swept on the next status event"
+        );
+    }
+
+    #[test]
+    fn wait_answers_at_once_for_a_session_that_already_exited() {
+        // `Exited` is terminal in core — it refuses to overwrite it — so a wait
+        // parked on a dead session could never be woken by a status event. It
+        // has to be answered on the spot instead.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
+
+        let mut rx = serve(&mut shell, wait_for(session.0.get()));
+        assert_eq!(
+            waited(&mut rx),
+            Some(WaitOutcome {
+                status: Some(SessionStatus::Exited),
+                error: None,
+            })
+        );
+        assert!(shell.waiters.is_empty(), "nothing parked");
+    }
+
+    #[test]
+    fn a_status_still_in_flight_when_the_exit_lands_settles_as_exited() {
+        // The PTY task can emit a status the exit overtakes. Core drops it (a
+        // dead session stays dead); the wait must report what core recorded,
+        // not the message, or the client is told a crashed session went idle.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        let mut rx = serve(&mut shell, wait_for(session.0.get()));
+
+        // The exit lands first and settles the waiter...
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
+        assert_eq!(
+            waited(&mut rx).and_then(|outcome| outcome.status),
+            Some(SessionStatus::Exited)
+        );
+
+        // ...and a late Idle must not resurrect it for a second waiter either.
+        let mut late = serve(&mut shell, wait_for(session.0.get()));
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Idle,
+        });
+        assert_eq!(
+            waited(&mut late).and_then(|outcome| outcome.status),
+            Some(SessionStatus::Exited),
+            "core kept the session dead, so the wait reports dead"
+        );
+    }
+
+    #[test]
+    fn a_wait_on_a_session_closed_from_the_ui_is_settled_on_the_next_request() {
+        // Closing a tab drops its sessions without any PTY exit reaching
+        // `update`, so nothing would settle the waiter. The next served request
+        // sweeps it rather than leaving the caller parked on a ghost.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        let mut rx = serve(&mut shell, wait_for(session.0.get()));
+        assert_eq!(waited(&mut rx), None, "parked while busy");
+
+        let effects = shell.core.apply(termherd_core::Event::CloseTab(0));
+        let _ = shell.perform(effects);
+        assert!(
+            !shell.core.sessions.contains_key(&session),
+            "the close took the session out of the registry"
+        );
+
+        // Any request re-enters `serve`, which sweeps first.
+        drop(serve(&mut shell, BridgeRequest::ListSessions));
+        assert_eq!(
+            waited(&mut rx).and_then(|outcome| outcome.status),
+            Some(SessionStatus::Exited)
+        );
+        assert!(shell.waiters.is_empty());
+    }
+
+    #[test]
+    fn abandoned_waiters_are_swept_on_a_quiet_workspace() {
+        // Without a sweep on the request path, a quiet workspace never drops
+        // the waiters of callers that timed out, and the list grows unbounded.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        // Ten timed-out waits in a row on a session that never moves: the list
+        // must not accumulate them, since each `serve` sweeps before parking.
+        for _ in 0..10 {
+            drop(serve(&mut shell, wait_for(session.0.get())));
+            assert!(
+                shell.waiters.len() <= 1,
+                "at most the wait just parked, never a backlog"
+            );
+        }
+
+        drop(serve(&mut shell, BridgeRequest::ListSessions));
+        assert!(
+            shell.waiters.is_empty(),
+            "no status event fired, yet the dead waiters are gone"
+        );
+    }
+
+    #[test]
+    fn read_terminal_returns_the_panes_visible_text() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of("$ cargo test"));
+
+        let mut rx = serve(
+            &mut shell,
+            BridgeRequest::ReadTerminal {
+                session: session.0.get(),
+                lines: 40,
+            },
+        );
+        assert_eq!(
+            read_back(&mut rx),
+            TerminalRead {
+                text: Some("$ cargo test".to_owned()),
+                error: None,
+            }
+        );
+    }
+
+    #[test]
+    fn read_terminal_keeps_only_the_requested_trailing_lines() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell
+            .screens
+            .insert(session, screen_of("one\ntwo\nthree\nfour"));
+
+        let mut rx = serve(
+            &mut shell,
+            BridgeRequest::ReadTerminal {
+                session: session.0.get(),
+                lines: 2,
+            },
+        );
+        assert_eq!(
+            read_back(&mut rx).text.as_deref(),
+            Some("three\nfour"),
+            "the read is bounded like a snapshot's text_lines"
+        );
+    }
+
+    #[test]
+    fn read_terminal_reports_no_text_for_a_pane_that_has_not_rendered() {
+        // Distinct from an unknown handle: the session is live, its screen just
+        // hasn't arrived. An agent should retry, not give up on the handle.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+
+        let mut rx = serve(
+            &mut shell,
+            BridgeRequest::ReadTerminal {
+                session: session.0.get(),
+                lines: 40,
+            },
+        );
+        assert_eq!(
+            read_back(&mut rx),
+            TerminalRead {
+                text: None,
+                error: None,
+            }
+        );
+    }
+
+    #[test]
+    fn read_terminal_rejects_an_unknown_handle() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let mut rx = serve(
+            &mut shell,
+            BridgeRequest::ReadTerminal {
+                session: 9_999,
+                lines: 40,
+            },
+        );
+        let read = read_back(&mut rx);
+        assert_eq!(read.text, None);
+        assert!(
+            read.error.is_some(),
+            "an unknown handle is an error, not empty text"
         );
     }
 }

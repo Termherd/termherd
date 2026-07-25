@@ -17,16 +17,32 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
+use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
-use termherd_core::{Section, SnapshotFilter, TerminalScope};
+use termherd_core::{Section, SessionStatus, SnapshotFilter, TerminalScope};
 
-use crate::shell::bridge::{Action, BridgeHandle, Reply, Request, SessionInfo, SessionKind};
+use crate::shell::bridge::{
+    Action, BridgeHandle, CallError, Reply, Request, SessionInfo, SessionKind,
+};
 use crate::snapshot_dto::{SnapshotDto, status_str};
 
 /// How long a tool waits for the shell to answer before failing the caller.
 /// Bounds the whole round-trip (enqueue + reply) via [`BridgeHandle::call`], so
 /// a wedged shell surfaces as a tool error, never a hang (Q7).
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Default bound for `wait_for_status` when the caller names none. Long enough
+/// for a real command, short enough that a forgotten wait reports back.
+const DEFAULT_WAIT_MS: u64 = 30_000;
+
+/// Hard cap on a wait, whatever the caller asks for — the outer Q7 guarantee
+/// that no bridge call can park a caller indefinitely.
+const MAX_WAIT_MS: u64 = 300_000;
+
+/// Bound on the status read-back after a wait timed out. Deliberately short: it
+/// is a courtesy on top of an answer the caller has already earned, so it must
+/// barely extend the wait it follows.
+const READ_BACK_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// The live-bridge MCP server handler. Holds only the bridge into the shell —
 /// cloned fresh per session by the transport's service factory.
@@ -233,9 +249,124 @@ impl TermherdMcp {
         })
         .await
     }
+
+    /// Block until a session's activity reaches one of the given statuses — the
+    /// synchronisation half of `act → wait → observe`.
+    #[tool(
+        name = "wait_for_status",
+        description = "Wait until a session's activity reaches one of `statuses` \
+                       (default: idle or attention), then report it. Pair it \
+                       with `run_in_session`, which returns immediately: run, \
+                       wait, then `read_terminal`. Args: `session` (handle), \
+                       `statuses` (any of \"starting\", \"busy\", \"idle\", \
+                       \"attention\", \"exited\"), `timeout_ms` (default 30000, \
+                       capped at 300000). A session that exits settles the wait \
+                       whatever you asked for — it can no longer reach it. \
+                       Returns `{ status, timed_out }`: on timeout the status is \
+                       the session's current one, not an error."
+    )]
+    async fn wait_for_status(
+        &self,
+        Parameters(args): Parameters<WaitArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+        let targets = parse_statuses(args.statuses)?;
+        let timeout = wait_timeout(args.timeout_ms);
+
+        match self
+            .bridge
+            .call(Request::WaitForStatus { session, targets }, timeout)
+            .await
+        {
+            Ok(Reply::Waited(outcome)) => {
+                if let Some(reason) = outcome.error {
+                    return Err(ErrorData::invalid_params(reason, None));
+                }
+                Ok(CallToolResult::structured(serde_json::json!({
+                    "status": outcome.status.map(status_str),
+                    "timed_out": false,
+                })))
+            }
+            Ok(_) => Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            )),
+            // The wait outlived its bound. Report *where the session got to*
+            // rather than a bare failure: an agent that waited 30s needs the
+            // current status to decide whether to keep waiting or give up.
+            Err(CallError::Timeout(_)) => {
+                let status = self.current_status(session).await;
+                Ok(CallToolResult::structured(serde_json::json!({
+                    "status": status,
+                    "timed_out": true,
+                })))
+            }
+            Err(error) => Err(ErrorData::internal_error(error.to_string(), None)),
+        }
+    }
+
+    /// The visible text of one session's terminal — the deep read `snapshot`
+    /// deliberately leaves out.
+    #[tool(
+        name = "read_terminal",
+        description = "Read the visible text of one session's terminal. Args: \
+                       `session` (handle), `lines` (trailing lines to keep, \
+                       default 40). Returns `{ text, rendered }`; `rendered` is \
+                       false when the session is live but its screen has not \
+                       been drawn yet — retry rather than giving up on the \
+                       handle."
+    )]
+    async fn read_terminal(
+        &self,
+        Parameters(args): Parameters<ReadArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+        let lines = args.lines.unwrap_or(DEFAULT_TEXT_LINES);
+        let reply = self
+            .bridge
+            .call(Request::ReadTerminal { session, lines }, CALL_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Terminal(read) = reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        if let Some(reason) = read.error {
+            return Err(ErrorData::invalid_params(reason, None));
+        }
+        Ok(CallToolResult::structured(serde_json::json!({
+            "text": read.text.as_deref().unwrap_or_default(),
+            "rendered": read.text.is_some(),
+        })))
+    }
 }
 
 impl TermherdMcp {
+    /// A session's current activity, read back after a wait timed out. Best
+    /// effort by design: `None` covers a handle that no longer resolves *and* a
+    /// read-back that failed. The likeliest cause of the original timeout is a
+    /// wedged shell, which would fail this call too — and turning that into an
+    /// error would swallow the `timed_out` answer the caller is owed.
+    async fn current_status(&self, session: u64) -> Option<&'static str> {
+        match self
+            .bridge
+            .call(Request::ListSessions, READ_BACK_TIMEOUT)
+            .await
+        {
+            Ok(Reply::Sessions(sessions)) => sessions
+                .iter()
+                .find(|info| info.handle == session.to_string())
+                .map(|info| status_str(info.status)),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::debug!(%error, "could not read the status back after a wait timeout");
+                None
+            }
+        }
+    }
+
     /// Send an [`Action`] over the bridge and shape its [`ActionOutcome`] into a
     /// tool result: a rejection (unknown handle / out-of-range tab) becomes an
     /// `invalid_params` error, an applied action a `{ focused_handle }` object.
@@ -442,6 +573,68 @@ fn parse_handle(handle: &str) -> Result<u64, ErrorData> {
 /// Parse an optional handle: absent stays absent, present is validated.
 fn parse_optional_handle(handle: Option<String>) -> Result<Option<u64>, ErrorData> {
     handle.map(|h| parse_handle(&h)).transpose()
+}
+
+/// Arguments for `wait_for_status`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct WaitArgs {
+    /// The session handle to watch.
+    session: String,
+    /// Statuses that settle the wait. Omit for idle-or-attention.
+    #[serde(default)]
+    statuses: Option<Vec<String>>,
+    /// How long to wait before reporting the current status instead.
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+/// Arguments for `read_terminal`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct ReadArgs {
+    /// The session handle to read.
+    session: String,
+    /// Trailing lines to keep.
+    #[serde(default)]
+    lines: Option<usize>,
+}
+
+/// Map the named statuses onto the core enum. An empty or omitted list means
+/// idle-or-attention — the two a caller waiting on a command actually wants.
+/// An unknown name is rejected rather than dropped: silently waiting on fewer
+/// statuses than asked is exactly the silent-catch trap to avoid.
+fn parse_statuses(names: Option<Vec<String>>) -> Result<Vec<SessionStatus>, ErrorData> {
+    let Some(names) = names.filter(|names| !names.is_empty()) else {
+        return Ok(vec![SessionStatus::Idle, SessionStatus::Attention]);
+    };
+    names
+        .iter()
+        .map(|name| {
+            status_from_str(name)
+                .ok_or_else(|| ErrorData::invalid_params(format!("unknown status {name:?}"), None))
+        })
+        .collect()
+}
+
+/// The caller's bound for a wait, defaulted and capped. The cap is the outer
+/// guarantee behind Q7: no bridge call, however it was parameterised, can park
+/// a caller indefinitely.
+fn wait_timeout(timeout_ms: Option<u64>) -> Duration {
+    Duration::from_millis(timeout_ms.unwrap_or(DEFAULT_WAIT_MS).min(MAX_WAIT_MS))
+}
+
+/// The inverse of [`crate::snapshot_dto::status_str`] — the external word back
+/// to the core enum.
+fn status_from_str(name: &str) -> Option<SessionStatus> {
+    match name {
+        "starting" => Some(SessionStatus::Starting),
+        "busy" => Some(SessionStatus::Busy),
+        "idle" => Some(SessionStatus::Idle),
+        "attention" => Some(SessionStatus::Attention),
+        "exited" => Some(SessionStatus::Exited),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -841,5 +1034,298 @@ mod tests {
             .await
             .expect_err("a closed bridge is a tool error");
         assert!(error.message.contains("closed"), "got: {}", error.message);
+    }
+
+    // --- wait_for_status / read_terminal ---
+
+    use crate::shell::bridge::{TerminalRead, WaitOutcome, spawn_test_shell_seq};
+
+    /// Args for a wait on `session`, otherwise defaulted.
+    fn wait_args(session: &str) -> WaitArgs {
+        WaitArgs {
+            session: session.to_owned(),
+            ..WaitArgs::default()
+        }
+    }
+
+    /// Run `wait_for_status` against a shell answering `reply`, returning the
+    /// request the tool built.
+    async fn wait_request(args: WaitArgs, reply: Reply) -> Request {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(requests, reply);
+        let _ = TermherdMcp::new(handle)
+            .wait_for_status(Parameters(args))
+            .await;
+        shell.await.expect("shell task")
+    }
+
+    /// A settled wait, as the shell would answer it.
+    fn settled(status: SessionStatus) -> Reply {
+        Reply::Waited(WaitOutcome {
+            status: Some(status),
+            error: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn wait_for_status_defaults_to_idle_or_attention() {
+        // The two a caller waiting on a command actually cares about: finished,
+        // or stopped to ask something.
+        let request = wait_request(wait_args("7"), settled(SessionStatus::Idle)).await;
+        assert_eq!(
+            request,
+            Request::WaitForStatus {
+                session: 7,
+                targets: vec![SessionStatus::Idle, SessionStatus::Attention],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_status_maps_the_named_statuses() {
+        let args = WaitArgs {
+            session: "7".into(),
+            statuses: Some(vec!["busy".into(), "exited".into()]),
+            ..WaitArgs::default()
+        };
+        let request = wait_request(args, settled(SessionStatus::Busy)).await;
+        assert_eq!(
+            request,
+            Request::WaitForStatus {
+                session: 7,
+                targets: vec![SessionStatus::Busy, SessionStatus::Exited],
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_status_rejects_an_unknown_status_name() {
+        // Dropping the unknown name and waiting on the rest would be the silent
+        // catch this codebase exists to avoid.
+        let (handle, requests) = channel();
+        let args = WaitArgs {
+            session: "7".into(),
+            statuses: Some(vec!["idle".into(), "finished".into()]),
+            ..WaitArgs::default()
+        };
+        let error = TermherdMcp::new(handle)
+            .wait_for_status(Parameters(args))
+            .await
+            .expect_err("an unknown status is rejected");
+        assert!(error.message.contains("finished"), "got: {}", error.message);
+        drop(requests);
+    }
+
+    #[tokio::test]
+    async fn wait_for_status_reports_the_settled_status() {
+        let (handle, requests) = channel();
+        let _shell = spawn_test_shell(requests, settled(SessionStatus::Attention));
+        let result = TermherdMcp::new(handle)
+            .wait_for_status(Parameters(wait_args("7")))
+            .await
+            .expect("the tool returns a result");
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(value["status"], "attention");
+        assert_eq!(value["timed_out"], false);
+    }
+
+    #[tokio::test]
+    async fn wait_for_status_relays_an_unknown_handle_as_invalid_params() {
+        let (handle, requests) = channel();
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Waited(WaitOutcome {
+                status: None,
+                error: Some("no live session with handle 7".into()),
+            }),
+        );
+        let error = TermherdMcp::new(handle)
+            .wait_for_status(Parameters(wait_args("7")))
+            .await
+            .expect_err("a rejected wait is a tool error");
+        assert!(
+            error.message.contains("no live session"),
+            "got: {}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_status_reports_the_current_status_when_it_times_out() {
+        // Timing out is not a failure: the agent needs to know *where* the
+        // session got to, to decide between waiting again and giving up.
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell_seq(
+            requests,
+            vec![
+                // The wait itself: received, never answered.
+                None,
+                // The follow-up read of the current status.
+                Some(Reply::Sessions(vec![SessionInfo {
+                    handle: "7".into(),
+                    title: "proj".into(),
+                    cwd: None,
+                    kind: SessionKind::Shell,
+                    resume_id: None,
+                    status: SessionStatus::Busy,
+                }])),
+            ],
+        );
+        let args = WaitArgs {
+            session: "7".into(),
+            timeout_ms: Some(50),
+            ..WaitArgs::default()
+        };
+        let result = TermherdMcp::new(handle)
+            .wait_for_status(Parameters(args))
+            .await
+            .expect("a timed-out wait still returns a result");
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(value["timed_out"], true);
+        assert_eq!(
+            value["status"], "busy",
+            "the session's current status rides back with the timeout"
+        );
+        let seen = shell.await.expect("shell task");
+        assert_eq!(seen.len(), 2, "the wait, then the status read-back");
+        assert_eq!(seen[1], Request::ListSessions);
+    }
+
+    #[tokio::test]
+    async fn a_wait_that_times_out_still_answers_when_the_read_back_fails() {
+        // The likeliest cause of the original timeout is a wedged shell, which
+        // fails the status read-back too. That must not swallow the `timed_out`
+        // answer the caller already earned — it is the whole point of the path.
+        let (handle, requests) = channel();
+        // Neither the wait nor the read-back is ever answered.
+        let shell = spawn_test_shell_seq(requests, vec![None, None]);
+        let args = WaitArgs {
+            session: "7".into(),
+            timeout_ms: Some(50),
+            ..WaitArgs::default()
+        };
+        let result = TermherdMcp::new(handle)
+            .wait_for_status(Parameters(args))
+            .await
+            .expect("a wedged shell still yields the timeout answer");
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(value["timed_out"], true);
+        assert!(
+            value["status"].is_null(),
+            "an unreadable status is null, not an error"
+        );
+        drop(shell);
+    }
+
+    #[test]
+    fn a_wait_is_capped_however_long_the_caller_asks() {
+        // The outer Q7 guarantee: no parameterisation parks a caller forever.
+        assert_eq!(wait_timeout(None), Duration::from_millis(DEFAULT_WAIT_MS));
+        assert_eq!(wait_timeout(Some(1_000)), Duration::from_millis(1_000));
+        assert_eq!(
+            wait_timeout(Some(u64::MAX)),
+            Duration::from_millis(MAX_WAIT_MS)
+        );
+    }
+
+    #[tokio::test]
+    async fn read_terminal_passes_the_handle_and_line_budget() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(
+            requests,
+            Reply::Terminal(TerminalRead {
+                text: Some("$ cargo test".into()),
+                error: None,
+            }),
+        );
+        let result = TermherdMcp::new(handle)
+            .read_terminal(Parameters(ReadArgs {
+                session: "7".into(),
+                lines: Some(5),
+            }))
+            .await
+            .expect("the tool returns a result");
+        assert_eq!(
+            shell.await.expect("shell task"),
+            Request::ReadTerminal {
+                session: 7,
+                lines: 5
+            }
+        );
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(value["text"], "$ cargo test");
+        assert_eq!(value["rendered"], true);
+    }
+
+    #[tokio::test]
+    async fn read_terminal_defaults_to_the_snapshot_line_budget() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(
+            requests,
+            Reply::Terminal(TerminalRead {
+                text: None,
+                error: None,
+            }),
+        );
+        let _ = TermherdMcp::new(handle)
+            .read_terminal(Parameters(ReadArgs {
+                session: "7".into(),
+                lines: None,
+            }))
+            .await;
+        assert_eq!(
+            shell.await.expect("shell task"),
+            Request::ReadTerminal {
+                session: 7,
+                lines: DEFAULT_TEXT_LINES
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn read_terminal_marks_an_undrawn_screen_as_not_rendered() {
+        // Distinct from an unknown handle: the caller should retry, not give up.
+        let (handle, requests) = channel();
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Terminal(TerminalRead {
+                text: None,
+                error: None,
+            }),
+        );
+        let result = TermherdMcp::new(handle)
+            .read_terminal(Parameters(ReadArgs {
+                session: "7".into(),
+                lines: None,
+            }))
+            .await
+            .expect("an undrawn screen is not an error");
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(value["rendered"], false);
+        assert_eq!(value["text"], "");
+    }
+
+    #[tokio::test]
+    async fn read_terminal_relays_an_unknown_handle_as_invalid_params() {
+        let (handle, requests) = channel();
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Terminal(TerminalRead {
+                text: None,
+                error: Some("no live session with handle 7".into()),
+            }),
+        );
+        let error = TermherdMcp::new(handle)
+            .read_terminal(Parameters(ReadArgs {
+                session: "7".into(),
+                lines: None,
+            }))
+            .await
+            .expect_err("a rejected read is a tool error");
+        assert!(
+            error.message.contains("no live session"),
+            "got: {}",
+            error.message
+        );
     }
 }

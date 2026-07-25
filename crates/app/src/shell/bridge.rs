@@ -56,6 +56,45 @@ pub enum Request {
     /// read requests it is answered off `respond` — the shell applies it through
     /// `App::apply` and performs the effects, since it needs `&mut` state.
     Act(Action),
+    /// Park until a session's activity reaches one of `targets`, for the
+    /// `wait_for_status` MCP tool. The odd one out on this bridge: its reply
+    /// lands in a *later* `update` — whichever one carries the status change —
+    /// so the shell holds the reply port meanwhile. Answers at once when the
+    /// session already sits on a target, or when the handle is unknown.
+    WaitForStatus {
+        session: u64,
+        targets: Vec<SessionStatus>,
+    },
+    /// The visible text of one session's terminal, for the `read_terminal` MCP
+    /// tool — the deep read the light `Snapshot` deliberately leaves out.
+    ReadTerminal { session: u64, lines: usize },
+}
+
+/// The result of a [`Request::WaitForStatus`]. `error` is `Some` only when the
+/// handle named no live session, in which case nothing was awaited. Otherwise
+/// `status` is the activity the session had reached when the wait settled.
+///
+/// A caller that gives up first sees [`CallError::Timeout`] instead — the wait
+/// is bounded by the caller's own clock, never by one the shell keeps (Q7).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitOutcome {
+    /// The status that settled the wait.
+    pub status: Option<SessionStatus>,
+    /// Why nothing was awaited, or `None` when the wait ran.
+    pub error: Option<String>,
+}
+
+/// The result of a [`Request::ReadTerminal`]. The three cases stay distinct: an
+/// unknown handle (`error`), a live session whose screen has not rendered yet
+/// (`text: None`), and real text — a scoped `Snapshot` collapses the first two
+/// into one absent key, which an agent cannot act on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalRead {
+    /// The visible text, trailing lines only, or `None` when nothing has
+    /// rendered yet.
+    pub text: Option<String>,
+    /// Why nothing was read, or `None` when the read ran.
+    pub error: Option<String>,
 }
 
 /// A workspace mutation an MCP client asks termherd to perform. Each variant
@@ -129,6 +168,8 @@ pub enum Reply {
     Snapshot(WorkspaceSnapshot),
     Sessions(Vec<SessionInfo>),
     Acted(ActionOutcome),
+    Waited(WaitOutcome),
+    Terminal(TerminalRead),
 }
 
 /// The kind of program a session runs, as an MCP client sees it. Distinct from
@@ -238,7 +279,7 @@ pub type Requests = TakeOnceSource<mpsc::Receiver<Envelope>>;
 pub struct ReplyPort(Arc<Mutex<Option<oneshot::Sender<Reply>>>>);
 
 impl ReplyPort {
-    fn new(tx: oneshot::Sender<Reply>) -> Self {
+    pub(super) fn new(tx: oneshot::Sender<Reply>) -> Self {
         Self(Arc::new(Mutex::new(Some(tx))))
     }
 
@@ -250,6 +291,20 @@ impl ReplyPort {
             // failed send is expected, not an error.
             let _ = tx.send(reply);
         }
+    }
+}
+
+impl ReplyPort {
+    /// Whether the caller is gone — it timed out and dropped its end, so no
+    /// answer can land. Lets the shell sweep parked waiters instead of holding
+    /// them for a session that may never reach its target.
+    pub(super) fn abandoned(&self) -> bool {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(oneshot::Sender::is_closed))
+            // A taken slot means it was already answered; treat it as gone too.
+            .unwrap_or(true)
     }
 }
 
@@ -308,6 +363,17 @@ pub fn respond(core: &App, request: &Request, inputs: &SnapshotInputs) -> Reply 
         Request::Act(_) => Reply::Acted(ActionOutcome::rejected(
             "an action reached the read-only responder; the shell must apply it",
         )),
+        // A wait parks and a terminal read needs the `pty` adapter's screens —
+        // neither is answerable from a bare `&App`, so the shell serves them
+        // itself. These arms are the defensive default, as above.
+        Request::WaitForStatus { .. } => Reply::Waited(WaitOutcome {
+            status: None,
+            error: Some("a wait reached the read-only responder; the shell must park it".into()),
+        }),
+        Request::ReadTerminal { .. } => Reply::Terminal(TerminalRead {
+            text: None,
+            error: Some("a terminal read reached the read-only responder".into()),
+        }),
     }
 }
 
@@ -347,12 +413,54 @@ pub(crate) fn spawn_test_shell(
     requests: Requests,
     reply: Reply,
 ) -> tokio::task::JoinHandle<Request> {
+    spawn_test_shell_seq(requests, vec![Some(reply)]).map_into_first()
+}
+
+/// A test shell that serves a *sequence* of requests, answering the nth with
+/// `replies[n]` — `None` meaning "receive it and stay silent", which is how a
+/// caller-side timeout is exercised. Returns the requests in arrival order.
+#[cfg(test)]
+pub(crate) fn spawn_test_shell_seq(
+    requests: Requests,
+    replies: Vec<Option<Reply>>,
+) -> tokio::task::JoinHandle<Vec<Request>> {
     tokio::spawn(async move {
         let mut rx = requests.take().expect("a receiver on first take");
-        let (request, reply_tx) = rx.recv().await.expect("one request");
-        let _ = reply_tx.send(reply);
-        request
+        let mut seen = Vec::new();
+        // Un-answered ports are kept, not dropped: dropping one raises
+        // `Dropped` at the caller, and it is the *timeout* path we exercise.
+        let mut held = Vec::new();
+        for reply in replies {
+            let Some((request, reply_tx)) = rx.recv().await else {
+                break;
+            };
+            seen.push(request);
+            match reply {
+                Some(reply) => {
+                    let _ = reply_tx.send(reply);
+                }
+                None => held.push(reply_tx),
+            }
+        }
+        seen
     })
+}
+
+/// Adapter so the single-reply helper keeps its one-request return shape.
+#[cfg(test)]
+trait FirstRequest {
+    fn map_into_first(self) -> tokio::task::JoinHandle<Request>;
+}
+
+#[cfg(test)]
+impl FirstRequest for tokio::task::JoinHandle<Vec<Request>> {
+    fn map_into_first(self) -> tokio::task::JoinHandle<Request> {
+        tokio::spawn(async move {
+            let mut seen = self.await.expect("test shell task");
+            assert_eq!(seen.len(), 1, "the single-reply shell served one request");
+            seen.remove(0)
+        })
+    }
 }
 
 #[cfg(test)]
