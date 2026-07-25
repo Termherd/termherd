@@ -3,7 +3,7 @@
 use termherd_claude::digest::SessionDigest;
 
 use crate::browser::SessionRecord;
-use crate::capture::CaptureDump;
+use crate::snapshot::WorkspaceSnapshot;
 
 use super::*;
 
@@ -83,9 +83,9 @@ pub(crate) fn notify_effect(effects: &[Effect]) -> Option<(&str, &str)> {
 
 /// The single `Effect::Capture` payload a `Capture` event should produce.
 /// Panics on any other effect shape so a regression fails loudly.
-pub(crate) fn capture_dump(effects: &[Effect]) -> &CaptureDump {
+pub(crate) fn captured_snapshot(effects: &[Effect]) -> &WorkspaceSnapshot {
     match effects {
-        [Effect::Capture(dump)] => dump,
+        [Effect::Capture(snapshot)] => snapshot,
         other => panic!("expected one Capture effect, got {other:?}"),
     }
 }

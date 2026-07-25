@@ -10,8 +10,8 @@ use termherd_core::SessionStatus;
 
 /// The dot colour for an activity status (FR8). Shared by the tab strip's
 /// chips and the sidebar's per-session dots so both stay in sync. The colour is
-/// the only place the UI shows a status; the word form
-/// ([`crate::strings::status_label`]) is for the capture dump, not the screen.
+/// the only place the UI shows a status; the word form an agent reads lives in
+/// [`crate::snapshot_dto`], not on the screen.
 pub(super) fn status_color(status: SessionStatus) -> Color {
     match status {
         SessionStatus::Starting => Color::from_rgb(0.55, 0.55, 0.6),

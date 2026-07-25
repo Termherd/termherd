@@ -1243,7 +1243,7 @@ mod key_routing {
     use iced::keyboard::{Key, Location, Modifiers};
     use std::sync::Mutex as StdMutex;
     use termherd_core::ports::{PtyError, ScanError};
-    use termherd_core::{Action, SelectSide, SpawnSpec};
+    use termherd_core::{Action, SelectSide, SnapshotFilter, SpawnSpec};
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]
@@ -2181,19 +2181,19 @@ mod key_routing {
     }
 
     #[test]
-    fn capture_writes_a_json_dump_with_the_focused_pty_text() {
-        // a capture writes capture-<ts>.json with the focused tab, its
-        // status, and the focused terminal's visible text. Driven through the
-        // `perform_capture` dir seam so it lands in a tempdir, not the real home;
-        // the PNG is an async iced screenshot and is not exercised here.
+    fn capture_writes_a_json_dump_of_the_whole_workspace() {
+        // a capture writes capture-<ts>.json holding the whole workspace —
+        // focus, config, sidebar, tabs — plus the focused terminal's visible
+        // text. Driven through the `perform_capture` dir seam so it lands in a
+        // tempdir, not the real home; the PNG is an async iced screenshot and is
+        // not exercised here.
         let (mut shell, _pty) = shell_with_terminal();
         let session = shell.core.workspace.focused_session().expect("focused");
         shell.screens.insert(session, screen_of("$ cargo test"));
 
-        // Build the dump through the same seam `capture()` uses for PTY text.
-        let text = shell.focused_pty_text();
-        assert_eq!(text.as_deref(), Some("$ cargo test"));
-        let dump = shell.core.build_capture(text);
+        // Build the dump through the same seams `capture()` uses.
+        let inputs = shell.snapshot_inputs_for(&SnapshotFilter::capture());
+        let dump = shell.core.build_capture(&inputs);
 
         let dir = tempfile::tempdir().expect("tempdir");
         let _ = shell.perform_capture(dir.path(), dump);
@@ -2210,10 +2210,22 @@ mod key_routing {
         let json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(written.path()).expect("read"))
                 .expect("valid json");
-        assert_eq!(json["active_tab"], 0);
-        assert_eq!(json["focused_pty"], "$ cargo test");
+        assert_eq!(json["focus"]["tab"], 0);
+        assert_eq!(json["focus"]["session"], session.0.get().to_string());
         assert_eq!(json["tabs"][0]["title"], "project $");
-        assert_eq!(json["tabs"][0]["focus_session"], session.0.get());
+        assert_eq!(
+            json["tabs"][0]["panes"][0]["handle"],
+            session.0.get().to_string()
+        );
+        assert_eq!(
+            json["terminals"][session.0.get().to_string()],
+            "$ cargo test",
+            "the focused pane's screen rides in the dump"
+        );
+        assert!(
+            json["config"].is_object(),
+            "a capture carries the resolved config, not just the terminal"
+        );
     }
 
     #[test]

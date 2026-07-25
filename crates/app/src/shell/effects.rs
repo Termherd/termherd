@@ -14,10 +14,9 @@ use std::time::SystemTime;
 
 use iced::{Task, window};
 use termherd_core::{
-    CaptureDump, Effect, Launch, McpConfig, Section, SessionId, SnapshotFilter, SnapshotInputs,
-    SpawnSpec, TerminalScope,
+    Effect, Launch, McpConfig, Section, SessionId, SnapshotFilter, SnapshotInputs, SpawnSpec,
+    TerminalScope, WorkspaceSnapshot,
 };
-use termherd_pty::Screen;
 
 use super::bridge::Request;
 use super::{Message, Shell};
@@ -114,14 +113,6 @@ impl Shell {
         }
     }
 
-    /// The focused terminal's visible grid as text, for a capture. `None`
-    /// when nothing is focused or its screen has not rendered yet — `core` then
-    /// records a focus-less dump.
-    pub(super) fn focused_pty_text(&self) -> Option<String> {
-        let id = self.core.workspace.focused_session()?;
-        self.screens.get(&id).map(Screen::text)
-    }
-
     /// Gather the adapter-owned inputs for a bridge request: the config summary
     /// and the scoped terminal text a `snapshot` needs, which the pure `core`
     /// cannot read (settings live here, the grid in the `pty` adapter). Only the
@@ -131,6 +122,13 @@ impl Shell {
         let Request::Snapshot(filter) = request else {
             return SnapshotInputs::default();
         };
+        self.snapshot_inputs_for(filter)
+    }
+
+    /// The adapter-owned inputs a given filter needs. Shared by the bridge
+    /// request above and the dev-loop capture, so both gather the config and
+    /// the terminal text exactly one way.
+    pub(super) fn snapshot_inputs_for(&self, filter: &SnapshotFilter) -> SnapshotInputs {
         SnapshotInputs {
             config: filter
                 .includes(Section::Config)
@@ -161,20 +159,19 @@ impl Shell {
             .collect()
     }
 
-    /// Capture the current state for the AI dev loop: hand `core` the focused
-    /// terminal's text, then perform the returned effects — the `Effect::Capture`
-    /// writes the JSON dump and schedules the PNG into `~/.termherd/captures/`.
+    /// Capture the current state for the AI dev loop: hand `core` the inputs it
+    /// cannot read (config, focused terminal text) under the capture filter,
+    /// then perform the returned effects — the `Effect::Capture` writes the JSON
+    /// dump and schedules the PNG into `~/.termherd/captures/`.
     pub(super) fn capture(&mut self) -> Task<Message> {
-        let focused_pty_text = self.focused_pty_text();
-        let effects = self
-            .core
-            .apply(termherd_core::Event::Capture { focused_pty_text });
+        let inputs = self.snapshot_inputs_for(&SnapshotFilter::capture());
+        let effects = self.core.apply(termherd_core::Event::Capture(inputs));
         self.perform(effects)
     }
 
     /// Resolve the captures dir and write the dump for an `Effect::Capture`. A
     /// no-op when no home directory is set.
-    fn capture_dump(&self, dump: CaptureDump) -> Task<Message> {
+    fn capture_dump(&self, dump: WorkspaceSnapshot) -> Task<Message> {
         let Some(dir) = crate::capture::captures_dir() else {
             tracing::warn!("no home directory; capture skipped");
             return Task::none();
@@ -191,7 +188,7 @@ impl Shell {
     pub(super) fn perform_capture(
         &self,
         dir: &std::path::Path,
-        dump: CaptureDump,
+        dump: WorkspaceSnapshot,
     ) -> Task<Message> {
         if let Err(error) = std::fs::create_dir_all(dir) {
             tracing::warn!(%error, "could not create captures dir; capture skipped");

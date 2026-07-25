@@ -5,7 +5,6 @@
 
 pub mod app;
 pub mod browser;
-pub mod capture;
 pub mod docscope;
 pub mod keymap;
 pub mod links;
@@ -20,7 +19,6 @@ pub use app::{
     ScrollTarget, SelectOp, SelectSide, SessionStatus, SidebarFold, SpawnSpec, Zoom,
 };
 pub use browser::{ProjectGroup, SessionRecord};
-pub use capture::{CaptureDump, CaptureTab};
 pub use keymap::{Action, ActionBinding, ChordError, KeyChord, Keymap, action_catalog};
 pub use metadata::{Overlay, RepoMeta, SessionMeta};
 pub use record::Recording;

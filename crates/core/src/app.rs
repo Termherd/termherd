@@ -263,9 +263,7 @@ impl App {
             Event::Zoom(zoom) => self.zoom(zoom),
             Event::OpenUrl(url) => Self::open_url(url),
             Event::SessionNotified { session, body } => self.notify_session(session, body),
-            Event::Capture { focused_pty_text } => {
-                vec![Effect::Capture(self.build_capture(focused_pty_text))]
-            }
+            Event::Capture(inputs) => vec![Effect::Capture(self.build_capture(&inputs))],
             Event::ToggleRecord { max_frames } => self.toggle_record(max_frames),
             Event::RecordTick => self.record_tick(),
             Event::WindowFocusChanged(focused) => {

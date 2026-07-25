@@ -81,17 +81,23 @@ Press **⌘⇧S** (macOS) / **Ctrl+Shift+S** (rebindable as `capture`) to dump t
 running app's state for an AI assistant to read — rung 0+1 of `F-capture`. Each
 press writes a timestamped pair to `~/.termherd/captures/`:
 
-- `capture-<ts>.json` — a diffable state dump: active tab, every tab's title /
-  activity status / hosted sessions, the focused pane, and the focused
-  terminal's visible text. No vision needed.
+- `capture-<ts>.json` — a diffable state dump of the whole workspace: focus,
+  resolved config, the sidebar, every tab with its panes (each pane's stable
+  handle, kind, cwd, status), and the focused terminal's visible text. No vision
+  needed.
 - `capture-<ts>.png` — the real window pixels (iced `window::screenshot`), for
   render / colour / glyph bugs the text dump can't show.
 
+The dump **is** the `WorkspaceSnapshot` the MCP `snapshot` tool reports, under a
+fixed full filter (`SnapshotFilter::capture()`) — one model, two readers, so a
+field never means one thing on disk and another on the wire.
+
 `<ts>` is a UTC `YYYYMMDD-HHMMSS-mmm` stamp, so the **latest capture is the
 highest-named pair** — an AI finds it by sorting the directory. Capture stays
-pure in `core` (`Event::Capture` → `Effect::Capture(CaptureDump)`); all I/O —
-the clock, JSON/PNG encoding, the files — lives in the `app` adapter
-(`crates/app/src/capture.rs`).
+pure in `core` (`Event::Capture(SnapshotInputs)` →
+`Effect::Capture(WorkspaceSnapshot)`); all I/O — the clock, JSON/PNG encoding,
+the files — lives in the `app` adapter (`crates/app/src/capture.rs`), which
+shares its wire form with the MCP handler (`crates/app/src/snapshot_dto.rs`).
 
 For motion (rung 2, #124), press **⌘⇧R** / **Ctrl+Shift+R** (rebindable as
 `toggle-record`) to start a **GIF screencast**; press again to stop, or let it
