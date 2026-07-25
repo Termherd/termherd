@@ -125,8 +125,9 @@ pub enum Action {
     /// lone pane closes its whole tab (core collapses to `close_tab`, killing the
     /// PTY). → `[RevealPane +] CloseFocusedPane`.
     Close { pane: Option<u64> },
-    /// Type `bytes` into a session's PTY without waiting (waiting is a later
-    /// rung). → `Event::TerminalInput`.
+    /// Type `bytes` into a session's PTY without waiting; a caller that needs
+    /// to synchronise follows with [`Request::WaitForStatus`].
+    /// → `Event::TerminalInput`.
     Run { session: u64, bytes: Vec<u8> },
 }
 

@@ -229,14 +229,18 @@ impl TermherdMcp {
         self.act(Action::Close { pane }).await
     }
 
-    /// Type text into a session's terminal without waiting. → `run_in_session`.
+    /// Type text into a session's terminal; the wait is a separate call.
+    /// → `run_in_session`.
     #[tool(
         name = "run_in_session",
         description = "Type text into a session's terminal, as if typed at the \
-                       keyboard — does not wait for it to finish (read the result \
-                       with `snapshot`'s scoped terminal text). Include a trailing \
-                       newline in `text` to submit a command. Args: `session` (its \
-                       stable handle), `text`. Returns the `focused_handle`."
+                       keyboard. Returns as soon as the text is sent — it does \
+                       not wait for the command to finish. To act on the result, \
+                       follow with `wait_for_status` then `read_terminal`; do \
+                       not poll `snapshot`, which races the transition you are \
+                       watching for. Include a trailing newline in `text` to \
+                       submit a command. Args: `session` (its stable handle), \
+                       `text`. Returns the `focused_handle`."
     )]
     async fn run_in_session(
         &self,

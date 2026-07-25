@@ -30,3 +30,6 @@
 .claude/worktrees/
 # Local PRDs, planning notes, and extracted artifacts; locally controlled.
 .local/
+# Per-directory tool caches the impeccable skill drops beside the sources it
+# reads; they reappear on every run, so ignore rather than clean repeatedly.
+.impeccable/

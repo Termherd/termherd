@@ -141,13 +141,40 @@ description (the same card the sidebar shows).
 
 ## MCP control surface (experimental)
 
-`termherd-mcp` is a small [MCP](https://modelcontextprotocol.io) server that
-exposes termherd's own configuration to a Claude session, so you can ask "what
-can I configure here?" — or "switch me to a light theme" — from inside the
-conversation termherd already hosts. It exposes two tools, `list_options`
-(read) and `set_option` (write), plus the option **schema** as a resource, all
-reflecting `~/.termherd/settings.json`. Workspace orchestration (open session,
-split, focus, …) is a planned follow-up (`F-mcp-control-surface`, [#90]).
+termherd exposes itself to the Claude sessions it hosts over
+[MCP](https://modelcontextprotocol.io), so a session can read and drive the
+workspace it is running in (`F-mcp-control-surface`, [#90]). There are **two
+surfaces**, and which one you get depends on how the session was started.
+
+### The live bridge (automatic)
+
+A Claude session **launched from termherd** is wired to an in-process server on
+loopback, with a per-session token, injected into its `mcpServers` at spawn —
+nothing to configure. It exposes the running workspace:
+
+| Tool | What it does |
+| --- | --- |
+| `list_sessions` | every live session with its stable `handle` |
+| `snapshot` | the whole state — config, sidebar, tabs and panes; filterable, no terminal text by default |
+| `open_session` · `split_pane` · `focus_pane` · `rename_tab` · `close_pane` | workspace actions, each reporting the resulting focus |
+| `run_in_session` | type into a terminal (returns immediately) |
+| `wait_for_status` | block until a session goes idle / wants attention |
+| `read_terminal` | one pane's visible text |
+
+The loop that makes it useful is **act → wait → observe**: `run_in_session`,
+then `wait_for_status`, then `read_terminal`. Sessions are addressed by a
+stable `handle` that survives a Claude-side session re-key.
+
+Screenshots ([#215]) and an opt-in agent-drives-agent loop ([#196]) are the
+remaining follow-ups.
+
+### The stdio server (manual)
+
+`termherd-mcp` is a separate small binary that exposes termherd's own
+**configuration** — so you can ask "what can I configure here?", or "switch me
+to a light theme", from any Claude session. Two tools, `list_options` (read)
+and `set_option` (write), plus the option **schema** as a resource, all
+reflecting `~/.termherd/settings.json`.
 
 It speaks JSON-RPC over stdio. Register it with Claude Code by adding it to your
 `mcpServers` config (point `command` at the built binary):
@@ -163,6 +190,8 @@ It speaks JSON-RPC over stdio. Register it with Claude Code by adding it to your
 Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 
 [#90]: https://github.com/Termherd/termherd/issues/90
+[#196]: https://github.com/Termherd/termherd/issues/196
+[#215]: https://github.com/Termherd/termherd/issues/215
 
 ## Test
 

@@ -107,7 +107,8 @@ impl Shell {
         (self.applied(), task)
     }
 
-    /// Type bytes into a session's PTY without waiting (waiting is a later rung).
+    /// Type bytes into a session's PTY without waiting; synchronising is a
+    /// separate request (`WaitForStatus`), served in `shell::serve`.
     /// Rejects an unknown handle, so a stale target can't misfire into a live
     /// terminal.
     fn act_run(&mut self, session: u64, bytes: Vec<u8>) -> (ActionOutcome, Task<Message>) {
