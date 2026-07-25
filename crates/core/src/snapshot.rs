@@ -72,6 +72,23 @@ impl Default for SnapshotFilter {
 }
 
 impl SnapshotFilter {
+    /// The fixed filter behind a dev-loop capture: every structural section
+    /// plus the focused pane's screen, kept whole. A capture is written to a
+    /// file, not streamed into a call, so it pays for the full picture — but it
+    /// stays scoped to the focused pane, which is the one the developer is
+    /// looking at when they press the key.
+    #[must_use]
+    pub fn capture() -> Self {
+        Self {
+            terminals: TerminalScope::Focused,
+            // No truncation: the injected text is already just the visible
+            // grid, and a capture that silently dropped its head would defeat
+            // the point of a diffable dump.
+            text_lines: usize::MAX,
+            ..Self::default()
+        }
+    }
+
     /// Whether `section` was requested.
     #[must_use]
     pub fn includes(&self, section: Section) -> bool {
@@ -244,6 +261,23 @@ mod tests {
         assert!(filter.includes(Section::Tabs));
         assert_eq!(filter.terminals, TerminalScope::None);
         assert_eq!(filter.text_lines, DEFAULT_TEXT_LINES);
+    }
+
+    #[test]
+    fn capture_filter_is_every_section_plus_the_focused_terminal_whole() {
+        let filter = SnapshotFilter::capture();
+        assert!(filter.includes(Section::Config));
+        assert!(filter.includes(Section::Sidebar));
+        assert!(filter.includes(Section::Tabs));
+        assert_eq!(filter.terminals, TerminalScope::Focused);
+        // The dev-loop dump keeps the focused grid whole — a truncation here
+        // would silently drop lines the previous dump format carried.
+        assert_eq!(
+            tail_lines(&"x\n".repeat(10_000), filter.text_lines)
+                .lines()
+                .count(),
+            10_000
+        );
     }
 
     #[test]

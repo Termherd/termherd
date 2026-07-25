@@ -1,5 +1,5 @@
 //! Capture adapter — write the state dump + PNG screenshot for the AI dev loop
-//! (G1). `core` builds the pure [`CaptureDump`]; this module owns the I/O
+//! (G1). `core` builds the pure [`WorkspaceSnapshot`]; this module owns the I/O
 //! it deliberately keeps out: the clock, the JSON encoding, the PNG encoding,
 //! and the on-disk layout.
 //!
@@ -14,8 +14,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use iced::window::Screenshot;
-use serde::Serialize;
-use termherd_core::CaptureDump;
+use termherd_core::WorkspaceSnapshot;
+
+use crate::snapshot_dto::SnapshotDto;
 
 /// `~/.termherd/captures` — the capture output dir (PRD §7 app data dir). `None`
 /// when no home directory is set, in which case capture is skipped.
@@ -59,16 +60,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
-/// Encode a [`CaptureDump`] as pretty JSON. The encoding lives here, not in
-/// `core`: `core` carries no serde dependency, so the dump stays a plain value
-/// and the adapter owns its wire form.
-pub fn to_json(dump: &CaptureDump) -> Result<String, serde_json::Error> {
-    serde_json::to_string_pretty(&DumpDto::from(dump))
+/// Encode a [`WorkspaceSnapshot`] as pretty JSON — the same wire form the MCP
+/// `snapshot` tool reports, so a reader learns one shape for both.
+pub fn to_json(dump: &WorkspaceSnapshot) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(&SnapshotDto::from(dump))
 }
 
 /// Write the JSON dump to `dir/capture-<stamp>.json`, returning the path
 /// written. The companion PNG shares the stamp ([`png_path`]).
-pub fn write_dump(dir: &Path, stamp: &str, dump: &CaptureDump) -> io::Result<PathBuf> {
+pub fn write_dump(dir: &Path, stamp: &str, dump: &WorkspaceSnapshot) -> io::Result<PathBuf> {
     let path = dir.join(format!("capture-{stamp}.json"));
     let json = to_json(dump).map_err(io::Error::other)?;
     std::fs::write(&path, json)?;
@@ -94,51 +94,14 @@ pub fn write_png(path: &Path, screenshot: &Screenshot) -> io::Result<()> {
         .map_err(io::Error::other)
 }
 
-/// On-disk JSON shape of a [`CaptureDump`]. A thin serde mirror so `core` keeps
-/// no serde dependency; per-tab `focus_session` is omitted when absent.
-#[derive(Serialize)]
-struct DumpDto<'a> {
-    active_tab: Option<usize>,
-    tabs: Vec<TabDto<'a>>,
-    focused_pty: Option<&'a str>,
-}
-
-#[derive(Serialize)]
-struct TabDto<'a> {
-    active: bool,
-    title: &'a str,
-    status: Option<&'static str>,
-    sessions: &'a [u64],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    focus_session: Option<u64>,
-}
-
-impl<'a> From<&'a CaptureDump> for DumpDto<'a> {
-    fn from(dump: &'a CaptureDump) -> Self {
-        DumpDto {
-            active_tab: dump.active_tab,
-            focused_pty: dump.focused_pty.as_deref(),
-            tabs: dump
-                .tabs
-                .iter()
-                .map(|tab| TabDto {
-                    active: tab.active,
-                    title: &tab.title,
-                    // The word form of the status the UI only paints as a dot
-                    // colour, so a reader of the dump needs no colour key.
-                    status: tab.status.map(crate::strings::status_label),
-                    sessions: &tab.sessions,
-                    focus_session: tab.focus_session,
-                })
-                .collect(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use termherd_core::{CaptureTab, SessionStatus};
+    use std::collections::BTreeMap;
+    use termherd_core::{
+        ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, SessionKind, SessionStatus,
+        SidebarSnapshot, TabSnapshot,
+    };
 
     #[test]
     fn stamp_formats_a_known_instant_in_utc() {
@@ -157,43 +120,72 @@ mod tests {
         assert!(earlier < later, "{earlier} should sort before {later}");
     }
 
-    fn dump() -> CaptureDump {
-        CaptureDump {
-            active_tab: Some(1),
-            focused_pty: Some("$ cargo test".to_owned()),
-            tabs: vec![
-                CaptureTab {
+    fn dump() -> WorkspaceSnapshot {
+        WorkspaceSnapshot {
+            focus: FocusRef {
+                tab: Some(1),
+                session: Some(7),
+            },
+            config: Some(ConfigSummary {
+                font_size: 14.0,
+                terminal_scheme: Some("gruvbox-dark".to_owned()),
+                record_fps: 8,
+                record_scale: 0.5,
+                keymap_overrides: 2,
+            }),
+            sidebar: Some(SidebarSnapshot {
+                hidden: false,
+                search: String::new(),
+                search_titles_only: false,
+                show_archived: false,
+                projects: vec![ProjectSnapshot {
+                    path: "/proj".to_owned(),
+                    session_count: 2,
+                    collapsed: false,
+                }],
+            }),
+            tabs: Some(vec![
+                TabSnapshot {
                     active: false,
                     title: "proj $".to_owned(),
                     status: Some(SessionStatus::Idle),
-                    sessions: vec![3],
-                    focus_session: None,
+                    panes: vec![pane(3, SessionStatus::Idle)],
                 },
-                CaptureTab {
+                TabSnapshot {
                     active: true,
                     title: "repo 🤖".to_owned(),
                     status: Some(SessionStatus::Busy),
-                    sessions: vec![6, 7],
-                    focus_session: Some(7),
+                    panes: vec![pane(6, SessionStatus::Idle), pane(7, SessionStatus::Busy)],
                 },
-            ],
+            ]),
+            terminals: BTreeMap::from([(7, "$ cargo test".to_owned())]),
+        }
+    }
+
+    fn pane(handle: u64, status: SessionStatus) -> PaneSnapshot {
+        PaneSnapshot {
+            handle,
+            kind: SessionKind::Shell,
+            cwd: Some("/proj".to_owned()),
+            status,
         }
     }
 
     #[test]
-    fn to_json_encodes_the_dump_shape() {
+    fn to_json_encodes_the_whole_workspace_snapshot() {
         let json: serde_json::Value =
             serde_json::from_str(&to_json(&dump()).expect("encode")).expect("valid json");
-        assert_eq!(json["active_tab"], 1);
-        assert_eq!(json["focused_pty"], "$ cargo test");
+        // The dump is the *whole* app: focus, config, sidebar, tabs, terminals —
+        // the same shape (and vocabulary) the MCP `snapshot` tool reports.
+        assert_eq!(json["focus"]["tab"], 1);
+        assert_eq!(json["focus"]["session"], "7", "handles are strings");
+        assert_eq!(json["config"]["terminal_scheme"], "gruvbox-dark");
+        assert_eq!(json["sidebar"]["projects"][0]["path"], "/proj");
         assert_eq!(json["tabs"][0]["title"], "proj $");
-        // Status is stringified through `status_label`: Idle renders "ready".
-        assert_eq!(json["tabs"][0]["status"], "ready");
-        // focus_session is omitted on the inactive tab, present on the active.
-        assert!(json["tabs"][0].get("focus_session").is_none());
-        assert_eq!(json["tabs"][1]["status"], "busy");
-        assert_eq!(json["tabs"][1]["sessions"], serde_json::json!([6, 7]));
-        assert_eq!(json["tabs"][1]["focus_session"], 7);
+        assert_eq!(json["tabs"][0]["status"], "idle");
+        assert_eq!(json["tabs"][1]["panes"][1]["handle"], "7");
+        assert_eq!(json["tabs"][1]["panes"][1]["status"], "busy");
+        assert_eq!(json["terminals"]["7"], "$ cargo test");
     }
 
     #[test]

@@ -5,8 +5,6 @@
 //! user-facing literal should live in the view/shell code. Static labels are
 //! `const`s; strings built from runtime values are functions.
 
-use termherd_core::SessionStatus;
-
 // --- Sidebar ---
 pub const SEARCH_PLACEHOLDER: &str = "Search…";
 pub const TITLES_ONLY: &str = "Titles only";
@@ -94,20 +92,5 @@ pub fn quit_prompt(live: usize) -> String {
         format!(
             "Quit TermHerd? {live} open session(s) will be force-stopped — any running work is lost."
         )
-    }
-}
-
-// --- Activity status (FR8) ---
-/// The short label for a session's activity status. The UI itself only paints
-/// the status as a dot colour ([`crate::shell::view`]); this word form exists
-/// for the capture dump, where a colour carries nothing.
-#[must_use]
-pub fn status_label(status: SessionStatus) -> &'static str {
-    match status {
-        SessionStatus::Starting => "starting",
-        SessionStatus::Busy => "busy",
-        SessionStatus::Idle => "ready",
-        SessionStatus::Attention => "attention",
-        SessionStatus::Exited => "exited",
     }
 }

@@ -8,6 +8,7 @@ use std::collections::HashSet;
 
 use crate::browser::SessionRecord;
 use crate::metadata::Overlay;
+use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
 
 use super::{LaunchSpec, ScrollTarget, SelectOp, SessionStatus, Zoom};
@@ -146,12 +147,11 @@ pub enum Event {
         session: SessionId,
         body: String,
     },
-    /// Capture the current state for the AI dev loop (G1). The shell
-    /// injects the focused terminal's visible text (the grid lives in the `pty`
-    /// adapter, not here); `core` assembles the rest of the dump.
-    Capture {
-        focused_pty_text: Option<String>,
-    },
+    /// Capture the current state for the AI dev loop (G1). The shell injects
+    /// the parts it owns — the resolved config and the focused terminal's
+    /// visible text (the grid lives in the `pty` adapter) — and `core`
+    /// assembles the rest of the workspace snapshot.
+    Capture(SnapshotInputs),
     /// Start or stop the GIF screencast. Starting carries the frame cap
     /// (`fps × max_seconds`) the app derives from settings; a no-op when the cap
     /// is zero.

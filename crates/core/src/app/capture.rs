@@ -1,52 +1,48 @@
 //! The capture snapshot for the AI dev loop (`F-capture`, rung 0/1).
 
-use crate::capture::{CaptureDump, CaptureTab};
+use crate::snapshot::{SnapshotFilter, SnapshotInputs, WorkspaceSnapshot};
 
 use super::*;
 
 impl App {
-    /// Assemble the capture snapshot for the AI dev loop. Pure: it reads
-    /// the workspace and live-session state and folds in the focused terminal's
-    /// text the shell supplied (the grid lives in the `pty` adapter). The result
-    /// is the diffable rung-0 payload; the shell adds the rung-1 PNG.
+    /// Assemble the capture payload for the AI dev loop: the same
+    /// [`WorkspaceSnapshot`] an MCP client reads, under the fixed
+    /// [`SnapshotFilter::capture`] shape. The shell injects what it owns
+    /// (`inputs`: the resolved config, the focused pane's text) and adds the
+    /// rung-1 PNG; this stays the pure, diffable rung-0 payload.
     #[must_use]
-    pub fn build_capture(&self, focused_pty_text: Option<String>) -> CaptureDump {
-        let active_tab = (!self.workspace.tabs.is_empty()).then_some(self.workspace.active);
-        let focused = self.workspace.focused_session();
-        let tabs = self
-            .workspace
-            .tabs
-            .iter()
-            .enumerate()
-            .map(|(index, tab)| {
-                let active = active_tab == Some(index);
-                CaptureTab {
-                    active,
-                    title: tab.display_title().to_owned(),
-                    status: self.tab_status(index),
-                    sessions: tab.sessions().into_iter().map(|s| s.0.get()).collect(),
-                    // Only the active tab has a live focus to report.
-                    focus_session: focused.filter(|_| active).map(|s| s.0.get()),
-                }
-            })
-            .collect();
-        CaptureDump {
-            active_tab,
-            tabs,
-            focused_pty: focused_pty_text,
-        }
+    pub fn build_capture(&self, inputs: &SnapshotInputs) -> WorkspaceSnapshot {
+        self.snapshot(&SnapshotFilter::capture(), inputs)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::app::testsupport::*;
+    use crate::snapshot::ConfigInput;
     use crate::workspace::SplitDir;
 
+    /// Adapter-injected inputs carrying a config block and the focused pane's
+    /// text — what the shell hands in on a capture.
+    fn inputs(focused: SessionId, text: &str) -> SnapshotInputs {
+        SnapshotInputs {
+            config: Some(ConfigInput {
+                terminal_scheme: Some("gruvbox-dark".into()),
+                record_fps: 8,
+                record_scale: 0.5,
+                keymap_overrides: 2,
+            }),
+            terminals: BTreeMap::from([(focused.0.get(), text.to_owned())]),
+        }
+    }
+
     #[test]
-    fn capture_snapshots_tabs_focus_status_and_pty_text() {
+    fn capture_dumps_every_section_of_the_workspace_snapshot() {
         let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record("s0", "/p", "work")]));
         let first = launch(&mut app, "proj $");
         let second = launch(&mut app, "repo 🤖");
         app.apply(Event::StatusChanged {
@@ -54,32 +50,64 @@ mod tests {
             status: SessionStatus::Busy,
         });
 
-        let effects = app.apply(Event::Capture {
-            focused_pty_text: Some("$ cargo test\nok".to_owned()),
-        });
-        let dump = capture_dump(&effects);
+        let effects = app.apply(Event::Capture(inputs(second, "$ cargo test\nok")));
+        let snapshot = captured_snapshot(&effects);
 
-        // The active tab is the last launched one, carrying its focus.
-        assert_eq!(dump.active_tab, Some(1));
-        assert_eq!(dump.tabs.len(), 2);
-        assert_eq!(dump.focused_pty.as_deref(), Some("$ cargo test\nok"));
+        // Focus: the active tab is the last launched one, carrying its session.
+        assert_eq!(snapshot.focus.tab, Some(1));
+        assert_eq!(snapshot.focus.session, Some(second.0.get()));
+        // The three structural sections a capture always carries — the dump is
+        // the *whole* app, not just the terminal.
+        let config = snapshot.config.as_ref().expect("config section");
+        assert_eq!(config.terminal_scheme.as_deref(), Some("gruvbox-dark"));
+        let sidebar = snapshot.sidebar.as_ref().expect("sidebar section");
+        assert_eq!(sidebar.projects.len(), 1);
+        let tabs = snapshot.tabs.as_ref().expect("tabs section");
+        assert_eq!(tabs.len(), 2);
+        assert!(!tabs[0].active);
+        assert_eq!(tabs[0].title, "proj $");
+        assert_eq!(tabs[0].status, Some(SessionStatus::Starting));
+        assert_eq!(tabs[0].panes[0].handle, first.0.get());
+        assert!(tabs[1].active);
+        assert_eq!(tabs[1].status, Some(SessionStatus::Busy));
+    }
 
-        let tab0 = &dump.tabs[0];
-        assert!(!tab0.active);
-        assert_eq!(tab0.title, "proj $");
-        assert_eq!(tab0.status, Some(SessionStatus::Starting));
-        assert_eq!(tab0.sessions, vec![first.0.get()]);
+    #[test]
+    fn capture_carries_the_focused_terminal_text_whole() {
+        let mut app = App::new();
+        let session = launch(&mut app, "proj");
+        let long = (1..=500)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let effects = app.apply(Event::Capture(inputs(session, &long)));
+        let snapshot = captured_snapshot(&effects);
         assert_eq!(
-            tab0.focus_session, None,
-            "only the active tab reports focus"
+            snapshot.terminals.get(&session.0.get()).map(String::as_str),
+            Some(long.as_str()),
+            "the dev-loop dump keeps the focused grid untruncated"
         );
+        assert_eq!(snapshot.terminals.len(), 1, "only the focused pane");
+    }
 
-        let tab1 = &dump.tabs[1];
-        assert!(tab1.active);
-        assert_eq!(tab1.title, "repo 🤖");
-        assert_eq!(tab1.status, Some(SessionStatus::Busy));
-        assert_eq!(tab1.sessions, vec![second.0.get()]);
-        assert_eq!(tab1.focus_session, Some(second.0.get()));
+    #[test]
+    fn capture_ignores_text_for_panes_that_do_not_hold_focus() {
+        let mut app = App::new();
+        let base = launch(&mut app, "proj");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        let split = app.workspace.focused_session().expect("focused split pane");
+        let mut injected = inputs(split, "focused output");
+        injected
+            .terminals
+            .insert(base.0.get(), "background output".to_owned());
+
+        let effects = app.apply(Event::Capture(injected));
+        let snapshot = captured_snapshot(&effects);
+        assert_eq!(
+            snapshot.terminals.keys().copied().collect::<Vec<_>>(),
+            vec![split.0.get()]
+        );
     }
 
     #[test]
@@ -91,25 +119,21 @@ mod tests {
             title: "My work".into(),
         });
 
-        let effects = app.apply(Event::Capture {
-            focused_pty_text: None,
-        });
-        let dump = capture_dump(&effects);
+        let effects = app.apply(Event::Capture(SnapshotInputs::default()));
+        let snapshot = captured_snapshot(&effects);
         // The dump must match what the user sees on the chip, or an AI reading
         // the state would name the tab wrong.
-        assert_eq!(dump.tabs[0].title, "My work");
+        assert_eq!(snapshot.tabs.as_ref().expect("tabs")[0].title, "My work");
     }
 
     #[test]
-    fn capture_on_an_empty_workspace_has_no_active_tab() {
+    fn capture_on_an_empty_workspace_has_no_focus_and_no_tabs() {
         let mut app = App::new();
-        let effects = app.apply(Event::Capture {
-            focused_pty_text: None,
-        });
-        let dump = capture_dump(&effects);
-        assert_eq!(dump.active_tab, None);
-        assert!(dump.tabs.is_empty());
-        assert_eq!(dump.focused_pty, None);
+        let effects = app.apply(Event::Capture(SnapshotInputs::default()));
+        let snapshot = captured_snapshot(&effects);
+        assert_eq!(snapshot.focus, crate::snapshot::FocusRef::default());
+        assert_eq!(snapshot.tabs, Some(Vec::new()));
+        assert!(snapshot.terminals.is_empty());
     }
 
     #[test]
@@ -121,12 +145,11 @@ mod tests {
         app.apply(Event::SplitFocused(SplitDir::Vertical));
         let split = app.workspace.focused_session().expect("focused split pane");
 
-        let effects = app.apply(Event::Capture {
-            focused_pty_text: None,
-        });
-        let dump = capture_dump(&effects);
-        let tab = &dump.tabs[0];
-        assert_eq!(tab.sessions, vec![base.0.get(), split.0.get()]);
-        assert_eq!(tab.focus_session, Some(split.0.get()));
+        let effects = app.apply(Event::Capture(SnapshotInputs::default()));
+        let snapshot = captured_snapshot(&effects);
+        let tab = &snapshot.tabs.as_ref().expect("tabs")[0];
+        let handles: Vec<u64> = tab.panes.iter().map(|pane| pane.handle).collect();
+        assert_eq!(handles, vec![base.0.get(), split.0.get()]);
+        assert_eq!(snapshot.focus.session, Some(split.0.get()));
     }
 }

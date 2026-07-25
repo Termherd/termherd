@@ -6,8 +6,8 @@
 
 use std::collections::HashSet;
 
-use crate::capture::CaptureDump;
 use crate::metadata::Overlay;
+use crate::snapshot::WorkspaceSnapshot;
 use crate::workspace::SessionId;
 
 use super::{ScrollTarget, SelectOp, SpawnSpec};
@@ -51,8 +51,10 @@ pub enum Effect {
     Notify { title: String, body: String },
     /// Write a captured state snapshot for the AI dev loop (G1). The shell
     /// encodes it to `capture-<ts>.json` and takes the companion PNG; `core`
-    /// only builds the pure, diffable payload.
-    Capture(CaptureDump),
+    /// only builds the pure, diffable payload. It is the same
+    /// [`WorkspaceSnapshot`] the MCP `snapshot` tool reports — one model, two
+    /// readers.
+    Capture(WorkspaceSnapshot),
     /// Begin a GIF screencast: the app opens the encoder and starts its
     /// frame timer. `core` has already entered the recording state.
     StartRecording,
