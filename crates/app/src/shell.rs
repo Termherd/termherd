@@ -43,6 +43,7 @@ mod launch;
 mod orchestrate;
 mod record;
 mod routing;
+mod serve;
 mod session_ops;
 mod streams;
 mod terminal;
@@ -1158,21 +1159,7 @@ impl Shell {
             }
             Message::RecordFrameTick(now) => self.on_record_frame_tick(now),
             Message::RecordFrame(screenshot) => self.record.on_frame(screenshot),
-            Message::Bridge { request, reply } => match request {
-                // Actions mutate, so they can't answer off a `&App`: apply them
-                // and perform the effects here, where the shell owns both.
-                bridge::Request::Act(action) => {
-                    let (outcome, task) = self.perform_action(action);
-                    reply.answer(bridge::Reply::Acted(outcome));
-                    task
-                }
-                // The two read requests answer straight from owned state.
-                read => {
-                    let inputs = self.snapshot_inputs(&read);
-                    reply.answer(bridge::respond(&self.core, &read, &inputs));
-                    Task::none()
-                }
-            },
+            Message::Bridge { request, reply } => self.serve(request, reply),
         }
     }
 
