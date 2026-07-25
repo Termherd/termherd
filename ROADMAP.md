@@ -366,10 +366,13 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
     adapter (which owns `core::App` **and** the one effect executor) resolves the
     stable handle, applies the event(s) through `App::apply`, performs the
     effects, and reports the **resulting focused handle** — so an agent gets
-    act→observe in one round trip. An unknown handle / out-of-range tab is
-    rejected before any state is touched (surfaced as `invalid_params`); every
-    call stays `tokio::timeout`-bounded and apply-and-read (Q7). Handles are
-    strings, matching `list_sessions`/`snapshot`. Depends on #193; with #212
+    act→observe in one round trip. A handle no open pane hosts / an out-of-range
+    tab is rejected before any state is touched (surfaced as `invalid_params`);
+    every call stays `tokio::timeout`-bounded and apply-and-read (Q7). Handles
+    are strings, matching `list_sessions`/`snapshot`, and address a pane **in
+    any tab** — `Event::RevealPane` activates the owning tab first, since
+    click-to-focus (`FocusPane`) only reaches the active one and a silent no-op
+    there would let a close destroy the wrong terminal. Depends on #193; with #212
     (perception) this closes the act→observe loop
   - [ ] `F-mcp-terminal-sync` (#195) — `wait_for_status` (OSC) + `read_terminal`;
     depends on #193

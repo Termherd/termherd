@@ -61,9 +61,9 @@ pub enum Request {
 /// A workspace mutation an MCP client asks termherd to perform. Each variant
 /// maps onto one or more existing core [`Event`](termherd_core::Event)s applied
 /// through `App::apply` — the orchestration surface never bypasses the state
-/// machine (the #90 constraint). A `session`/`pane` field is the stable handle
-/// as [`SessionInfo::handle`] reports it, resolved to a live `SessionId` before
-/// anything is applied.
+/// machine, it drives termherd exactly as a keystroke does. A `session`/`pane`
+/// field is the stable handle as [`SessionInfo::handle`] reports it, resolved to
+/// a live `SessionId` before anything is applied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Open a new session in `project` (or the home dir when `None`), running
@@ -73,16 +73,18 @@ pub enum Action {
         kind: SessionKind,
     },
     /// Split a pane, opening a fresh session beside it. Splits the focused pane,
-    /// or `pane` when given (focused first). → `[FocusPane +] SplitFocused`.
+    /// or `pane` when given (revealed first, so a pane in another tab is
+    /// reachable). → `[RevealPane +] SplitFocused`.
     Split { pane: Option<u64>, dir: SplitDir },
-    /// Move focus to the pane hosting `session`. → `Event::FocusPane`.
+    /// Bring the pane hosting `session` into view, activating its tab when it
+    /// lives in another one. → `Event::RevealPane`.
     Focus { session: u64 },
     /// Give the tab at `tab` a manual name (blank reverts to the derived title,
     /// core's rule). → `Event::RenameTab`.
     Rename { tab: usize, title: String },
-    /// Close a pane — the focused one, or `pane` when given (focused first). A
+    /// Close a pane — the focused one, or `pane` when given (revealed first). A
     /// lone pane closes its whole tab (core collapses to `close_tab`, killing the
-    /// PTY). → `[FocusPane +] CloseFocusedPane`.
+    /// PTY). → `[RevealPane +] CloseFocusedPane`.
     Close { pane: Option<u64> },
     /// Type `bytes` into a session's PTY without waiting (waiting is a later
     /// rung). → `Event::TerminalInput`.

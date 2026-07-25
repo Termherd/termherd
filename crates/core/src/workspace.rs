@@ -355,6 +355,24 @@ impl Workspace {
         Some(())
     }
 
+    /// Bring the pane hosting `session` into view wherever it lives — activating
+    /// its tab first, then focusing the leaf. The counterpart of
+    /// [`Workspace::focus_pane_of`], which only reaches the *active* tab because
+    /// a click cannot land anywhere else; a caller addressing a pane by handle
+    /// can. Returns `None` — leaving both the active tab and the focus untouched
+    /// — when no tab hosts it.
+    pub fn reveal_pane_of(&mut self, session: SessionId) -> Option<()> {
+        let index = self.tab_of(session)?;
+        let previous = self.active;
+        self.active = index;
+        // Restore the previous tab if the leaf turns out to be unreachable, so a
+        // failed reveal changes nothing at all.
+        self.focus_pane_of(session).or_else(|| {
+            self.active = previous;
+            None
+        })
+    }
+
     /// Move pane focus one step in a spatial direction (FR6), cycling within
     /// the move's axis. It crosses the nearest ancestor split of that
     /// orientation into the sibling subtree, landing on the adjacent leaf; from
@@ -636,6 +654,43 @@ mod tests {
         // A session absent from the active tab is a no-op, focus unchanged.
         assert_eq!(ws.focus_pane_of(sid(99)), None);
         assert_eq!(ws.focused_session(), Some(sid(1)));
+    }
+
+    #[test]
+    fn focus_pane_of_does_not_reach_into_another_tab() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.open(sid(2), "b");
+        // A click cannot land on an inactive tab, so this stays a no-op — the
+        // guarantee `reveal_pane_of` exists to lift.
+        assert_eq!(ws.focus_pane_of(sid(1)), None);
+        assert_eq!(ws.active, 1);
+        assert_eq!(ws.focused_session(), Some(sid(2)));
+    }
+
+    #[test]
+    fn reveal_pane_of_activates_the_tab_hosting_the_session() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+        ws.open(sid(3), "b");
+        assert_eq!(ws.active, 1);
+
+        // Reaching back into the first tab activates it *and* lands focus on the
+        // named leaf — not merely on whatever that tab last focused.
+        assert_eq!(ws.reveal_pane_of(sid(1)), Some(()));
+        assert_eq!(ws.active, 0);
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+    }
+
+    #[test]
+    fn reveal_pane_of_leaves_everything_untouched_for_an_unhosted_session() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.open(sid(2), "b");
+        assert_eq!(ws.reveal_pane_of(sid(99)), None);
+        assert_eq!(ws.active, 1, "the active tab must not move");
+        assert_eq!(ws.focused_session(), Some(sid(2)));
     }
 
     #[test]

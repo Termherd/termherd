@@ -1639,6 +1639,113 @@ mod key_routing {
         assert_eq!(pty.kill_count(), 1, "its PTY was killed");
     }
 
+    /// A shell with two tabs; returns it plus the session handle of the *first*
+    /// tab, which is no longer the active one — the setup for the cross-tab
+    /// targeting tests below.
+    fn shell_with_two_tabs() -> (Shell, Arc<RecordingPty>, u64) {
+        let (mut shell, pty) = shell_with_terminal();
+        let first = shell
+            .core
+            .workspace
+            .focused_session()
+            .expect("focused")
+            .0
+            .get();
+        let _ = shell.launch("/tmp/other".to_string(), Launch::Shell);
+        assert_eq!(shell.core.workspace.active, 1, "the new tab is active");
+        (shell, pty, first)
+    }
+
+    #[test]
+    fn close_action_reaches_a_pane_in_another_tab() {
+        // The registry is workspace-global, so a handle from an inactive tab
+        // resolves; the close must land on *that* pane, not on the active tab's
+        // focused one.
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: Some(first) });
+        assert_eq!(outcome.error, None);
+        let live: Vec<u64> = shell
+            .core
+            .workspace
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.sessions())
+            .map(|id| id.0.get())
+            .collect();
+        assert!(
+            !live.contains(&first),
+            "the targeted pane is gone; surviving panes: {live:?}"
+        );
+        assert_eq!(live.len(), 1, "the other tab must not have been closed");
+    }
+
+    #[test]
+    fn split_action_reaches_a_pane_in_another_tab() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Split {
+            pane: Some(first),
+            dir: SplitDir::Vertical,
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(
+            shell.core.workspace.active, 0,
+            "the split happened in the target's tab"
+        );
+        assert_eq!(
+            shell.core.workspace.tabs[0].sessions().len(),
+            2,
+            "the target tab now hosts two panes"
+        );
+        assert_eq!(shell.core.workspace.tabs[1].sessions().len(), 1);
+    }
+
+    #[test]
+    fn focus_action_reaches_a_pane_in_another_tab() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Focus { session: first });
+        assert_eq!(outcome.error, None);
+        assert_eq!(shell.core.workspace.active, 0, "its tab was activated");
+        assert_eq!(
+            outcome.focused,
+            Some(first.to_string()),
+            "the reported focus is the pane that was asked for"
+        );
+        assert_eq!(focused(&shell), Some(first.to_string()));
+    }
+
+    #[test]
+    fn focus_relative_actions_reject_a_handle_whose_pane_is_gone() {
+        // A stale handle — the agent read it, then the pane closed. Rejecting
+        // beats silently acting on whatever holds focus now, which is how a
+        // close request would destroy the wrong terminal.
+        let (mut shell, pty, first) = shell_with_two_tabs();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: Some(first) });
+        assert_eq!(outcome.error, None, "the first close lands");
+        let handle = first;
+
+        for action in [
+            BridgeAction::Close { pane: Some(handle) },
+            BridgeAction::Split {
+                pane: Some(handle),
+                dir: SplitDir::Vertical,
+            },
+            BridgeAction::Focus { session: handle },
+        ] {
+            let (outcome, _task) = shell.perform_action(action.clone());
+            assert_eq!(
+                outcome.error,
+                Some(format!("no open pane hosts handle {handle}")),
+                "{action:?} should be rejected"
+            );
+        }
+        assert_eq!(
+            shell.core.workspace.tabs.len(),
+            1,
+            "the surviving tab is untouched"
+        );
+        assert_eq!(pty.kill_count(), 1, "only the first, targeted close killed");
+    }
+
     #[test]
     fn a_drag_selection_reaches_the_pty_as_grid_anchored_ops() {
         // The canvas turns a press-then-drag into Select ops; the shell must
