@@ -220,6 +220,15 @@ exists). Do not relax them locally.
   complexity. A function that exceeds it on purpose (a flat dispatcher / layout
   builder) carries a local `#[allow(clippy::too_many_lines)]` with a rationale,
   never a relaxed global threshold.
+- **An invariant expressed twice will drift — extract the predicate.** Two
+  call sites deciding "has this settled?" with hand-written conditions is a
+  bug waiting on the first edit that touches one of them. It bit the
+  `wait_for_status` rung: one site treated a session exit as settling a wait,
+  the other only compared against the requested statuses, so a wait placed
+  after a crash parked until the caller's timeout. Both now go through one
+  `settles()` predicate. A doc-comment asserting the rule is *not* enforcement
+  — the comment describing the correct behaviour sat directly above the code
+  that broke it.
 
 ## Conventions
 
