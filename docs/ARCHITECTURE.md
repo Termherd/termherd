@@ -94,8 +94,11 @@ structurally prevents a new god-object.
 
 - `core` defines port traits (`SessionStore`, `PtyHost`, `ProjectScanner`,
   `Clock`, `FileSystem`) and never names a concrete adapter.
-- `mcp` exists in the workspace only if/when the Unsure bet is taken; nothing in
-  the v1 path imports it.
+- ~~`mcp` exists in the workspace only if/when the Unsure bet is taken; nothing
+  in the v1 path imports it.~~ **Superseded.** This still holds for the `mcp`
+  *crate* below (§15, `IdeBridge` — termherd as a **client**). It does not hold
+  for the MCP **control surface** (`F-mcp-control-surface`, #90), which shipped
+  in the v1 path as a module inside `app` — see §8.
 - The rule is CI-enforceable, so "main.js → 1,461 LOC" cannot recur.
 
 ## 5. The headless core (the quality keystone)
@@ -190,6 +193,14 @@ Each adapter implements a `core` port and fixes a specific v0.0.30 defect.
 - **`mcp`** (`IdeBridge`) — *deferred (Unsure)*. If built: a per-session WS
   server with a `~/.claude/ide` lock and JSON-RPC, `tokio::timeout` on every
   round-trip (Q7). Not in the v1 path.
+
+  **Not to be confused with the shipped MCP control surface** (#90). That one
+  runs the other way round — termherd is the *server* and the Claude sessions
+  it hosts are the clients — and it lives in `app` (`app::mcp` over
+  `shell::bridge` / `shell::serve`), not in a crate of its own, because it is a
+  bridge *into* the shell rather than a port `core` calls *out* through. The
+  `tokio::timeout`-on-every-round-trip rule (Q7) is shared: it is enforced in
+  `BridgeHandle::call`.
 
 ## 8. GUI shell (iced)
 

@@ -108,6 +108,39 @@ idle→recording state machine (frames are the time proxy — no clock), and the
 `gif` encoder runs on a dedicated thread in `app` (`crates/app/src/record.rs`)
 so the UI — and the recording — stay smooth.
 
+### Driving termherd over MCP (#90)
+
+A Claude session **launched from termherd** gets an in-process MCP server wired
+into its `mcpServers` at spawn (loopback, per-session token) — so it can read
+and drive the workspace it runs in. This is the richer sibling of the capture
+dump above: same `WorkspaceSnapshot` model, live instead of a file.
+
+**Settled.** Six slices shipped: `list_sessions` + `snapshot` (perception),
+`open_session` / `split_pane` / `focus_pane` / `rename_tab` / `close_pane` /
+`run_in_session` (action), `wait_for_status` + `read_terminal`
+(synchronisation). The loop they exist to serve is **act → wait → observe**:
+`run_in_session` returns immediately, so synchronise with `wait_for_status`
+and then `read_terminal`. Do **not** poll `snapshot` in a loop — it races the
+transition you are watching for, which is why the wait rung exists.
+
+Sessions are addressed by a stable `handle` (the runtime `SessionId`), never
+the Claude `resume_id`, which re-keys on a fork / plan-accept (Q6). Every call
+is `tokio::timeout`-bounded in `BridgeHandle::call` (Q7).
+
+Where it lives: tools in `crates/app/src/mcp/handler.rs`, transport in
+`shell::bridge`, and the shell's answers in `shell::serve` — the one place an
+external caller meets `core::App`. `core` has no MCP awareness at all; every
+mutation goes through an existing `Event`.
+
+**Still open.** `F-mcp-screenshot` (#215) and `F-mcp-agent-loop` (#196, scope
+question open — may be cut). Both tracked on the #90 epic.
+
+**Looks like a contradiction, is not.** `docs/ARCHITECTURE.md` §15 lists an
+`mcp` crate as *deferred (Unsure)*. That is a **different feature** —
+`F-mcp-ide-bridge`, termherd as an MCP *client* of Claude's IDE bridge — and it
+really is unbuilt. The surface described here runs the other way round
+(termherd is the server) and lives in `app`, not in a crate of its own.
+
 ## Architecture — the dependency rule
 
 Hexagonal workspace. The single most important invariant:
@@ -125,12 +158,20 @@ app  ──►  core  ◄──  adapters          (adapters depend on core, nev
   `crates/core/Cargo.toml`).
 - `crates/claude` — pure Claude CLI format codec (path encode/derive, JSONL
   digest, OSC decode). Same strict lint profile as `core`.
-- `crates/app` — iced GUI shell. Currently a tracing + single-instance stub;
-  M1+ will construct adapters in `main()` and inject them into `core::App`.
+- `crates/app` — iced GUI shell. Constructs the adapters in `main()` and
+  injects them into `core::App`; owns the one effect executor
+  (`shell::effects`) and the MCP control surface (`app::mcp` + `shell::bridge`
+  / `shell::serve`).
 - `crates/scan` — filesystem discovery adapter (walks `~/.claude/projects`
   via the `claude` codec; implements `core::ports::ProjectScanner`).
-- Remaining adapters land per `docs/ARCHITECTURE.md` §15: `pty` (M2),
-  `store` (Should, PRD rev. 4), optional `mcp` (Unsure).
+- `crates/pty` — terminal adapter (`portable-pty` + `alacritty_terminal`);
+  implements `core::ports::PtyHost`.
+- `store` (Should, PRD rev. 4) is the one adapter still unbuilt. The **MCP
+  control surface shipped** as a module inside `app`, not as its own crate —
+  it is a bridge into the shell, not a port `core` calls out through. The
+  separate `mcp` *crate* sketched in `docs/ARCHITECTURE.md` §15 is a different
+  feature (`F-mcp-ide-bridge`: termherd as an MCP **client** of Claude's IDE
+  bridge), still unbuilt.
 
 When adding code, ask: *which crate does this belong in?* If the answer is
 "`core` should call this adapter directly," the answer is wrong — add a port
