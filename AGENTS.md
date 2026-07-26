@@ -32,6 +32,9 @@ just check-arch                    # intra-crate module boundaries + OS-cfg cont
 
 # Markdown is also gated in CI
 markdownlint-cli2                  # uses .markdownlint-cli2.jsonc
+
+# Planning hygiene — not a CI gate (needs a `project`-scoped token)
+just board-check                   # open issues the board hasn't classified
 ```
 
 Toolchain is pinned to **Rust 1.95.0 / edition 2024** via `rust-toolchain.toml`
@@ -272,10 +275,34 @@ Three layers, each owning one thing — no item lives fully in two places:
   bucket, shipped history with rationale, and design-first epics not yet scoped
   enough to act on (e.g. `F-i18n`, `F-favorites`). Source of truth for whether
   a feature exists.
-- **GitHub issues** — the *unit of work*: actionable, scoped tickets. Labelled
-  `bug`/`enhancement` and a priority `P0`/`P1`/`P2`.
-- **GitHub Project board** — the *what's in flight*: a view over the issues
-  (status columns seeded from the `P` labels). It holds no truth of its own.
+- **GitHub issues** — the *unit of work*: actionable, scoped tickets. Each
+  carries a native **issue type** (`Feature` / `Bug` / `Task`) and one or more
+  **`area:*`** labels; `os:*` and `needs-design` are modifiers on top.
+- **[Project board](https://github.com/orgs/Termherd/projects/1)** — canonical
+  for **priority and order**, held as sortable single-select fields: `Horizon`
+  (Now / Next / Later / Parked / Shipped), `Class`, `Effort`, `Severity` (see
+  **Priority scheme** below). Edit these there, visually — not in a file.
+
+### Priority scheme
+
+Priority is **two orthogonal axes**, not one `Pn` number (which conflated
+impact, urgency, and cost — the `P0`–`P3` labels were retired 2026-07-26).
+
+- **Class** — the *kind of leverage* a Feature delivers: **⚡ Differentiator**
+  (the thesis edge) · **🔑 Enabler** (unblocks other work) · **📐 Table-stakes**
+  (expected of any such tool; its absence is a wart) · **✨ Polish**
+  (ergonomics) · **🎲 Bet** (uncertain — prototype to learn).
+- **Effort** — **S / M / L**.
+- **Ordering rule**: within a Horizon, **small Differentiators & Enablers
+  first**; a **Bet gets a timeboxed probe, not a full build**.
+
+Bugs are **not a Class** — they restore a contract, they don't add leverage.
+A `Bug` carries a **Severity** instead (🔴 Critical / 🟠 Major / 🟡 Minor) and
+jumps the queue on severity × blast-radius, off the leverage map. A `Task`
+(packaging, tooling, chores) carries neither.
+
+So: **Class / Effort / Severity / Horizon = board fields · Type = the native
+issue type · Area = `area:*` labels · everything narrative = `ROADMAP.md`.**
 
 The one rule that keeps it sane: an epic **graduates from `ROADMAP.md` to an
 issue only when it's scoped enough to do.** A design-first item lives only in
@@ -294,3 +321,11 @@ issues, so a scoped roadmap item with no issue is invisible):
   `.personal/feature-torture/reports/<F-id>.md`; cite it in the ROADMAP entry.
   Items that stay design-first (e.g. `F-keymap-per-command`) live only in the
   roadmap until their blocking design is resolved.
+- **`just board-check` reports the issues the board never classified** — filed,
+  then invisible to every view. It checks the board only: the roadmap's MoSCoW
+  list has no per-entry horizon, so neither "every issue is cited by an entry"
+  (it flags refinements that were never features) nor "every unticked entry
+  cites an issue" (it flags the design-first items the rule above *wants* to
+  live in the roadmap alone) is checkable. Reconciling the roadmap stays a
+  human read; the script's own docstring records why. Run it before a planning
+  pass.

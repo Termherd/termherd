@@ -5,52 +5,21 @@ short, scannable view; commits land features here when they ship.
 
 ## Working order (next up)
 
-Execution priority across the open Musts and the feedback issues (#18–#29,
-gist `d1d02e5`).
-The MoSCoW buckets below stay tied to PRD §5; this block is just the order to
-pick work in. GH `P0`/`P1`/`P2` labels mirror it.
+**On the board, not in this file.** Execution order lives in
+[Project #1](https://github.com/orgs/Termherd/projects/1) as sortable fields —
+`Horizon` (Now / Next / Later / Parked / Shipped) crossed with `Class` and
+`Effort`. Read the **By horizon** view; within a horizon, take small
+Differentiators and Enablers first, and give a Bet a timeboxed probe rather
+than a full build. `AGENTS.md` § *Priority scheme* defines the vocabulary.
 
-> **Reprioritization (2026-07-12).** Supersedes the 2026-07-05 pass. Closed
-> since: #79 + #80 (confirm-on-running guards → `F-close-confirm-policy`),
-> #56 + #57 (favorites → `F-favorites`), #86 (background notifications), and the
-> `F-quality-gates` P1 slices #105/#106/#107, plus the **complete intra-crate
-> refactor #167–#173** (clusters A–G — the god-object splits and the CI lock-in
-> gate `intra-crate-arch`). Current **P1**: #102 (scroll-drift correctness bug),
-> #54 (split-pane UI — the release headline), #119 (reflect Claude's own
-> `/rename` in the tab). All three code-signing paths are **P3**. #90
-> stays P2 but is marked `needs-design`; #55 is blocked-by #54.
+This block used to be a hand-maintained ranking re-datered at each pass. It
+drifted — the 2026-07-12 revision still listed #54 as the next P1 in one
+paragraph and as done in the next — because a prose list has no way to be
+wrong out loud. The board does: `just board-check` reports every open issue
+it hasn't classified.
 
-1. **Finish the Musts** (`v0.1.0` milestone) — macOS ships **unsigned**
-   (`.dmg` + manual `xattr`); **Linux** signed checksums (#52, done) and the
-   `F-plans-memory` editing slice (#53, done) are in. All code signing is now
-   **P3**, deferred until GitHub traction / a sponsor: macOS Developer ID
-   notarization (#51 — no free OSS path, $99/yr), the **Homebrew** cask (#61 —
-   parked since Homebrew 5.1 removed `--no-quarantine`, so an unsigned cask
-   can't bypass Gatekeeper), and **Windows** Authenticode via **SignPath
-   Foundation** (#62 — viable, but not release-blocking). What's left in-bucket
-   is `F-quality-gates` (#105/#106/#107, P1). See feature-torture
-   `F-packaging-ci.md`.
-2. **P1 — correctness + the headline feature:** #102 (scroll-drift property
-   failure — the one open correctness bug), #54 (fixed-ratio split-pane UI —
-   cheapest large/visible feature, core already landed), #119 (live tab name).
-   Done since the last pass: #54 (split-pane UI), the **complete intra-crate
-   refactor #167–#173** (`tech-health` — the shell/terminal/core/scan/pty
-   god-object splits, clusters B/C/A/E/F/D, plus the CI lock-in gate G #173),
-   #79/#80 (running-process guards) and the `F-quality-gates` P1 slices
-   #105/#106/#107.
-3. **P2 — polish:** #36 (copy-on-select), #55 (drag-resize, **blocked-by #54**),
-   #59 (modifier bypass), #37 (settings template), #84 (OSC 8 links), #85
-   (inline images), #82 (link-cursor bug), #90 (MCP control surface,
-   **`needs-design`**), #114 (Cmd+M minimize). Done since the last pass:
-   #56/#57 (favorites) and #86 (bg notifications).
-4. **P3 — parked / not actionable now:** code signing — #51, #61, #62.
-5. **Design-first backlog** — see below; don't code until scoped.
-
-`F-terminal-split` (Should) isn't in the feedback but its core already landed —
-the cheapest large/visible feature left on the board and the release headline,
-now **P1**. The UI slice is scoped as #54 (fixed-ratio split + focus + per-pane
-geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
-`F-terminal-split.md`).
+The MoSCoW buckets below stay tied to PRD §5; they say **whether a feature
+exists and why**, never when it gets picked up.
 
 > **Feature-torture pass (2026-06-20).** The seven open/backlog features were
 > each pressure-tested; reports live in `.personal/feature-torture/reports/`.
@@ -109,18 +78,18 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   and Linux `.deb`/`.AppImage`, attached to the release. macOS `.app`/`.dmg`
   verified locally. Only "signed" remains — bundles are unsigned pending
   certificates (OQ5). **Split by platform** (feature-torture 🧬). macOS: the
-  Homebrew path (#61) is **parked P3** — Homebrew 5.1 removed
+  Homebrew path (#61) is **Parked** — Homebrew 5.1 removed
   `--no-quarantine` (all taps), so an unsigned cask can't bypass Gatekeeper
   and casks failing it are unsupported after 2026-09-01; v0.1.0 therefore
   ships macOS **unsigned** (`.dmg` + manual `xattr`), and Developer ID
-  notarization (#51, no free OSS path, now **P3**) is the sole fluent macOS
+  notarization (#51, no free OSS path, now **Parked**) is the sole fluent macOS
   path, deferred to GitHub traction / a sponsor ($99/yr). Linux ships **signed
   checksums** (#52, done) — a `sign-release.yml` workflow attaches a
   `SHA256SUMS` over the Linux tarballs and a sigstore *keyless*
   (GitHub OIDC, no stored key) build-provenance attestation; verify with
   `gh attestation verify <artifact> --repo Termherd/termherd`. **Windows**
   Authenticode via free **SignPath
-  Foundation** (#62, now **P3** — viable, but not release-blocking)*
+  Foundation** (#62, now **Parked** — viable, but not release-blocking)*
 - [ ] `F-quality-gates` — intrinsic-quality CI gates beyond the existing
   fmt/clippy/test/deny set, targeting the structural/maintainability axis
   (complexity, domain boundaries, merge-conflict risk). Scoped from a
@@ -145,11 +114,11 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   **shipped**) and #172 (pty →
   `input`/`grid`/`events`/`status`/`session`/`kill`/`manager` — **shipped**, the
   seam #143 foreground-process detection and #155 vim mouse build on).
-  Cognitive-complexity (signal C) stays unfiled. **P3 / report-only** (was
+  Cognitive-complexity (signal C) stays unfiled. **Report-only** (was
   blocked on a quality-report home): file length (signal A) now ships **inside
   #173's gate** as a job-summary report; churn×size hotspots (signal J) stays
   unfiled. Dropped: MSRV check,
-  `todo!`→deny, PR-size warning (rationale in the report). `tech-health`
+  `todo!`→deny, PR-size warning (rationale in the report)
 - [x] `F-session-tabs` — tabbed open sessions (M3): every launched session is
   a tab; a tab strip switches between them, each chip carrying its activity
   dot (the FR8 tab badge) and a close button that kills the session's PTY —
@@ -313,7 +282,7 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   shippable:
   - [x] `F-mcp-config-write` (#191) — `set_option` + `keys` on the stdio slice;
     independent, deliverable now
-  - [x] async transport substrate (#192, `tech-health`) — tokio runtime in the
+  - [x] async transport substrate (#192, intrinsic quality) — tokio runtime in the
     composition root + a timeout-bounded request/reply primitive drained through
     the iced loop into `core::App` (pure state read → reply). The bound covers
     the enqueue too, so a full request channel can't hang the caller (Q7).
@@ -419,8 +388,8 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
     one pure `app::image` module rather than being copied a third time.
     Depends on #212/#193. **#196 + #229 + #215 are one capability in three
     parts** — drive the UI, see the pixels, read the terminal — the loop that
-    lets an agent *verify* a gesture fix instead of only proposing it. All
-    three carry `P1` for that reason
+    lets an agent *verify* a gesture fix instead of only proposing it. The two
+    that remain sit on the board accordingly
   - [x] `F-mcp-snapshot-g1` (#216) — **one model, two readers.** The G1 dev-loop
     dump (`~/.termherd/captures/capture-<ts>.json`) is now the same
     `WorkspaceSnapshot` the MCP `snapshot` tool reports, under a fixed
@@ -466,11 +435,11 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
   only capture the inner terminal, not the GUI shell. Capture is an
   `Event`→`Effect` (pure `core`, I/O in `app`), surviving the hexagonal
   tightening. Ladder:
-  - **Rung 0+1 (G1) — shipped (#108)** (`tech-health`): ⌘⇧S → `Event::Capture`
+  - **Rung 0+1 (G1) — shipped (#108)** (intrinsic quality): ⌘⇧S → `Event::Capture`
     → `Effect::Capture` → a JSON state+PTY-text dump *and* an iced PNG to
     `~/.termherd/captures/capture-<ts>.{json,png}` an AI reads by newest stamp.
     The cheap, on-thesis first slice.
-  - **Rung 2 (G3) — shipped (#124, #126)** (`tech-health`): reshaped ✂️ by
+  - **Rung 2 (G3) — shipped (#124, #126)** (intrinsic quality): reshaped ✂️ by
     feature-torture (`.personal/feature-torture/reports/F-capture-rung2.md`)
     to **one dev-only GIF screencast** slice (⌘⇧R toggle, pure-Rust `gif`,
     screenshot-loop driven by the window's present clock (`window::frames()`,
