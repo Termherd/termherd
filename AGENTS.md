@@ -317,6 +317,16 @@ exists). Do not relax them locally.
   `count > 0` — all that stands between a box with no readable pixel and a
   divide by zero — was reachable and earned a truncated-buffer test. Both
   survivors looked like missing assertions and were really design smells.
+- **A test that claims to be exhaustive is worse than no test when it is not.**
+  A hand-written list asserting "this *set* is the contract" reads as a
+  guarantee, so nobody re-derives it — where an absent test at least leaves the
+  reader suspicious. `every_action_that_can_refuse_reports_which_kind_of_nothing`
+  said so in its own comment and listed five of the seven actions that refuse;
+  the two it missed (`copy` with nothing selected, `close-focused` on an empty
+  workspace) went on reporting success at doing nothing, which is the exact
+  failure the test existed to kill. Either derive the list from the same source
+  the code uses, or make each case fail loudly on its own — never assert
+  completeness in prose above an enumeration a human typed.
 
 ## Conventions
 
