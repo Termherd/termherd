@@ -128,11 +128,15 @@ a loop — it races the transition you are watching for, which is why the wait
 rung exists.
 
 `screenshot` is the pixel companion to the text `snapshot`, for the render,
-colour and glyph questions text cannot answer. Reach for it *last*: an image
-costs orders of magnitude more context than a `snapshot`, so `max_width`
-(default 1200) bounds every result, and a window smaller than the bound is
-never upscaled. A headless run has no window and says so as a tool-level error
-— the text reads keep working.
+colour and glyph questions text cannot answer. Reach for it *last*: a
+default-bound window is ~200 kB of PNG and a third more again as base64, where
+a `snapshot` is a few hundred bytes. Two bounds keep that honest — `max_width`
+(default 1200) and a total-pixel ceiling for tall windows a width alone never
+reaches — and a window smaller than them is never upscaled. Shrinking averages
+the covered pixels rather than picking the nearest one, so terminal glyphs stay
+legible at the ~0.4× a retina window gets reduced by; that legibility is what
+the bytes buy. Lower `max_width` when a coarse view will do. A headless run
+has no window and says so as a tool-level error; the text reads keep working.
 
 Sessions are addressed by a stable `handle` (the runtime `SessionId`), never
 the Claude `resume_id`, which re-keys on a fork / plan-accept (Q6). Every call
@@ -244,6 +248,15 @@ exists). Do not relax them locally.
   `settles()` predicate. A doc-comment asserting the rule is *not* enforcement
   — the comment describing the correct behaviour sat directly above the code
   that broke it.
+- **A guard is unreachable and goes, or reachable and gets a test — there is
+  no third state.** Defensive arithmetic nobody can trigger is not free: it
+  reads as a live case to the next reader, and no test can pin it. Mutation
+  testing finds these by construction, because a mutant of dead code changes
+  nothing observable and survives. In `image::resample_box` the clamps were
+  provably unreachable under its shrink-only precondition and went, while
+  `count > 0` — all that stands between a box with no readable pixel and a
+  divide by zero — was reachable and earned a truncated-buffer test. Both
+  survivors looked like missing assertions and were really design smells.
 
 ## Conventions
 

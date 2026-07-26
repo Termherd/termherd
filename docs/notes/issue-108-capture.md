@@ -167,7 +167,9 @@ by running the app.
 - `crates/core/src/app.rs` — `Event::Capture`, `Effect::Capture`.
 - `crates/core/src/app/capture.rs` — `App::build_capture`.
 - `crates/core/src/keymap.rs` — `Action::Capture`, default `mod+shift+s`.
-- `crates/app/src/capture.rs` — stamp, JSON encode, PNG encode, output dir.
+- `crates/app/src/capture.rs` — stamp, JSON encode, output dir. The PNG encoder
+  itself moved to `crates/app/src/image.rs` when the MCP `screenshot` tool
+  became its second reader; `write_png` is now the disk wrapper over it.
 - `crates/app/src/snapshot_dto.rs` — the JSON wire form, shared with the MCP
   handler.
 - `crates/app/src/paths.rs` — shared `home_dir` / `termherd_dir` the stores
