@@ -154,13 +154,25 @@ naming the prompt in the way, so a caller learns why its chord did nothing.
 state the keyboard cannot.
 
 Each press answers with what the ladder did — `ran` (with the action's name),
-`inert` (the action is in the vocabulary but has no surface yet, so nothing
-happened — do not retry, no rebinding helps), `overlay` (which prompt ate it),
+`inert` (nothing happened, with a `reason`), `overlay` (which prompt ate it),
 `typed` (bound to nothing, so it reached the focused terminal), `unbound`
 (nothing claimed it) — plus the resulting `focused_handle`. A malformed chord or
 unknown action name rejects the **whole** call before anything applies: half an
 applied sequence is worse than none, since the caller cannot tell how far it
 got.
+
+`inert` carries its `reason` because the two kinds of nothing call for opposite
+responses: `no-surface` means the action is wired to nothing, so retrying is
+pointless (`open-new-session` is the one), while `no-context` means a
+precondition was absent — nothing focused to derive a repo from, no closed tab
+to reopen, nothing to scroll — which the caller can go and *create* before
+trying again. Five handlers can refuse that way, and each says so at its own
+refusal (they return `Option`), so no predicate here has to re-derive the list.
+
+The line is whether the shell refused, **not** whether the effect was
+interesting: `activate-tab-9` on a single-tab workspace reports `ran`, because
+`core` applied the event and absorbed it. Collapsing the two would make the
+distinction useless.
 
 Sessions are addressed by a stable `handle` (the runtime `SessionId`), never
 the Claude `resume_id`, which re-keys on a fork / plan-accept (Q6). Every call

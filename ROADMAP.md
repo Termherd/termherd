@@ -388,9 +388,20 @@ exists and why**, never when it gets picked up.
     reasoned about. `inert` came out of reviewing the rung against its own
     contract: `open-new-session` is in the keymap vocabulary and still unwired,
     so reporting `ran` would have an agent record a gesture it never made — and,
-    verifying a fix, read a false pass. `run_action` now returns
-    `Option<Task>`, making its own `match` the single place that knows a surface
-    is missing rather than a predicate duplicating that list.
+    verifying a fix, read a false pass. Live testing then showed the hole was
+    wider than one unwired action: **five** handlers refuse before acting
+    (`new_claude_here` without a focused repo, `reopen_closed_tab` on an empty
+    close stack, `scroll_focused` with nothing focused, `cycle_tab` with nothing
+    open, `toggle_record` mid-drain) and every one of them reported `ran`. So
+    `inert` carries a `reason` — `no-surface` (wired to nothing, retrying is
+    pointless) or `no-context` (a precondition the caller can create) — since the
+    two call for opposite responses. `run_action` returns
+    `Result<Task, Inertia>` and each refusing handler returns `Option`, so the
+    knowledge lives *at the refusal* rather than in a predicate here that would
+    duplicate the list — the same smell the tidy-first pass had just removed. The
+    line held deliberately: `activate-tab-9` on one tab stays `ran`, because
+    `core` applied the event and absorbed it. It is whether the shell refused,
+    not whether the effect was interesting.
     Tidy-first prerequisite: the overlay ladder was stated twice — as
     `overlay_key`'s precedence chain and as `accepts_terminal_input`'s
     conjunction — and this rung would have been a third reading, so it became one

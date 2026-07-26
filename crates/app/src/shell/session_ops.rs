@@ -72,12 +72,11 @@ impl Shell {
     }
 
     /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
-    /// `PrevTab`). No-op when nothing is open.
-    pub(super) fn cycle_tab(&mut self, delta: i32) -> Task<Message> {
-        let Some(next) = self.core.workspace.cycled_tab(delta) else {
-            return Task::none();
-        };
-        self.activate_tab(next)
+    /// `PrevTab`). `None` when nothing is open, so a caller learns the cycle had
+    /// nowhere to go instead of being told the tab changed.
+    pub(super) fn cycle_tab(&mut self, delta: i32) -> Option<Task<Message>> {
+        let next = self.core.workspace.cycled_tab(delta)?;
+        Some(self.activate_tab(next))
     }
 
     pub(super) fn on_window_event(

@@ -820,6 +820,11 @@ struct PressStepDto {
     /// Which overlay consumed it, for `"overlay"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     overlay: Option<String>,
+    /// Why nothing happened, for `"inert"`: `"no-surface"` (the action is wired
+    /// to nothing, so retrying is pointless) or `"no-context"` (a precondition
+    /// was absent, which the caller can go and create).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
 }
 
 impl PressStepDto {
@@ -827,18 +832,21 @@ impl PressStepDto {
     /// fields are per-outcome, so each is omitted where it means nothing rather
     /// than sent as a null the caller has to interpret.
     fn new(press: &str, step: &PressStep) -> Self {
-        let (result, action, overlay) = match step {
-            PressStep::Ran(name) => ("ran", Some(name.clone()), None),
-            PressStep::Inert(name) => ("inert", Some(name.clone()), None),
-            PressStep::Overlay(name) => ("overlay", None, Some(name.clone())),
-            PressStep::Typed => ("typed", None, None),
-            PressStep::Unbound => ("unbound", None, None),
+        let (result, action, overlay, reason) = match step {
+            PressStep::Ran(name) => ("ran", Some(name.clone()), None, None),
+            PressStep::Inert { action, reason } => {
+                ("inert", Some(action.clone()), None, Some(*reason))
+            }
+            PressStep::Overlay(name) => ("overlay", None, Some(name.clone()), None),
+            PressStep::Typed => ("typed", None, None, None),
+            PressStep::Unbound => ("unbound", None, None, None),
         };
         Self {
             press: press.to_owned(),
             result,
             action,
             overlay,
+            reason,
         }
     }
 }
@@ -1914,7 +1922,14 @@ mod tests {
         let (result, _presses) = press_request(
             |mcp| async move {
                 mcp.press_keys(Parameters(PressKeysArgs {
-                    keys: vec!["cmd+w".into(), "cmd+d".into(), "x".into(), "f2".into()],
+                    keys: vec![
+                        "cmd+w".into(),
+                        "cmd+d".into(),
+                        "x".into(),
+                        "f2".into(),
+                        "cmd+n".into(),
+                        "cmd+shift+t".into(),
+                    ],
                 }))
                 .await
             },
@@ -1923,6 +1938,14 @@ mod tests {
                 PressStep::Overlay("tab-close-confirm".into()),
                 PressStep::Typed,
                 PressStep::Unbound,
+                PressStep::Inert {
+                    action: "open-new-session".into(),
+                    reason: "no-surface",
+                },
+                PressStep::Inert {
+                    action: "new-claude-session-here".into(),
+                    reason: "no-context",
+                },
             ]),
         )
         .await;
@@ -1937,6 +1960,10 @@ mod tests {
                     { "press": "cmd+d", "result": "overlay", "overlay": "tab-close-confirm" },
                     { "press": "x", "result": "typed" },
                     { "press": "f2", "result": "unbound" },
+                    { "press": "cmd+n", "result": "inert",
+                      "action": "open-new-session", "reason": "no-surface" },
+                    { "press": "cmd+shift+t", "result": "inert",
+                      "action": "new-claude-session-here", "reason": "no-context" },
                 ],
                 "focused_handle": "2",
             }),

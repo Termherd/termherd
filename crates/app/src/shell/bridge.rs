@@ -123,11 +123,15 @@ pub enum Press {
 pub enum PressStep {
     /// A keymap action ran; carries its config name.
     Ran(String),
-    /// The action is in the keymap vocabulary but has no surface in the app yet,
-    /// so nothing happened. Distinct from `Ran` (which would have a caller
-    /// believe a gesture it never made) and from `Unbound` (which invites trying
-    /// another chord, where this one will never work however it is bound).
-    Inert(String),
+    /// The action changed nothing, and why: `"no-surface"` (wired to nothing —
+    /// retrying is pointless) or `"no-context"` (a precondition was absent, which
+    /// the caller can go and create). Distinct from `Ran`, which would have a
+    /// caller believe a gesture it never made, and from `Unbound`, which invites
+    /// trying another chord where neither of these ever would.
+    Inert {
+        action: String,
+        reason: &'static str,
+    },
     /// An overlay owned the keyboard and consumed it, as it would for a human.
     /// Carries the overlay's name, so a caller learns *why* its chord did
     /// nothing it expected — and that `escape` / `enter` are what move next.

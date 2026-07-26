@@ -60,6 +60,36 @@ impl KeyboardOwner {
     }
 }
 
+/// Why running a keymap action changed nothing.
+///
+/// The two cases call for opposite responses from a caller, which is the whole
+/// reason they are not one: a missing surface will never appear, so retrying is
+/// pointless; a missing precondition is something the caller can go and create.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Inertia {
+    /// The action is in the keymap vocabulary and wired to nothing.
+    NoSurface,
+    /// The action is wired, but refused before acting because a precondition was
+    /// absent — no focused session to derive a repo from, no closed tab to
+    /// reopen, nothing to scroll.
+    ///
+    /// Deliberately narrower than "had no visible effect": an action whose event
+    /// `core` applies and absorbs (a tab index past the open tabs) *did* run, and
+    /// says so. The line is whether the shell refused, not whether the result
+    /// was interesting.
+    NoContext,
+}
+
+impl Inertia {
+    /// The reason an external caller reads.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::NoSurface => "no-surface",
+            Self::NoContext => "no-context",
+        }
+    }
+}
+
 /// What the routing ladder did with one key press.
 ///
 /// The ladder naming its own outcome, so a caller that needs to *report* what a
@@ -75,12 +105,12 @@ pub(super) enum KeyVerdict {
     Overlay(&'static str),
     /// A bound keymap action ran; carries its config name.
     Ran(String),
-    /// A bound keymap action has no surface in the shell yet, so nothing
-    /// happened. Kept apart from [`Self::Ran`] because a caller told "ran" would
-    /// believe a gesture that never occurred, and apart from [`Self::Ignored`]
-    /// because the two call for opposite responses: an ignored press invites
-    /// another chord, an inert one will never work however it is bound.
-    Inert(String),
+    /// A bound keymap action changed nothing, and why. Kept apart from
+    /// [`Self::Ran`] because a caller told "ran" would believe a gesture that
+    /// never occurred, and apart from [`Self::Ignored`] because the two call for
+    /// opposite responses: an ignored press invites another chord, an inert one
+    /// will never work however it is bound.
+    Inert(String, Inertia),
     /// It reached the focused terminal as input bytes.
     Typed,
     /// Nothing claimed it: no overlay, no binding, and no terminal to type into.
@@ -107,35 +137,42 @@ impl Shell {
     /// Run a keymap [`Action`] (FR9). Clipboard actions become iced tasks; tab
     /// actions drive `core`.
     ///
-    /// `None` means the action is in the keymap vocabulary but has **no surface
-    /// in the shell yet** — distinct from a surfaced action whose effect happens
-    /// to be nothing. This `match` is the only place that knows which is which,
-    /// so a caller reporting what a press did cannot over-claim: telling an agent
-    /// `ran` about an unwired action would have it believe a gesture that never
-    /// happened, and retry it forever.
-    pub(super) fn run_action(&mut self, action: Action) -> Option<Task<Message>> {
-        Some(match action {
+    /// `Err` means the action changed nothing, and says why (see [`Inertia`]).
+    /// This `match` is the only place that knows, so a caller reporting what a
+    /// press did cannot over-claim: told `ran` about an action that refused, an
+    /// agent would record a gesture that never happened — and, verifying a fix,
+    /// read a false pass.
+    ///
+    /// The handlers that can refuse return `Option` for exactly this reason, so
+    /// the knowledge lives at the refusal rather than in a predicate here that
+    /// would have to re-derive it.
+    pub(super) fn run_action(&mut self, action: Action) -> Result<Task<Message>, Inertia> {
+        Ok(match action {
             Action::Copy => self.copy_selection(),
             Action::Paste => iced::clipboard::read().map(Message::Paste),
-            Action::NextTab => self.cycle_tab(1),
-            Action::PrevTab => self.cycle_tab(-1),
+            Action::NextTab => self.cycle_tab(1).ok_or(Inertia::NoContext)?,
+            Action::PrevTab => self.cycle_tab(-1).ok_or(Inertia::NoContext)?,
             Action::CloseFocused => self.close_focused_pane(),
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
             }
             Action::ToggleSidebar => self.toggle_sidebar(),
-            Action::ScrollTop => self.scroll_focused(ScrollTarget::Top),
-            Action::ScrollBottom => self.scroll_focused(ScrollTarget::Bottom),
+            Action::ScrollTop => self
+                .scroll_focused(ScrollTarget::Top)
+                .ok_or(Inertia::NoContext)?,
+            Action::ScrollBottom => self
+                .scroll_focused(ScrollTarget::Bottom)
+                .ok_or(Inertia::NoContext)?,
             // New shell / Claude session in the focused context, and
             // reopen the last closed tab.
             Action::NewShellHere => self.new_shell_here(),
-            Action::NewClaudeSessionHere => self.new_claude_here(),
-            Action::ReopenClosedTab => self.reopen_closed_tab(),
+            Action::NewClaudeSessionHere => self.new_claude_here().ok_or(Inertia::NoContext)?,
+            Action::ReopenClosedTab => self.reopen_closed_tab().ok_or(Inertia::NoContext)?,
             // Capture the current state for the AI dev loop.
             Action::Capture => self.capture(),
             // Start / stop the GIF screencast.
-            Action::ToggleRecord => self.toggle_record(),
+            Action::ToggleRecord => self.toggle_record().ok_or(Inertia::NoContext)?,
             // Zoom re-derives the grid geometry, so the focused terminal is
             // resized like on a window resize; other tabs catch up on
             // focus, the existing convention.
@@ -156,7 +193,7 @@ impl Shell {
             Action::FocusDown => self.focus_dir(Direction::Down),
             // In the vocabulary since FR9, still unwired: the launch surfaces
             // that exist are `NewShellHere` / `NewClaudeSessionHere`.
-            Action::OpenNewSession => return None,
+            Action::OpenNewSession => return Err(Inertia::NoSurface),
         })
     }
 
@@ -166,8 +203,8 @@ impl Shell {
     pub(super) fn dispatch_action(&mut self, action: Action) -> (KeyVerdict, Task<Message>) {
         let name = action.name();
         match self.run_action(action) {
-            Some(task) => (KeyVerdict::Ran(name), task),
-            None => (KeyVerdict::Inert(name), Task::none()),
+            Ok(task) => (KeyVerdict::Ran(name), task),
+            Err(inertia) => (KeyVerdict::Inert(name, inertia), Task::none()),
         }
     }
 

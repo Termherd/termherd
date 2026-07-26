@@ -231,7 +231,10 @@ fn step_of(verdict: KeyVerdict) -> PressStep {
     match verdict {
         KeyVerdict::Overlay(name) => PressStep::Overlay(name.to_owned()),
         KeyVerdict::Ran(name) => PressStep::Ran(name),
-        KeyVerdict::Inert(name) => PressStep::Inert(name),
+        KeyVerdict::Inert(name, inertia) => PressStep::Inert {
+            action: name,
+            reason: inertia.label(),
+        },
         KeyVerdict::Typed => PressStep::Typed,
         KeyVerdict::Ignored => PressStep::Unbound,
     }

@@ -1933,6 +1933,15 @@ mod key_routing {
         );
     }
 
+    /// The `inert` step for an action name, with its reason — the shape these
+    /// tests assert over and over.
+    fn inert(action: &str, reason: &'static str) -> PressStep {
+        PressStep::Inert {
+            action: action.to_owned(),
+            reason,
+        }
+    }
+
     #[test]
     fn an_action_with_no_surface_yet_reports_inert_not_ran() {
         // `open-new-session` is in the keymap vocabulary and still unwired.
@@ -1941,12 +1950,124 @@ mod key_routing {
         // *don't retry*, which `unbound` would not: no rebinding will help.
         let (mut shell, pty) = shell_with_terminal();
         let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::OpenNewSession)]);
-        assert_eq!(
-            outcome.steps,
-            vec![PressStep::Inert("open-new-session".to_owned())]
-        );
+        assert_eq!(outcome.steps, vec![inert("open-new-session", "no-surface")]);
         assert_eq!(shell.core.workspace.tabs.len(), 1, "nothing was opened");
         assert_eq!(pty.spawn_count(), 1, "and nothing was spawned");
+    }
+
+    #[test]
+    fn an_action_that_refused_for_want_of_context_says_so() {
+        // Found in live testing: on an empty workspace the launch chords do
+        // nothing, because `new_claude_here` has no focused session to derive a
+        // repo from. It used to report `ran`, so an agent — like a human pressing
+        // the chord — would conclude a session had opened.
+        //
+        // `no-context` is not `no-surface`: the caller can *create* the missing
+        // precondition and try again, where an unwired action will never work.
+        let (mut shell, pty) = empty_shell();
+        let (outcome, _task) =
+            shell.perform_presses(vec![Press::Command(Action::NewClaudeSessionHere)]);
+        assert_eq!(
+            outcome.steps,
+            vec![inert("new-claude-session-here", "no-context")]
+        );
+        assert_eq!(pty.spawn_count(), 0, "nothing was spawned");
+    }
+
+    #[test]
+    fn every_action_that_can_refuse_reports_which_kind_of_nothing() {
+        // The five handlers that bail out before acting, each on its own missing
+        // precondition. Pinned together because the *set* is the contract: an
+        // action added to `run_action` that can refuse and does not say so
+        // reintroduces the false pass this distinction exists to kill.
+        let (mut shell, _pty) = empty_shell();
+        for (action, name) in [
+            (Action::NewClaudeSessionHere, "new-claude-session-here"),
+            (Action::ReopenClosedTab, "reopen-closed-tab"),
+            (Action::ScrollTop, "scroll-top"),
+            (Action::ScrollBottom, "scroll-bottom"),
+            (Action::NextTab, "next-tab"),
+            (Action::PrevTab, "prev-tab"),
+        ] {
+            let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
+            assert_eq!(
+                outcome.steps,
+                vec![inert(name, "no-context")],
+                "{name} refused, so it must not report `ran`"
+            );
+        }
+    }
+
+    #[test]
+    fn tab_cycling_runs_and_moves_in_opposite_directions() {
+        // The refusal tests only exercise cycling on an *empty* workspace, where
+        // reporting nothing is correct — so the positive case was uncovered, and
+        // mutation testing proved it twice: making `cycle_tab` always refuse went
+        // unnoticed, and so did dropping the sign that tells `prev` from `next`.
+        //
+        // Three tabs, not two: with two, wrapping makes both directions land on
+        // the same tab, so the test could not tell them apart.
+        let mut shell = shell_with_three_tabs();
+        let tabs = shell.core.workspace.tabs.len();
+        let start = shell.core.workspace.active;
+
+        let (next, _task) = shell.perform_presses(vec![Press::Command(Action::NextTab)]);
+        assert_eq!(next.steps, vec![PressStep::Ran("next-tab".to_owned())]);
+        assert_eq!(
+            shell.core.workspace.active,
+            (start + 1) % tabs,
+            "next-tab moves forward"
+        );
+
+        let (back, _task) = shell.perform_presses(vec![Press::Command(Action::PrevTab)]);
+        assert_eq!(back.steps, vec![PressStep::Ran("prev-tab".to_owned())]);
+        assert_eq!(
+            shell.core.workspace.active, start,
+            "prev-tab undoes it, so the two are not the same action"
+        );
+
+        let (again, _task) = shell.perform_presses(vec![Press::Command(Action::PrevTab)]);
+        assert_eq!(again.steps, vec![PressStep::Ran("prev-tab".to_owned())]);
+        assert_eq!(
+            shell.core.workspace.active,
+            (start + tabs - 1) % tabs,
+            "and it wraps backwards, not forwards"
+        );
+    }
+
+    #[test]
+    fn a_record_toggle_blocked_by_a_draining_screencast_is_inert() {
+        // The fifth refusal, which needs a recorder mid-drain rather than an
+        // empty workspace: a ⌘⇧R that lands while a finish is pending on
+        // in-flight frames is ignored so it can't replace the recorder under the
+        // encoder — and that must not read as "recording started".
+        let (mut shell, _pty) = shell_with_terminal();
+        let (idle, _task) = shell.perform_presses(vec![Press::Command(Action::ToggleRecord)]);
+        assert_eq!(
+            idle.steps,
+            vec![PressStep::Ran("toggle-record".to_owned())],
+            "an idle shell accepts the toggle"
+        );
+        // Force the drain the same way `a_toggle_is_blocked_while_the_previous_
+        // recording_drains` does: the real state needs in-flight screenshots.
+        shell.record.finish_pending = true;
+        shell.record.inflight = 1;
+        let (blocked, _task) = shell.perform_presses(vec![Press::Command(Action::ToggleRecord)]);
+        assert_eq!(blocked.steps, vec![inert("toggle-record", "no-context")]);
+    }
+
+    #[test]
+    fn new_shell_here_never_refuses_because_it_falls_back_to_home() {
+        // The counterexample that keeps the line honest: this handler *has* a
+        // fallback, so it acts from an empty workspace and reports `ran`. Only a
+        // handler that genuinely bails out is inert.
+        let (mut shell, pty) = empty_shell();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::NewShellHere)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("new-shell-here".to_owned())]
+        );
+        assert_eq!(pty.spawn_count(), 1, "it launched in the home directory");
     }
 
     #[test]
