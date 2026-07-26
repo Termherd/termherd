@@ -30,7 +30,7 @@ pub fn target_dims(sw: u32, sh: u32, scale: f32) -> (u32, u32) {
 /// context. This ceiling is what actually holds the promise the width bound
 /// only appears to make. Set above the common landscape case (1200×750) so the
 /// default call is never silently shrunk twice.
-pub const MAX_PAYLOAD_PIXELS: u64 = 1_440_000;
+const MAX_PAYLOAD_PIXELS: u64 = 1_440_000;
 
 /// Output dimensions for a frame destined for a tool result: bounded to
 /// `max_width`, then to [`MAX_PAYLOAD_PIXELS`], keeping the aspect ratio and
@@ -148,9 +148,10 @@ fn resample_box(src: &[u8], sw: u32, sh: u32, tw: u32, th: u32) -> Vec<u8> {
 
 /// Nearest-neighbour resample of an RGBA buffer from `sw×sh` to `tw×th`. Output
 /// is exactly `tw*th*4` bytes. The cheap filter, and the right one when a frame
-/// grows rather than shrinks; [`resample`] picks between the two.
+/// grows rather than shrinks; [`resample`] picks between the two, and is the
+/// only way in — the direction, not the caller, chooses the filter.
 #[must_use]
-pub fn resample_nearest(src: &[u8], sw: u32, sh: u32, tw: u32, th: u32) -> Vec<u8> {
+fn resample_nearest(src: &[u8], sw: u32, sh: u32, tw: u32, th: u32) -> Vec<u8> {
     let mut out = vec![0u8; (tw as usize) * (th as usize) * 4];
     for ty in 0..th {
         let sy = (ty * sh / th).min(sh.saturating_sub(1));
@@ -180,13 +181,15 @@ pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Frame builders for the tests of every module that handles RGBA frames —
+/// this one, the capture adapter, and the screenshot seam in `shell::serve`.
+/// Shared so "a 4×4 numbered frame" means one thing across all three, and so
+/// no test spells a frame's byte length as arithmetic.
 #[cfg(test)]
-mod tests {
-    use super::*;
-
+pub(crate) mod testing {
     /// The byte length of a `width`×`height` RGBA frame — what every resample
     /// must return, whatever it decides to put in it.
-    fn rgba_len(width: usize, height: usize) -> usize {
+    pub fn rgba_len(width: usize, height: usize) -> usize {
         width * height * 4
     }
 
@@ -194,7 +197,7 @@ mod tests {
     /// `row*16 + col`. Which source pixel a resample reached for is then
     /// readable straight off the output: a wrong index reads as a wrong
     /// number, where a uniform frame would hide it.
-    fn numbered_frame(width: u8, height: u8) -> Vec<u8> {
+    pub fn numbered_frame(width: u8, height: u8) -> Vec<u8> {
         let mut frame = Vec::new();
         for row in 0..height {
             for col in 0..width {
@@ -205,15 +208,21 @@ mod tests {
     }
 
     /// An all-black `width`×`height` RGBA frame.
-    fn black_frame(width: usize, height: usize) -> Vec<u8> {
+    pub fn black_frame(width: usize, height: usize) -> Vec<u8> {
         vec![0u8; rgba_len(width, height)]
     }
 
     /// The red channel of each pixel in order — the readable form of a frame
     /// from [`numbered_frame`].
-    fn reds(frame: &[u8]) -> Vec<u8> {
+    pub fn reds(frame: &[u8]) -> Vec<u8> {
         frame.chunks_exact(4).map(|px| px[0]).collect()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use testing::*;
 
     #[test]
     fn target_dims_scales_and_floors_at_one() {
@@ -338,6 +347,21 @@ mod tests {
     }
 
     #[test]
+    fn a_truncated_source_goes_black_rather_than_panicking() {
+        // The `count > 0` guard is the only thing between a box that found no
+        // readable pixel and a divide by zero. A frame whose buffer is shorter
+        // than its declared size should not happen — but "should not" is not a
+        // guarantee, and a panic here would take the whole app down.
+        let truncated = black_frame(4, 1); // declared 4×4, one row of bytes
+        let out = resample(&truncated, 4, 4, 2, 2);
+        assert_eq!(out.len(), rgba_len(2, 2));
+        assert!(
+            out[out.len() - 4..].iter().all(|&channel| channel == 0),
+            "the unreadable rows come out black"
+        );
+    }
+
+    #[test]
     fn resample_leaves_an_unchanged_size_untouched() {
         let src = numbered_frame(2, 2);
         assert_eq!(resample(&src, 2, 2, 2, 2), src, "a no-op stays a no-op");
@@ -374,8 +398,7 @@ mod tests {
 
     #[test]
     fn encode_png_produces_bytes_that_decode_to_the_same_dimensions() {
-        let rgba = vec![255u8, 0, 0, 255, 0, 255, 0, 255]; // 2×1
-        let bytes = encode_png(&rgba, 2, 1).expect("encode");
+        let bytes = encode_png(&numbered_frame(2, 1), 2, 1).expect("encode");
         let reader = png::Decoder::new(bytes.as_slice())
             .read_info()
             .expect("decode");

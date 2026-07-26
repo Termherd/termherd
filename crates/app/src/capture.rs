@@ -204,9 +204,8 @@ mod tests {
 
     #[test]
     fn write_png_round_trips_dimensions() {
-        // A 2x1 RGBA image: two opaque pixels.
         let screenshot = Screenshot::new(
-            vec![255u8, 0, 0, 255, 0, 255, 0, 255],
+            crate::image::testing::numbered_frame(2, 1),
             iced::Size::new(2, 1),
             1.0,
         );
