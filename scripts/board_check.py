@@ -52,6 +52,21 @@ OWNER = "Termherd"
 REPO = "Termherd/termherd"
 PROJECT = "1"
 
+# Page sizes. Both are checked for truncation rather than trusted: a partial
+# fetch reads exactly like a board that lost items.
+ISSUE_LIMIT = 500
+BOARD_LIMIT = 1000
+
+
+class Truncated(Exception):
+    """A page cap cut the fetch short.
+
+    Distinct from an unreachable `gh`: that is an environment the script can
+    only skip, this is a constant in this file that stopped being big enough.
+    Skipping it would report a healthy board as broken, so it fails loudly
+    instead of degrading quietly.
+    """
+
 
 def gh_json(args: list[str]) -> dict | list:
     out = subprocess.run(["gh", *args], capture_output=True, text=True, check=True)
@@ -60,18 +75,24 @@ def gh_json(args: list[str]) -> dict | list:
 
 def reason(exc: Exception) -> str:
     """A short, honest cause — so a skipped dimension names what actually
-    failed instead of always blaming a missing scope."""
+    failed instead of always blaming a missing scope.
+
+    Every stderr line is scanned, not just the last: `gh` puts the diagnosis on
+    one line and the remedy on the next ("error: your authentication token is
+    missing required scopes [read:project]" / "To request it, run: gh auth
+    refresh -s read:project"), so reading the tail alone reports the remedy as
+    if it were the cause.
+    """
     if isinstance(exc, FileNotFoundError):
         return "`gh` not found on PATH"
     if isinstance(exc, subprocess.CalledProcessError):
-        tail = (exc.stderr or "").strip().splitlines()
-        line = tail[-1] if tail else ""
-        low = line.lower()
-        if "scope" in low:
+        lines = (exc.stderr or "").strip().splitlines()
+        blob = "\n".join(lines).lower()
+        if "scope" in blob:
             return "token lacks the `project` scope"
-        if any(k in low for k in ("tls", "certificate", "dial tcp", "connection")):
-            return f"network blocked `gh` ({line})"
-        return line or "`gh` exited non-zero"
+        if any(k in blob for k in ("tls", "certificate", "dial tcp", "connection")):
+            return f"network blocked `gh` ({lines[0]})"
+        return lines[-1] if lines else "`gh` exited non-zero"
     if isinstance(exc, json.JSONDecodeError):
         return "`gh` returned non-JSON output"
     return str(exc)
@@ -85,9 +106,14 @@ def open_issues() -> tuple[dict[int, tuple[str, str]] | None, str]:
     """
     try:
         data = gh_json(["issue", "list", "--repo", REPO, "--state", "open",
-                        "--limit", "500", "--json", "number,title,issueType"])
+                        "--limit", str(ISSUE_LIMIT), "--json",
+                        "number,title,issueType"])
     except (subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
         return None, reason(exc)
+    # `gh issue list` reports no total, so a full page is the only truncation
+    # signal there is. Refusing to check beats checking a slice of the truth.
+    if len(data) >= ISSUE_LIMIT:
+        raise Truncated(f"more than {ISSUE_LIMIT} open issues — raise ISSUE_LIMIT")
     return {
         int(i["number"]): ((i.get("issueType") or {}).get("name") or "", i["title"])
         for i in data
@@ -98,14 +124,24 @@ def board() -> tuple[dict[int, dict] | None, str]:
     """{issue number: item}, or (None, reason).
 
     `gh project item-list` lower-cases custom field names in its JSON output.
+
+    The board accumulates every closed issue too, so it outgrows the open-issue
+    count without bound. A silent truncation here is the worst failure the
+    script has: items past the cap vanish, their issues get reported as "not on
+    the board", and `--check` fails a healthy board. `totalCount` catches it.
     """
     try:
         data = gh_json(["project", "item-list", PROJECT, "--owner", OWNER,
-                        "--format", "json", "--limit", "300"])
+                        "--format", "json", "--limit", str(BOARD_LIMIT)])
     except (subprocess.CalledProcessError, json.JSONDecodeError, OSError) as exc:
         return None, reason(exc)
+    items = data.get("items", [])
+    total = data.get("totalCount")
+    if total is not None and len(items) < total:
+        raise Truncated(f"board truncated at {len(items)} of {total} items — "
+                        "raise BOARD_LIMIT")
     out: dict[int, dict] = {}
-    for item in data.get("items", []):
+    for item in items:
         num = (item.get("content") or {}).get("number")
         if num is not None:
             out[int(num)] = item
@@ -157,13 +193,47 @@ def selftest() -> int:
         exc.stderr = stderr
         return exc
 
-    for exc, want_sub in [
+    reason_cases = [
         (FileNotFoundError(), "not found"),
         (cpe("error: missing required scopes: project"), "scope"),
         (cpe('Post "https://api.github.com/graphql": tls: bad certificate'), "network"),
-    ]:
+        # the shapes `gh` actually emits: the diagnosis is followed by the
+        # remedy, so reading only the last line names the wrong cause
+        (cpe("error: your authentication token is missing required scopes "
+             "[read:project]\nTo request it, run: gh auth refresh -s read:project"),
+         "scope"),
+        (cpe('Get "https://api.github.com": dial tcp: lookup api.github.com: '
+             "no such host\ntry again later"), "network"),
+    ]
+    for exc, want_sub in reason_cases:
         if want_sub not in reason(exc):
-            fails.append(f"reason({exc!r}) missing {want_sub!r}")
+            fails.append(f"reason({exc!r}) = {reason(exc)!r}, missing {want_sub!r}")
+
+    # truncation detection, with `gh` stubbed out — a full page of issues and a
+    # board short of its own totalCount must both refuse to report
+    real_gh_json = globals()["gh_json"]
+    try:
+        globals()["gh_json"] = lambda _args: [
+            {"number": n, "title": "t", "issueType": None} for n in range(ISSUE_LIMIT)
+        ]
+        try:
+            open_issues()
+            fails.append("open_issues accepted a full page instead of raising")
+        except Truncated:
+            pass
+
+        globals()["gh_json"] = lambda _args: {"items": [{}], "totalCount": 7}
+        try:
+            board()
+            fails.append("board accepted a short page instead of raising")
+        except Truncated:
+            pass
+
+        globals()["gh_json"] = lambda _args: {"items": [], "totalCount": 0}
+        if board() != ({}, ""):
+            fails.append("board rejected an honestly empty page")
+    finally:
+        globals()["gh_json"] = real_gh_json
 
     for f in fails:
         print("selftest FAIL:", f)
@@ -176,8 +246,14 @@ def main() -> int:
     if "--selftest" in argv:
         return selftest()
 
-    issues, issues_err = open_issues()
-    items, board_err = board()
+    try:
+        issues, issues_err = open_issues()
+        items, board_err = board()
+    except Truncated as exc:
+        # Not a degradation: the fetch cap in this file stopped being big
+        # enough, and a partial view reports classified issues as missing.
+        print(f"⚠ {exc}")
+        return 1 if "--check" in argv else 0
 
     if issues is None:
         print(f"· issues unreachable ({issues_err}) — nothing to check.")
