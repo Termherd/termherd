@@ -68,6 +68,20 @@ pub enum Request {
     /// The visible text of one session's terminal, for the `read_terminal` MCP
     /// tool — the deep read the light `Snapshot` deliberately leaves out.
     ReadTerminal { session: u64, lines: usize },
+    /// The window's pixels as PNG bytes, for the `screenshot` MCP tool — the
+    /// companion of the text `Snapshot`, for what only pixels can show.
+    ///
+    /// The other odd one out on this bridge: the pixels come from an async iced
+    /// `window::screenshot`, so — like a wait — the reply lands after the
+    /// `update` that served the request. Here the reply port travels *with* the
+    /// screenshot task rather than parking in a waiter list, since the answer
+    /// depends on nothing the shell will later observe.
+    Screenshot {
+        /// Bound on the returned width; the frame is downscaled to fit and
+        /// never upscaled. Bounding matters: an unscaled retina window is
+        /// megabytes of base64 in the caller's context.
+        max_width: u32,
+    },
 }
 
 /// The result of a [`Request::WaitForStatus`]. `error` is `Some` only when the
@@ -95,6 +109,50 @@ pub struct TerminalRead {
     pub text: Option<String>,
     /// Why nothing was read, or `None` when the read ran.
     pub error: Option<String>,
+}
+
+/// The result of a [`Request::Screenshot`]: the encoded PNG and the size it was
+/// actually rendered at, or why no pixels could be produced.
+///
+/// `error` covers the two graceful degradations — no window (a headless run)
+/// and an encode failure. Neither is fatal: the text `Snapshot` stays the
+/// reliable read, and the caller is told so rather than left guessing.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ShotResult {
+    /// The encoded PNG, or `None` when `error` explains why there is none.
+    pub png: Option<Vec<u8>>,
+    /// Pixel dimensions of the encoded image — after the `max_width` fit, so a
+    /// caller knows what detail it actually received.
+    pub width: u32,
+    pub height: u32,
+    /// Why no image was produced, or `None` when one was.
+    pub error: Option<String>,
+}
+
+impl ShotResult {
+    /// No pixels, and the plain-language reason — the caller reads this.
+    pub fn failed(reason: impl Into<String>) -> Self {
+        Self {
+            png: None,
+            width: 0,
+            height: 0,
+            error: Some(reason.into()),
+        }
+    }
+}
+
+// A screenshot is megabytes of PNG; the derived `Debug` would dump all of it
+// into any log line or assertion failure carrying a `Reply`. Report the length
+// instead — the only part of the payload a reader can act on.
+impl fmt::Debug for ShotResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ShotResult")
+            .field("png_bytes", &self.png.as_ref().map(Vec::len))
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("error", &self.error)
+            .finish()
+    }
 }
 
 /// A workspace mutation an MCP client asks termherd to perform. Each variant
@@ -171,6 +229,7 @@ pub enum Reply {
     Acted(ActionOutcome),
     Waited(WaitOutcome),
     Terminal(TerminalRead),
+    Shot(ShotResult),
 }
 
 /// The kind of program a session runs, as an MCP client sees it. Distinct from
@@ -375,6 +434,11 @@ pub fn respond(core: &App, request: &Request, inputs: &SnapshotInputs) -> Reply 
             text: None,
             error: Some("a terminal read reached the read-only responder".into()),
         }),
+        // A screenshot is an async window round-trip the shell owns; same
+        // defensive default.
+        Request::Screenshot { .. } => Reply::Shot(ShotResult::failed(
+            "a screenshot reached the read-only responder; the shell must perform it",
+        )),
     }
 }
 

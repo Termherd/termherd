@@ -12,7 +12,10 @@ use std::time::Duration;
 use rmcp::{
     ErrorData, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
+    model::{
+        CallToolResult, ContentBlock, Implementation, ProtocolVersion, ServerCapabilities,
+        ServerInfo,
+    },
     schemars::JsonSchema,
     tool, tool_handler, tool_router,
 };
@@ -38,6 +41,21 @@ const DEFAULT_WAIT_MS: u64 = 30_000;
 /// Hard cap on a wait, whatever the caller asks for — the outer Q7 guarantee
 /// that no bridge call can park a caller indefinitely.
 const MAX_WAIT_MS: u64 = 300_000;
+
+/// Bound on a `screenshot` round-trip. Longer than [`CALL_TIMEOUT`]: it covers
+/// an async window frame *plus* a multi-megapixel resample and PNG encode,
+/// legitimately slower than a state read — but still bounded (Q7).
+const SCREENSHOT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Default bound on a screenshot's width. Sized for a model's context, not for
+/// a display: an unscaled retina window is megabytes of base64.
+const DEFAULT_MAX_WIDTH: u32 = 1200;
+
+/// Range a caller's `max_width` is clamped into. The floor keeps an image
+/// legible; the ceiling keeps one tool call from swamping the context it is
+/// supposed to inform.
+const MIN_MAX_WIDTH: u32 = 64;
+const MAX_MAX_WIDTH: u32 = 4096;
 
 /// Bound on the status read-back after a wait timed out. Deliberately short: it
 /// is a courtesy on top of an answer the caller has already earned, so it must
@@ -345,6 +363,50 @@ impl TermherdMcp {
             "rendered": read.text.is_some(),
         })))
     }
+
+    /// The window's pixels — what the text `snapshot` cannot show.
+    #[tool(
+        name = "screenshot",
+        description = "Capture termherd's window as a PNG image — the pixel \
+                       companion to the text `snapshot`, for render, colour and \
+                       glyph questions text cannot answer. Args: `max_width` \
+                       (bound on the returned width, default 1200, 64–4096); \
+                       the frame is downscaled to fit, never upscaled. Prefer \
+                       `snapshot` / `read_terminal` for anything textual — they \
+                       cost a fraction of the context an image does."
+    )]
+    async fn screenshot(
+        &self,
+        Parameters(args): Parameters<ScreenshotArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let max_width = args
+            .max_width
+            .unwrap_or(DEFAULT_MAX_WIDTH)
+            .clamp(MIN_MAX_WIDTH, MAX_MAX_WIDTH);
+        let reply = self
+            .bridge
+            .call(Request::Screenshot { max_width }, SCREENSHOT_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Shot(shot) = reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        let Some(png) = shot.png else {
+            return Ok(no_pixels(shot.error));
+        };
+        let data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png);
+        let mut result = CallToolResult::success(vec![ContentBlock::image(data, "image/png")]);
+        // The size the caller *received*, which is not the size it asked for
+        // when the window was smaller than the bound.
+        result.structured_content = Some(serde_json::json!({
+            "width": shot.width,
+            "height": shot.height,
+        }));
+        Ok(result)
+    }
 }
 
 impl TermherdMcp {
@@ -566,6 +628,18 @@ struct RunArgs {
     text: String,
 }
 
+/// A screenshot that produced no image, as a *tool-level* error: the caller
+/// reads this text, where an `Err(ErrorData)` would be rendered opaquely by its
+/// MCP client. It carries the shell's reason and the way forward — the text
+/// `snapshot` needs no window and still answers.
+fn no_pixels(reason: Option<String>) -> CallToolResult {
+    let reason = reason.unwrap_or_else(|| "the window produced no image".to_owned());
+    CallToolResult::error(vec![ContentBlock::text(format!(
+        "{reason}. Use `snapshot` or `read_terminal` instead — they read the \
+         workspace without the window."
+    ))])
+}
+
 /// Parse a stable handle string (as `list_sessions` / `snapshot` report it) to
 /// its numeric id, surfacing a non-numeric handle as an `invalid_params` error.
 fn parse_handle(handle: &str) -> Result<u64, ErrorData> {
@@ -591,6 +665,15 @@ struct WaitArgs {
     /// How long to wait before reporting the current status instead.
     #[serde(default)]
     timeout_ms: Option<u64>,
+}
+
+/// Arguments for `screenshot`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct ScreenshotArgs {
+    /// Bound on the returned image width, in pixels.
+    #[serde(default)]
+    max_width: Option<u32>,
 }
 
 /// Arguments for `read_terminal`.
@@ -644,7 +727,7 @@ fn status_from_str(name: &str) -> Option<SessionStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shell::bridge::{Reply, Request, channel, spawn_test_shell};
+    use crate::shell::bridge::{Reply, Request, ShotResult, channel, spawn_test_shell};
     use termherd_core::{App, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs};
 
     #[tokio::test]
@@ -1328,6 +1411,177 @@ mod tests {
             .expect_err("a rejected read is a tool error");
         assert!(
             error.message.contains("no live session"),
+            "got: {}",
+            error.message
+        );
+    }
+
+    // ---- screenshot: the pixel companion to `snapshot` ----
+
+    /// The image block of a tool result, as `(base64 data, mime type)`.
+    fn image_content(result: &CallToolResult) -> (String, String) {
+        result
+            .content
+            .iter()
+            .find_map(|block| match block {
+                ContentBlock::Image(image) => Some((image.data.clone(), image.mime_type.clone())),
+                _ => None,
+            })
+            .expect("an image content block")
+    }
+
+    /// Serve one `screenshot` call with `reply`, returning the tool result and
+    /// the request the bridge actually saw.
+    async fn call_screenshot(
+        args: ScreenshotArgs,
+        reply: Reply,
+    ) -> (Result<CallToolResult, ErrorData>, Request) {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(requests, reply);
+        let result = TermherdMcp::new(handle).screenshot(Parameters(args)).await;
+        (result, shell.await.expect("shell task"))
+    }
+
+    #[tokio::test]
+    async fn screenshot_returns_the_png_as_base64_image_content() {
+        let png = vec![0x89u8, 0x50, 0x4e, 0x47, 1, 2, 3];
+        let (result, _) = call_screenshot(
+            ScreenshotArgs::default(),
+            Reply::Shot(ShotResult {
+                png: Some(png.clone()),
+                width: 1200,
+                height: 800,
+                error: None,
+            }),
+        )
+        .await;
+        let result = result.expect("the tool returns a result");
+        let (data, mime) = image_content(&result);
+        assert_eq!(mime, "image/png");
+        assert_eq!(
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data)
+                .expect("valid base64"),
+            png,
+            "the caller receives exactly the bytes the shell encoded"
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshot_reports_the_dimensions_it_actually_produced() {
+        // An agent that asked for 1200 must be able to tell what it got — the
+        // window may have been smaller, in which case no upscaling happened.
+        let (result, _) = call_screenshot(
+            ScreenshotArgs::default(),
+            Reply::Shot(ShotResult {
+                png: Some(vec![1, 2, 3]),
+                width: 800,
+                height: 600,
+                error: None,
+            }),
+        )
+        .await;
+        let value = result
+            .expect("a result")
+            .structured_content
+            .expect("structured json alongside the image");
+        assert_eq!(value["width"], 800);
+        assert_eq!(value["height"], 600);
+    }
+
+    #[tokio::test]
+    async fn screenshot_defaults_the_width_bound() {
+        let (_, request) = call_screenshot(
+            ScreenshotArgs::default(),
+            Reply::Shot(ShotResult::failed("no window")),
+        )
+        .await;
+        assert_eq!(
+            request,
+            Request::Screenshot {
+                max_width: DEFAULT_MAX_WIDTH
+            },
+            "an unparameterised call still bounds the payload"
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshot_clamps_an_out_of_range_width_bound() {
+        // Both ends: a caller asking for a thumbnail too small to read, and one
+        // asking for more pixels than a tool result should ever carry.
+        let (_, tiny) = call_screenshot(
+            ScreenshotArgs { max_width: Some(1) },
+            Reply::Shot(ShotResult::failed("no window")),
+        )
+        .await;
+        assert_eq!(
+            tiny,
+            Request::Screenshot {
+                max_width: MIN_MAX_WIDTH
+            }
+        );
+        let (_, huge) = call_screenshot(
+            ScreenshotArgs {
+                max_width: Some(100_000),
+            },
+            Reply::Shot(ShotResult::failed("no window")),
+        )
+        .await;
+        assert_eq!(
+            huge,
+            Request::Screenshot {
+                max_width: MAX_MAX_WIDTH
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshot_passes_a_width_bound_inside_the_range_through() {
+        let (_, request) = call_screenshot(
+            ScreenshotArgs {
+                max_width: Some(640),
+            },
+            Reply::Shot(ShotResult::failed("no window")),
+        )
+        .await;
+        assert_eq!(request, Request::Screenshot { max_width: 640 });
+    }
+
+    #[tokio::test]
+    async fn a_window_less_run_degrades_to_a_readable_tool_error() {
+        // Not `Err(ErrorData)`: rmcp renders a protocol error opaquely, and the
+        // caller needs to read *why* and that `snapshot` still works.
+        let (result, _) = call_screenshot(
+            ScreenshotArgs::default(),
+            Reply::Shot(ShotResult::failed("no window to screenshot")),
+        )
+        .await;
+        let result = result.expect("a graceful degradation is not a protocol error");
+        assert_eq!(result.is_error, Some(true));
+        let text = result
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.text.clone()),
+                _ => None,
+            })
+            .collect::<String>();
+        assert!(
+            text.contains("no window to screenshot"),
+            "the shell's reason reaches the caller, got {text:?}"
+        );
+        assert!(
+            text.contains("snapshot"),
+            "the caller is pointed at the reliable read, got {text:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn screenshot_rejects_a_wrong_reply_kind_as_an_internal_error() {
+        let (result, _) =
+            call_screenshot(ScreenshotArgs::default(), Reply::Sessions(Vec::new())).await;
+        let error = result.expect_err("a mismatched reply is an internal error");
+        assert!(
+            error.message.contains("wrong reply kind"),
             "got: {}",
             error.message
         );

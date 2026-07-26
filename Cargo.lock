@@ -3855,6 +3855,7 @@ dependencies = [
 name = "termherd-app"
 version = "0.1.0-prerelease.4"
 dependencies = [
+ "base64",
  "bytes",
  "display-info",
  "gif",

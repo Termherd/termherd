@@ -391,10 +391,21 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
     can choose between waiting again and giving up. Bounds are the caller's:
     `timeout_ms` (default 30 s) capped at 5 min (Q7). Depends on #193; unblocks
     #196
-  - [ ] `F-mcp-agent-loop` (#196) — `type_into_terminal` + prompt→wait→read,
-    opt-in; depends on #195; product-scope question open (may be cut)
+  - [ ] `F-mcp-agent-loop` (#196) — the composed prompt→wait→read over **any**
+    session, shell or Claude: the primitive shipped as `run_in_session` (#194)
+    and is kind-agnostic, so what is left is the one-round-trip composition,
+    the guards, and an opt-in scoped to the nested-Claude case only. Depends on
+    #195
+  - [ ] `F-mcp-keys` (#229) — drive the **app** by key chords (not a terminal):
+    resolve a chord through the live keymap and dispatch its `Action` down the
+    real keypress path, so the palette, the browser, capture/record and any
+    future binding become reachable. Depends on #193/#194
   - [ ] `F-mcp-screenshot` (#215) — expose the window PNG as an MCP tool (async
-    window round-trip); pixel companion to #212, depends on #212/#193
+    window round-trip); pixel companion to #212, depends on #212/#193.
+    **#196 + #229 + #215 are one capability in three parts** — drive the UI,
+    see the pixels, read the terminal — the loop that lets an agent *verify* a
+    gesture fix instead of only proposing it. All three carry `P1` for that
+    reason
   - [x] `F-mcp-snapshot-g1` (#216) — **one model, two readers.** The G1 dev-loop
     dump (`~/.termherd/captures/capture-<ts>.json`) is now the same
     `WorkspaceSnapshot` the MCP `snapshot` tool reports, under a fixed
