@@ -404,6 +404,80 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn the_keyboard_tools_are_advertised_with_the_rest() {
+        let (bridge, _requests) = crate::shell::bridge::channel();
+        let tokens = Tokens::default();
+        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
+        let token = tokens.issue();
+
+        let (status, body) = round_trip(
+            &authority(&endpoint),
+            &call_headers(&token),
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        )
+        .await;
+
+        assert!(status.contains("200"), "got status: {status}");
+        for tool in ["press_keys", "run_action"] {
+            assert!(
+                body.contains(&format!("\"{tool}\"")),
+                "{tool} must be listed, got: {body}"
+            );
+        }
+    }
+
+    /// The wire proof for the keyboard rung: an authenticated `tools/call`
+    /// reaches the handler, the chord arrives parsed, and the per-press steps
+    /// come back as structured content. The handler's own tests never cross the
+    /// JSON-RPC boundary, so this is the one place that claim is made.
+    #[tokio::test]
+    async fn a_press_keys_call_carries_its_steps_back_as_structured_content() {
+        use crate::shell::bridge::{PressOutcome, PressStep, Reply, Request, spawn_test_shell};
+
+        let (bridge, requests) = crate::shell::bridge::channel();
+        let shell = spawn_test_shell(
+            requests,
+            Reply::Pressed(PressOutcome {
+                steps: vec![
+                    PressStep::Ran("close-focused".into()),
+                    PressStep::Overlay("tab-close-confirm".into()),
+                ],
+                focused: Some("7".into()),
+                error: None,
+            }),
+        );
+        let tokens = Tokens::default();
+        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
+        let token = tokens.issue();
+
+        let (status, body) = round_trip(
+            &authority(&endpoint),
+            &call_headers(&token),
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"press_keys","arguments":{"keys":["cmd+w","cmd+d"]}}}"#,
+        )
+        .await;
+
+        assert!(status.contains("200"), "got status: {status}");
+        assert!(
+            body.contains("\"action\":\"close-focused\""),
+            "the action that ran must reach the caller, got: {body}"
+        );
+        assert!(
+            body.contains("\"overlay\":\"tab-close-confirm\""),
+            "so must the prompt that ate the second chord, got: {body}"
+        );
+        assert!(
+            body.contains("\"focused_handle\":\"7\""),
+            "act→observe in one round trip, got: {body}"
+        );
+        // The chords crossed the boundary parsed, not as raw strings.
+        match shell.await.expect("shell task") {
+            Request::Press(presses) => assert_eq!(presses.len(), 2, "got: {presses:?}"),
+            other => panic!("expected a press request, got {other:?}"),
+        }
+    }
+
     #[test]
     fn authorized_only_for_a_minted_bearer_token() {
         let tokens = Tokens::default();

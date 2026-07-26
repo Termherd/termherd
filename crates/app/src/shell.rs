@@ -855,7 +855,9 @@ impl Shell {
                 let modifiers = event_modifiers(&event);
                 self.link_modifier = modifiers.control() || modifiers.logo();
                 self.shift_modifier = modifiers.shift();
-                self.on_key(event)
+                // A real keypress has no one to report to; the verdict exists
+                // for the MCP press tool, which answers a caller.
+                self.on_key(event).1
             }
             Message::ImeCommit(text) => self.on_ime_commit(text),
             Message::FocusPane(session) => {
@@ -1740,6 +1742,269 @@ mod key_routing {
             "the surviving tab is untouched"
         );
         assert_eq!(pty.kill_count(), 1, "only the first, targeted close killed");
+    }
+
+    // ---- Key presses over the control surface (F-mcp-keys) ---------------
+    //
+    // Two tools share one dispatch: a chord walks the real `on_key` ladder as a
+    // synthesised event, a named action skips the keymap but not the ladder.
+    // These pin what the ladder *reports*, which is the half a caller reads.
+
+    use super::bridge::{Press, PressStep};
+    use termherd_core::KeyChord;
+
+    /// Press one chord spec and return the step it produced.
+    fn press_chord(shell: &mut Shell, spec: &str) -> PressStep {
+        press_all(shell, &[spec]).remove(0)
+    }
+
+    /// Press a sequence of chord specs and return every step, in order.
+    fn press_all(shell: &mut Shell, specs: &[&str]) -> Vec<PressStep> {
+        let presses = specs
+            .iter()
+            .map(|spec| Press::Chord(KeyChord::parse(spec).expect("a test chord parses")))
+            .collect();
+        let (outcome, _task) = shell.perform_presses(presses);
+        assert_eq!(outcome.error, None, "the shell routes presses itself");
+        outcome.steps
+    }
+
+    /// The platform's primary-modifier spec, so these tests read the same
+    /// bindings the running app does on macOS and elsewhere.
+    fn mod_spec(rest: &str) -> String {
+        let primary = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        format!("{primary}+{rest}")
+    }
+
+    #[test]
+    fn a_bound_chord_runs_its_action_and_names_it() {
+        // The binding half: the chord resolves through the *live* keymap, so
+        // what runs is whatever the user bound — and the step names it, so a
+        // caller can tell "it worked" from "it hit something else".
+        let (mut shell, _pty) = shell_with_terminal();
+        let panes_before = shell.core.workspace.tabs[0].sessions().len();
+        let step = press_chord(&mut shell, &mod_spec("d"));
+        assert_eq!(step, PressStep::Ran("split-vertical".to_owned()));
+        assert_eq!(
+            shell.core.workspace.tabs[0].sessions().len(),
+            panes_before + 1,
+            "the action must actually apply, not just report"
+        );
+    }
+
+    #[test]
+    fn an_unbound_chord_reaches_the_focused_terminal_as_text() {
+        // A chord bound to nothing falls through exactly as a keypress does.
+        // Reported as `Typed`, not as success or as silence — the caller needs
+        // to know its chord went to the shell instead of to the app.
+        let (mut shell, pty) = shell_with_terminal();
+        let step = press_chord(&mut shell, "x");
+        assert_eq!(step, PressStep::Typed);
+        assert_eq!(
+            pty.writes(),
+            vec![b"x".to_vec()],
+            "the character must reach the PTY"
+        );
+    }
+
+    #[test]
+    fn a_chord_with_no_binding_and_no_terminal_is_reported_unbound() {
+        // Nothing claimed it. Reported rather than dropped: a silent success
+        // here would have an agent believe a gesture it never made.
+        let (mut shell, pty) = shell_with_terminal();
+        shell.focus = Focus::Search;
+        let step = press_chord(&mut shell, "x");
+        assert_eq!(step, PressStep::Unbound);
+        assert!(pty.writes().is_empty(), "nothing was typed anywhere");
+    }
+
+    #[test]
+    fn a_chord_naming_an_unreachable_key_is_reported_unbound() {
+        // `f2` is a key no event carries, so no real press could resolve it
+        // either. It must report, not vanish.
+        let (mut shell, _pty) = shell_with_terminal();
+        assert_eq!(press_chord(&mut shell, "f2"), PressStep::Unbound);
+    }
+
+    #[test]
+    fn a_press_sequence_applies_in_order() {
+        // Each press lands before the next, so a sequence composes — two splits
+        // leave three panes, not two.
+        let (mut shell, _pty) = shell_with_terminal();
+        let steps = press_all(&mut shell, &[&mod_spec("d"), &mod_spec("d")]);
+        assert_eq!(
+            steps,
+            vec![
+                PressStep::Ran("split-vertical".to_owned()),
+                PressStep::Ran("split-vertical".to_owned()),
+            ]
+        );
+        assert_eq!(shell.core.workspace.tabs[0].sessions().len(), 3);
+    }
+
+    #[test]
+    fn a_press_reports_the_focus_it_left_behind() {
+        // act→observe in one round trip, like the other action tools: a split
+        // focuses the new pane, and that is the handle the caller gets back.
+        let (mut shell, _pty) = shell_with_terminal();
+        let presses = vec![Press::Chord(
+            KeyChord::parse(&mod_spec("d")).expect("chord parses"),
+        )];
+        let (outcome, _task) = shell.perform_presses(presses);
+        assert_eq!(outcome.focused, focused(&shell));
+        assert!(outcome.focused.is_some(), "the new pane holds focus");
+    }
+
+    #[test]
+    fn a_prompt_a_press_opened_consumes_the_next_press_and_says_which() {
+        // The reason a chord is dispatched as a synthesised *event* rather than
+        // resolved to its action: closing a busy session arms a confirmation,
+        // and from then on the app behaves for MCP exactly as it does for a
+        // human — the prompt eats the next chord. The step names the prompt, so
+        // a caller learns why its chord did nothing instead of guessing.
+        let (mut shell, pty) = busy_shell_with_terminal();
+        assert_eq!(
+            press_chord(&mut shell, &mod_spec("w")),
+            PressStep::Ran("close-focused".to_owned())
+        );
+        assert!(shell.closing.is_some(), "a busy session arms the prompt");
+        assert_eq!(
+            press_chord(&mut shell, &mod_spec("d")),
+            PressStep::Overlay("tab-close-confirm".to_owned()),
+            "the prompt owns the keyboard, so the split never happens"
+        );
+        assert_eq!(shell.core.workspace.tabs[0].sessions().len(), 1);
+        assert_eq!(pty.kill_count(), 0, "nothing was killed while parked");
+    }
+
+    #[test]
+    fn escape_dismisses_a_prompt_a_press_opened() {
+        // The other half of the same reason: `escape` is an *overlay* key, bound
+        // to no keymap action. A chord resolved through `Keymap::lookup` could
+        // never reach it, and an agent that armed a prompt over MCP would leave
+        // the app parked until a human intervened. Through the real ladder it
+        // dismisses the prompt, so the loop closes.
+        let (mut shell, pty) = busy_shell_with_terminal();
+        let _ = press_chord(&mut shell, &mod_spec("w"));
+        assert_eq!(
+            press_chord(&mut shell, "escape"),
+            PressStep::Overlay("tab-close-confirm".to_owned())
+        );
+        assert_eq!(shell.closing, None, "escape must dismiss the prompt");
+        assert_eq!(pty.kill_count(), 0, "dismissing kills nothing");
+        // With the prompt gone the app takes chords again.
+        assert_eq!(
+            press_chord(&mut shell, &mod_spec("d")),
+            PressStep::Ran("split-vertical".to_owned())
+        );
+    }
+
+    #[test]
+    fn enter_confirms_a_prompt_a_press_opened() {
+        // The affirmative half: an agent can carry the close it asked for
+        // through to the kill, without a human answering the prompt.
+        let (mut shell, pty) = busy_shell_with_terminal();
+        let _ = press_chord(&mut shell, &mod_spec("w"));
+        let _ = press_chord(&mut shell, "enter");
+        assert_eq!(pty.kill_count(), 1, "enter must confirm the close");
+    }
+
+    #[test]
+    fn a_named_action_runs_without_going_through_the_keymap() {
+        // The behaviour half: `run_action` names the action directly, so it
+        // keeps working after a rebind that would break the chord.
+        let (mut shell, _pty) = shell_with_terminal();
+        let mut keymap = Keymap::defaults();
+        keymap.set(Action::SplitVertical, [KeyChord::new("F13", 0)]);
+        shell.keymap = keymap;
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::SplitVertical)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("split-vertical".to_owned())]
+        );
+        assert_eq!(
+            shell.core.workspace.tabs[0].sessions().len(),
+            2,
+            "the action runs even though its chord is now unreachable"
+        );
+    }
+
+    #[test]
+    fn an_action_with_no_surface_yet_reports_inert_not_ran() {
+        // `open-new-session` is in the keymap vocabulary and still unwired.
+        // Reporting `ran` would have an agent record a gesture that never
+        // happened — and, verifying a fix, read a false pass. `inert` also says
+        // *don't retry*, which `unbound` would not: no rebinding will help.
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::OpenNewSession)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Inert("open-new-session".to_owned())]
+        );
+        assert_eq!(shell.core.workspace.tabs.len(), 1, "nothing was opened");
+        assert_eq!(pty.spawn_count(), 1, "and nothing was spawned");
+    }
+
+    #[test]
+    fn a_surfaced_action_whose_effect_is_nothing_still_reports_ran() {
+        // The other side of that line: `activate-tab-9` on a one-tab workspace
+        // is absorbed by core as a no-op, but the action *is* wired — so it
+        // reports `ran`. `inert` is about a missing surface, not a quiet effect,
+        // and collapsing the two would make the distinction useless.
+        let (mut shell, _pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::ActivateTab(8))]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("activate-tab-9".to_owned())]
+        );
+    }
+
+    #[test]
+    fn an_open_prompt_gates_a_named_action_too() {
+        // `run_action` skips the keymap but not the ladder: letting it act
+        // through a prompt would give the MCP surface a reach the keyboard has
+        // not got, which is the one thing this control surface must never do.
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        let _ = shell.update(Message::RequestCloseTab(0));
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::SplitVertical)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Overlay("tab-close-confirm".to_owned())]
+        );
+        assert_eq!(
+            shell.core.workspace.tabs[0].sessions().len(),
+            1,
+            "the split must not happen behind the prompt"
+        );
+    }
+
+    #[test]
+    fn every_overlay_that_owns_the_keyboard_names_itself() {
+        // The ladder has one reader too many to leave unpinned: the key router,
+        // the terminal-input guard, and this control surface. Each overlay must
+        // both claim the keyboard and report a distinct name, or a caller
+        // reading `overlay` cannot tell which prompt is in its way.
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        assert!(
+            shell.keyboard_owner().is_none(),
+            "a plain shell owns nothing"
+        );
+        assert!(shell.accepts_terminal_input(), "and takes terminal input");
+
+        let _ = shell.update(Message::RequestCloseTab(0));
+        let owner = shell
+            .keyboard_owner()
+            .expect("the prompt owns the keyboard");
+        assert_eq!(owner.label(), "tab-close-confirm");
+        assert!(
+            !shell.accepts_terminal_input(),
+            "an owned keyboard sends nothing to the terminal — the guard and the \
+             ladder must agree"
+        );
     }
 
     #[test]

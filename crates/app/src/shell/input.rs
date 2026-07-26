@@ -37,6 +37,116 @@ pub(super) fn chord_of(
     Some(KeyChord::new(name, mods))
 }
 
+/// The key event a [`KeyChord`] stands for — the inverse of [`chord_of`].
+///
+/// This is what lets a chord that arrived as *text* (over the MCP control
+/// surface) walk the very same `on_key` ladder a physical press walks, instead
+/// of getting a second, shortcut-only dispatch path. So an overlay consumes what
+/// it would consume for a human, and `escape` / `enter` reach it — a chord
+/// resolved straight to its keymap action could never do that.
+///
+/// `None` for a chord naming a key no event can carry (`"f2"`, `"space"`): those
+/// bind to nothing today, so no round trip is owed.
+///
+/// The number row is rebuilt by *physical* position, mirroring how `chord_of`
+/// reads it — otherwise `cmd+1` would come back as the character `1` and fail to
+/// resolve on a layout where that key types something else.
+pub(super) fn event_of(chord: &KeyChord) -> Option<keyboard::Event> {
+    let (key, physical_key) = named_key(&chord.key)
+        .map(|named| (keyboard::Key::Named(named), NON_DIGIT))
+        .or_else(|| digit_key(&chord.key))
+        .or_else(|| character_key(&chord.key))?;
+    Some(keyboard::Event::KeyPressed {
+        modified_key: key.clone(),
+        // The chord's character *is* the text it types, so an unbound character
+        // chord falls through to the terminal typing that character. Chords are
+        // lowercased, so this types lower case; typing arbitrary text is
+        // `run_in_session`'s job, not this tool's.
+        text: match &key {
+            keyboard::Key::Character(c) => Some(c.clone()),
+            keyboard::Key::Named(_) | keyboard::Key::Unidentified => None,
+        },
+        key,
+        physical_key,
+        location: keyboard::Location::Standard,
+        modifiers: modifiers_of(chord.mods),
+        repeat: false,
+    })
+}
+
+/// A physical key that is not on the number row, for the character and named
+/// keys whose chord name comes from the key itself rather than its position.
+const NON_DIGIT: keyboard::key::Physical =
+    keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified);
+
+/// The named key a chord name spells, or `None` when it names a character. The
+/// inverse of [`key_name`]'s named arms, and deliberately no wider: a name this
+/// does not know is a key no binding can hold.
+fn named_key(name: &str) -> Option<keyboard::key::Named> {
+    use keyboard::key::Named;
+    match name {
+        "tab" => Some(Named::Tab),
+        "enter" => Some(Named::Enter),
+        "escape" => Some(Named::Escape),
+        "up" => Some(Named::ArrowUp),
+        "down" => Some(Named::ArrowDown),
+        "left" => Some(Named::ArrowLeft),
+        "right" => Some(Named::ArrowRight),
+        _ => None,
+    }
+}
+
+/// A single-digit chord name as a number-row key: the character it types plus
+/// the physical code [`physical_digit_name`] reads back.
+fn digit_key(name: &str) -> Option<(keyboard::Key, keyboard::key::Physical)> {
+    use keyboard::key::{Code, Physical};
+    let code = match name {
+        "0" => Code::Digit0,
+        "1" => Code::Digit1,
+        "2" => Code::Digit2,
+        "3" => Code::Digit3,
+        "4" => Code::Digit4,
+        "5" => Code::Digit5,
+        "6" => Code::Digit6,
+        "7" => Code::Digit7,
+        "8" => Code::Digit8,
+        "9" => Code::Digit9,
+        _ => return None,
+    };
+    Some((keyboard::Key::Character(name.into()), Physical::Code(code)))
+}
+
+/// A one-character chord name as a character key. Longer names are rejected:
+/// [`key_name`] only ever produces one character, so a multi-character name that
+/// [`named_key`] did not claim can round-trip through nothing.
+fn character_key(name: &str) -> Option<(keyboard::Key, keyboard::key::Physical)> {
+    let mut chars = name.chars();
+    let ch = chars.next()?;
+    chars
+        .next()
+        .is_none()
+        .then(|| (keyboard::Key::Character(ch.to_string().into()), NON_DIGIT))
+}
+
+/// The iced modifier state for a chord's [`keymap`] modifier bits — the inverse
+/// of the bit-setting half of [`chord_of`].
+fn modifiers_of(mods: u8) -> keyboard::Modifiers {
+    let mut modifiers = keyboard::Modifiers::default();
+    if mods & keymap::MOD_CTRL != 0 {
+        modifiers |= keyboard::Modifiers::CTRL;
+    }
+    if mods & keymap::MOD_ALT != 0 {
+        modifiers |= keyboard::Modifiers::ALT;
+    }
+    if mods & keymap::MOD_SHIFT != 0 {
+        modifiers |= keyboard::Modifiers::SHIFT;
+    }
+    if mods & keymap::MOD_CMD != 0 {
+        modifiers |= keyboard::Modifiers::LOGO;
+    }
+    modifiers
+}
+
 /// The digit `"0"`…`"9"` for a number-row key by physical position, or `None`
 /// for any other key. Layout-independent: the same physical keys carry these
 /// names on QWERTY, AZERTY, QWERTZ, … so number-row shortcuts are universal —
@@ -147,12 +257,24 @@ pub(super) fn event_modifiers(event: &keyboard::Event) -> keyboard::Modifiers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iced::keyboard::key::{Code, Named, NativeCode, Physical};
+    use iced::keyboard::key::{Code, Named, Physical};
     use iced::keyboard::{Key, Modifiers};
+    use termherd_core::keymap::action_catalog;
 
-    /// A physical key that is not on the number row — letters and named keys
-    /// fall back to their character/name, so tests pass this for non-digits.
-    const NON_DIGIT: Physical = Physical::Unidentified(NativeCode::Unidentified);
+    /// The chord a synthesised event reads back as, or `None` when the chord
+    /// could not be synthesised at all — the whole round trip in one call.
+    fn round_trip(chord: &KeyChord) -> Option<KeyChord> {
+        let keyboard::Event::KeyPressed {
+            key,
+            physical_key,
+            modifiers,
+            ..
+        } = event_of(chord)?
+        else {
+            return None;
+        };
+        chord_of(&key, &physical_key, modifiers)
+    }
 
     #[test]
     fn to_term_key_maps_characters_and_named_keys() {
@@ -278,6 +400,141 @@ mod tests {
         assert_eq!(numpad_char(keyboard::Location::Numpad, None), None);
         assert_eq!(numpad_char(keyboard::Location::Numpad, Some("")), None);
         assert_eq!(numpad_char(keyboard::Location::Numpad, Some("\r")), None);
+    }
+
+    // ---- `event_of`: the inverse of `chord_of` (F-mcp-keys) --------------
+    //
+    // A chord that arrived as text must reach the app as an event the routing
+    // ladder cannot tell from a real press. The round trip is the property that
+    // pins it: whatever `event_of` builds, `chord_of` must read back unchanged.
+
+    #[test]
+    fn every_chord_the_shipped_keymap_can_hold_round_trips() {
+        // The defaults are the chords that must work on day one. A chord that
+        // does not round-trip is a binding `press_keys` silently cannot reach —
+        // exactly the silent-drop this rung exists to avoid.
+        let primary = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        for entry in action_catalog() {
+            for spec in entry.default_chords {
+                let chord = KeyChord::parse(&spec.replace("mod", primary))
+                    .expect("a shipped default chord spec parses");
+                assert_eq!(
+                    round_trip(&chord).as_ref(),
+                    Some(&chord),
+                    "default chord `{spec}` for {} must round-trip",
+                    entry.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_number_row_round_trips_by_physical_position() {
+        // `chord_of` reads digits positionally, so `event_of` must *write* them
+        // positionally. A character-only digit event would read back as whatever
+        // that key types on the user's layout — on AZERTY, not a digit at all.
+        //
+        // The physical code has to be asserted per digit, not inferred from the
+        // round trip: a digit that fell through to the character path still
+        // round-trips here (`chord_of` reads its character when the physical key
+        // is not a digit code), so the round trip alone cannot see the bug. A
+        // mutation run proved it — deleting nine of the ten arms in `digit_key`
+        // survived a version of this test that spot-checked one digit.
+        for (digit, code) in [
+            ('0', Code::Digit0),
+            ('1', Code::Digit1),
+            ('2', Code::Digit2),
+            ('3', Code::Digit3),
+            ('4', Code::Digit4),
+            ('5', Code::Digit5),
+            ('6', Code::Digit6),
+            ('7', Code::Digit7),
+            ('8', Code::Digit8),
+            ('9', Code::Digit9),
+        ] {
+            let chord = KeyChord::new(digit.to_string(), keymap::MOD_CMD);
+            assert_eq!(round_trip(&chord).as_ref(), Some(&chord));
+            let keyboard::Event::KeyPressed { physical_key, .. } =
+                event_of(&chord).expect("a digit chord synthesises")
+            else {
+                unreachable!("event_of builds a key press")
+            };
+            assert_eq!(
+                physical_key,
+                Physical::Code(code),
+                "`{digit}` must carry its physical code, not just its character"
+            );
+        }
+    }
+
+    #[test]
+    fn a_chord_no_key_event_can_carry_synthesises_nothing() {
+        // `key_name` never produces these, so no real press could resolve such a
+        // binding either. Reporting nothing is the faithful answer; inventing an
+        // event would give the MCP surface a reach the keyboard lacks.
+        for name in ["f2", "space", "pageup", "home"] {
+            assert_eq!(
+                event_of(&KeyChord::new(name, keymap::MOD_CMD)),
+                None,
+                "`{name}` names no key an event can carry"
+            );
+        }
+    }
+
+    #[test]
+    fn a_character_chord_carries_its_character_as_typed_text() {
+        // An unbound character chord falls through to the terminal, which types
+        // `text` — so a chord with no text would reach the PTY as nothing.
+        let keyboard::Event::KeyPressed { text, .. } =
+            event_of(&KeyChord::new("a", 0)).expect("a character chord synthesises")
+        else {
+            unreachable!("event_of builds a key press")
+        };
+        assert_eq!(text.as_deref(), Some("a"));
+        // A named key types no text of its own — `key_bytes` derives its
+        // sequence from the `TermKey`, and inventing text here would double it.
+        let keyboard::Event::KeyPressed { text, .. } =
+            event_of(&KeyChord::new("enter", 0)).expect("a named chord synthesises")
+        else {
+            unreachable!("event_of builds a key press")
+        };
+        assert_eq!(text, None);
+    }
+
+    #[test]
+    fn modifiers_round_trip_through_every_combination() {
+        // All 16 combinations of the four modifier bits, so neither direction can
+        // drop or transpose one — a swapped Cmd/Ctrl would make every default
+        // binding unreachable on one platform and silently work on the other.
+        for mods in 0u8..16 {
+            let chord = KeyChord::new("k", mods);
+            assert_eq!(
+                round_trip(&chord).as_ref(),
+                Some(&chord),
+                "modifier bits {mods:#06b} must round-trip"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        /// Every chord built from a key name the keymap can name and any
+        /// modifier set survives the round trip.
+        #[test]
+        fn arbitrary_nameable_chords_round_trip(
+            name in proptest::sample::select(vec![
+                "a", "z", "0", "5", "9", "-", "=", "+",
+                "tab", "enter", "escape", "up", "down", "left", "right",
+            ]),
+            mods in 0u8..16,
+        ) {
+            let chord = KeyChord::new(name, mods);
+            let read_back = round_trip(&chord);
+            proptest::prop_assert_eq!(read_back.as_ref(), Some(&chord));
+        }
     }
 
     #[test]

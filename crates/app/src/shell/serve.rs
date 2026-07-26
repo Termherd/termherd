@@ -43,6 +43,13 @@ impl Shell {
                 reply.answer(bridge::Reply::Acted(outcome));
                 task
             }
+            // Presses drive the app's own keyboard routing, which mutates —
+            // same reason as `Act`, so it takes the same fork.
+            Request::Press(presses) => {
+                let (outcome, task) = self.perform_presses(presses);
+                reply.answer(bridge::Reply::Pressed(outcome));
+                task
+            }
             // A wait may answer now or park; either way it needs no follow-up.
             Request::WaitForStatus { session, targets } => {
                 self.serve_wait(session, targets, reply);
