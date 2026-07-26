@@ -400,12 +400,27 @@ geometry) with drag-resize split out to #55 (blocked-by #54; feature-torture
     resolve a chord through the live keymap and dispatch its `Action` down the
     real keypress path, so the palette, the browser, capture/record and any
     future binding become reachable. Depends on #193/#194
-  - [ ] `F-mcp-screenshot` (#215) — expose the window PNG as an MCP tool (async
-    window round-trip); pixel companion to #212, depends on #212/#193.
-    **#196 + #229 + #215 are one capability in three parts** — drive the UI,
-    see the pixels, read the terminal — the loop that lets an agent *verify* a
-    gesture fix instead of only proposing it. All three carry `P1` for that
-    reason
+  - [x] `F-mcp-screenshot` (#215) — **the pixel rung.** A `screenshot` tool
+    returning the window as PNG image content, for the render / colour / glyph
+    questions the text `snapshot` cannot answer. The first bridge request whose
+    answer comes from outside `core::App`: the pixels arrive from an async iced
+    `window::screenshot`, so the reply port travels *inside* the screenshot task
+    and answers from there — unlike a wait it parks in no list, since nothing
+    the shell will later observe decides it. Payload is the constraint, not an
+    afterthought: an unscaled retina window is megabytes of base64, so
+    `max_width` (default 1200, clamped 64–4096) bounds the image, the frame is
+    downscaled to fit and **never** upscaled, and the result reports the size
+    actually produced. The decision is a pure function of `Option<Screenshot>`
+    (`shot_reply`), so sizing, degradation and encoding are all testable
+    headlessly; a window-less run answers with the reason as a *tool-level*
+    error (which the caller reads, unlike an `ErrorData`) pointing at
+    `snapshot`. Tidy-first prerequisite: `target_dims` / `resample_nearest`
+    (from the recorder) and the PNG encoder (from the capture dump) moved into
+    one pure `app::image` module rather than being copied a third time.
+    Depends on #212/#193. **#196 + #229 + #215 are one capability in three
+    parts** — drive the UI, see the pixels, read the terminal — the loop that
+    lets an agent *verify* a gesture fix instead of only proposing it. All
+    three carry `P1` for that reason
   - [x] `F-mcp-snapshot-g1` (#216) — **one model, two readers.** The G1 dev-loop
     dump (`~/.termherd/captures/capture-<ts>.json`) is now the same
     `WorkspaceSnapshot` the MCP `snapshot` tool reports, under a fixed
