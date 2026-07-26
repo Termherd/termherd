@@ -128,6 +128,14 @@ with `wait_for_status` and then `read_terminal`. Do **not** poll `snapshot` in
 a loop — it races the transition you are watching for, which is why the wait
 rung exists.
 
+**That loop does not currently run (#236).** No session leaves `starting`, so
+`wait_for_status` only ever settles by timing out, and the advice above leaves
+a caller with no recourse at all. Until it is fixed, treat the wait as a bounded
+sleep and read the terminal after it. The same stuck status also stops a close
+confirmation arming for a *shell* — `has_running_process` needs `Busy` or
+`Attention` — which is why a Claude session, which always confirms, is the
+reliable way to exercise that prompt.
+
 `screenshot` is the pixel companion to the text `snapshot`, for the render,
 colour and glyph questions text cannot answer. Reach for it *last*: a
 default-bound window is ~200 kB of PNG and a third more again as base64, where
@@ -195,7 +203,16 @@ overlay ladder and its outcome named once, since three readers consult them.
 round trip), the last child of the #90 epic. With `screenshot` and the keyboard
 tools the capability is otherwise whole in three parts: drive the UI, see the
 pixels, read the terminal — what lets an agent verify a gesture fix instead of
-only proposing it.
+only proposing it. Note the order: #196 *composes* the wait that #236 currently
+breaks, so building it first means building on a synchronisation that never
+fires.
+
+Two defects of this surface are known and filed. **#236** — no session leaves
+`starting`, so `wait_for_status` never settles (above). **#237** — an open
+sidebar session-rename swallows every key including `escape`, so it parks the
+whole control surface until a human clears it with the mouse. That second one
+is the failure mode the synthesised-key-event design exists to prevent: it is
+prevented for the confirmation prompts, and not for that one.
 
 **Looks like a contradiction, is not.** `docs/ARCHITECTURE.md` §15 lists an
 `mcp` crate as *deferred (Unsure)*. That is a **different feature** —
@@ -300,6 +317,16 @@ exists). Do not relax them locally.
   `count > 0` — all that stands between a box with no readable pixel and a
   divide by zero — was reachable and earned a truncated-buffer test. Both
   survivors looked like missing assertions and were really design smells.
+- **A test that claims to be exhaustive is worse than no test when it is not.**
+  A hand-written list asserting "this *set* is the contract" reads as a
+  guarantee, so nobody re-derives it — where an absent test at least leaves the
+  reader suspicious. `every_action_that_can_refuse_reports_which_kind_of_nothing`
+  said so in its own comment and listed five of the seven actions that refuse;
+  the two it missed (`copy` with nothing selected, `close-focused` on an empty
+  workspace) went on reporting success at doing nothing, which is the exact
+  failure the test existed to kill. Either derive the list from the same source
+  the code uses, or make each case fail loudly on its own — never assert
+  completeness in prose above an enumeration a human typed.
 
 ## Conventions
 

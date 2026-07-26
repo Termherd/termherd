@@ -161,13 +161,21 @@ nothing to configure. It exposes the running workspace:
 | `wait_for_status` | block until a session goes idle / wants attention |
 | `read_terminal` | one pane's visible text |
 | `screenshot` | the window as a PNG — for what only pixels show |
+| `press_keys` · `run_action` | drive termherd's own interface — chords through the live keymap, or actions by name |
 
 The loop that makes it useful is **act → wait → observe**: `run_in_session`,
 then `wait_for_status`, then `read_terminal`. Sessions are addressed by a
 stable `handle` that survives a Claude-side session re-key.
 
-A composed prompt→wait→read in one round trip ([#196]) and key chords into the
-app itself ([#229]) are the remaining follow-ups.
+`press_keys` and `run_action` reach the app itself, not a terminal — typing
+into a session stays `run_in_session`'s job. A chord goes in as a synthesised
+key event down the real keyboard path, so an open prompt consumes it exactly as
+it would for a human, and `escape` / `enter` can answer that prompt. Each press
+reports what happened (`ran`, `inert`, `overlay`, `typed`, `unbound`), so
+"nothing visible changed" is never confused with "it worked".
+
+A composed prompt→wait→read in one round trip ([#196]) is the remaining
+follow-up.
 
 ### The stdio server (manual)
 
@@ -192,7 +200,6 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 
 [#90]: https://github.com/Termherd/termherd/issues/90
 [#196]: https://github.com/Termherd/termherd/issues/196
-[#229]: https://github.com/Termherd/termherd/issues/229
 
 ## Test
 
