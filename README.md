@@ -160,13 +160,14 @@ nothing to configure. It exposes the running workspace:
 | `run_in_session` | type into a terminal (returns immediately) |
 | `wait_for_status` | block until a session goes idle / wants attention |
 | `read_terminal` | one pane's visible text |
+| `screenshot` | the window as a PNG — for what only pixels show |
 
 The loop that makes it useful is **act → wait → observe**: `run_in_session`,
 then `wait_for_status`, then `read_terminal`. Sessions are addressed by a
 stable `handle` that survives a Claude-side session re-key.
 
-Screenshots ([#215]) and an opt-in agent-drives-agent loop ([#196]) are the
-remaining follow-ups.
+A composed prompt→wait→read in one round trip ([#196]) and key chords into the
+app itself ([#229]) are the remaining follow-ups.
 
 ### The stdio server (manual)
 
@@ -191,7 +192,7 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 
 [#90]: https://github.com/Termherd/termherd/issues/90
 [#196]: https://github.com/Termherd/termherd/issues/196
-[#215]: https://github.com/Termherd/termherd/issues/215
+[#229]: https://github.com/Termherd/termherd/issues/229
 
 ## Test
 

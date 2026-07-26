@@ -74,9 +74,17 @@ impl Shell {
     /// yields no frame and answers with the reason, so the caller learns why
     /// rather than waiting out its bound.
     ///
-    /// The fit + encode run inside the async block, off the UI thread: a
-    /// multi-megapixel resample and PNG encode on the render thread would stall
-    /// the very frames the caller is trying to photograph.
+    /// The fit + encode run inside the async block, so they are off the winit
+    /// thread — a multi-megapixel resample and PNG encode there would stall the
+    /// very frames the caller is trying to photograph. They are still
+    /// synchronous work occupying one bridge-runtime worker for their duration;
+    /// the runtime is multi-threaded, so that costs concurrency, not liveness.
+    ///
+    /// One gap the reason-in-words degradation does not cover: a window that
+    /// disappears *between* `latest` and `screenshot` (a quit mid-capture)
+    /// leaves the iced oneshot unanswered, so this task never resumes and the
+    /// caller falls back on its own `SCREENSHOT_TIMEOUT`. Bounded, never a
+    /// hang (Q7) — but a timeout rather than an explanation.
     fn serve_screenshot(max_width: u32, reply: ReplyPort) -> Task<Message> {
         window::latest()
             .then(|window| match window {
