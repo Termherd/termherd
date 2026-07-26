@@ -34,7 +34,7 @@ just check-arch                    # intra-crate module boundaries + OS-cfg cont
 markdownlint-cli2                  # uses .markdownlint-cli2.jsonc
 
 # Planning hygiene — not a CI gate (needs a `project`-scoped token)
-just board-check                   # open issues the board hasn't classified
+just board-check                   # board/issue drift (0 clean · 1 drift · 2 unchecked)
 ```
 
 Toolchain is pinned to **Rust 1.95.0 / edition 2024** via `rust-toolchain.toml`
@@ -321,8 +321,12 @@ issues, so a scoped roadmap item with no issue is invisible):
   `.personal/feature-torture/reports/<F-id>.md`; cite it in the ROADMAP entry.
   Items that stay design-first (e.g. `F-keymap-per-command`) live only in the
   roadmap until their blocking design is resolved.
-- **`just board-check` reports the issues the board never classified** — filed,
-  then invisible to every view. It checks the board only: the roadmap's MoSCoW
+- **`just board-check` reports board/issue drift** — an open issue the board
+  never classified (filed, then invisible to every view), and an item whose
+  `Status` and `Horizon` disagree about having shipped. That second one is
+  structural, not hypothetical: closing an issue flips `Status` to Done and
+  leaves `Horizon` alone, so a landed feature keeps reading as *Next* until
+  someone moves it by hand. It checks the board only: the roadmap's MoSCoW
   list has no per-entry horizon, so neither "every issue is cited by an entry"
   (it flags refinements that were never features) nor "every unticked entry
   cites an issue" (it flags the design-first items the rule above *wants* to

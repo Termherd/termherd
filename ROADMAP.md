@@ -32,7 +32,11 @@ exists and why**, never when it gets picked up.
 
 - [x] `F-foundations` — workspace, core, CI, single-instance, tracing
 - [x] `F-app-shell` — window, lifecycle, bounds (menu: deferred to M3 with
-  the keymap — no native menu API in iced; menu items mirror keymap actions)
+  the keymap — no native menu API in iced; menu items mirror keymap actions).
+  The deferral left one visible gap on macOS: winit builds only the
+  *application* menu, so there is no Window menu and **⌘M does not minimize**
+  (#114) — a system gesture users expect of any window, not a keymap
+  preference
 - [x] `F-session-browser` — scan + derive + group + list + live fs-watch
   updates (debounced `notify`, FR2); a per-project disclosure triangle folds
   its session list, persisted to `~/.termherd/collapsed.json` (#22); long
@@ -51,7 +55,16 @@ exists and why**, never when it gets picked up.
   iced `canvas` renders the colour grid + cursor; raw keyboard routed to the
   focused PTY; wheel scrollback; drag-to-select + copy; `claude --resume` on
   a session click; PTY resize follows the window. Verified end-to-end on
-  Windows resuming a real Claude session.
+  Windows resuming a real Claude session. The widget shipped; the **terminal
+  ergonomics a user compares against Ghostty/iTerm are still open**, each a
+  refinement of this entry rather than a feature of its own: clipboard
+  conventions (copy-on-select, paste-on-right-click, #36), Cmd/Ctrl-clickable
+  hyperlinks whose displayed text differs from the URL (OSC 8, #84),
+  auto-scroll when a drag-selection reaches the canvas edge (#157), and
+  Alt+drag rectangular selection (#159). Two contract bugs sit on the same
+  surface: mouse reporting isn't forwarded to the child (#155, vim) and the
+  `emitted_lines_never_drift` property has a known failing scroll sequence
+  whose seed was never committed (#102)
 - [x] `F-search` — in-memory search over digests (was `F-fts-search`;
   the SQLite FTS5 version moved to Should as `F-store-cache`, PRD rev. 4)
   — case-insensitive, titles-only toggle (FR3)
@@ -264,6 +277,28 @@ exists and why**, never when it gets picked up.
   (`launch_command`, `crates/pty/src/lib.rs`), so the one real cost is
   cross-shell path quoting (pwsh vs bash)
 - [ ] `F-session-grid` — a layout preset over the pane model
+- [ ] `F-multi-window` — more than one termherd window, and tabs that travel
+  between them. Filed as three issues in dependency order: **#149** opens a
+  second window (`mod+shift+n`) — architectural, since the shell is built on
+  `iced::application` (single-window) and would convert to `iced::daemon`;
+  **#153** moves a tab to another window by drag-and-drop and **#154** detaches
+  one by dropping outside any window, both *blocked by* #149 and both reusing
+  the in-window `TabDrag` plumbing that already reorders tabs. The gate is
+  #149's conversion: `core::Workspace` is one tree today, so "which window owns
+  this tab" has no representation yet
+- [ ] `F-repo-view` — a per-repository surface to browse and *manage* one git
+  repo's sessions (rename, archive, launch, compare) instead of only the flat
+  `project_path` grouping in the sidebar. Filed as **#148**, `needs-design`:
+  git awareness exists today only to *normalize* paths (worktrees collapse onto
+  their main repo), so "the sessions of this repo" is not a concept `core`
+  holds. Design before scope — what the surface is (pane, tab, modal) decides
+  most of the cost
+- [ ] `F-file-browser` — a file tree for the focused repository, floating or as
+  a right pane in the tab area. Filed as **#151**, `needs-design` and
+  greenfield: nothing tree-shaped exists in the app (the closest, Plans &
+  mémoire, is a flat fixed list of Markdown docs). Adjacent to `F-repo-view`
+  (#148) — both answer "show me this repo", one by session, one by file — and
+  worth shaping together rather than twice
 - [ ] `F-scheduled-tasks`
 - [ ] `F-mcp-ide-bridge` — live MCP/IDE bridge to Claude (moved from Unsure,
   PRD rev. 6); decoupled from the still-Unsure diff panel
