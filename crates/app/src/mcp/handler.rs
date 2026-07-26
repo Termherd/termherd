@@ -431,7 +431,11 @@ impl TermherdMcp {
                        chord — `ran` (with the action's name), `inert` (the \
                        action exists but has no surface yet, so nothing \
                        happened; do not retry), `overlay` (an open prompt \
-                       consumed it; press \"enter\" or \"escape\" to answer it), \
+                       consumed it; \"escape\" usually cancels and \"enter\" \
+                       confirms — but on `quit-confirm` \"enter\" quits the app, \
+                       killing every session and this connection, and \
+                       `session-rename` answers to neither, so only a human can \
+                       clear that one), \
                        `typed` (bound to nothing, so it reached the focused \
                        terminal), `unbound` (nothing claimed it) — plus the \
                        resulting `focused_handle`. Use `run_action` instead \
@@ -461,10 +465,10 @@ impl TermherdMcp {
                        where `press_keys` tests the binding itself. Names are \
                        the kebab-case ones the `keys` section of settings.json \
                        speaks: \"split-vertical\", \"next-tab\", \
-                       \"toggle-sidebar\", \"capture\", \"activate-tab-3\", … \
-                       (the full catalogue with current bindings is published as \
-                       the `termherd://keys/schema` resource). \
-                       Args: `actions` (applied in order). An open prompt still \
+                       \"toggle-sidebar\", \"capture\", \"activate-tab-3\". An \
+                       unknown name is rejected and the error shows the syntax; \
+                       this server serves tools only, so there is no resource to \
+                       enumerate them from. Args: `actions` (applied in order). An open prompt still \
                        consumes an action, exactly as it consumes a keypress, \
                        and the step reports which one — answer it with \
                        `press_keys([\"enter\"])`. Returns `steps` plus the \
@@ -533,6 +537,20 @@ impl TermherdMcp {
         };
         if let Some(reason) = outcome.error {
             return Err(ErrorData::internal_error(reason, None));
+        }
+        // The echo is positional, so a step count that does not match the press
+        // count would silently truncate — or worse, misalign — into a report
+        // indistinguishable from a correct one. The shell answers one step per
+        // press, so this is a loud failure rather than a quiet wrong answer.
+        if outcome.steps.len() != requested.len() {
+            return Err(ErrorData::internal_error(
+                format!(
+                    "the shell answered {} steps for {} presses",
+                    outcome.steps.len(),
+                    requested.len()
+                ),
+                None,
+            ));
         }
         let steps: Vec<PressStepDto> = outcome
             .steps
@@ -1992,6 +2010,27 @@ mod tests {
             .expect_err("a mis-routed press is an internal error");
         assert!(
             error.message.contains("read-only responder"),
+            "got: {}",
+            error.message
+        );
+        let _ = shell.await;
+    }
+
+    #[tokio::test]
+    async fn a_step_count_that_does_not_match_the_presses_is_an_internal_error() {
+        // The echo is positional. A shell answering a different number of steps
+        // would otherwise truncate into a report that reads as correct — worse
+        // than an error, because the caller acts on it.
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(requests, pressed(vec![PressStep::Typed]));
+        let error = TermherdMcp::new(handle)
+            .press_keys(Parameters(PressKeysArgs {
+                keys: vec!["cmd+d".into(), "cmd+w".into()],
+            }))
+            .await
+            .expect_err("a step/press mismatch is an internal error");
+        assert!(
+            error.message.contains("1 steps for 2 presses"),
             "got: {}",
             error.message
         );

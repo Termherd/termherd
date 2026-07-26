@@ -924,7 +924,7 @@ impl Shell {
                 });
                 self.perform(effects)
             }
-            Message::RequestCloseTab(index) => self.request_close(index),
+            Message::RequestCloseTab(index) => self.request_close(index).unwrap_or_else(Task::none),
             Message::CloseTab(index) => self.close_tab(index),
             Message::CancelClose => {
                 self.closing = None;
@@ -1175,10 +1175,13 @@ impl Shell {
     }
 
     /// Copy the last terminal selection to the clipboard, if any (FR4).
-    fn copy_selection(&self) -> Task<Message> {
+    /// Put the last terminal selection on the clipboard. `None` when there is
+    /// nothing selected: a caller told the copy ran would follow with a paste and
+    /// paste whatever was on the clipboard before.
+    fn copy_selection(&self) -> Option<Task<Message>> {
         match &self.selection {
-            Some(sel) if !sel.is_empty() => iced::clipboard::write(sel.clone()),
-            _ => Task::none(),
+            Some(sel) if !sel.is_empty() => Some(iced::clipboard::write(sel.clone())),
+            _ => None,
         }
     }
 
@@ -1988,6 +1991,15 @@ mod key_routing {
             (Action::ScrollBottom, "scroll-bottom"),
             (Action::NextTab, "next-tab"),
             (Action::PrevTab, "prev-tab"),
+            // There is no tab to close, so `request_close` bails on its range
+            // check — and `close-focused` is the action whose prompt-arming the
+            // headline overlay test depends on, so a false `ran` here is the
+            // worst of the set.
+            (Action::CloseFocused, "close-focused"),
+            // Nothing is selected, so there is nothing to put on the clipboard.
+            // Told `ran`, an agent would follow with `paste` and paste whatever
+            // was on the clipboard before.
+            (Action::Copy, "copy"),
         ] {
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
@@ -1996,6 +2008,41 @@ mod key_routing {
                 "{name} refused, so it must not report `ran`"
             );
         }
+    }
+
+    #[test]
+    fn copy_runs_only_with_something_selected() {
+        // Three states, because the negative case alone leaves the guard
+        // untested: mutation testing survived `copy_selection` always refusing
+        // *and* both settings of `!sel.is_empty()` until the positive case and
+        // the empty-string case were pinned alongside it.
+        //
+        // The clipboard write itself is an iced task and not observable here, so
+        // the verdict is the assertion — which is exactly what a caller reads.
+        let (mut shell, _pty) = shell_with_terminal();
+
+        let (nothing, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            nothing.steps,
+            vec![inert("copy", "no-context")],
+            "no selection at all"
+        );
+
+        shell.selection = Some(String::new());
+        let (empty, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            empty.steps,
+            vec![inert("copy", "no-context")],
+            "an empty selection is nothing to copy either"
+        );
+
+        shell.selection = Some("cargo test".to_owned());
+        let (text, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            text.steps,
+            vec![PressStep::Ran("copy".to_owned())],
+            "real text on the clipboard is a copy that ran"
+        );
     }
 
     #[test]

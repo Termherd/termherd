@@ -148,11 +148,11 @@ impl Shell {
     /// would have to re-derive it.
     pub(super) fn run_action(&mut self, action: Action) -> Result<Task<Message>, Inertia> {
         Ok(match action {
-            Action::Copy => self.copy_selection(),
+            Action::Copy => self.copy_selection().ok_or(Inertia::NoContext)?,
             Action::Paste => iced::clipboard::read().map(Message::Paste),
             Action::NextTab => self.cycle_tab(1).ok_or(Inertia::NoContext)?,
             Action::PrevTab => self.cycle_tab(-1).ok_or(Inertia::NoContext)?,
-            Action::CloseFocused => self.close_focused_pane(),
+            Action::CloseFocused => self.close_focused_pane().ok_or(Inertia::NoContext)?,
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -219,7 +219,9 @@ impl Shell {
     /// resize the survivors; a lone pane *is* the whole tab, so fall back to the
     /// tab-close path, which honours the close-confirmation policy for a
     /// still-running session rather than hard-killing it silently.
-    fn close_focused_pane(&mut self) -> Task<Message> {
+    /// `None` when there is no tab to close at all, so an empty workspace does
+    /// not answer a close with "done".
+    fn close_focused_pane(&mut self) -> Option<Task<Message>> {
         let in_split = self
             .core
             .workspace
@@ -228,7 +230,7 @@ impl Shell {
             .is_some_and(|tab| tab.sessions().len() > 1);
         if in_split {
             let effects = self.core.apply(termherd_core::Event::CloseFocusedPane);
-            Task::batch([self.perform(effects), self.resize_panes()])
+            Some(Task::batch([self.perform(effects), self.resize_panes()]))
         } else {
             self.request_close(self.core.workspace.active)
         }

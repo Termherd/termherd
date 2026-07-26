@@ -15,15 +15,18 @@ impl Shell {
     /// closes silently, a running one confirms; `alwaysConfirm` / `noConfirmation`
     /// override that. No-op for an out-of-range index, so a stale request can
     /// never close the wrong tab.
-    pub(super) fn request_close(&mut self, index: usize) -> Task<Message> {
+    /// `None` when the request was refused rather than acted on — a prompt is
+    /// already up, or the index names no tab — so a caller reporting what
+    /// happened does not claim a close that never started.
+    pub(super) fn request_close(&mut self, index: usize) -> Option<Task<Message>> {
         // A pending confirmation owns the interaction (like the keyboard in
         // `on_key`): while one is up, ignore a close request for another tab so
         // it can't silently close that tab and drop the unanswered prompt.
         if self.closing.is_some() {
-            return Task::none();
+            return None;
         }
         if index >= self.core.workspace.tabs.len() {
-            return Task::none();
+            return None;
         }
         if self
             .close_confirm
@@ -31,9 +34,11 @@ impl Shell {
             .confirms(self.core.tab_has_running_process(index))
         {
             self.closing = Some(index);
-            Task::none()
+            // Arming the prompt *is* the action: it happened, and the caller is
+            // told which prompt now owns the keyboard by its next press.
+            Some(Task::none())
         } else {
-            self.close_tab(index)
+            Some(self.close_tab(index))
         }
     }
 

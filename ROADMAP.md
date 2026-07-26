@@ -388,11 +388,16 @@ exists and why**, never when it gets picked up.
     reasoned about. `inert` came out of reviewing the rung against its own
     contract: `open-new-session` is in the keymap vocabulary and still unwired,
     so reporting `ran` would have an agent record a gesture it never made — and,
-    verifying a fix, read a false pass. Live testing then showed the hole was
-    wider than one unwired action: **five** handlers refuse before acting
-    (`new_claude_here` without a focused repo, `reopen_closed_tab` on an empty
-    close stack, `scroll_focused` with nothing focused, `cycle_tab` with nothing
-    open, `toggle_record` mid-drain) and every one of them reported `ran`. So
+    verifying a fix, read a false pass. Live testing, then an adversarial review,
+    showed the hole was far wider than one unwired action: **seven** handlers
+    refuse before acting (`new_claude_here` without a focused repo,
+    `reopen_closed_tab` on an empty close stack, `scroll_focused` with nothing
+    focused, `cycle_tab` with nothing open, `toggle_record` mid-drain,
+    `close_focused_pane` with no tab at all, `copy_selection` with nothing
+    selected) and every one of them reported `ran`. The last two are the ones a
+    caller would be hurt by soonest: a false `ran` on `copy` has an agent paste
+    stale clipboard content, and `close-focused` is the very action the overlay
+    behaviour rests on. So
     `inert` carries a `reason` — `no-surface` (wired to nothing, retrying is
     pointless) or `no-context` (a precondition the caller can create) — since the
     two call for opposite responses. `run_action` returns
