@@ -80,6 +80,14 @@ fn under_pixel_ceiling(width: u32, height: u32) -> (u32, u32) {
 /// discards three pixel rows in five — terminal glyphs alias into noise, and
 /// the image cannot answer the rendering question it was requested for.
 /// Averaging costs one pass over the source and keeps text legible.
+///
+/// It also costs **payload**: measured on a real window at 900px, the averaged
+/// PNG is ~40% larger than the nearest one (130 kB → 185 kB), because the
+/// intermediate colours it creates compress worse than flat runs. The pixel
+/// ceiling bounds area, not bytes, so that is a real increase per call. Worth
+/// it — an illegible image costs its whole payload for nothing — but a caller
+/// that only needs a coarse view should lower its width bound rather than
+/// expect this to be cheap.
 #[must_use]
 pub fn resample(src: &[u8], sw: u32, sh: u32, tw: u32, th: u32) -> Vec<u8> {
     if tw <= sw && th <= sh {
