@@ -132,9 +132,11 @@ colour and glyph questions text cannot answer. Reach for it *last*: a
 default-bound window is ~200 kB of PNG and a third more again as base64, where
 a `snapshot` is a few hundred bytes. Two bounds keep that honest — `max_width`
 (default 1200) and a total-pixel ceiling for tall windows a width alone never
-reaches — and a window smaller than them is never upscaled. Lower `max_width`
-when a coarse view will do. A headless run has no window and says so as a
-tool-level error; the text reads keep working.
+reaches — and a window smaller than them is never upscaled. Shrinking averages
+the covered pixels rather than picking the nearest one, so terminal glyphs stay
+legible at the ~0.4× a retina window gets reduced by; that legibility is what
+the bytes buy. Lower `max_width` when a coarse view will do. A headless run
+has no window and says so as a tool-level error; the text reads keep working.
 
 Sessions are addressed by a stable `handle` (the runtime `SessionId`), never
 the Claude `resume_id`, which re-keys on a fork / plan-accept (Q6). Every call

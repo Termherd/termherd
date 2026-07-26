@@ -255,13 +255,10 @@ fn shot_reply(shot: Option<&Screenshot>, max_width: u32) -> ShotResult {
 mod tests {
     use super::*;
 
-    /// A solid-colour RGBA frame of `w`×`h`, as iced would hand one over.
+    /// A `w`×`h` frame, as iced would hand one over.
     fn frame(w: u32, h: u32) -> Screenshot {
-        Screenshot::new(
-            vec![0x40u8; (w * h * 4) as usize],
-            iced::Size::new(w, h),
-            1.0,
-        )
+        let pixels = crate::image::testing::black_frame(w as usize, h as usize);
+        Screenshot::new(pixels, iced::Size::new(w, h), 1.0)
     }
 
     /// The PNG dimensions a decoder reads back out of the encoded bytes — the
