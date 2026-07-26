@@ -118,10 +118,11 @@ into its `mcpServers` at spawn (loopback, per-session token) — so it can read
 and drive the workspace it runs in. This is the richer sibling of the capture
 dump above: same `WorkspaceSnapshot` model, live instead of a file.
 
-**Settled.** Seven slices shipped: `list_sessions` + `snapshot` (perception),
+**Settled.** Eight slices shipped: `list_sessions` + `snapshot` (perception),
 `open_session` / `split_pane` / `focus_pane` / `rename_tab` / `close_pane` /
 `run_in_session` (action), `wait_for_status` + `read_terminal`
-(synchronisation), `screenshot` (pixels). The loop they exist to serve is
+(synchronisation), `screenshot` (pixels), `press_keys` + `run_action`
+(the app's own keyboard). The loop they exist to serve is
 **act → wait → observe**: `run_in_session` returns immediately, so synchronise
 with `wait_for_status` and then `read_terminal`. Do **not** poll `snapshot` in
 a loop — it races the transition you are watching for, which is why the wait
@@ -134,6 +135,33 @@ costs orders of magnitude more context than a `snapshot`, so `max_width`
 never upscaled. A headless run has no window and says so as a tool-level error
 — the text reads keep working.
 
+`press_keys` and `run_action` drive termherd's **own interface**, not a terminal
+— raw keys *into* a session stay `run_in_session`'s job. They are the same
+dispatch asked two ways: `press_keys` takes chords in `settings.json` syntax and
+resolves them through the **live** keymap, so it tests the *binding* (including
+the user's overrides); `run_action` takes the kebab-case action names (the
+catalogue the stdio server publishes at `termherd://keys/schema`) and skips the
+keymap, so it tests the *behaviour* and survives a rebind.
+
+A chord is dispatched as a **synthesised key event** fed to `Shell::on_key` —
+the whole ladder, not just `Keymap::lookup`. That is what makes `escape` and
+`enter` reachable: they are *overlay* keys bound to no action, so an agent that
+armed a close-confirmation would otherwise have no way to answer it and would
+park the app until a human intervened. The corollary is that an open overlay
+consumes an MCP press exactly as it consumes a keypress — reported per press,
+naming the prompt in the way, so a caller learns why its chord did nothing.
+`run_action` is gated on the same ladder, deliberately: neither tool may reach a
+state the keyboard cannot.
+
+Each press answers with what the ladder did — `ran` (with the action's name),
+`inert` (the action is in the vocabulary but has no surface yet, so nothing
+happened — do not retry, no rebinding helps), `overlay` (which prompt ate it),
+`typed` (bound to nothing, so it reached the focused terminal), `unbound`
+(nothing claimed it) — plus the resulting `focused_handle`. A malformed chord or
+unknown action name rejects the **whole** call before anything applies: half an
+applied sequence is worse than none, since the caller cannot tell how far it
+got.
+
 Sessions are addressed by a stable `handle` (the runtime `SessionId`), never
 the Claude `resume_id`, which re-keys on a fork / plan-accept (Q6). Every call
 is `tokio::timeout`-bounded in `BridgeHandle::call` (Q7).
@@ -141,12 +169,14 @@ is `tokio::timeout`-bounded in `BridgeHandle::call` (Q7).
 Where it lives: tools in `crates/app/src/mcp/handler.rs`, transport in
 `shell::bridge`, and the shell's answers in `shell::serve` — the one place an
 external caller meets `core::App`. `core` has no MCP awareness at all; every
-mutation goes through an existing `Event`.
+mutation goes through an existing `Event`. The keyboard rung adds
+`shell::orchestrate::perform_presses` beside the action path, `input::event_of`
+(the inverse of `chord_of`), and `routing::KeyboardOwner` / `KeyVerdict` — the
+overlay ladder and its outcome named once, since three readers consult them.
 
 **Still open.** `F-mcp-agent-loop` (#196 — the composed prompt→wait→read in one
-round trip) and `F-mcp-keys` (#229 — key chords into the *app*, so the palette,
-the browser and any binding become reachable). Both on the #90 epic. With
-`screenshot` they are one capability in three parts: drive the UI, see the
+round trip), the last child of the #90 epic. With `screenshot` and the keyboard
+tools the capability is otherwise whole in three parts: drive the UI, see the
 pixels, read the terminal — what lets an agent verify a gesture fix instead of
 only proposing it.
 
