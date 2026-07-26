@@ -225,9 +225,9 @@ fn shot_reply(shot: Option<&Screenshot>, max_width: u32) -> ShotResult {
         return ShotResult::failed("no window to screenshot (a headless or not-yet-mapped run)");
     };
     let (source_width, source_height) = (shot.size.width, shot.size.height);
-    // `fit_width` owns "is there an image to make?"; re-deciding it here would
+    // `fit_payload` owns "is there an image to make?"; re-deciding it here would
     // be the same invariant in two places, free to drift apart.
-    let Some((width, height)) = crate::image::fit_width(source_width, source_height, max_width)
+    let Some((width, height)) = crate::image::fit_payload(source_width, source_height, max_width)
     else {
         return ShotResult::failed("the window reported no pixels");
     };
@@ -237,8 +237,7 @@ fn shot_reply(shot: Option<&Screenshot>, max_width: u32) -> ShotResult {
     let pixels = if (width, height) == (source_width, source_height) {
         &shot.rgba[..]
     } else {
-        fitted =
-            crate::image::resample_nearest(&shot.rgba, source_width, source_height, width, height);
+        fitted = crate::image::resample(&shot.rgba, source_width, source_height, width, height);
         &fitted[..]
     };
     match crate::image::encode_png(pixels, width, height) {
