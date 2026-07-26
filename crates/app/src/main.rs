@@ -8,6 +8,7 @@
 mod capture;
 mod collapsed_store;
 mod docs;
+mod image;
 mod instance;
 mod json_store;
 #[cfg(target_os = "macos")]

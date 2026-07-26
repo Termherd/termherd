@@ -7,12 +7,13 @@
 //! auditable place where an external caller meets `core::App`.
 
 use iced::Task;
+use iced::window::{self, Screenshot};
 
 use termherd_core::SessionStatus;
 use termherd_core::snapshot::tail_lines;
 use termherd_core::workspace::SessionId;
 
-use super::bridge::{self, ReplyPort, Request, TerminalRead, WaitOutcome};
+use super::bridge::{self, ReplyPort, Request, ShotResult, TerminalRead, WaitOutcome};
 use super::{Message, Shell};
 
 /// One bridge caller parked on a session reaching a target activity. Held by
@@ -53,6 +54,9 @@ impl Shell {
                 reply.answer(bridge::Reply::Terminal(self.read_terminal(session, lines)));
                 Task::none()
             }
+            // Pixels come from the window, not from state: this one answers
+            // from inside the task it returns, once iced hands the frame over.
+            Request::Screenshot { max_width } => Self::serve_screenshot(max_width, reply),
             // The remaining read requests answer straight from owned state.
             read => {
                 let inputs = self.snapshot_inputs(&read);
@@ -60,6 +64,32 @@ impl Shell {
                 Task::none()
             }
         }
+    }
+
+    /// Ask iced for the window's pixels and answer `reply` once they arrive.
+    ///
+    /// The reply port rides along inside the task instead of parking in a
+    /// waiter list: unlike a wait, nothing the shell will later observe decides
+    /// this answer — it is simply not ready in this `update`. A window-less run
+    /// yields no frame and answers with the reason, so the caller learns why
+    /// rather than waiting out its bound.
+    ///
+    /// The fit + encode run inside the async block, off the UI thread: a
+    /// multi-megapixel resample and PNG encode on the render thread would stall
+    /// the very frames the caller is trying to photograph.
+    fn serve_screenshot(max_width: u32, reply: ReplyPort) -> Task<Message> {
+        window::latest()
+            .then(|window| match window {
+                Some(id) => window::screenshot(id).map(Some),
+                None => Task::done(None),
+            })
+            .then(move |shot| {
+                let reply = reply.clone();
+                Task::future(async move {
+                    reply.answer(bridge::Reply::Shot(shot_reply(shot.as_ref(), max_width)));
+                })
+                .discard()
+            })
     }
 
     /// Answer a wait now when it is already settled — an unknown handle, or a
@@ -172,4 +202,115 @@ impl Shell {
 /// the same conclusion.
 fn settles(targets: &[SessionStatus], status: SessionStatus) -> bool {
     targets.contains(&status) || status == SessionStatus::Exited
+}
+
+/// Shape a window frame into a [`ShotResult`]: fit it to `max_width`, resample
+/// when that shrinks it, and encode PNG bytes. Pure over `Option<Screenshot>`,
+/// which is the whole point — the part of the screenshot path that needs a real
+/// window is reduced to fetching the frame, and every rule about size,
+/// degradation and encoding is testable headlessly.
+///
+/// `None` is the headless / window-less run: an explanatory result, never a
+/// panic, pointing the caller at the text snapshot that still works.
+fn shot_reply(shot: Option<&Screenshot>, max_width: u32) -> ShotResult {
+    let Some(shot) = shot else {
+        return ShotResult::failed("no window to screenshot (a headless or not-yet-mapped run)");
+    };
+    let (source_width, source_height) = (shot.size.width, shot.size.height);
+    // `fit_width` owns "is there an image to make?"; re-deciding it here would
+    // be the same invariant in two places, free to drift apart.
+    let Some((width, height)) = crate::image::fit_width(source_width, source_height, max_width)
+    else {
+        return ShotResult::failed("the window reported no pixels");
+    };
+    // Resample only when the fit actually shrinks the frame — a window already
+    // inside the bound is encoded from its own pixels, untouched.
+    let fitted;
+    let pixels = if (width, height) == (source_width, source_height) {
+        &shot.rgba[..]
+    } else {
+        fitted =
+            crate::image::resample_nearest(&shot.rgba, source_width, source_height, width, height);
+        &fitted[..]
+    };
+    match crate::image::encode_png(pixels, width, height) {
+        Ok(png) => ShotResult {
+            png: Some(png),
+            width,
+            height,
+            error: None,
+        },
+        Err(error) => ShotResult::failed(format!("could not encode the screenshot: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A solid-colour RGBA frame of `w`×`h`, as iced would hand one over.
+    fn frame(w: u32, h: u32) -> Screenshot {
+        Screenshot::new(
+            vec![0x40u8; (w * h * 4) as usize],
+            iced::Size::new(w, h),
+            1.0,
+        )
+    }
+
+    /// The PNG dimensions a decoder reads back out of the encoded bytes — the
+    /// only claim that proves the image is really the size we reported.
+    fn decoded_dims(png: &[u8]) -> (u32, u32) {
+        let reader = png::Decoder::new(png).read_info().expect("decodable png");
+        (reader.info().width, reader.info().height)
+    }
+
+    #[test]
+    fn a_frame_under_the_bound_is_encoded_untouched() {
+        let shot = shot_reply(Some(&frame(120, 80)), 1200);
+        let png = shot.png.expect("pixels");
+        assert_eq!((shot.width, shot.height), (120, 80));
+        assert_eq!(
+            decoded_dims(&png),
+            (120, 80),
+            "the encoded image matches the reported size"
+        );
+        assert_eq!(shot.error, None);
+    }
+
+    #[test]
+    fn a_frame_over_the_bound_is_downscaled_keeping_its_ratio() {
+        let shot = shot_reply(Some(&frame(3000, 2000)), 1200);
+        assert_eq!((shot.width, shot.height), (1200, 800));
+        assert_eq!(decoded_dims(&shot.png.expect("pixels")), (1200, 800));
+    }
+
+    #[test]
+    fn a_window_less_run_reports_why_instead_of_panicking() {
+        // The headless degradation: no window means no pixels, and the caller
+        // must learn that in words — the text snapshot is still available.
+        let shot = shot_reply(None, 1200);
+        assert!(shot.png.is_none(), "no window, no image");
+        let reason = shot.error.expect("a reason");
+        assert!(
+            reason.contains("window"),
+            "the reason should name the missing window, got {reason:?}"
+        );
+    }
+
+    #[test]
+    fn the_debug_form_reports_the_payload_length_not_the_payload() {
+        // A `Reply` reaches logs and assertion failures; dumping megabytes of
+        // PNG into either is a footgun, so `Debug` must summarise.
+        let shot = shot_reply(Some(&frame(8, 8)), 1200);
+        let rendered = format!("{shot:?}");
+        assert!(
+            rendered.contains("png_bytes: Some("),
+            "Debug should report the byte count, got {rendered}"
+        );
+        assert!(
+            rendered.len() < 200,
+            "Debug must not inline the pixels, got {} chars",
+            rendered.len()
+        );
+    }
 }

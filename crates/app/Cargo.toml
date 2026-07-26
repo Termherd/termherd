@@ -111,6 +111,10 @@ bytes = "1"
 # session's mcp config, validated by the loopback server. `uuid` is already in
 # the tree (rmcp / notify-rust); this only turns on the `v4` generator.
 uuid = { version = "1", features = ["v4"] }
+# MCP carries image content as base64 (`ImageContent.data`), so the `screenshot`
+# tool encodes its PNG bytes with it. Already in the tree via rmcp's own wire
+# codec; declared here because this crate calls it directly.
+base64 = "0.22"
 
 [dev-dependencies]
 # Temp dirs for the atomic-write round-trip tests.

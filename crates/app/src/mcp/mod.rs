@@ -335,6 +335,75 @@ mod tests {
         );
     }
 
+    /// Headers for an authenticated JSON tool call.
+    fn call_headers(token: &str) -> String {
+        format!(
+            "Authorization: Bearer {token}\r\nContent-Type: application/json\r\n\
+             Accept: application/json, text/event-stream\r\n"
+        )
+    }
+
+    #[tokio::test]
+    async fn the_screenshot_tool_is_advertised_alongside_the_text_reads() {
+        let (bridge, _requests) = crate::shell::bridge::channel();
+        let tokens = Tokens::default();
+        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
+        let token = tokens.issue();
+
+        let (status, body) = round_trip(
+            &authority(&endpoint),
+            &call_headers(&token),
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
+        )
+        .await;
+
+        assert!(status.contains("200"), "got status: {status}");
+        assert!(
+            body.contains("\"screenshot\""),
+            "the pixel companion is listed with the other tools, got: {body}"
+        );
+    }
+
+    /// The wire proof: an authenticated `tools/call` reaches the handler, the
+    /// bridge answers with encoded pixels, and the caller receives them as MCP
+    /// image content — the one claim the handler's own tests cannot make,
+    /// since they never cross the JSON-RPC boundary.
+    #[tokio::test]
+    async fn a_screenshot_call_carries_png_bytes_back_as_image_content() {
+        use crate::shell::bridge::{Reply, ShotResult, spawn_test_shell};
+
+        let (bridge, requests) = crate::shell::bridge::channel();
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Shot(ShotResult {
+                png: Some(vec![1, 2, 3]),
+                width: 640,
+                height: 400,
+                error: None,
+            }),
+        );
+        let tokens = Tokens::default();
+        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
+        let token = tokens.issue();
+
+        let (status, body) = round_trip(
+            &authority(&endpoint),
+            &call_headers(&token),
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"screenshot","arguments":{"max_width":640}}}"#,
+        )
+        .await;
+
+        assert!(status.contains("200"), "got status: {status}");
+        assert!(
+            body.contains("image/png") && body.contains("\"AQID\""),
+            "the three bytes arrive base64-encoded as image content, got: {body}"
+        );
+        assert!(
+            body.contains("\"height\":400"),
+            "the produced size travels alongside the image, got: {body}"
+        );
+    }
+
     #[test]
     fn authorized_only_for_a_minted_bearer_token() {
         let tokens = Tokens::default();

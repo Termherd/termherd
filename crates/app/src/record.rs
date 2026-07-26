@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use tracing::{info, warn};
 
+use crate::image::{resample_nearest, target_dims};
 use crate::record_config::RecordConfig;
 
 /// A frame or lifecycle signal sent to the recorder thread.
@@ -173,32 +174,6 @@ impl Session {
     }
 }
 
-/// The locked output dimensions for a source frame at `scale`, each at least 1
-/// pixel and clamped to the GIF `u16` ceiling.
-fn target_dims(sw: u32, sh: u32, scale: f32) -> (u32, u32) {
-    let scaled = |n: u32| ((n as f32 * scale).round() as u32).clamp(1, u32::from(u16::MAX));
-    (scaled(sw), scaled(sh))
-}
-
-/// Nearest-neighbour resample of an RGBA buffer from `sw×sh` to `tw×th`. Output
-/// is exactly `tw*th*4` bytes. Cheap and dependency-free — enough for a
-/// downscaled screencast; a real filter is a later refinement.
-fn resample_nearest(src: &[u8], sw: u32, sh: u32, tw: u32, th: u32) -> Vec<u8> {
-    let mut out = vec![0u8; (tw as usize) * (th as usize) * 4];
-    for ty in 0..th {
-        let sy = (ty * sh / th).min(sh.saturating_sub(1));
-        for tx in 0..tw {
-            let sx = (tx * sw / tw).min(sw.saturating_sub(1));
-            let si = ((sy * sw + sx) as usize) * 4;
-            let di = ((ty * tw + tx) as usize) * 4;
-            if let (Some(s), Some(d)) = (src.get(si..si + 4), out.get_mut(di..di + 4)) {
-                d.copy_from_slice(s);
-            }
-        }
-    }
-    out
-}
-
 /// Throttles a high-frequency frame source — the window's *present* clock,
 /// delivered via `window::frames()` — down to the recording's target cadence
 /// cadence. Driving the screencast off real presents (rather than a wall-clock
@@ -315,33 +290,6 @@ mod tests {
         assert_eq!((c.fps, c.max_seconds), (8, 30));
         assert_eq!(c.max_frames(), 240);
         assert_eq!(c.frame_interval(), Duration::from_secs_f32(0.125));
-    }
-
-    #[test]
-    fn target_dims_scales_and_floors_at_one() {
-        assert_eq!(target_dims(800, 600, 0.5), (400, 300));
-        assert_eq!(target_dims(1, 1, 0.5), (1, 1)); // never zero
-    }
-
-    #[test]
-    fn resample_downscale_picks_nearest_source_pixels() {
-        // A 2×2 image, one solid colour per pixel, downscaled to 1×1 picks the
-        // top-left source pixel (sx=sy=0).
-        let src = vec![
-            10, 20, 30, 255, // (0,0)
-            40, 50, 60, 255, // (1,0)
-            70, 80, 90, 255, // (0,1)
-            99, 99, 99, 255, // (1,1)
-        ];
-        let out = resample_nearest(&src, 2, 2, 1, 1);
-        assert_eq!(out, vec![10, 20, 30, 255]);
-    }
-
-    #[test]
-    fn resample_output_length_matches_target() {
-        let src = vec![0u8; 4 * 4 * 4]; // 4×4 RGBA
-        let out = resample_nearest(&src, 4, 4, 3, 2);
-        assert_eq!(out.len(), 3 * 2 * 4);
     }
 
     // ---- real-time cadence — throttle the present clock to fps ----

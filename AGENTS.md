@@ -115,13 +115,21 @@ into its `mcpServers` at spawn (loopback, per-session token) — so it can read
 and drive the workspace it runs in. This is the richer sibling of the capture
 dump above: same `WorkspaceSnapshot` model, live instead of a file.
 
-**Settled.** Six slices shipped: `list_sessions` + `snapshot` (perception),
+**Settled.** Seven slices shipped: `list_sessions` + `snapshot` (perception),
 `open_session` / `split_pane` / `focus_pane` / `rename_tab` / `close_pane` /
 `run_in_session` (action), `wait_for_status` + `read_terminal`
-(synchronisation). The loop they exist to serve is **act → wait → observe**:
-`run_in_session` returns immediately, so synchronise with `wait_for_status`
-and then `read_terminal`. Do **not** poll `snapshot` in a loop — it races the
-transition you are watching for, which is why the wait rung exists.
+(synchronisation), `screenshot` (pixels). The loop they exist to serve is
+**act → wait → observe**: `run_in_session` returns immediately, so synchronise
+with `wait_for_status` and then `read_terminal`. Do **not** poll `snapshot` in
+a loop — it races the transition you are watching for, which is why the wait
+rung exists.
+
+`screenshot` is the pixel companion to the text `snapshot`, for the render,
+colour and glyph questions text cannot answer. Reach for it *last*: an image
+costs orders of magnitude more context than a `snapshot`, so `max_width`
+(default 1200) bounds every result, and a window smaller than the bound is
+never upscaled. A headless run has no window and says so as a tool-level error
+— the text reads keep working.
 
 Sessions are addressed by a stable `handle` (the runtime `SessionId`), never
 the Claude `resume_id`, which re-keys on a fork / plan-accept (Q6). Every call
@@ -132,8 +140,12 @@ Where it lives: tools in `crates/app/src/mcp/handler.rs`, transport in
 external caller meets `core::App`. `core` has no MCP awareness at all; every
 mutation goes through an existing `Event`.
 
-**Still open.** `F-mcp-screenshot` (#215) and `F-mcp-agent-loop` (#196, scope
-question open — may be cut). Both tracked on the #90 epic.
+**Still open.** `F-mcp-agent-loop` (#196 — the composed prompt→wait→read in one
+round trip) and `F-mcp-keys` (#229 — key chords into the *app*, so the palette,
+the browser and any binding become reachable). Both on the #90 epic. With
+`screenshot` they are one capability in three parts: drive the UI, see the
+pixels, read the terminal — what lets an agent verify a gesture fix instead of
+only proposing it.
 
 **Looks like a contradiction, is not.** `docs/ARCHITECTURE.md` §15 lists an
 `mcp` crate as *deferred (Unsure)*. That is a **different feature** —
