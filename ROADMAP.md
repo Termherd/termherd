@@ -377,9 +377,16 @@ exists and why**, never when it gets picked up.
     and answers from there — unlike a wait it parks in no list, since nothing
     the shell will later observe decides it. Payload is the constraint, not an
     afterthought: an unscaled retina window is megabytes of base64, so
-    `max_width` (default 1200, clamped 64–4096) bounds the image, the frame is
-    downscaled to fit and **never** upscaled, and the result reports the size
-    actually produced. The decision is a pure function of `Option<Screenshot>`
+    `max_width` (default 1200, clamped 64–4096) bounds the image, a total-pixel
+    ceiling bounds the tall windows a width alone never reaches, the frame is
+    **never** upscaled, and the result reports the size actually produced.
+    Shrinking **averages** the covered box rather than picking the nearest
+    pixel: `Screenshot.size` is physical, so the default bound is a ~0.4×
+    reduction on a retina display and nearest-neighbour aliases terminal glyphs
+    into noise — an image that cannot answer the question it was requested for.
+    Averaging costs ~40% more PNG (measured, 130 kB → 185 kB at 900px), which
+    is the trade the tool description names. The decision is a pure function of
+    `Option<Screenshot>`
     (`shot_reply`), so sizing, degradation and encoding are all testable
     headlessly; a window-less run answers with the reason as a *tool-level*
     error (which the caller reads, unlike an `ErrorData`) pointing at
