@@ -74,9 +74,17 @@ impl Shell {
     /// yields no frame and answers with the reason, so the caller learns why
     /// rather than waiting out its bound.
     ///
-    /// The fit + encode run inside the async block, off the UI thread: a
-    /// multi-megapixel resample and PNG encode on the render thread would stall
-    /// the very frames the caller is trying to photograph.
+    /// The fit + encode run inside the async block, so they are off the winit
+    /// thread — a multi-megapixel resample and PNG encode there would stall the
+    /// very frames the caller is trying to photograph. They are still
+    /// synchronous work occupying one bridge-runtime worker for their duration;
+    /// the runtime is multi-threaded, so that costs concurrency, not liveness.
+    ///
+    /// One gap the reason-in-words degradation does not cover: a window that
+    /// disappears *between* `latest` and `screenshot` (a quit mid-capture)
+    /// leaves the iced oneshot unanswered, so this task never resumes and the
+    /// caller falls back on its own `SCREENSHOT_TIMEOUT`. Bounded, never a
+    /// hang (Q7) — but a timeout rather than an explanation.
     fn serve_screenshot(max_width: u32, reply: ReplyPort) -> Task<Message> {
         window::latest()
             .then(|window| match window {
@@ -217,9 +225,9 @@ fn shot_reply(shot: Option<&Screenshot>, max_width: u32) -> ShotResult {
         return ShotResult::failed("no window to screenshot (a headless or not-yet-mapped run)");
     };
     let (source_width, source_height) = (shot.size.width, shot.size.height);
-    // `fit_width` owns "is there an image to make?"; re-deciding it here would
+    // `fit_payload` owns "is there an image to make?"; re-deciding it here would
     // be the same invariant in two places, free to drift apart.
-    let Some((width, height)) = crate::image::fit_width(source_width, source_height, max_width)
+    let Some((width, height)) = crate::image::fit_payload(source_width, source_height, max_width)
     else {
         return ShotResult::failed("the window reported no pixels");
     };
@@ -229,8 +237,7 @@ fn shot_reply(shot: Option<&Screenshot>, max_width: u32) -> ShotResult {
     let pixels = if (width, height) == (source_width, source_height) {
         &shot.rgba[..]
     } else {
-        fitted =
-            crate::image::resample_nearest(&shot.rgba, source_width, source_height, width, height);
+        fitted = crate::image::resample(&shot.rgba, source_width, source_height, width, height);
         &fitted[..]
     };
     match crate::image::encode_png(pixels, width, height) {
@@ -279,9 +286,11 @@ mod tests {
 
     #[test]
     fn a_frame_over_the_bound_is_downscaled_keeping_its_ratio() {
-        let shot = shot_reply(Some(&frame(3000, 2000)), 1200);
-        assert_eq!((shot.width, shot.height), (1200, 800));
-        assert_eq!(decoded_dims(&shot.png.expect("pixels")), (1200, 800));
+        // Deliberately small: the ratio is the claim, and a multi-megapixel
+        // frame here would make every mutation-testing run crawl.
+        let shot = shot_reply(Some(&frame(300, 200)), 120);
+        assert_eq!((shot.width, shot.height), (120, 80));
+        assert_eq!(decoded_dims(&shot.png.expect("pixels")), (120, 80));
     }
 
     #[test]

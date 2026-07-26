@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use tracing::{info, warn};
 
-use crate::image::{resample_nearest, target_dims};
+use crate::image::{resample, target_dims};
 use crate::record_config::RecordConfig;
 
 /// A frame or lifecycle signal sent to the recorder thread.
@@ -154,7 +154,7 @@ impl Session {
         let mut pixels = if (sw, sh) == (tw, th) {
             rgba.to_vec()
         } else {
-            resample_nearest(rgba, sw, sh, tw, th)
+            resample(rgba, sw, sh, tw, th)
         };
         // `from_rgba_speed` panics on a length mismatch; resample guarantees
         // exactly `tw*th*4`, so this holds. speed 10 balances quality/CPU.

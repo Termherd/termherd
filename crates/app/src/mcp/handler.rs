@@ -371,7 +371,13 @@ impl TermherdMcp {
                        companion to the text `snapshot`, for render, colour and \
                        glyph questions text cannot answer. Args: `max_width` \
                        (bound on the returned width, default 1200, 64–4096); \
-                       the frame is downscaled to fit, never upscaled. Prefer \
+                       the frame is area-averaged down to fit, never upscaled, \
+                       and a total-pixel ceiling bounds tall windows the width \
+                       alone would not. The reported `width`/`height` are what \
+                       you actually received. A default-bound window costs on \
+                       the order of 200 kB of PNG, a third more again as \
+                       base64 — lower `max_width` when a coarse view will do. \
+                       Prefer \
                        `snapshot` / `read_terminal` for anything textual — they \
                        cost a fraction of the context an image does."
     )]
