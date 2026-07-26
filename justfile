@@ -30,11 +30,13 @@ check-arch:
     ./scripts/check-os-cfg-containment.sh
     ./scripts/report-file-length.sh
 
-# Report open issues the project board hasn't classified (absent from the
-# board, or missing the fields their issue type owes). Run before a planning
-# pass. Not a CI gate: it needs a `project`-scoped token, which the default
-# GITHUB_TOKEN lacks. Stdlib-only, so plain python3 — no uv/venv needed.
-[doc("Report open issues the project board hasn't classified")]
+# Report board/issue drift: an open issue absent from the board, one missing a
+# field its issue type owes, or an item whose Status and Horizon disagree about
+# having shipped. Run before a planning pass. Exits 0 clean / 1 drift found /
+# 2 a dimension could not be fetched — a missing `project` scope reads as
+# "unchecked", never as clean, which is also why this is not a CI gate: the
+# default GITHUB_TOKEN lacks that scope. Stdlib-only, so plain python3.
+[doc("Report board/issue drift (unclassified, or Status vs Horizon)")]
 board-check:
     python3 scripts/board_check.py --check
 
