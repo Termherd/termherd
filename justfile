@@ -30,6 +30,18 @@ check-arch:
     ./scripts/check-os-cfg-containment.sh
     ./scripts/report-file-length.sh
 
+# Report open issues the project board hasn't classified (absent from the
+# board, or missing the fields their issue type owes). Run before a planning
+# pass. Not a CI gate: it needs a `project`-scoped token, which the default
+# GITHUB_TOKEN lacks. Stdlib-only, so plain python3 — no uv/venv needed.
+[doc("Report open issues the project board hasn't classified")]
+board-check:
+    python3 scripts/board_check.py --check
+
+[doc("Offline guards for the board check (no `gh`, no network)")]
+board-check-selftest:
+    python3 scripts/board_check.py --selftest
+
 # Build the shipping binary (host target) — the input the packager bundles.
 build-release:
     cargo build --release -p termherd-app
