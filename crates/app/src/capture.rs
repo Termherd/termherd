@@ -8,8 +8,7 @@
 //! assistant reads the latest by picking the highest-stamped pair — the names
 //! sort chronologically.
 
-use std::fs::File;
-use std::io::{self, BufWriter};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -81,17 +80,17 @@ pub fn png_path(dir: &Path, stamp: &str) -> PathBuf {
     dir.join(format!("capture-{stamp}.png"))
 }
 
-/// Encode an iced [`Screenshot`]'s RGBA pixels to a PNG at `path`. The `png`
-/// crate is already a dependency (window-icon decode), so this adds none.
+/// Write an iced [`Screenshot`]'s RGBA pixels to a PNG at `path`, full size —
+/// a file pays for the whole picture where a tool result does not. The encoder
+/// itself is shared with the MCP `screenshot` tool ([`crate::image`]), so both
+/// readers produce the same bytes.
 pub fn write_png(path: &Path, screenshot: &Screenshot) -> io::Result<()> {
-    let writer = BufWriter::new(File::create(path)?);
-    let mut encoder = png::Encoder::new(writer, screenshot.size.width, screenshot.size.height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().map_err(io::Error::other)?;
-    writer
-        .write_image_data(&screenshot.rgba)
-        .map_err(io::Error::other)
+    let bytes = crate::image::encode_png(
+        &screenshot.rgba,
+        screenshot.size.width,
+        screenshot.size.height,
+    )?;
+    std::fs::write(path, bytes)
 }
 
 #[cfg(test)]
@@ -215,7 +214,7 @@ mod tests {
         let path = dir.path().join("shot.png");
         write_png(&path, &screenshot).expect("write png");
 
-        let decoder = png::Decoder::new(File::open(&path).expect("open"));
+        let decoder = png::Decoder::new(std::fs::File::open(&path).expect("open"));
         let reader = decoder.read_info().expect("read info");
         assert_eq!((reader.info().width, reader.info().height), (2, 1));
     }
