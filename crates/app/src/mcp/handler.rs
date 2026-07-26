@@ -20,12 +20,15 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
+use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
-use termherd_core::{Section, SessionStatus, SnapshotFilter, TerminalScope};
+use termherd_core::{
+    Action as KeymapAction, KeyChord, Section, SessionStatus, SnapshotFilter, TerminalScope,
+};
 
 use crate::shell::bridge::{
-    Action, BridgeHandle, CallError, Reply, Request, SessionInfo, SessionKind,
+    Action, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo, SessionKind,
 };
 use crate::snapshot_dto::{SnapshotDto, status_str};
 
@@ -413,6 +416,79 @@ impl TermherdMcp {
         }));
         Ok(result)
     }
+
+    /// Press key chords at termherd's own interface — the binding half of the
+    /// keyboard surface.
+    #[tool(
+        name = "press_keys",
+        description = "Press key chords at termherd's own interface (not at a \
+                       terminal — typing into a session is `run_in_session`). \
+                       Chords use the same syntax as the `keys` section of \
+                       settings.json — \"cmd+shift+s\", \"ctrl+tab\", \
+                       \"escape\" — and resolve through the *live* keymap, so \
+                       this exercises whatever the user rebound. Args: `keys` \
+                       (chords, applied in order). Returns one `steps` entry per \
+                       chord — `ran` (with the action's name), `inert` (the \
+                       action exists but has no surface yet, so nothing \
+                       happened; do not retry), `overlay` (an open prompt \
+                       consumed it; \"escape\" usually cancels and \"enter\" \
+                       confirms — but on `quit-confirm` \"enter\" quits the app, \
+                       killing every session and this connection, and \
+                       `session-rename` answers to neither, so only a human can \
+                       clear that one), \
+                       `typed` (bound to nothing, so it reached the focused \
+                       terminal), `unbound` (nothing claimed it) — plus the \
+                       resulting `focused_handle`. Use `run_action` instead \
+                       when you want the behaviour regardless of bindings."
+    )]
+    async fn press_keys(
+        &self,
+        Parameters(args): Parameters<PressKeysArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let presses = args
+            .keys
+            .iter()
+            .map(|spec| {
+                KeyChord::parse(spec)
+                    .map(Press::Chord)
+                    .map_err(|error| invalid_chord(spec, &error))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.press(presses, &args.keys).await
+    }
+
+    /// Run keymap actions by name — the behaviour half, stable across rebinds.
+    #[tool(
+        name = "run_action",
+        description = "Run termherd's keymap actions by name, skipping the \
+                       keymap — so it keeps working whatever the user rebound, \
+                       where `press_keys` tests the binding itself. Names are \
+                       the kebab-case ones the `keys` section of settings.json \
+                       speaks: \"split-vertical\", \"next-tab\", \
+                       \"toggle-sidebar\", \"capture\", \"activate-tab-3\". An \
+                       unknown name is rejected and the error shows the syntax; \
+                       this server serves tools only, so there is no resource to \
+                       enumerate them from. Args: `actions` (applied in order). An open prompt still \
+                       consumes an action, exactly as it consumes a keypress, \
+                       and the step reports which one — answer it with \
+                       `press_keys([\"enter\"])`. Returns `steps` plus the \
+                       resulting `focused_handle`."
+    )]
+    async fn run_action(
+        &self,
+        Parameters(args): Parameters<RunActionArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let presses = args
+            .actions
+            .iter()
+            .map(|name| {
+                KeymapAction::from_config_name(name)
+                    .map(Press::Command)
+                    .ok_or_else(|| unknown_action(name))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.press(presses, &args.actions).await
+    }
 }
 
 impl TermherdMcp {
@@ -437,6 +513,56 @@ impl TermherdMcp {
                 None
             }
         }
+    }
+
+    /// Send a press sequence over the bridge and shape its [`PressOutcome`] into
+    /// a tool result. `requested` is what the caller asked for, echoed back into
+    /// each step positionally: a caller reading "the third one hit an overlay"
+    /// should not have to count its own arguments to learn which chord that was.
+    async fn press(
+        &self,
+        presses: Vec<Press>,
+        requested: &[String],
+    ) -> Result<CallToolResult, ErrorData> {
+        let reply = self
+            .bridge
+            .call(Request::Press(presses), CALL_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Pressed(outcome) = reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        if let Some(reason) = outcome.error {
+            return Err(ErrorData::internal_error(reason, None));
+        }
+        // The echo is positional, so a step count that does not match the press
+        // count would silently truncate — or worse, misalign — into a report
+        // indistinguishable from a correct one. The shell answers one step per
+        // press, so this is a loud failure rather than a quiet wrong answer.
+        if outcome.steps.len() != requested.len() {
+            return Err(ErrorData::internal_error(
+                format!(
+                    "the shell answered {} steps for {} presses",
+                    outcome.steps.len(),
+                    requested.len()
+                ),
+                None,
+            ));
+        }
+        let steps: Vec<PressStepDto> = outcome
+            .steps
+            .iter()
+            .zip(requested)
+            .map(|(step, press)| PressStepDto::new(press, step))
+            .collect();
+        let value = serde_json::json!({
+            "steps": steps,
+            "focused_handle": outcome.focused,
+        });
+        Ok(CallToolResult::structured(value))
     }
 
     /// Send an [`Action`] over the bridge and shape its [`ActionOutcome`] into a
@@ -680,6 +806,94 @@ struct ScreenshotArgs {
     /// Bound on the returned image width, in pixels.
     #[serde(default)]
     max_width: Option<u32>,
+}
+
+/// Arguments for `press_keys`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct PressKeysArgs {
+    /// Chord strings in `settings.json` syntax, applied in order.
+    keys: Vec<String>,
+}
+
+/// Arguments for `run_action`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct RunActionArgs {
+    /// Kebab-case action names, applied in order.
+    actions: Vec<String>,
+}
+
+/// The on-the-wire shape of one press: what was asked, what the routing ladder
+/// did with it, and the detail that outcome carries.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct PressStepDto {
+    /// The chord or action name the caller asked for.
+    press: String,
+    /// `"ran"`, `"inert"`, `"overlay"`, `"typed"` or `"unbound"`.
+    result: &'static str,
+    /// The keymap action named, for `"ran"` and `"inert"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<String>,
+    /// Which overlay consumed it, for `"overlay"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overlay: Option<String>,
+    /// Why nothing happened, for `"inert"`: `"no-surface"` (the action is wired
+    /// to nothing, so retrying is pointless) or `"no-context"` (a precondition
+    /// was absent, which the caller can go and create).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
+}
+
+impl PressStepDto {
+    /// Flatten one [`PressStep`] against the press that produced it. The detail
+    /// fields are per-outcome, so each is omitted where it means nothing rather
+    /// than sent as a null the caller has to interpret.
+    fn new(press: &str, step: &PressStep) -> Self {
+        let (result, action, overlay, reason) = match step {
+            PressStep::Ran(name) => ("ran", Some(name.clone()), None, None),
+            PressStep::Inert { action, reason } => {
+                ("inert", Some(action.clone()), None, Some(*reason))
+            }
+            PressStep::Overlay(name) => ("overlay", None, Some(name.clone()), None),
+            PressStep::Typed => ("typed", None, None, None),
+            PressStep::Unbound => ("unbound", None, None, None),
+        };
+        Self {
+            press: press.to_owned(),
+            result,
+            action,
+            overlay,
+            reason,
+        }
+    }
+}
+
+/// A chord string the keymap parser rejected. Names the offender and the syntax,
+/// and rejects the **whole** call before anything applies — a half-applied
+/// sequence is worse than none, since the caller cannot tell how far it got.
+fn invalid_chord(spec: &str, error: &ChordError) -> ErrorData {
+    ErrorData::invalid_params(
+        format!(
+            "chord {spec:?} does not parse: {error}. Use the settings.json \
+             syntax — modifiers `ctrl`/`alt`/`shift`/`cmd` joined to one key by \
+             `+`, e.g. \"cmd+shift+s\" (the literal plus key is spelled `plus`)."
+        ),
+        None,
+    )
+}
+
+/// An action name that is in no keymap. Rejected rather than skipped, and
+/// likewise before anything applies.
+fn unknown_action(name: &str) -> ErrorData {
+    ErrorData::invalid_params(
+        format!(
+            "unknown action {name:?}. Names are the kebab-case ones \
+             settings.json speaks, e.g. \"split-vertical\", \"next-tab\", \
+             \"activate-tab-3\"."
+        ),
+        None,
+    )
 }
 
 /// Arguments for `read_terminal`.
@@ -1591,5 +1805,266 @@ mod tests {
             "got: {}",
             error.message
         );
+    }
+
+    // ---- The keyboard tools (F-mcp-keys) ---------------------------------
+    //
+    // Both tools are adapters onto one `Request::Press`. These pin the halves
+    // the shell cannot: what the tool builds from its arguments, what it rejects
+    // before anything applies, and how a step is shaped on the wire.
+
+    use crate::shell::bridge::{Press, PressOutcome, PressStep};
+    use termherd_core::keymap::{MOD_CMD, MOD_CTRL, MOD_SHIFT};
+
+    /// An applied press outcome with these steps, focus on handle `2`.
+    fn pressed(steps: Vec<PressStep>) -> Reply {
+        Reply::Pressed(PressOutcome {
+            steps,
+            focused: Some("2".into()),
+            error: None,
+        })
+    }
+
+    /// Run `call` against a shell answering with `reply`; return both the tool's
+    /// result and the presses it asked for.
+    async fn press_request<F, Fut>(call: F, reply: Reply) -> (CallToolResult, Vec<Press>)
+    where
+        F: FnOnce(TermherdMcp) -> Fut,
+        Fut: std::future::Future<Output = Result<CallToolResult, ErrorData>>,
+    {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(requests, reply);
+        let result = call(TermherdMcp::new(handle))
+            .await
+            .expect("the tool returns a result");
+        match shell.await.expect("shell task") {
+            Request::Press(presses) => (result, presses),
+            other => panic!("expected a press request, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn press_keys_parses_every_chord_in_order() {
+        // The chords reach the shell as parsed `KeyChord`s, in the order asked —
+        // a sequence whose order the transport shuffled would be unusable.
+        let (_result, presses) = press_request(
+            |mcp| async move {
+                mcp.press_keys(Parameters(PressKeysArgs {
+                    keys: vec!["cmd+shift+s".into(), "ctrl+tab".into(), "escape".into()],
+                }))
+                .await
+            },
+            pressed(vec![PressStep::Typed; 3]),
+        )
+        .await;
+        assert_eq!(
+            presses,
+            vec![
+                Press::Chord(KeyChord::new("s", MOD_CMD | MOD_SHIFT)),
+                Press::Chord(KeyChord::new("tab", MOD_CTRL)),
+                Press::Chord(KeyChord::new("escape", 0)),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn run_action_resolves_every_name_including_the_tab_jumps() {
+        // Names are the settings.json vocabulary, and the parameterized
+        // `activate-tab-N` family is part of it.
+        let (_result, presses) = press_request(
+            |mcp| async move {
+                mcp.run_action(Parameters(RunActionArgs {
+                    actions: vec!["split-vertical".into(), "activate-tab-3".into()],
+                }))
+                .await
+            },
+            pressed(vec![PressStep::Typed; 2]),
+        )
+        .await;
+        assert_eq!(
+            presses,
+            vec![
+                Press::Command(KeymapAction::SplitVertical),
+                // The name's digit is 1-based, the action's index 0-based.
+                Press::Command(KeymapAction::ActivateTab(2)),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_malformed_chord_rejects_the_whole_call_before_anything_applies() {
+        // Half a sequence is worse than none: the caller cannot tell how far it
+        // got, and the app is left in a state it did not ask for. So the bad
+        // chord is caught before the request is even sent.
+        let (handle, requests) = channel();
+        let error = TermherdMcp::new(handle)
+            .press_keys(Parameters(PressKeysArgs {
+                keys: vec!["cmd+d".into(), "ctrl+".into()],
+            }))
+            .await
+            .expect_err("an unparsable chord is invalid params");
+        assert!(error.message.contains("ctrl+"), "got: {}", error.message);
+        assert!(
+            error.message.contains("no key"),
+            "the parser's reason must reach the caller: {}",
+            error.message
+        );
+        // Nothing was queued: the good first chord never applied either.
+        drop(requests);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_action_name_is_rejected_not_skipped() {
+        // Silently dropping an unrecognised name would report a sequence that
+        // ran when part of it never did — the silent-catch trap.
+        let (handle, requests) = channel();
+        let error = TermherdMcp::new(handle)
+            .run_action(Parameters(RunActionArgs {
+                actions: vec!["split-vertical".into(), "do-the-thing".into()],
+            }))
+            .await
+            .expect_err("an unknown action is invalid params");
+        assert!(
+            error.message.contains("do-the-thing"),
+            "got: {}",
+            error.message
+        );
+        drop(requests);
+    }
+
+    #[tokio::test]
+    async fn each_step_is_shaped_against_the_press_that_produced_it() {
+        // A caller reading "the second one hit a prompt" must not have to count
+        // its own arguments to learn which chord that was, so every step echoes
+        // its press — and carries only the detail its outcome has.
+        let (result, _presses) = press_request(
+            |mcp| async move {
+                mcp.press_keys(Parameters(PressKeysArgs {
+                    keys: vec![
+                        "cmd+w".into(),
+                        "cmd+d".into(),
+                        "x".into(),
+                        "f2".into(),
+                        "cmd+n".into(),
+                        "cmd+shift+t".into(),
+                    ],
+                }))
+                .await
+            },
+            pressed(vec![
+                PressStep::Ran("close-focused".into()),
+                PressStep::Overlay("tab-close-confirm".into()),
+                PressStep::Typed,
+                PressStep::Unbound,
+                PressStep::Inert {
+                    action: "open-new-session".into(),
+                    reason: "no-surface",
+                },
+                PressStep::Inert {
+                    action: "new-claude-session-here".into(),
+                    reason: "no-context",
+                },
+            ]),
+        )
+        .await;
+        let value = result
+            .structured_content
+            .expect("a press answers with structured content");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "steps": [
+                    { "press": "cmd+w", "result": "ran", "action": "close-focused" },
+                    { "press": "cmd+d", "result": "overlay", "overlay": "tab-close-confirm" },
+                    { "press": "x", "result": "typed" },
+                    { "press": "f2", "result": "unbound" },
+                    { "press": "cmd+n", "result": "inert",
+                      "action": "open-new-session", "reason": "no-surface" },
+                    { "press": "cmd+shift+t", "result": "inert",
+                      "action": "new-claude-session-here", "reason": "no-context" },
+                ],
+                "focused_handle": "2",
+            }),
+        );
+    }
+
+    #[tokio::test]
+    async fn a_press_that_reached_the_read_only_responder_is_an_internal_error() {
+        // The defensive arm in `respond` must surface, not read as an empty
+        // sequence — "nothing happened" and "the shell mis-routed this" are
+        // different answers and an agent acts differently on each.
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(
+            requests,
+            Reply::Pressed(PressOutcome {
+                steps: Vec::new(),
+                focused: None,
+                error: Some("a press reached the read-only responder".into()),
+            }),
+        );
+        let error = TermherdMcp::new(handle)
+            .run_action(Parameters(RunActionArgs {
+                actions: vec!["next-tab".into()],
+            }))
+            .await
+            .expect_err("a mis-routed press is an internal error");
+        assert!(
+            error.message.contains("read-only responder"),
+            "got: {}",
+            error.message
+        );
+        let _ = shell.await;
+    }
+
+    #[tokio::test]
+    async fn a_step_count_that_does_not_match_the_presses_is_an_internal_error() {
+        // The echo is positional. A shell answering a different number of steps
+        // would otherwise truncate into a report that reads as correct — worse
+        // than an error, because the caller acts on it.
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(requests, pressed(vec![PressStep::Typed]));
+        let error = TermherdMcp::new(handle)
+            .press_keys(Parameters(PressKeysArgs {
+                keys: vec!["cmd+d".into(), "cmd+w".into()],
+            }))
+            .await
+            .expect_err("a step/press mismatch is an internal error");
+        assert!(
+            error.message.contains("1 steps for 2 presses"),
+            "got: {}",
+            error.message
+        );
+        let _ = shell.await;
+    }
+
+    #[tokio::test]
+    async fn a_press_rejects_a_wrong_reply_kind_as_an_internal_error() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(requests, Reply::Sessions(Vec::new()));
+        let error = TermherdMcp::new(handle)
+            .press_keys(Parameters(PressKeysArgs {
+                keys: vec!["cmd+d".into()],
+            }))
+            .await
+            .expect_err("a mismatched reply is an internal error");
+        assert!(
+            error.message.contains("wrong reply kind"),
+            "got: {}",
+            error.message
+        );
+        let _ = shell.await;
+    }
+
+    #[tokio::test]
+    async fn a_press_surfaces_a_bridge_failure_as_an_error() {
+        let (handle, requests) = channel();
+        drop(requests);
+        let error = TermherdMcp::new(handle)
+            .press_keys(Parameters(PressKeysArgs {
+                keys: vec!["cmd+d".into()],
+            }))
+            .await
+            .expect_err("a closed bridge is a tool error");
+        assert!(error.message.contains("closed"), "got: {}", error.message);
     }
 }

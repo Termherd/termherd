@@ -855,7 +855,9 @@ impl Shell {
                 let modifiers = event_modifiers(&event);
                 self.link_modifier = modifiers.control() || modifiers.logo();
                 self.shift_modifier = modifiers.shift();
-                self.on_key(event)
+                // A real keypress has no one to report to; the verdict exists
+                // for the MCP press tool, which answers a caller.
+                self.on_key(event).1
             }
             Message::ImeCommit(text) => self.on_ime_commit(text),
             Message::FocusPane(session) => {
@@ -922,7 +924,7 @@ impl Shell {
                 });
                 self.perform(effects)
             }
-            Message::RequestCloseTab(index) => self.request_close(index),
+            Message::RequestCloseTab(index) => self.request_close(index).unwrap_or_else(Task::none),
             Message::CloseTab(index) => self.close_tab(index),
             Message::CancelClose => {
                 self.closing = None;
@@ -1173,10 +1175,13 @@ impl Shell {
     }
 
     /// Copy the last terminal selection to the clipboard, if any (FR4).
-    fn copy_selection(&self) -> Task<Message> {
+    /// Put the last terminal selection on the clipboard. `None` when there is
+    /// nothing selected: a caller told the copy ran would follow with a paste and
+    /// paste whatever was on the clipboard before.
+    fn copy_selection(&self) -> Option<Task<Message>> {
         match &self.selection {
-            Some(sel) if !sel.is_empty() => iced::clipboard::write(sel.clone()),
-            _ => Task::none(),
+            Some(sel) if !sel.is_empty() => Some(iced::clipboard::write(sel.clone())),
+            _ => None,
         }
     }
 
@@ -1740,6 +1745,434 @@ mod key_routing {
             "the surviving tab is untouched"
         );
         assert_eq!(pty.kill_count(), 1, "only the first, targeted close killed");
+    }
+
+    // ---- Key presses over the control surface (F-mcp-keys) ---------------
+    //
+    // Two tools share one dispatch: a chord walks the real `on_key` ladder as a
+    // synthesised event, a named action skips the keymap but not the ladder.
+    // These pin what the ladder *reports*, which is the half a caller reads.
+
+    use super::bridge::{Press, PressStep};
+    use termherd_core::KeyChord;
+
+    /// Press one chord spec and return the step it produced.
+    fn press_chord(shell: &mut Shell, spec: &str) -> PressStep {
+        press_all(shell, &[spec]).remove(0)
+    }
+
+    /// Press a sequence of chord specs and return every step, in order.
+    fn press_all(shell: &mut Shell, specs: &[&str]) -> Vec<PressStep> {
+        let presses = specs
+            .iter()
+            .map(|spec| Press::Chord(KeyChord::parse(spec).expect("a test chord parses")))
+            .collect();
+        let (outcome, _task) = shell.perform_presses(presses);
+        assert_eq!(outcome.error, None, "the shell routes presses itself");
+        outcome.steps
+    }
+
+    /// The platform's primary-modifier spec, so these tests read the same
+    /// bindings the running app does on macOS and elsewhere.
+    fn mod_spec(rest: &str) -> String {
+        let primary = if cfg!(target_os = "macos") {
+            "cmd"
+        } else {
+            "ctrl"
+        };
+        format!("{primary}+{rest}")
+    }
+
+    #[test]
+    fn a_bound_chord_runs_its_action_and_names_it() {
+        // The binding half: the chord resolves through the *live* keymap, so
+        // what runs is whatever the user bound — and the step names it, so a
+        // caller can tell "it worked" from "it hit something else".
+        let (mut shell, _pty) = shell_with_terminal();
+        let panes_before = shell.core.workspace.tabs[0].sessions().len();
+        let step = press_chord(&mut shell, &mod_spec("d"));
+        assert_eq!(step, PressStep::Ran("split-vertical".to_owned()));
+        assert_eq!(
+            shell.core.workspace.tabs[0].sessions().len(),
+            panes_before + 1,
+            "the action must actually apply, not just report"
+        );
+    }
+
+    #[test]
+    fn an_unbound_chord_reaches_the_focused_terminal_as_text() {
+        // A chord bound to nothing falls through exactly as a keypress does.
+        // Reported as `Typed`, not as success or as silence — the caller needs
+        // to know its chord went to the shell instead of to the app.
+        let (mut shell, pty) = shell_with_terminal();
+        let step = press_chord(&mut shell, "x");
+        assert_eq!(step, PressStep::Typed);
+        assert_eq!(
+            pty.writes(),
+            vec![b"x".to_vec()],
+            "the character must reach the PTY"
+        );
+    }
+
+    #[test]
+    fn a_chord_with_no_binding_and_no_terminal_is_reported_unbound() {
+        // Nothing claimed it. Reported rather than dropped: a silent success
+        // here would have an agent believe a gesture it never made.
+        let (mut shell, pty) = shell_with_terminal();
+        shell.focus = Focus::Search;
+        let step = press_chord(&mut shell, "x");
+        assert_eq!(step, PressStep::Unbound);
+        assert!(pty.writes().is_empty(), "nothing was typed anywhere");
+    }
+
+    #[test]
+    fn a_chord_naming_an_unreachable_key_is_reported_unbound() {
+        // `f2` is a key no event carries, so no real press could resolve it
+        // either. It must report, not vanish.
+        let (mut shell, _pty) = shell_with_terminal();
+        assert_eq!(press_chord(&mut shell, "f2"), PressStep::Unbound);
+    }
+
+    #[test]
+    fn a_press_sequence_applies_in_order() {
+        // Each press lands before the next, so a sequence composes — two splits
+        // leave three panes, not two.
+        let (mut shell, _pty) = shell_with_terminal();
+        let steps = press_all(&mut shell, &[&mod_spec("d"), &mod_spec("d")]);
+        assert_eq!(
+            steps,
+            vec![
+                PressStep::Ran("split-vertical".to_owned()),
+                PressStep::Ran("split-vertical".to_owned()),
+            ]
+        );
+        assert_eq!(shell.core.workspace.tabs[0].sessions().len(), 3);
+    }
+
+    #[test]
+    fn a_press_reports_the_focus_it_left_behind() {
+        // act→observe in one round trip, like the other action tools: a split
+        // focuses the new pane, and that is the handle the caller gets back.
+        let (mut shell, _pty) = shell_with_terminal();
+        let presses = vec![Press::Chord(
+            KeyChord::parse(&mod_spec("d")).expect("chord parses"),
+        )];
+        let (outcome, _task) = shell.perform_presses(presses);
+        assert_eq!(outcome.focused, focused(&shell));
+        assert!(outcome.focused.is_some(), "the new pane holds focus");
+    }
+
+    #[test]
+    fn a_prompt_a_press_opened_consumes_the_next_press_and_says_which() {
+        // The reason a chord is dispatched as a synthesised *event* rather than
+        // resolved to its action: closing a busy session arms a confirmation,
+        // and from then on the app behaves for MCP exactly as it does for a
+        // human — the prompt eats the next chord. The step names the prompt, so
+        // a caller learns why its chord did nothing instead of guessing.
+        let (mut shell, pty) = busy_shell_with_terminal();
+        assert_eq!(
+            press_chord(&mut shell, &mod_spec("w")),
+            PressStep::Ran("close-focused".to_owned())
+        );
+        assert!(shell.closing.is_some(), "a busy session arms the prompt");
+        assert_eq!(
+            press_chord(&mut shell, &mod_spec("d")),
+            PressStep::Overlay("tab-close-confirm".to_owned()),
+            "the prompt owns the keyboard, so the split never happens"
+        );
+        assert_eq!(shell.core.workspace.tabs[0].sessions().len(), 1);
+        assert_eq!(pty.kill_count(), 0, "nothing was killed while parked");
+    }
+
+    #[test]
+    fn escape_dismisses_a_prompt_a_press_opened() {
+        // The other half of the same reason: `escape` is an *overlay* key, bound
+        // to no keymap action. A chord resolved through `Keymap::lookup` could
+        // never reach it, and an agent that armed a prompt over MCP would leave
+        // the app parked until a human intervened. Through the real ladder it
+        // dismisses the prompt, so the loop closes.
+        let (mut shell, pty) = busy_shell_with_terminal();
+        let _ = press_chord(&mut shell, &mod_spec("w"));
+        assert_eq!(
+            press_chord(&mut shell, "escape"),
+            PressStep::Overlay("tab-close-confirm".to_owned())
+        );
+        assert_eq!(shell.closing, None, "escape must dismiss the prompt");
+        assert_eq!(pty.kill_count(), 0, "dismissing kills nothing");
+        // With the prompt gone the app takes chords again.
+        assert_eq!(
+            press_chord(&mut shell, &mod_spec("d")),
+            PressStep::Ran("split-vertical".to_owned())
+        );
+    }
+
+    #[test]
+    fn enter_confirms_a_prompt_a_press_opened() {
+        // The affirmative half: an agent can carry the close it asked for
+        // through to the kill, without a human answering the prompt.
+        let (mut shell, pty) = busy_shell_with_terminal();
+        let _ = press_chord(&mut shell, &mod_spec("w"));
+        let _ = press_chord(&mut shell, "enter");
+        assert_eq!(pty.kill_count(), 1, "enter must confirm the close");
+    }
+
+    #[test]
+    fn a_named_action_runs_without_going_through_the_keymap() {
+        // The behaviour half: `run_action` names the action directly, so it
+        // keeps working after a rebind that would break the chord.
+        let (mut shell, _pty) = shell_with_terminal();
+        let mut keymap = Keymap::defaults();
+        keymap.set(Action::SplitVertical, [KeyChord::new("F13", 0)]);
+        shell.keymap = keymap;
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::SplitVertical)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("split-vertical".to_owned())]
+        );
+        assert_eq!(
+            shell.core.workspace.tabs[0].sessions().len(),
+            2,
+            "the action runs even though its chord is now unreachable"
+        );
+    }
+
+    /// The `inert` step for an action name, with its reason — the shape these
+    /// tests assert over and over.
+    fn inert(action: &str, reason: &'static str) -> PressStep {
+        PressStep::Inert {
+            action: action.to_owned(),
+            reason,
+        }
+    }
+
+    #[test]
+    fn an_action_with_no_surface_yet_reports_inert_not_ran() {
+        // `open-new-session` is in the keymap vocabulary and still unwired.
+        // Reporting `ran` would have an agent record a gesture that never
+        // happened — and, verifying a fix, read a false pass. `inert` also says
+        // *don't retry*, which `unbound` would not: no rebinding will help.
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::OpenNewSession)]);
+        assert_eq!(outcome.steps, vec![inert("open-new-session", "no-surface")]);
+        assert_eq!(shell.core.workspace.tabs.len(), 1, "nothing was opened");
+        assert_eq!(pty.spawn_count(), 1, "and nothing was spawned");
+    }
+
+    #[test]
+    fn an_action_that_refused_for_want_of_context_says_so() {
+        // Found in live testing: on an empty workspace the launch chords do
+        // nothing, because `new_claude_here` has no focused session to derive a
+        // repo from. It used to report `ran`, so an agent — like a human pressing
+        // the chord — would conclude a session had opened.
+        //
+        // `no-context` is not `no-surface`: the caller can *create* the missing
+        // precondition and try again, where an unwired action will never work.
+        let (mut shell, pty) = empty_shell();
+        let (outcome, _task) =
+            shell.perform_presses(vec![Press::Command(Action::NewClaudeSessionHere)]);
+        assert_eq!(
+            outcome.steps,
+            vec![inert("new-claude-session-here", "no-context")]
+        );
+        assert_eq!(pty.spawn_count(), 0, "nothing was spawned");
+    }
+
+    #[test]
+    fn every_action_that_can_refuse_reports_which_kind_of_nothing() {
+        // The five handlers that bail out before acting, each on its own missing
+        // precondition. Pinned together because the *set* is the contract: an
+        // action added to `run_action` that can refuse and does not say so
+        // reintroduces the false pass this distinction exists to kill.
+        let (mut shell, _pty) = empty_shell();
+        for (action, name) in [
+            (Action::NewClaudeSessionHere, "new-claude-session-here"),
+            (Action::ReopenClosedTab, "reopen-closed-tab"),
+            (Action::ScrollTop, "scroll-top"),
+            (Action::ScrollBottom, "scroll-bottom"),
+            (Action::NextTab, "next-tab"),
+            (Action::PrevTab, "prev-tab"),
+            // There is no tab to close, so `request_close` bails on its range
+            // check — and `close-focused` is the action whose prompt-arming the
+            // headline overlay test depends on, so a false `ran` here is the
+            // worst of the set.
+            (Action::CloseFocused, "close-focused"),
+            // Nothing is selected, so there is nothing to put on the clipboard.
+            // Told `ran`, an agent would follow with `paste` and paste whatever
+            // was on the clipboard before.
+            (Action::Copy, "copy"),
+        ] {
+            let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
+            assert_eq!(
+                outcome.steps,
+                vec![inert(name, "no-context")],
+                "{name} refused, so it must not report `ran`"
+            );
+        }
+    }
+
+    #[test]
+    fn copy_runs_only_with_something_selected() {
+        // Three states, because the negative case alone leaves the guard
+        // untested: mutation testing survived `copy_selection` always refusing
+        // *and* both settings of `!sel.is_empty()` until the positive case and
+        // the empty-string case were pinned alongside it.
+        //
+        // The clipboard write itself is an iced task and not observable here, so
+        // the verdict is the assertion — which is exactly what a caller reads.
+        let (mut shell, _pty) = shell_with_terminal();
+
+        let (nothing, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            nothing.steps,
+            vec![inert("copy", "no-context")],
+            "no selection at all"
+        );
+
+        shell.selection = Some(String::new());
+        let (empty, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            empty.steps,
+            vec![inert("copy", "no-context")],
+            "an empty selection is nothing to copy either"
+        );
+
+        shell.selection = Some("cargo test".to_owned());
+        let (text, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            text.steps,
+            vec![PressStep::Ran("copy".to_owned())],
+            "real text on the clipboard is a copy that ran"
+        );
+    }
+
+    #[test]
+    fn tab_cycling_runs_and_moves_in_opposite_directions() {
+        // The refusal tests only exercise cycling on an *empty* workspace, where
+        // reporting nothing is correct — so the positive case was uncovered, and
+        // mutation testing proved it twice: making `cycle_tab` always refuse went
+        // unnoticed, and so did dropping the sign that tells `prev` from `next`.
+        //
+        // Three tabs, not two: with two, wrapping makes both directions land on
+        // the same tab, so the test could not tell them apart.
+        let mut shell = shell_with_three_tabs();
+        let tabs = shell.core.workspace.tabs.len();
+        let start = shell.core.workspace.active;
+
+        let (next, _task) = shell.perform_presses(vec![Press::Command(Action::NextTab)]);
+        assert_eq!(next.steps, vec![PressStep::Ran("next-tab".to_owned())]);
+        assert_eq!(
+            shell.core.workspace.active,
+            (start + 1) % tabs,
+            "next-tab moves forward"
+        );
+
+        let (back, _task) = shell.perform_presses(vec![Press::Command(Action::PrevTab)]);
+        assert_eq!(back.steps, vec![PressStep::Ran("prev-tab".to_owned())]);
+        assert_eq!(
+            shell.core.workspace.active, start,
+            "prev-tab undoes it, so the two are not the same action"
+        );
+
+        let (again, _task) = shell.perform_presses(vec![Press::Command(Action::PrevTab)]);
+        assert_eq!(again.steps, vec![PressStep::Ran("prev-tab".to_owned())]);
+        assert_eq!(
+            shell.core.workspace.active,
+            (start + tabs - 1) % tabs,
+            "and it wraps backwards, not forwards"
+        );
+    }
+
+    #[test]
+    fn a_record_toggle_blocked_by_a_draining_screencast_is_inert() {
+        // The fifth refusal, which needs a recorder mid-drain rather than an
+        // empty workspace: a ⌘⇧R that lands while a finish is pending on
+        // in-flight frames is ignored so it can't replace the recorder under the
+        // encoder — and that must not read as "recording started".
+        let (mut shell, _pty) = shell_with_terminal();
+        let (idle, _task) = shell.perform_presses(vec![Press::Command(Action::ToggleRecord)]);
+        assert_eq!(
+            idle.steps,
+            vec![PressStep::Ran("toggle-record".to_owned())],
+            "an idle shell accepts the toggle"
+        );
+        // Force the drain the same way `a_toggle_is_blocked_while_the_previous_
+        // recording_drains` does: the real state needs in-flight screenshots.
+        shell.record.finish_pending = true;
+        shell.record.inflight = 1;
+        let (blocked, _task) = shell.perform_presses(vec![Press::Command(Action::ToggleRecord)]);
+        assert_eq!(blocked.steps, vec![inert("toggle-record", "no-context")]);
+    }
+
+    #[test]
+    fn new_shell_here_never_refuses_because_it_falls_back_to_home() {
+        // The counterexample that keeps the line honest: this handler *has* a
+        // fallback, so it acts from an empty workspace and reports `ran`. Only a
+        // handler that genuinely bails out is inert.
+        let (mut shell, pty) = empty_shell();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::NewShellHere)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("new-shell-here".to_owned())]
+        );
+        assert_eq!(pty.spawn_count(), 1, "it launched in the home directory");
+    }
+
+    #[test]
+    fn a_surfaced_action_whose_effect_is_nothing_still_reports_ran() {
+        // The other side of that line: `activate-tab-9` on a one-tab workspace
+        // is absorbed by core as a no-op, but the action *is* wired — so it
+        // reports `ran`. `inert` is about a missing surface, not a quiet effect,
+        // and collapsing the two would make the distinction useless.
+        let (mut shell, _pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::ActivateTab(8))]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("activate-tab-9".to_owned())]
+        );
+    }
+
+    #[test]
+    fn an_open_prompt_gates_a_named_action_too() {
+        // `run_action` skips the keymap but not the ladder: letting it act
+        // through a prompt would give the MCP surface a reach the keyboard has
+        // not got, which is the one thing this control surface must never do.
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        let _ = shell.update(Message::RequestCloseTab(0));
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::SplitVertical)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Overlay("tab-close-confirm".to_owned())]
+        );
+        assert_eq!(
+            shell.core.workspace.tabs[0].sessions().len(),
+            1,
+            "the split must not happen behind the prompt"
+        );
+    }
+
+    #[test]
+    fn every_overlay_that_owns_the_keyboard_names_itself() {
+        // The ladder has one reader too many to leave unpinned: the key router,
+        // the terminal-input guard, and this control surface. Each overlay must
+        // both claim the keyboard and report a distinct name, or a caller
+        // reading `overlay` cannot tell which prompt is in its way.
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        assert!(
+            shell.keyboard_owner().is_none(),
+            "a plain shell owns nothing"
+        );
+        assert!(shell.accepts_terminal_input(), "and takes terminal input");
+
+        let _ = shell.update(Message::RequestCloseTab(0));
+        let owner = shell
+            .keyboard_owner()
+            .expect("the prompt owns the keyboard");
+        assert_eq!(owner.label(), "tab-close-confirm");
+        assert!(
+            !shell.accepts_terminal_input(),
+            "an owned keyboard sends nothing to the terminal — the guard and the \
+             ladder must agree"
+        );
     }
 
     #[test]

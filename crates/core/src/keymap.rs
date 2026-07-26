@@ -329,6 +329,30 @@ impl Action {
             .find(|def| def.action == self)
             .map(|def| def.name)
     }
+
+    /// This action's config name, **including** the parameterized
+    /// [`Action::ActivateTab`] family that [`Self::config_name`] cannot spell
+    /// because its name carries an index. Total where `config_name` is partial,
+    /// so it round-trips through [`Self::from_config_name`] for every action —
+    /// which is what a surface reporting *which* action ran needs.
+    #[must_use]
+    pub fn name(self) -> String {
+        if let Some(name) = self.config_name() {
+            return name.to_owned();
+        }
+        match self {
+            // The action carries the 0-based index; the name carries the
+            // 1-based digit the user sees, as `from_config_name` reads it.
+            Action::ActivateTab(index) => format!("activate-tab-{}", index + 1),
+            // Every other variant has a row in `ACTIONS`, so `config_name`
+            // already answered. `every_action_round_trips_through_its_name` is
+            // what holds that — not this comment. The arm is the type-level
+            // residue of a fact a test pins, since `core` forbids the panic that
+            // would state it directly; `Debug` at least names the offender if a
+            // new variant ever lands without its table row.
+            other => format!("{other:?}"),
+        }
+    }
 }
 
 /// One entry of the public, read-only action vocabulary: a bindable action's
@@ -616,6 +640,56 @@ mod tests {
                     def.action
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_action_round_trips_through_its_name() {
+        // `name()` is what a surface reporting *which* action ran spells, so it
+        // must be total and it must round-trip — otherwise a reported name is
+        // not a name a caller can send back. This is the property `config_name`
+        // cannot have: it returns None for the parameterized family.
+        for def in ACTIONS {
+            let name = def.action.name();
+            assert_eq!(name, def.name, "a table action names itself from the table");
+            assert_eq!(
+                Action::from_config_name(&name),
+                Some(def.action),
+                "{name} must round-trip"
+            );
+        }
+        for index in 0..NUMBER_ROW_TABS {
+            let action = Action::ActivateTab(index);
+            let name = action.name();
+            assert_eq!(
+                Action::from_config_name(&name),
+                Some(action),
+                "{name} must round-trip"
+            );
+        }
+    }
+
+    #[test]
+    fn activate_tab_names_carry_the_one_based_digit_the_user_sees() {
+        // The action holds a 0-based index; the name holds the 1-based digit, so
+        // `activate-tab-1` is the first tab. Off by one here would rename every
+        // tab jump on the wire.
+        assert_eq!(Action::ActivateTab(0).name(), "activate-tab-1");
+        assert_eq!(Action::ActivateTab(8).name(), "activate-tab-9");
+    }
+
+    #[test]
+    fn every_default_bound_action_is_nameable() {
+        // The stronger form of `every_default_bound_action_is_reconfigurable`:
+        // not just "has some name" but "names itself back to itself". This is
+        // what keeps `name()`'s fallback arm out of reach.
+        let map = Keymap::defaults();
+        for action in map.bindings.values() {
+            assert_eq!(
+                Action::from_config_name(&action.name()),
+                Some(*action),
+                "default-bound {action:?} must round-trip through its name"
+            );
         }
     }
 

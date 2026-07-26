@@ -42,12 +42,12 @@ const H_CHROME: f32 = 40.0;
 const V_CHROME: f32 = 84.0;
 
 impl Shell {
-    /// Scroll the focused terminal's viewport (a wheel delta or a top/bottom jump).
-    pub(super) fn scroll_focused(&mut self, target: ScrollTarget) -> Task<Message> {
-        let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
-        };
-        self.scroll_session(session, target)
+    /// Scroll the focused terminal's viewport (a wheel delta or a top/bottom
+    /// jump). `None` when nothing holds focus — there is no viewport to move, and
+    /// a caller is told that rather than told the scroll happened.
+    pub(super) fn scroll_focused(&mut self, target: ScrollTarget) -> Option<Task<Message>> {
+        let session = self.core.workspace.focused_session()?;
+        Some(self.scroll_session(session, target))
     }
 
     /// Scroll a specific session's viewport — the wheel targets the pane under

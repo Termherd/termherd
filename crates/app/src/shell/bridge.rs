@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
 use termherd_core::{
-    App, Launch, LiveSession, SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot,
-    workspace::SplitDir,
+    Action as KeymapAction, App, KeyChord, Launch, LiveSession, SessionStatus, SnapshotFilter,
+    SnapshotInputs, WorkspaceSnapshot, workspace::SplitDir,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -82,6 +82,81 @@ pub enum Request {
         /// megabytes of base64 in the caller's context.
         max_width: u32,
     },
+    /// Drive termherd's **own interface** — for the `press_keys` and
+    /// `run_action` MCP tools. Each [`Press`] is applied in order against the
+    /// keyboard-routing ladder, not against a terminal: raw keys *into* a
+    /// session are [`Action::Run`]'s job.
+    ///
+    /// Like [`Self::Act`] this mutates, so it is answered by the shell rather
+    /// than by the read-only `respond`.
+    Press(Vec<Press>),
+}
+
+/// One thing to press against the app.
+///
+/// Two MCP tools share this one request, because they answer different
+/// questions and must not develop separate behaviour: a chord tests the
+/// *binding* — including whatever the user rebound — while a named action tests
+/// the *behaviour* and keeps working after a rebind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Press {
+    /// A chord, dispatched as a **synthesised key event** down the real
+    /// `on_key` ladder, so it resolves through the live `Keymap` and an open
+    /// overlay consumes it exactly as it would for a human. Resolving the chord
+    /// straight to its action instead would be a second, MCP-only dispatch path
+    /// — and would leave `escape` / `enter` unable to reach an overlay at all.
+    Chord(KeyChord),
+    /// A keymap action, run directly. It skips the keymap — that is the point,
+    /// it survives a rebind — but not the overlay ladder, so it can reach no
+    /// state a keypress could not.
+    Command(KeymapAction),
+}
+
+/// What the routing ladder did with one [`Press`].
+///
+/// The wire-side twin of the shell's internal `KeyVerdict`, kept separate for
+/// the reason [`SessionKind`] is: the external surface stays plain and owned,
+/// with no shell-internal type leaking through it. The mapping between them is
+/// one exhaustive `match`, so a new verdict is a compile error here rather than
+/// a case that quietly reports as something else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PressStep {
+    /// A keymap action ran; carries its config name.
+    Ran(String),
+    /// The action changed nothing, and why: `"no-surface"` (wired to nothing —
+    /// retrying is pointless) or `"no-context"` (a precondition was absent, which
+    /// the caller can go and create). Distinct from `Ran`, which would have a
+    /// caller believe a gesture it never made, and from `Unbound`, which invites
+    /// trying another chord where neither of these ever would.
+    Inert {
+        action: String,
+        reason: &'static str,
+    },
+    /// An overlay owned the keyboard and consumed it, as it would for a human.
+    /// Carries the overlay's name, so a caller learns *why* its chord did
+    /// nothing it expected — and that `escape` / `enter` are what move next.
+    Overlay(String),
+    /// Bound to nothing, so it reached the focused terminal as text.
+    Typed,
+    /// Nothing claimed it: bound to nothing, and no focused terminal to type
+    /// into — or a chord naming a key no keyboard event can carry (`"f2"`),
+    /// which is a binding a human could not reach either.
+    Unbound,
+}
+
+/// The result of a [`Request::Press`]: one step per press, in the order asked,
+/// plus the focus left behind — so a caller gets act→observe in one round trip
+/// like the other action tools.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PressOutcome {
+    /// What happened to each press, positionally matching the request.
+    pub steps: Vec<PressStep>,
+    /// The resulting focused session handle, or `None` when nothing is focused.
+    pub focused: Option<String>,
+    /// Why nothing was pressed, or `None` when the sequence ran. Kept distinct
+    /// from an empty `steps`, which would read as "nothing happened" — the same
+    /// reason [`WaitOutcome`] and [`TerminalRead`] carry one.
+    pub error: Option<String>,
 }
 
 /// The result of a [`Request::WaitForStatus`]. `error` is `Some` only when the
@@ -230,6 +305,7 @@ pub enum Reply {
     Waited(WaitOutcome),
     Terminal(TerminalRead),
     Shot(ShotResult),
+    Pressed(PressOutcome),
 }
 
 /// The kind of program a session runs, as an MCP client sees it. Distinct from
@@ -439,6 +515,13 @@ pub fn respond(core: &App, request: &Request, inputs: &SnapshotInputs) -> Reply 
         Request::Screenshot { .. } => Reply::Shot(ShotResult::failed(
             "a screenshot reached the read-only responder; the shell must perform it",
         )),
+        // Presses drive the keyboard-routing ladder, which mutates; same
+        // defensive default as `Act`.
+        Request::Press(_) => Reply::Pressed(PressOutcome {
+            steps: Vec::new(),
+            focused: None,
+            error: Some("a press reached the read-only responder; the shell must route it".into()),
+        }),
     }
 }
 

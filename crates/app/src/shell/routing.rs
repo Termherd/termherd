@@ -21,6 +21,102 @@ enum ConfirmKey {
     Swallow,
 }
 
+/// Which overlay holds the keyboard, in precedence order — the quit modal wins
+/// over the prompts beneath it.
+///
+/// The ladder as *data*, because it has three readers: the key router, the
+/// terminal-input guard, and the MCP press tool. Stated once, as a predicate,
+/// they cannot drift; stated three times, the first edit that touches one of
+/// them is a bug.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeyboardOwner {
+    /// The inline tab-title field.
+    TabRename,
+    /// The sidebar's inline session-rename field.
+    PaneRename,
+    /// The macOS Cmd+Q quit confirmation.
+    Quit,
+    /// The close-confirmation for the tab at this index, which the prompt needs
+    /// to act. Carried here rather than re-read on dispatch: a second read
+    /// would need a fallback for a state this variant already rules out.
+    TabClose(usize),
+    /// The archive confirmation.
+    Archive,
+    /// The document editor, which handles its own keys.
+    Doc,
+}
+
+impl KeyboardOwner {
+    /// The name an external caller reads when this overlay consumed its press.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::TabRename => "tab-rename",
+            Self::PaneRename => "session-rename",
+            Self::Quit => "quit-confirm",
+            Self::TabClose(_) => "tab-close-confirm",
+            Self::Archive => "archive-confirm",
+            Self::Doc => "doc-editor",
+        }
+    }
+}
+
+/// Why running a keymap action changed nothing.
+///
+/// The two cases call for opposite responses from a caller, which is the whole
+/// reason they are not one: a missing surface will never appear, so retrying is
+/// pointless; a missing precondition is something the caller can go and create.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Inertia {
+    /// The action is in the keymap vocabulary and wired to nothing.
+    NoSurface,
+    /// The action is wired, but refused before acting because a precondition was
+    /// absent — no focused session to derive a repo from, no closed tab to
+    /// reopen, nothing to scroll.
+    ///
+    /// Deliberately narrower than "had no visible effect": an action whose event
+    /// `core` applies and absorbs (a tab index past the open tabs) *did* run, and
+    /// says so. The line is whether the shell refused, not whether the result
+    /// was interesting.
+    NoContext,
+}
+
+impl Inertia {
+    /// The reason an external caller reads.
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::NoSurface => "no-surface",
+            Self::NoContext => "no-context",
+        }
+    }
+}
+
+/// What the routing ladder did with one key press.
+///
+/// The ladder naming its own outcome, so a caller that needs to *report* what a
+/// press did reads the same verdict the press itself produced. Re-deriving it
+/// from a second reading of the state would be the same invariant expressed
+/// twice — and the two would disagree the first time a rung moved.
+///
+/// A real keypress discards this; the MCP press tool is what reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum KeyVerdict {
+    /// An open overlay consumed it — acted on it or swallowed it. Carries
+    /// [`KeyboardOwner::label`].
+    Overlay(&'static str),
+    /// A bound keymap action ran; carries its config name.
+    Ran(String),
+    /// A bound keymap action changed nothing, and why. Kept apart from
+    /// [`Self::Ran`] because a caller told "ran" would believe a gesture that
+    /// never occurred, and apart from [`Self::Ignored`] because the two call for
+    /// opposite responses: an ignored press invites another chord, an inert one
+    /// will never work however it is bound.
+    Inert(String, Inertia),
+    /// It reached the focused terminal as input bytes.
+    Typed,
+    /// Nothing claimed it: no overlay, no binding, and no terminal to type into.
+    Ignored,
+}
+
 /// Enter confirms, Escape cancels; everything else (and any non-press event) is
 /// swallowed so it can't reach the terminal beneath the prompt.
 fn classify_confirm(event: &keyboard::Event) -> ConfirmKey {
@@ -39,30 +135,44 @@ fn classify_confirm(event: &keyboard::Event) -> ConfirmKey {
 
 impl Shell {
     /// Run a keymap [`Action`] (FR9). Clipboard actions become iced tasks; tab
-    /// actions drive `core`. Actions without a surface yet are no-ops.
-    pub(super) fn run_action(&mut self, action: Action) -> Task<Message> {
-        match action {
-            Action::Copy => self.copy_selection(),
+    /// actions drive `core`.
+    ///
+    /// `Err` means the action changed nothing, and says why (see [`Inertia`]).
+    /// This `match` is the only place that knows, so a caller reporting what a
+    /// press did cannot over-claim: told `ran` about an action that refused, an
+    /// agent would record a gesture that never happened — and, verifying a fix,
+    /// read a false pass.
+    ///
+    /// The handlers that can refuse return `Option` for exactly this reason, so
+    /// the knowledge lives at the refusal rather than in a predicate here that
+    /// would have to re-derive it.
+    pub(super) fn run_action(&mut self, action: Action) -> Result<Task<Message>, Inertia> {
+        Ok(match action {
+            Action::Copy => self.copy_selection().ok_or(Inertia::NoContext)?,
             Action::Paste => iced::clipboard::read().map(Message::Paste),
-            Action::NextTab => self.cycle_tab(1),
-            Action::PrevTab => self.cycle_tab(-1),
-            Action::CloseFocused => self.close_focused_pane(),
+            Action::NextTab => self.cycle_tab(1).ok_or(Inertia::NoContext)?,
+            Action::PrevTab => self.cycle_tab(-1).ok_or(Inertia::NoContext)?,
+            Action::CloseFocused => self.close_focused_pane().ok_or(Inertia::NoContext)?,
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
             }
             Action::ToggleSidebar => self.toggle_sidebar(),
-            Action::ScrollTop => self.scroll_focused(ScrollTarget::Top),
-            Action::ScrollBottom => self.scroll_focused(ScrollTarget::Bottom),
+            Action::ScrollTop => self
+                .scroll_focused(ScrollTarget::Top)
+                .ok_or(Inertia::NoContext)?,
+            Action::ScrollBottom => self
+                .scroll_focused(ScrollTarget::Bottom)
+                .ok_or(Inertia::NoContext)?,
             // New shell / Claude session in the focused context, and
             // reopen the last closed tab.
             Action::NewShellHere => self.new_shell_here(),
-            Action::NewClaudeSessionHere => self.new_claude_here(),
-            Action::ReopenClosedTab => self.reopen_closed_tab(),
+            Action::NewClaudeSessionHere => self.new_claude_here().ok_or(Inertia::NoContext)?,
+            Action::ReopenClosedTab => self.reopen_closed_tab().ok_or(Inertia::NoContext)?,
             // Capture the current state for the AI dev loop.
             Action::Capture => self.capture(),
             // Start / stop the GIF screencast.
-            Action::ToggleRecord => self.toggle_record(),
+            Action::ToggleRecord => self.toggle_record().ok_or(Inertia::NoContext)?,
             // Zoom re-derives the grid geometry, so the focused terminal is
             // resized like on a window resize; other tabs catch up on
             // focus, the existing convention.
@@ -81,7 +191,20 @@ impl Shell {
             Action::FocusRight => self.focus_dir(Direction::Right),
             Action::FocusUp => self.focus_dir(Direction::Up),
             Action::FocusDown => self.focus_dir(Direction::Down),
-            Action::OpenNewSession => Task::none(),
+            // In the vocabulary since FR9, still unwired: the launch surfaces
+            // that exist are `NewShellHere` / `NewClaudeSessionHere`.
+            Action::OpenNewSession => return Err(Inertia::NoSurface),
+        })
+    }
+
+    /// Run a keymap action and say what became of it — the pairing of
+    /// [`Self::run_action`] with the verdict it earns, so the ladder and the
+    /// control surface report an unwired action the same way.
+    pub(super) fn dispatch_action(&mut self, action: Action) -> (KeyVerdict, Task<Message>) {
+        let name = action.name();
+        match self.run_action(action) {
+            Ok(task) => (KeyVerdict::Ran(name), task),
+            Err(inertia) => (KeyVerdict::Inert(name, inertia), Task::none()),
         }
     }
 
@@ -96,7 +219,9 @@ impl Shell {
     /// resize the survivors; a lone pane *is* the whole tab, so fall back to the
     /// tab-close path, which honours the close-confirmation policy for a
     /// still-running session rather than hard-killing it silently.
-    fn close_focused_pane(&mut self) -> Task<Message> {
+    /// `None` when there is no tab to close at all, so an empty workspace does
+    /// not answer a close with "done".
+    fn close_focused_pane(&mut self) -> Option<Task<Message>> {
         let in_split = self
             .core
             .workspace
@@ -105,7 +230,7 @@ impl Shell {
             .is_some_and(|tab| tab.sessions().len() > 1);
         if in_split {
             let effects = self.core.apply(termherd_core::Event::CloseFocusedPane);
-            Task::batch([self.perform(effects), self.resize_panes()])
+            Some(Task::batch([self.perform(effects), self.resize_panes()]))
         } else {
             self.request_close(self.core.workspace.active)
         }
@@ -131,38 +256,55 @@ impl Shell {
     }
 
     /// Route a key press (FR4): an open overlay captures it, otherwise it
-    /// reaches the focused terminal's PTY.
-    pub(super) fn on_key(&mut self, event: keyboard::Event) -> Task<Message> {
-        match self.overlay_key(&event) {
-            Some(task) => task,
+    /// reaches the focused terminal's PTY. Reports what the ladder did with it
+    /// alongside the work it produced — see [`KeyVerdict`].
+    pub(super) fn on_key(&mut self, event: keyboard::Event) -> (KeyVerdict, Task<Message>) {
+        match self.keyboard_owner() {
+            Some(owner) => (
+                KeyVerdict::Overlay(owner.label()),
+                self.overlay_key(owner, &event),
+            ),
             None => self.terminal_key(event),
         }
     }
 
-    /// The overlays that own the keyboard while open, in precedence order — the
-    /// quit modal wins over the tab/archive prompts beneath it. `Some` means the
-    /// key was consumed (acted on or swallowed, never leaking to the terminal);
-    /// `None` falls through to [`Self::terminal_key`].
-    fn overlay_key(&mut self, event: &keyboard::Event) -> Option<Task<Message>> {
+    /// Which overlay owns the keyboard right now, if any — the precedence ladder
+    /// itself. `None` means a key falls through to [`Self::terminal_key`].
+    pub(super) fn keyboard_owner(&self) -> Option<KeyboardOwner> {
         if self.tab_rename.is_some() {
-            return Some(self.tab_rename_key(event));
+            return Some(KeyboardOwner::TabRename);
         }
         if self.renaming.is_some() {
-            return Some(Task::none());
+            return Some(KeyboardOwner::PaneRename);
         }
         if self.quit_pending() {
-            return Some(self.quit_confirm_key(event));
+            return Some(KeyboardOwner::Quit);
         }
         if let Some(index) = self.closing {
-            return Some(self.tab_close_confirm_key(event, index));
+            return Some(KeyboardOwner::TabClose(index));
         }
         if self.archiving.is_some() {
-            return Some(self.archive_confirm_key(event));
+            return Some(KeyboardOwner::Archive);
         }
         if self.open_doc.is_some() {
-            return Some(self.open_doc_key(event));
+            return Some(KeyboardOwner::Doc);
         }
         None
+    }
+
+    /// Hand one key press to the overlay that owns the keyboard. The key is
+    /// consumed either way — acted on or swallowed — and never leaks to the
+    /// terminal beneath the prompt.
+    fn overlay_key(&mut self, owner: KeyboardOwner, event: &keyboard::Event) -> Task<Message> {
+        match owner {
+            KeyboardOwner::TabRename => self.tab_rename_key(event),
+            // The sidebar's rename field owns its own typing entirely.
+            KeyboardOwner::PaneRename => Task::none(),
+            KeyboardOwner::Quit => self.quit_confirm_key(event),
+            KeyboardOwner::TabClose(index) => self.tab_close_confirm_key(event, index),
+            KeyboardOwner::Archive => self.archive_confirm_key(event),
+            KeyboardOwner::Doc => self.open_doc_key(event),
+        }
     }
 
     /// Escape abandons a tab rename; Enter and a blur commit it elsewhere, so
@@ -227,7 +369,7 @@ impl Shell {
     /// resolved before the focus guard so command chords stay global (e.g.
     /// `mod+T` from an empty workspace with the search box focused) — otherwise
     /// it goes to the focused terminal's PTY, leaving plain Ctrl+C as interrupt.
-    fn terminal_key(&mut self, event: keyboard::Event) -> Task<Message> {
+    fn terminal_key(&mut self, event: keyboard::Event) -> (KeyVerdict, Task<Message>) {
         let keyboard::Event::KeyPressed {
             key,
             physical_key,
@@ -237,18 +379,18 @@ impl Shell {
             ..
         } = event
         else {
-            return Task::none();
+            return (KeyVerdict::Ignored, Task::none());
         };
         if let Some(chord) = chord_of(&key, &physical_key, modifiers)
             && let Some(action) = self.keymap.lookup(&chord)
         {
-            return self.run_action(action);
+            return self.dispatch_action(action);
         }
         if self.focus != Focus::Terminal {
-            return Task::none();
+            return (KeyVerdict::Ignored, Task::none());
         }
         let Some(session) = self.core.workspace.focused_session() else {
-            return Task::none();
+            return (KeyVerdict::Ignored, Task::none());
         };
         // With NumLock on, a numpad key reports its un-locked name (`End`,
         // arrows, …) but carries the digit/operator in `text`; type that rather
@@ -257,31 +399,26 @@ impl Shell {
             .map(TermKey::Char)
             .or_else(|| to_term_key(&key));
         let Some(term_key) = term_key else {
-            return Task::none();
+            return (KeyVerdict::Ignored, Task::none());
         };
         let Some(bytes) = termherd_pty::key_bytes(term_key, key_mods(modifiers), text.as_deref())
         else {
-            return Task::none();
+            return (KeyVerdict::Ignored, Task::none());
         };
         let effects = self
             .core
             .apply(termherd_core::Event::TerminalInput { session, bytes });
-        self.perform(effects)
+        (KeyVerdict::Typed, self.perform(effects))
     }
 
     /// Whether raw keyboard / IME input should reach the focused terminal: it
     /// holds focus and no overlay (inline rename, close confirmation) is up.
-    /// Focus stays `Terminal` while those overlays are open, so they have to be
-    /// excluded explicitly — this is the predicate [`Shell::on_key`] enforces
-    /// step by step, shared so the IME path can't drift from it.
+    /// Focus stays `Terminal` while those overlays are open, so the overlay
+    /// ladder has to be excluded explicitly — and it is the same ladder
+    /// [`Shell::on_key`] walks, read through [`Shell::keyboard_owner`] so the
+    /// IME path can't drift from it.
     pub(super) fn accepts_terminal_input(&self) -> bool {
-        self.focus == Focus::Terminal
-            && self.renaming.is_none()
-            && self.tab_rename.is_none()
-            && self.closing.is_none()
-            && self.archiving.is_none()
-            && self.open_doc.is_none()
-            && !self.quit_pending()
+        self.focus == Focus::Terminal && self.keyboard_owner().is_none()
     }
 
     /// Route IME-composed text (dead/accent keys, CJK) to the focused terminal

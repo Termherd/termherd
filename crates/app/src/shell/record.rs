@@ -232,16 +232,16 @@ impl Shell {
     /// record budget and perform whatever effects it returns. Ignored while a
     /// previous recording is still draining, so a back-to-back ⌘⇧R can't replace
     /// the recorder mid-finish.
-    pub(super) fn toggle_record(&mut self) -> Task<Message> {
+    pub(super) fn toggle_record(&mut self) -> Option<Task<Message>> {
         if self.record.toggle_blocked() {
             tracing::info!("record toggle ignored: previous screencast still finishing");
-            return Task::none();
+            return None;
         }
         let max_frames = self.record.max_frames();
         let effects = self
             .core
             .apply(termherd_core::Event::ToggleRecord { max_frames });
-        self.perform(effects)
+        Some(self.perform(effects))
     }
 
     /// A window present arrived while recording: throttle the present rate down

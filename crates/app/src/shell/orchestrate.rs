@@ -15,7 +15,9 @@ use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
 use termherd_core::{Event, Launch};
 
-use super::bridge::{Action, ActionOutcome, SessionKind};
+use super::bridge::{Action, ActionOutcome, Press, PressOutcome, PressStep, SessionKind};
+use super::input::event_of;
+use super::routing::KeyVerdict;
 use super::{Focus, Message, Shell, home_dir};
 
 impl Shell {
@@ -155,14 +157,86 @@ impl Shell {
         self.core.sessions.contains_key(&id).then_some(id)
     }
 
+    /// Press each of `presses` against the app itself, in the order asked,
+    /// reporting what the routing ladder did with each plus the focus left
+    /// behind.
+    ///
+    /// Every press runs; none short-circuits. A press the ladder did not act on
+    /// is a *reported step*, not a failure — and stopping there would break the
+    /// sequence that matters most, where one press opens an overlay and the next
+    /// one answers it.
+    pub(super) fn perform_presses(&mut self, presses: Vec<Press>) -> (PressOutcome, Task<Message>) {
+        let mut steps = Vec::with_capacity(presses.len());
+        let mut tasks = Vec::with_capacity(presses.len());
+        for press in presses {
+            let (step, task) = self.press(press);
+            steps.push(step);
+            tasks.push(task);
+        }
+        let outcome = PressOutcome {
+            steps,
+            focused: self.focused_handle(),
+            error: None,
+        };
+        (outcome, Task::batch(tasks))
+    }
+
+    /// Carry out one [`Press`].
+    ///
+    /// A chord goes in as a *synthesised key event* through [`Shell::on_key`], so
+    /// it walks the same ladder a physical press walks — the whole reason an
+    /// agent can dismiss an overlay it opened. A named action skips the keymap
+    /// but is still gated on the ladder, so neither tool can reach a state the
+    /// keyboard cannot.
+    fn press(&mut self, press: Press) -> (PressStep, Task<Message>) {
+        match press {
+            Press::Chord(chord) => match event_of(&chord) {
+                Some(event) => {
+                    let (verdict, task) = self.on_key(event);
+                    (step_of(verdict), task)
+                }
+                // A chord naming a key no event can carry. A human pressing it
+                // gets nothing either, so it reports as nothing happened.
+                None => (PressStep::Unbound, Task::none()),
+            },
+            Press::Command(action) => match self.keyboard_owner() {
+                Some(owner) => (PressStep::Overlay(owner.label().to_owned()), Task::none()),
+                None => {
+                    let (verdict, task) = self.dispatch_action(action);
+                    (step_of(verdict), task)
+                }
+            },
+        }
+    }
+
     /// An applied outcome reporting the session that holds focus now.
     fn applied(&self) -> ActionOutcome {
-        ActionOutcome::applied(
-            self.core
-                .workspace
-                .focused_session()
-                .map(|id| id.0.get().to_string()),
-        )
+        ActionOutcome::applied(self.focused_handle())
+    }
+
+    /// The stable handle of the session holding focus, as an external caller
+    /// spells it — `None` when the workspace is empty.
+    fn focused_handle(&self) -> Option<String> {
+        self.core
+            .workspace
+            .focused_session()
+            .map(|id| id.0.get().to_string())
+    }
+}
+
+/// The routing ladder's verdict as the wire reports it. Exhaustive, so a new
+/// [`KeyVerdict`] case is a compile error here rather than one that silently
+/// reports as its neighbour.
+fn step_of(verdict: KeyVerdict) -> PressStep {
+    match verdict {
+        KeyVerdict::Overlay(name) => PressStep::Overlay(name.to_owned()),
+        KeyVerdict::Ran(name) => PressStep::Ran(name),
+        KeyVerdict::Inert(name, inertia) => PressStep::Inert {
+            action: name,
+            reason: inertia.label(),
+        },
+        KeyVerdict::Typed => PressStep::Typed,
+        KeyVerdict::Ignored => PressStep::Unbound,
     }
 }
 

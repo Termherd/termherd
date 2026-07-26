@@ -55,31 +55,30 @@ impl Shell {
 
     /// Open a fresh Claude session in the repo containing the focused session.
     /// Walks up to the repo root so a session running in a subdirectory
-    /// still lands at the repo. Inert when nothing is open — there is no context
-    /// to derive a repo from.
-    pub(super) fn new_claude_here(&mut self) -> Task<Message> {
-        let Some(cwd) = self.focused_cwd() else {
-            return Task::none();
-        };
+    /// still lands at the repo. `None` when nothing is open — there is no context
+    /// to derive a repo from, and a caller is told so rather than told it ran.
+    pub(super) fn new_claude_here(&mut self) -> Option<Task<Message>> {
+        let cwd = self.focused_cwd()?;
         let root = termherd_scan::repo_root(std::path::Path::new(&cwd))
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or(cwd);
-        self.launch(root, Launch::Claude { resume: None })
+        Some(self.launch(root, Launch::Claude { resume: None }))
     }
 
     /// Reopen the most recently closed tab, restoring its mode and
     /// directory. The reopen lives in `core`; here we just perform the spawn and
-    /// focus the restored terminal, mirroring [`Self::launch`]. A no-op when the
-    /// close stack is empty (`core` yields no effects).
-    pub(super) fn reopen_closed_tab(&mut self) -> Task<Message> {
+    /// focus the restored terminal, mirroring [`Self::launch`]. `None` when the
+    /// close stack is empty (`core` yields no effects), so a caller learns there
+    /// was nothing to reopen instead of being told a tab came back.
+    pub(super) fn reopen_closed_tab(&mut self) -> Option<Task<Message>> {
         let effects = self.core.apply(termherd_core::Event::ReopenClosedTab);
         if effects.is_empty() {
-            return Task::none();
+            return None;
         }
         let spawn = self.perform(effects);
         self.focus = Focus::Terminal;
         self.closing = None;
         self.archiving = None;
-        Task::batch([spawn, self.resize_panes()])
+        Some(Task::batch([spawn, self.resize_panes()]))
     }
 }
