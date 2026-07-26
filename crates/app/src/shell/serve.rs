@@ -286,9 +286,11 @@ mod tests {
 
     #[test]
     fn a_frame_over_the_bound_is_downscaled_keeping_its_ratio() {
-        let shot = shot_reply(Some(&frame(3000, 2000)), 1200);
-        assert_eq!((shot.width, shot.height), (1200, 800));
-        assert_eq!(decoded_dims(&shot.png.expect("pixels")), (1200, 800));
+        // Deliberately small: the ratio is the claim, and a multi-megapixel
+        // frame here would make every mutation-testing run crawl.
+        let shot = shot_reply(Some(&frame(300, 200)), 120);
+        assert_eq!((shot.width, shot.height), (120, 80));
+        assert_eq!(decoded_dims(&shot.png.expect("pixels")), (120, 80));
     }
 
     #[test]

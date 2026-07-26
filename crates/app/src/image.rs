@@ -98,26 +98,28 @@ pub fn resample(src: &[u8], sw: u32, sh: u32, tw: u32, th: u32) -> Vec<u8> {
 }
 
 /// Box-average resample: each output pixel is the mean of the source pixels it
-/// covers. Only meaningful when shrinking — a growing axis maps each output
-/// pixel to a sub-pixel box, which averages a single sample and degenerates to
-/// nearest anyway, so [`resample`] routes those elsewhere.
+/// covers.
+///
+/// **Only for shrinking** — `tw <= sw` and `th <= sh`, which is why it is
+/// private and reached through [`resample`]. That precondition is what makes
+/// the body clamp-free: with `sh >= th` every row span is at least one row and
+/// at most `sh`, so guarding either end would be arithmetic that can never
+/// fire. (Dead defensiveness is not free: it reads as a live case to the next
+/// reader, and no test can ever pin it.) A growing axis would break that and
+/// average sub-pixel boxes, so [`resample`] sends those to nearest instead.
 ///
 /// Channels are averaged independently, alpha included: a window screenshot is
 /// opaque, and averaging alpha with colour would be wrong on anything else.
 #[must_use]
-pub fn resample_box(src: &[u8], sw: u32, sh: u32, tw: u32, th: u32) -> Vec<u8> {
+fn resample_box(src: &[u8], sw: u32, sh: u32, tw: u32, th: u32) -> Vec<u8> {
     let mut out = vec![0u8; (tw as usize) * (th as usize) * 4];
-    if tw == 0 || th == 0 {
-        return out;
-    }
     for ty in 0..th {
-        // The half-open source row span this output row covers, always at least
-        // one row so no output pixel is left with an empty box to average.
+        // The half-open source row span this output row covers.
         let y0 = ty * sh / th;
-        let y1 = (((ty + 1) * sh / th).max(y0 + 1)).min(sh);
+        let y1 = (ty + 1) * sh / th;
         for tx in 0..tw {
             let x0 = tx * sw / tw;
-            let x1 = (((tx + 1) * sw / tw).max(x0 + 1)).min(sw);
+            let x1 = (tx + 1) * sw / tw;
             let mut sums = [0u64; 4];
             let mut count = 0u64;
             for sy in y0..y1 {
@@ -181,6 +183,37 @@ pub fn encode_png(rgba: &[u8], width: u32, height: u32) -> io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The byte length of a `width`×`height` RGBA frame — what every resample
+    /// must return, whatever it decides to put in it.
+    fn rgba_len(width: usize, height: usize) -> usize {
+        width * height * 4
+    }
+
+    /// A `width`×`height` RGBA frame whose red channel numbers every pixel
+    /// `row*16 + col`. Which source pixel a resample reached for is then
+    /// readable straight off the output: a wrong index reads as a wrong
+    /// number, where a uniform frame would hide it.
+    fn numbered_frame(width: u8, height: u8) -> Vec<u8> {
+        let mut frame = Vec::new();
+        for row in 0..height {
+            for col in 0..width {
+                frame.extend_from_slice(&[row * 16 + col, 0, 0, 255]);
+            }
+        }
+        frame
+    }
+
+    /// An all-black `width`×`height` RGBA frame.
+    fn black_frame(width: usize, height: usize) -> Vec<u8> {
+        vec![0u8; rgba_len(width, height)]
+    }
+
+    /// The red channel of each pixel in order — the readable form of a frame
+    /// from [`numbered_frame`].
+    fn reds(frame: &[u8]) -> Vec<u8> {
+        frame.chunks_exact(4).map(|px| px[0]).collect()
+    }
 
     #[test]
     fn target_dims_scales_and_floors_at_one() {
@@ -258,35 +291,26 @@ mod tests {
         // shows up as a different value rather than the same one. Shrinking
         // vertically matters on its own: with equal source and target heights,
         // a wrong row index still clamps back onto the right row.
-        let mut src = Vec::new();
-        for row in 0..4u8 {
-            for col in 0..4u8 {
-                src.extend_from_slice(&[row * 16 + col, 0, 0, 255]);
-            }
-        }
-        let out = resample_nearest(&src, 4, 4, 2, 2);
-        let reds: Vec<u8> = out.chunks_exact(4).map(|px| px[0]).collect();
+        let src = numbered_frame(4, 4);
         // Columns 0 and 2 of rows 0 and 2: (0,0)=0, (0,2)=2, (2,0)=32, (2,2)=34.
-        assert_eq!(reds, vec![0, 2, 32, 34]);
+        assert_eq!(
+            reds(&resample_nearest(&src, 4, 4, 2, 2)),
+            vec![0, 2, 32, 34]
+        );
     }
 
     #[test]
     fn shrinking_averages_the_pixels_it_covers() {
         // The same 4×4 grid the nearest test uses, so the two can be compared
         // directly: nearest picks (0,0)=0, the box averages 0,1,16,17 → 8.
-        let mut src = Vec::new();
-        for row in 0..4u8 {
-            for col in 0..4u8 {
-                src.extend_from_slice(&[row * 16 + col, 0, 0, 255]);
-            }
-        }
-        let reds: Vec<u8> = resample(&src, 4, 4, 2, 2)
-            .chunks_exact(4)
-            .map(|px| px[0])
-            .collect();
-        assert_eq!(reds, vec![8, 10, 40, 42], "each output is its box's mean");
+        let averaged = reds(&resample(&numbered_frame(4, 4), 4, 4, 2, 2));
+        assert_eq!(
+            averaged,
+            vec![8, 10, 40, 42],
+            "each output is its box's mean"
+        );
         assert_ne!(
-            reds,
+            averaged,
             vec![0, 2, 32, 34],
             "and is not the nearest-neighbour pick"
         );
@@ -299,11 +323,9 @@ mod tests {
         // rows and returns pure black — the glyph stroke is gone. The box mean
         // keeps a grey trace, which is what makes text legible at 0.4×.
         const WHITE_ROW: usize = 1;
-        let mut src = vec![0u8; 4 * 4 * 4];
-        for col in 0..4 {
-            let i = (WHITE_ROW * 4 + col) * 4;
-            src[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
-        }
+        let mut src = black_frame(4, 4);
+        let line = rgba_len(4, WHITE_ROW)..rgba_len(4, WHITE_ROW + 1);
+        src[line].fill(255);
         assert_eq!(
             resample_nearest(&src, 4, 4, 1, 1)[0],
             0,
@@ -317,8 +339,21 @@ mod tests {
 
     #[test]
     fn resample_leaves_an_unchanged_size_untouched() {
-        let src: Vec<u8> = (0..(2 * 2 * 4) as u8).collect();
+        let src = numbered_frame(2, 2);
         assert_eq!(resample(&src, 2, 2, 2, 2), src, "a no-op stays a no-op");
+    }
+
+    #[test]
+    fn a_frame_shrinking_on_one_axis_and_growing_on_the_other_uses_nearest() {
+        // Routing is an *and*: box averaging needs both axes to shrink. Shrink
+        // x while y grows and the box path would average sub-pixel rows, so
+        // this must come out identical to nearest.
+        let src = numbered_frame(4, 1);
+        assert_eq!(
+            resample(&src, 4, 1, 2, 3),
+            resample_nearest(&src, 4, 1, 2, 3),
+            "a mixed direction is not a shrink"
+        );
     }
 
     #[test]
@@ -327,15 +362,14 @@ mod tests {
         // an upscale down that path (and must still size the output right).
         let src = vec![10u8, 20, 30, 255];
         let out = resample(&src, 1, 1, 2, 2);
-        assert_eq!(out.len(), 2 * 2 * 4);
+        assert_eq!(out.len(), rgba_len(2, 2));
         assert_eq!(&out[..4], &[10, 20, 30, 255]);
     }
 
     #[test]
     fn resample_output_length_matches_target() {
-        let src = vec![0u8; 4 * 4 * 4]; // 4×4 RGBA
-        let out = resample_nearest(&src, 4, 4, 3, 2);
-        assert_eq!(out.len(), 3 * 2 * 4);
+        let out = resample_nearest(&black_frame(4, 4), 4, 4, 3, 2);
+        assert_eq!(out.len(), rgba_len(3, 2));
     }
 
     #[test]
