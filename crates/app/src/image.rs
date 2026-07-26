@@ -134,20 +134,22 @@ mod tests {
     #[test]
     fn resample_picks_a_distinct_source_pixel_per_axis() {
         // The 1×1 case above cannot tell a right index from a wrong one: every
-        // arithmetic slip still lands on pixel (0,0). This 4×2 → 2×2 grid gives
-        // each source pixel a unique red channel (row*16 + col), so a swapped
-        // axis, a dropped stride or an off-by-one column shows up as a
-        // different value rather than the same one.
+        // arithmetic slip still lands on pixel (0,0). This 4×4 → 2×2 grid gives
+        // each source pixel a unique red channel (row*16 + col) and shrinks on
+        // *both* axes, so a swapped axis, a dropped stride or an off-by-one row
+        // shows up as a different value rather than the same one. Shrinking
+        // vertically matters on its own: with equal source and target heights,
+        // a wrong row index still clamps back onto the right row.
         let mut src = Vec::new();
-        for row in 0..2u8 {
+        for row in 0..4u8 {
             for col in 0..4u8 {
                 src.extend_from_slice(&[row * 16 + col, 0, 0, 255]);
             }
         }
-        let out = resample_nearest(&src, 4, 2, 2, 2);
+        let out = resample_nearest(&src, 4, 4, 2, 2);
         let reds: Vec<u8> = out.chunks_exact(4).map(|px| px[0]).collect();
-        // Columns 0 and 2 of rows 0 and 1: (0,0)=0, (0,2)=2, (1,0)=16, (1,2)=18.
-        assert_eq!(reds, vec![0, 2, 16, 18]);
+        // Columns 0 and 2 of rows 0 and 2: (0,0)=0, (0,2)=2, (2,0)=32, (2,2)=34.
+        assert_eq!(reds, vec![0, 2, 32, 34]);
     }
 
     #[test]
