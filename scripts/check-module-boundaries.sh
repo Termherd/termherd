@@ -33,9 +33,11 @@ set -euo pipefail
 #
 # Anchor every regex with `^use ` so only top-level (production) imports match.
 rules=$(cat <<'RULES'
-crates/pty/src/input.rs	^use (crate|super)::(events|grid|status|kill|session|manager)\b	pty::input is a pure protocol leaf — it must not import a sibling module
-crates/pty/src/grid.rs	^use (crate|super)::(events|input|status|kill|session|manager)\b	pty::grid is the rendering leaf — it must not import a sibling module
-crates/pty/src/session.rs crates/pty/src/status.rs crates/pty/src/kill.rs crates/pty/src/events.rs	^use (crate::manager|super::manager)\b	nothing may import pty::manager — the PtyHost impl sits at the top; importing it back would form a cycle
+crates/pty/src/input.rs	^use (crate|super)::(events|grid|status|kill|session|manager|launch|prompt|integration)\b	pty::input is a pure protocol leaf — it must not import a sibling module
+crates/pty/src/grid.rs	^use (crate|super)::(events|input|status|kill|session|manager|launch|prompt|integration)\b	pty::grid is the rendering leaf — it must not import a sibling module
+crates/pty/src/prompt.rs crates/pty/src/integration.rs	^use (crate|super)::(events|grid|input|status|kill|session|manager|launch)\b	pty::prompt and pty::integration are pure leaves — the shell-integration dialect and its recipe must not import a sibling module
+crates/pty/src/status.rs	^use (crate|super)::(events|grid|input|kill|session|manager|launch)\b	pty::status derives activity from the two dialects — it may read pty::prompt, nothing else
+crates/pty/src/session.rs crates/pty/src/status.rs crates/pty/src/launch.rs crates/pty/src/kill.rs crates/pty/src/events.rs	^use (crate::manager|super::manager)\b	nothing may import pty::manager — the PtyHost impl sits at the top; importing it back would form a cycle
 crates/core/src/app/*.rs	^use (crate::app|super)::(session|tabs|sidebar|metadata|capture|record|settings|notify|events|effects)::	core::app submodules share state through the parent App (and its Sessions registry), never by reaching into a sibling submodule
 crates/app/src/shell/view	^use (crate::shell::effects|(super::)+effects)\b	shell::view renders — it must not reach into shell::effects (the executor); effects execute, views only read
 crates/app/src/shell/terminal	^use (crate::shell::effects|(super::)+effects)\b	shell::terminal renders — it must not reach into shell::effects (the executor)

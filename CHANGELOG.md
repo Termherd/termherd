@@ -7,6 +7,35 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (session status)
+
+- Sessions no longer sit on `starting` forever, which made `wait_for_status`
+  settle only by expiring and left the close confirmation unarmed for a shell
+  (#236). Two independent holes, both reproduced outside termherd on a raw PTY,
+  so neither was an artefact of a debug build:
+  - **A plain shell had no status source at all.** The fold only understood
+    Claude's dialect (glyph titles, OSC 9), and a shell emits none of it. Every
+    session now runs with an OSC 133 shell-integration snippet — zsh via a
+    private `ZDOTDIR`, bash via `--rcfile`, fish via `--init-command`, each
+    replaying the user's own startup files first — and its prompt/command marks
+    fold into the same `SessionStatus`. Where the injection cannot apply (an
+    unknown shell, an unwritable temp directory) the PTY's foreground process
+    group stands in, retired for good by the first mark or Claude signal so it
+    can never contradict what the terminal says about itself. ConPTY exposes no
+    foreground group, so that fallback is silent on Windows.
+  - **The Claude channel was switchable off by the user.** With
+    `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` set in `~/.claude/settings.json` the
+    CLI emits no OSC title at all — and that `env` block outranks the
+    environment termherd spawns with, so exporting the variable back had no
+    effect. A Claude launch now passes a private `--settings` overlay, which
+    outranks it in turn and merges with (never replaces) the user's settings.
+- The CLI's own product name (`✳ Claude Code`), which it reports as its title
+  until it has something session-specific to say, no longer renames the hosting
+  tab — a tab would have traded its project name for the program's.
+- A session's private temp files — its shell-integration directory, its mcp
+  config with the live bridge's **bearer token**, its settings overlay — are now
+  deleted when the session is torn down instead of accumulating for good.
+
 ### Added (tab reorder)
 
 - Open session tabs can be reordered by drag-and-drop (#25, FR5). Press a tab

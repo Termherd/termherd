@@ -17,8 +17,14 @@ use termherd_core::{ScrollTarget, SelectOp, SpawnSpec};
 use crate::events::EventSink;
 use crate::grid::Palette;
 use crate::kill::finish_kill;
-use crate::session::{Session, SharedWriter, TermCmd, spawn_reader, spawn_term, spawn_waiter};
-use crate::status::{apply_terminal_env, launch_command, write_mcp_config};
+use crate::launch::{
+    apply_integration, apply_terminal_env, discard_private_files, launch_command, write_mcp_config,
+    write_title_settings,
+};
+use crate::session::{
+    Session, SharedMaster, SharedWriter, TermCmd, spawn_reader, spawn_term, spawn_waiter,
+    spawn_watcher,
+};
 
 /// How to launch a session's shell process (FR10). Built from the user's
 /// settings and injected into [`PtyManager`]; `None` uses the platform default
@@ -98,6 +104,13 @@ impl PtyHost for PtyManager {
             cmd.cwd(cwd);
         }
         apply_terminal_env(&mut cmd);
+        // Which shell is about to run decides the integration recipe; the
+        // default program only resolves to a name here, so ask the builder.
+        let program = match &self.shell {
+            Some(shell) => shell.program.clone(),
+            None => cmd.get_shell(),
+        };
+        apply_integration(spec.session, &program, &mut cmd);
 
         let child = pair
             .slave
@@ -117,6 +130,8 @@ impl PtyHost for PtyManager {
                 .map_err(|e| PtyError::Spawn(e.to_string()))?,
         ));
         let killer = child.clone_killer();
+        let shell_pid = child.process_id();
+        let master: SharedMaster = Arc::new(Mutex::new(pair.master));
 
         // Start Claude by typing into the fresh shell (see `launch_command`).
         // Shells buffer stdin, so writing immediately is safe even before the
@@ -126,8 +141,16 @@ impl PtyHost for PtyManager {
             .mcp
             .as_ref()
             .and_then(|config| write_mcp_config(spec.session, config));
-        if let Some(command) = launch_command(&spec.launch, mcp_config_path.as_deref())
-            && let Ok(mut w) = writer.lock()
+        // A Claude launch also carries the settings overlay that keeps its OSC
+        // title — termherd's only status channel for it — switched on.
+        let settings_path = matches!(spec.launch, termherd_core::Launch::Claude { .. })
+            .then(|| write_title_settings(spec.session))
+            .flatten();
+        if let Some(command) = launch_command(
+            &spec.launch,
+            mcp_config_path.as_deref(),
+            settings_path.as_deref(),
+        ) && let Ok(mut w) = writer.lock()
         {
             let _ = w.write_all(command.as_bytes());
             let _ = w.flush();
@@ -146,9 +169,12 @@ impl PtyHost for PtyManager {
         // Detached from birth: it parks in `wait()` until the process ends,
         // whether by the user's `exit` or a later kill.
         let _ = spawn_waiter(spec.session, child, ctrl.clone(), self.sink.clone());
+        // The stand-in status source, for a shell whose integration did not
+        // take. It ends itself once the terminal thread is gone.
+        let _ = spawn_watcher(spec.session, master.clone(), shell_pid, ctrl.clone());
 
         let session = Session {
-            master: pair.master,
+            master,
             writer,
             killer,
             ctrl,
@@ -190,6 +216,8 @@ impl PtyHost for PtyManager {
         // a ConPTY resize so the child redraws at the new size).
         let _ = s.ctrl.send(TermCmd::Resize(cols, rows));
         s.master
+            .lock()
+            .map_err(|_| PtyError::Io("master lock poisoned".into()))?
             .resize(PtySize {
                 rows,
                 cols,
@@ -247,6 +275,9 @@ impl PtyHost for PtyManager {
             .remove(&session)
             .ok_or(PtyError::NoSuchSession(session.0.get()))?;
         let result = s.killer.kill();
+        // The session's private files — its integration snippet, its mcp config
+        // with the bridge token — have no reason to outlive it.
+        discard_private_files(session);
         // Dropping the session drops the master/writer, which unblocks the
         // reader; the waiter thread reaps the killed child (`wait`) and signals
         // the terminal thread, which emits `Exited` on its own.
@@ -263,7 +294,7 @@ mod tests {
     use crate::PtyEvent;
     use std::num::NonZeroU64;
     use std::time::{Duration, Instant};
-    use termherd_core::Launch;
+    use termherd_core::{Launch, SessionStatus};
 
     fn sid(n: u64) -> SessionId {
         SessionId(NonZeroU64::new(n).expect("non-zero"))
@@ -327,6 +358,65 @@ mod tests {
             "expected the echoed marker in the grid, got:\n{screen}"
         );
 
+        mgr.kill(id).expect("kill");
+    }
+
+    /// A **real spawned shell** must leave `Starting` and then report the work
+    /// it is doing — the end-to-end claim behind this whole seam, and the one
+    /// no unit test can make: whether the integration snippet actually takes on
+    /// the machine's shell is only knowable by running it. Either source is
+    /// accepted (the marks, or the foreground stand-in); what must not happen
+    /// is silence, which is what left `wait_for_status` unusable on a shell.
+    ///
+    /// Skipped on Windows: ConPTY exposes no foreground process group, and a
+    /// shell there may have no recipe, so silence is the documented outcome.
+    #[test]
+    fn a_real_shell_reports_idle_at_its_prompt_then_busy_while_working() {
+        if cfg!(windows) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let mgr = PtyManager::new(sink, None, Palette::default());
+        let id = sid(4);
+        mgr.spawn(spec(id)).expect("spawn");
+
+        /// Collect statuses until `wanted` shows up, or the deadline passes.
+        fn wait_for(
+            rx: &mpsc::Receiver<PtyEvent>,
+            wanted: SessionStatus,
+            seen: &mut Vec<SessionStatus>,
+        ) -> bool {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while Instant::now() < deadline {
+                match rx.recv_timeout(Duration::from_millis(500)) {
+                    Ok(PtyEvent::Status { status, .. }) => {
+                        seen.push(status);
+                        if status == wanted {
+                            return true;
+                        }
+                    }
+                    Ok(_) => continue,
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(_) => break,
+                }
+            }
+            false
+        }
+
+        let mut seen = Vec::new();
+        assert!(
+            wait_for(&rx, SessionStatus::Idle, &mut seen),
+            "a shell parked at its prompt must report idle, saw {seen:?}"
+        );
+        // Long enough to outlast a poll tick whichever source is in play.
+        mgr.write(id, b"sleep 3\r\n").expect("write");
+        assert!(
+            wait_for(&rx, SessionStatus::Busy, &mut seen),
+            "a shell running a command must report busy, saw {seen:?}"
+        );
         mgr.kill(id).expect("kill");
     }
 

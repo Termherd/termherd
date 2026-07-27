@@ -68,7 +68,17 @@ exists and why**, never when it gets picked up.
 - [x] `F-search` — in-memory search over digests (was `F-fts-search`;
   the SQLite FTS5 version moved to Should as `F-store-cache`, PRD rev. 4)
   — case-insensitive, titles-only toggle (FR3)
-- [x] `F-status-notifications` — busy / waiting / permission from OSC (M2):
+- [x] `F-status-notifications` — busy / waiting / permission from OSC (M2, and
+  #236 for the two holes that left *every* session stuck on `starting`, making
+  `wait_for_status` unusable): a plain shell speaks no Claude dialect, so `pty`
+  now injects an OSC 133 shell-integration snippet (zsh / bash / fish) and folds
+  its prompt and command marks into the same `SessionStatus`, with the PTY's
+  foreground process group as a stand-in where the injection did not take —
+  retired by the first real signal, and silent under ConPTY. And a Claude launch
+  now carries a `--settings` overlay re-enabling
+  `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`, whose `env` block in the user's own
+  `settings.json` outranks the environment we spawn with and silenced the only
+  channel we had:
   the `pty` reader decodes the raw byte stream with `termherd_claude::osc`;
   busy/idle titles plus an OSC 9 notification → a distinct `Attention` status
   (sticky over idle, cleared by work). Surfaced as a badge on the focused
@@ -137,11 +147,13 @@ exists and why**, never when it gets picked up.
   dot (the FR8 tab badge) and a close button that kills the session's PTY —
   the first UI-driven `Effect::Kill`. Tab tree edits (`activate`/`close_tab`,
   most-urgent `tab_status`) are pure in `core`. Tab labels: a resumed tab takes
-  the session name from the scanned digest (#109/#118) — current Claude (2.1.195)
-  renders status in-band in its TUI and emits no OSC title, so the OSC-0 override
-  (#24) never fires there; a fresh/unscanned session keeps the `<repo>` kind
-  label. The OSC plumbing stays in place and still wins where a Claude does emit
-  a title: the `osc` decoder carries the title text, the `pty` reader forwards a
+  the session name from the scanned digest (#109/#118) — current Claude (2.1.220)
+  *does* emit an OSC-0 title, but reports its own product name (`✳ Claude Code`)
+  until it has something session-specific to say, and #236 filters that as no
+  title at all, so the OSC-0 override (#24) still does not fire there; a
+  fresh/unscanned session keeps the `<repo>` kind label. The OSC plumbing stays
+  in place and still wins where a Claude does emit a real
+  title: the `osc` decoder carries the title text, the `pty` reader forwards a
   change as `PtyEvent::Title`, and `Workspace::set_session_title` relabels the
   hosting tab — which also lets a sidebar rename retitle the open tab live.
   Reflecting Claude's *own* `/rename` and live task name is tracked as #119.

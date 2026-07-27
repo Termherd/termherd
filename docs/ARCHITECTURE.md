@@ -249,6 +249,16 @@ Swapping iced for egui/GPUI (OQ1) touches only this crate.
 3. The terminal widget for that pane renders the grid; the tab/sidebar show the
    OSC-derived status.
 
+Activity (FR8) has **two dialects and a stand-in**, because two kinds of session
+are hosted. A Claude session announces itself in the CLI's own OSC stream (glyph
+titles, OSC 9); a plain shell announces nothing of the sort, so `pty` injects an
+OSC 133 shell-integration snippet and decodes the prompt/command marks it emits.
+Both fold into the same `SessionStatus`. A shell whose integration did not take
+(an unknown shell, an unwritable temp directory) falls back on the PTY's
+foreground process group — a stand-in the first real signal or mark retires for
+good, since it would otherwise call every Claude session busy forever. ConPTY
+exposes no foreground group, so that fallback is silent on Windows.
+
 ### Tabs / splits / focus
 
 Pure `Workspace` edits in `core` (split, close, focus-next, reorder). The only
