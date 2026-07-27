@@ -15,6 +15,7 @@ termherd-claude = { path = "../claude" }
 tracing = "0.1"
 
 [dev-dependencies]
+proptest = "1"
 
 [lints]
 workspace = true

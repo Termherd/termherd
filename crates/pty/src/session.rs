@@ -23,7 +23,8 @@ use termherd_core::{ScrollTarget, SelectOp, SessionStatus};
 use crate::events::{EventSink, PtyEvent};
 use crate::grid::{Palette, apply_select, indexed_rgb, snapshot};
 use crate::input::wheel_bytes;
-use crate::status::fold_status;
+use crate::prompt::decode_marks;
+use crate::status::{Activity, foreground_leader, foreground_status};
 
 /// Read buffer for the per-session reader thread.
 const READ_BUF: usize = 8192;
@@ -36,6 +37,15 @@ const EOF_DRAIN_QUIET: std::time::Duration = std::time::Duration::from_millis(50
 /// replies (the parser). A `Mutex` serialises the two so responses never
 /// interleave with keystrokes mid-sequence.
 pub(crate) type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
+/// The PTY's control side, shared between the manager (resize) and the watcher
+/// thread (reading the foreground process group). Neither holds it for long.
+pub(crate) type SharedMaster = Arc<Mutex<Box<dyn MasterPty + Send>>>;
+
+/// How often the watcher thread asks the PTY which process group owns it. Short
+/// enough that `wait_for_status` on an unintegrated shell settles promptly,
+/// long enough to be free: one `tcgetpgrp` per session per tick.
+const FOREGROUND_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Answers terminal queries the parser raises — chiefly the cursor-position
 /// report (`ESC[6n`). **ConPTY blocks startup until it gets that reply**, so
@@ -93,6 +103,10 @@ pub(crate) enum TermCmd {
     Select(SelectOp),
     /// Copy the current selection to the clipboard via a `SelectionCopied` event.
     CopySelection,
+    /// What the PTY's foreground process group implies about the session's
+    /// activity, or `None` when the platform cannot say. The stand-in source
+    /// for a shell whose integration did not take (see [`crate::status`]).
+    Foreground(Option<SessionStatus>),
     /// The PTY reached end of file; the process is gone. `clean` carries the
     /// reaped exit status (see [`PtyEvent::Exited`]).
     Eof { clean: bool },
@@ -101,7 +115,7 @@ pub(crate) enum TermCmd {
 /// The control-side handle to one session. The grid lives in the terminal
 /// thread; this half writes to the PTY, drives resize/scroll and kills.
 pub(crate) struct Session {
-    pub(crate) master: Box<dyn MasterPty + Send>,
+    pub(crate) master: SharedMaster,
     pub(crate) writer: SharedWriter,
     pub(crate) killer: Box<dyn ChildKiller + Send + Sync>,
     /// Commands to the terminal thread (resize / scroll). The reader thread
@@ -179,6 +193,77 @@ pub(crate) fn spawn_waiter(
         })
 }
 
+/// Emit a [`PtyEvent::Status`] when `activity` has moved off `before`. Both
+/// sources — the OSC fold and the foreground poll — report through here, so a
+/// status change is logged and published in exactly one place.
+fn report_status(session: SessionId, before: SessionStatus, activity: &Activity, sink: &EventSink) {
+    if activity.status == before {
+        return;
+    }
+    tracing::debug!(
+        session = session.0.get(),
+        from = ?before,
+        to = ?activity.status,
+        "session status changed"
+    );
+    sink(PtyEvent::Status {
+        session,
+        status: activity.status,
+    });
+}
+
+/// The foreground-watcher thread: reports which process group owns the PTY, so
+/// a shell whose integration did not take is not left mute (see
+/// [`crate::status::Activity`]). It stops as soon as the terminal thread is
+/// gone — the send fails — so it never outlives its session.
+///
+/// A thread rather than a timer on the runtime: the read is a blocking `ioctl`
+/// through `portable_pty`, and the terminal thread must stay free to drain
+/// output. `shell` is the session's own process id, the thing a foreground
+/// reading is compared against.
+pub(crate) fn spawn_watcher(
+    session: SessionId,
+    master: SharedMaster,
+    shell: Option<u32>,
+    ctrl: mpsc::Sender<TermCmd>,
+) -> JoinHandle<()> {
+    std::thread::Builder::new()
+        .name(format!("pty-fg-{}", session.0.get()))
+        .spawn(move || {
+            // Where the platform has no foreground process group there is
+            // nothing to watch; ticking forever to report `None` would cost a
+            // thread per session for no answer.
+            if !cfg!(unix) {
+                return;
+            }
+            loop {
+                std::thread::sleep(FOREGROUND_POLL);
+                let leader = match master.lock() {
+                    Ok(master) => foreground_leader(master.as_ref()),
+                    // A poisoned lock means the manager panicked mid-resize;
+                    // the stand-in is optional, so end quietly.
+                    Err(_) => break,
+                };
+                if ctrl
+                    .send(TermCmd::Foreground(foreground_status(leader, shell)))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .unwrap_or_else(|error| {
+            // Losing the stand-in costs an unintegrated shell its status, not
+            // the session — say so and carry on.
+            tracing::warn!(
+                %error,
+                session = session.0.get(),
+                "could not spawn the foreground watcher thread"
+            );
+            std::thread::spawn(|| {})
+        })
+}
+
 /// The terminal thread: owns the `alacritty_terminal` grid and applies every
 /// [`TermCmd`] (bytes → parse + status, resize, scroll), emitting a fresh
 /// `Screen` each time. It exits — and reports [`PtyEvent::Exited`] — when the
@@ -208,7 +293,7 @@ pub(crate) fn spawn_term(
                 },
             );
             let mut parser: Processor = Processor::new();
-            let mut status = SessionStatus::Starting;
+            let mut activity = Activity::starting();
             let mut title: Option<String> = None;
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
@@ -218,18 +303,12 @@ pub(crate) fn spawn_term(
                     TermCmd::Bytes(bytes) => {
                         // OSC status comes from the raw bytes — alacritty
                         // consumes the sequences, so decode before parsing.
-                        let signals = decode_chunk(&String::from_utf8_lossy(&bytes));
-                        let next = fold_status(status, &signals);
-                        if next != status {
-                            tracing::debug!(
-                                session = session.0.get(),
-                                from = ?status,
-                                to = ?next,
-                                "session status changed"
-                            );
-                            status = next;
-                            term_sink(PtyEvent::Status { session, status });
-                        }
+                        let text = String::from_utf8_lossy(&bytes);
+                        let signals = decode_chunk(&text);
+                        let marks = decode_marks(&text);
+                        let before = activity.status;
+                        activity.observe(&signals, &marks);
+                        report_status(session, before, &activity, &term_sink);
                         // Forward each OSC 9 notification's text to the OS,
                         // independent of the status fold above — the in-app
                         // `Attention` badge and the desktop alert are two
@@ -294,15 +373,34 @@ pub(crate) fn spawn_term(
                             term_sink(PtyEvent::SelectionCopied { session, text });
                         }
                     }
+                    TermCmd::Foreground(status) => {
+                        let before = activity.status;
+                        if activity.poll(status) {
+                            report_status(session, before, &activity, &term_sink);
+                        }
+                        // A poll changes no pixels; falling through to the
+                        // snapshot below would redraw every session four times
+                        // a second for nothing.
+                        continue;
+                    }
                     TermCmd::Eof { clean: c } => {
                         clean = c;
                         // The waiter races the reader: the exit is observed on
                         // the process while the last output chunks may still be
                         // in flight. Give them a short quiet window — a crash
                         // message is exactly what the surviving screen must show.
-                        while let Ok(TermCmd::Bytes(bytes)) = ctrl_rx.recv_timeout(EOF_DRAIN_QUIET)
-                        {
-                            parser.advance(&mut term, &bytes);
+                        loop {
+                            match ctrl_rx.recv_timeout(EOF_DRAIN_QUIET) {
+                                Ok(TermCmd::Bytes(bytes)) => parser.advance(&mut term, &bytes),
+                                // Anything else — chiefly a foreground poll,
+                                // which ticks four times a second — says
+                                // nothing about a session that has already
+                                // exited, but it must not *end* the drain:
+                                // matching only `Bytes` here would abandon the
+                                // trailing output this window exists to catch.
+                                Ok(_) => continue,
+                                Err(_) => break,
+                            }
                         }
                         break;
                     }
@@ -346,6 +444,87 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
+    }
+
+    /// Drive a real terminal thread over `chunks` and collect every status it
+    /// reported — the wiring test for "bytes in, activity out", which no pure
+    /// fold test can make: it is the terminal thread that decodes both dialects
+    /// and decides what is worth emitting.
+    fn statuses_reported(chunks: &[&str]) -> Vec<SessionStatus> {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let collected = seen.clone();
+        let sink: EventSink = Arc::new(move |event| {
+            if let PtyEvent::Status { status, .. } = event {
+                collected.lock().expect("sink lock").push(status);
+            }
+        });
+        let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(Arc::new(
+            Mutex::new(Vec::new()),
+        )))));
+        let session = SessionId(std::num::NonZeroU64::new(1).expect("nonzero"));
+        let (ctrl, ctrl_rx) = mpsc::channel();
+        let term = spawn_term(
+            session,
+            ctrl_rx,
+            (80, 24),
+            writer,
+            sink,
+            Palette::named("solarized-light").expect("known scheme"),
+        );
+        for chunk in chunks {
+            ctrl.send(TermCmd::Bytes(chunk.as_bytes().to_vec()))
+                .expect("terminal thread alive");
+        }
+        drop(ctrl);
+        term.join().expect("terminal thread ends");
+        seen.lock().expect("sink lock").clone()
+    }
+
+    #[test]
+    fn a_shell_reporting_its_prompt_reaches_idle_through_the_terminal_thread() {
+        // End of the chain the bug broke: a plain shell's integration marks
+        // must come out the other side as activity, or `wait_for_status` on a
+        // shell can only ever time out.
+        assert_eq!(
+            statuses_reported(&["\u{1b}]133;A\u{07}"]),
+            vec![SessionStatus::Idle]
+        );
+    }
+
+    #[test]
+    fn a_shell_command_cycle_reports_busy_then_idle() {
+        assert_eq!(
+            statuses_reported(&[
+                "\u{1b}]133;A\u{07}",
+                "\u{1b}]133;C\u{07}",
+                "output\r\n",
+                "\u{1b}]133;D;0\u{07}\u{1b}]133;A\u{07}",
+            ]),
+            vec![
+                SessionStatus::Idle,
+                SessionStatus::Busy,
+                SessionStatus::Idle
+            ],
+            "only real transitions are emitted — plain output is not one"
+        );
+    }
+
+    #[test]
+    fn claude_titles_still_report_activity_through_the_terminal_thread() {
+        // The other dialect, unchanged: a spinner title is work, `✳` is a
+        // prompt, and the OSC 9 ping outranks both.
+        assert_eq!(
+            statuses_reported(&[
+                "\u{1b}]0;\u{280B} Thinking…\u{07}",
+                "\u{1b}]0;\u{2733} claude\u{07}",
+                "\u{1b}]9;allow Bash?\u{07}",
+            ]),
+            vec![
+                SessionStatus::Busy,
+                SessionStatus::Idle,
+                SessionStatus::Attention
+            ]
+        );
     }
 
     #[test]

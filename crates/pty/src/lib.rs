@@ -17,21 +17,34 @@
 //! - `grid` — the [`Screen`]/[`Palette`] rendered-cell types and the
 //!   snapshot/colour/selection code over an `alacritty_terminal` grid.
 //! - `events` — the out-of-band [`PtyEvent`]s and the [`EventSink`].
-//! - `status` — spawn/launch policy (command line, environment, mcp config)
-//!   and the OSC activity fold.
+//! - `launch` — spawn/launch policy: command line, environment, and every
+//!   private per-session file — the mcp config, the settings overlay, the
+//!   shell-integration startup files — including their private-mode creation
+//!   and their removal at teardown.
+//! - `prompt` — the OSC 133 shell-integration marks a shell reports its
+//!   prompt and command boundaries with; a pure leaf.
+//! - `integration` — the per-shell recipe (env, args, rc-file contents) that
+//!   makes a shell emit those marks; pure data, performed by `launch`.
+//! - `status` — where a session's activity comes from: the fold over Claude's
+//!   OSC signals and the shell's prompt marks, plus the foreground-process
+//!   fallback for a shell with no integration.
 //! - `kill` — the OS-cfg kill reconciliation, quarantined in one file.
 //! - `session` — the per-session actor: reader / waiter / terminal threads.
 //! - `manager` — [`PtyManager`], the [`PtyHost`](termherd_core::ports::PtyHost)
 //!   implementation that owns every session.
 //!
 //! Dependency direction: `manager → session → {grid, status, events, kill}`,
-//! with `input` a free leaf.
+//! with `input`, `prompt` and `integration` free leaves and `status` reading
+//! `prompt`.
 
 mod events;
 mod grid;
 mod input;
+mod integration;
 mod kill;
+mod launch;
 mod manager;
+mod prompt;
 mod session;
 mod status;
 

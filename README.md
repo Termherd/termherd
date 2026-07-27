@@ -17,6 +17,29 @@ This is an early scaffold. Status, scope, and design live in:
 
 ## Install
 
+### Requirements
+
+A shell, and — to launch Claude sessions — the **Claude Code CLI, 1.0.61 or
+newer**, on your `PATH`.
+
+That floor is the `--settings` flag, which arrived in 1.0.61 and which termherd
+puts on every Claude launch. It re-enables the CLI's terminal title for that
+session only, and the title is where a Claude session's activity comes from —
+without it, a `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` anywhere in your own settings
+would leave every session reading `starting` forever. An older CLI would reject
+the flag and fail to start; termherd's other flag, `--mcp-config` (the live
+bridge), has been available since 0.2.75.
+
+A plain shell needs nothing: its activity comes from an OSC 133
+shell-integration snippet termherd injects itself (zsh, bash, fish), falling
+back on the PTY's foreground process group otherwise. Two cases take that
+fallback. Bash and fish need the snippet passed as a command-line argument,
+which termherd will not add to the platform's *default* program — it would
+demote your login shell to an ordinary one and change which startup files run —
+so they get the finer marks only when you name your shell in the settings; zsh
+needs no argument and is always integrated. And on Windows ConPTY exposes no
+foreground process group, so a shell with neither route stays on `starting`.
+
 Each tagged release publishes desktop installers on the
 [Releases](https://github.com/Termherd/termherd/releases) page. Pick the
 one for your platform:

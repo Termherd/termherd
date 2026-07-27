@@ -100,20 +100,33 @@ pub fn decode_chunk(chunk: &str) -> Vec<OscSignal> {
     signals
 }
 
+/// The CLI's own product name, which it reports as the title until it has
+/// something session-specific to say. It identifies the *program*, not the
+/// session, so it is no more of a title than a bare glyph is — and a tab
+/// relabelled with it would have lost its project name to learn nothing.
+const PRODUCT_NAME: &str = "Claude Code";
+
 /// The human title carried by an OSC 0 payload whose first char is a status
 /// glyph (Braille spinner or `✳`): the text after that glyph, trimmed.
-/// `None` when nothing meaningful remains — Claude's bare-glyph titles.
+/// `None` when nothing meaningful remains — Claude's bare-glyph titles, and its
+/// bare [`PRODUCT_NAME`].
 fn title_after_glyph(payload: &str) -> Option<&str> {
     let mut chars = payload.chars();
     chars.next()?; // drop the leading status glyph
     let rest = chars.as_str().trim();
-    (!rest.is_empty()).then_some(rest)
+    (!rest.is_empty() && rest != PRODUCT_NAME).then_some(rest)
 }
 
 /// All `ESC ] <digits> ; <payload>` sequences terminated by BEL or ST
 /// (`ESC \`), mirroring `/\x1b\](\d+);([^\x07\x1b]*)(?:\x07|\x1b\\)/g`.
 /// Sequences whose numeric code overflows `u32` are ignored.
-fn osc_sequences(chunk: &str) -> Vec<(u32, &str)> {
+///
+/// Public because Claude's dialect is not the only one termherd reads off a
+/// terminal: the shell reports its prompt and command boundaries in OSC 133,
+/// decoded by the `pty` adapter. The *scan* is the same wire grammar for both,
+/// so it lives here once rather than being re-derived per dialect.
+#[must_use]
+pub fn osc_sequences(chunk: &str) -> Vec<(u32, &str)> {
     let bytes = chunk.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -190,6 +203,29 @@ mod tests {
         assert_eq!(
             decode_chunk("\u{1b}]0;\u{2733}  \u{07}"),
             vec![OscSignal::Idle]
+        );
+    }
+
+    #[test]
+    fn the_clis_product_name_is_a_status_but_not_a_title() {
+        // What a freshly launched Claude reports until it has something of its
+        // own to say. The glyph is real activity; the text would rename the
+        // hosting tab from `<repo> 🤖` to the program's name, which tells the
+        // user strictly less than what it replaced.
+        assert_eq!(
+            decode_chunk("\u{1b}]0;\u{2733} Claude Code\u{07}"),
+            vec![OscSignal::Idle]
+        );
+        // A session that really is *called* that is still not relabelled — the
+        // string is indistinguishable, and losing the product-name filter would
+        // cost every tab its project.
+        assert_eq!(
+            decode_chunk("\u{1b}]0;\u{2733} Claude Code review\u{07}"),
+            vec![
+                OscSignal::Idle,
+                OscSignal::Title("Claude Code review".into())
+            ],
+            "only the bare product name is filtered, not anything containing it"
         );
     }
 
