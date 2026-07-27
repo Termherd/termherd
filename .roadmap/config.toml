@@ -1,0 +1,35 @@
+# The roadmap's source of truth. `roadmark generate -o ROADMAP.md` compiles it;
+# `roadmark validate` fails CI when the two disagree. Edit files here, never
+# ROADMAP.md.
+#
+# Priority is deliberately absent from this schema. `horizon`, `class` and
+# `effort` live on Project #1 and nowhere else — a second copy here would be a
+# second thing to keep true. The buckets below say whether a feature exists and
+# why; the board says when it gets picked up.
+
+versions = ["Must", "Should", "Could", "Backlog", "Unsure"]
+title = "TermHerd — Roadmap"
+
+# The buckets are the document's shape, not a sort key, so each gets its own
+# section and the column folds into the heading.
+split_by_bucket = true
+bucket_label = "Priority"
+unbucketed_label = "Unsorted"
+
+sections = [{ file = "preamble.md", slot = "before-catalog" }]
+
+[fields.type]
+values = ["feature", "fix", "chore"]
+
+# User-facing surfaces rather than crates: `core` and `app` are touched by
+# nearly every feature, so a crate axis would tag most rows the same and rank
+# nothing. A surface answers "what part of termherd does this change".
+[fields.area]
+values = ["terminal", "workspace", "sidebar", "keymap", "mcp", "sessions", "packaging"]
+multi = true
+
+# There is deliberately no `tracked` field. Only nine features have a single
+# issue that *is* the feature; the rest cite several, or none, so the column
+# would be four-fifths empty — and it would be a second home for what the board
+# already owns, the same objection that keeps priority out of this schema.
+# Issue numbers stay in the bodies, where they read as the story they tell.

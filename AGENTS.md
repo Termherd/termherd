@@ -30,8 +30,9 @@ cargo machete                      # unused deps; if cargo-machete installed
 just check-deps                    # hexagonal crate dependency rule (deps point inward)
 just check-arch                    # intra-crate module boundaries + OS-cfg containment (+ length report)
 
-# Markdown is also gated in CI
+# Markdown is also gated in CI (ROADMAP.md is ignored — it is generated)
 markdownlint-cli2                  # uses .markdownlint-cli2.jsonc
+just roadmap                       # recompile ROADMAP.md from .roadmap/, then validate
 
 # Planning hygiene — not a CI gate (needs a `project`-scoped token)
 just board-check                   # board/issue drift (0 clean · 1 drift · 2 unchecked)
@@ -347,17 +348,22 @@ exists). Do not relax them locally.
   Requirements in [`docs/PRD.md`](docs/PRD.md) (§Functional requirements)** —
   e.g. `FR4` is the embedded-terminal requirement, `FR6` splits. Do not coin
   other bare abbreviations; a lone `FR4` is only readable because of this line.
-- Status of every feature is tracked in `ROADMAP.md` (MoSCoW from PRD §5).
-  Check the ticked/unticked state there before assuming something is built.
+- Status of every feature is tracked in `.roadmap/features/*.md` (MoSCoW from
+  PRD §5), and compiled into `ROADMAP.md`. Check the `status =` line — or the
+  glyph in the generated catalog — before assuming something is built.
+- **`ROADMAP.md` is generated. Never edit it.** Edit the feature file, then
+  run `just roadmap` and commit both. CI rebuilds and diffs.
 
 ## How we track work
 
 Three layers, each owning one thing — no item lives fully in two places:
 
-- **`ROADMAP.md` (+ `docs/PRD.md`)** — the *what* and *why*: features, MoSCoW
+- **`.roadmap/` (+ `docs/PRD.md`)** — the *what* and *why*: features, MoSCoW
   bucket, shipped history with rationale, and design-first epics not yet scoped
   enough to act on (e.g. `F-i18n`, `F-favorites`). Source of truth for whether
-  a feature exists.
+  a feature exists. One feature is one file, so two people never edit the same
+  line; `ROADMAP.md` is compiled from it by [roadmark](https://github.com/bastien-gallay/roadmark)
+  and is a build artifact — read it, don't write it.
 - **GitHub issues** — the *unit of work*: actionable, scoped tickets. Each
   carries a native **issue type** (`Feature` / `Bug` / `Task`) and one or more
   **`area:*`** labels; `os:*` and `needs-design` are modifiers on top.
@@ -385,19 +391,31 @@ jumps the queue on severity × blast-radius, off the leverage map. A `Task`
 (packaging, tooling, chores) carries neither.
 
 So: **Class / Effort / Severity / Horizon = board fields · Type = the native
-issue type · Area = `area:*` labels · everything narrative = `ROADMAP.md`.**
+issue type · Area = `area:*` labels · everything narrative = `.roadmap/`.**
 
-The one rule that keeps it sane: an epic **graduates from `ROADMAP.md` to an
+`.roadmap/config.toml` declares no `horizon`, `class` or `effort` on purpose —
+those are the board's, and a second copy here would be a second thing to keep
+true. The roadmap's own `area` axis is a separate, coarser vocabulary from the
+`area:*` labels: it answers "what part of termherd does this change", one line
+in a frontmatter, not a label to triage by.
+
+The one rule that keeps it sane: an epic **graduates from the roadmap to an
 issue only when it's scoped enough to do.** A design-first item lives only in
-the roadmap until then; once filed as an issue it appears on the board. Mark
-the roadmap entry done when its issues close.
+the roadmap until then; once filed as an issue it appears on the board. Flip
+the feature's `status` to `done` when its issues close.
 
 Two corollaries that keep the layers in sync (both contributors work from
 issues, so a scoped roadmap item with no issue is invisible):
 
 - **When an epic graduates, link it both ways.** Open the issue *and* add its
-  `#number` to the ROADMAP entry. Shipped entries already cite their issues; do
-  the same for open ones.
+  `#number` to the feature's body. Shipped entries already cite their issues;
+  do the same for open ones.
+- **A cross-reference between features is a link, not a name.** Write
+  `[F-mcp-keys](#f-mcp-keys)`, never a bare `F-mcp-keys`: `roadmark validate`
+  fails on a link to an id nothing declares and `roadmark rename` rewrites it,
+  while a bare mention only earns a warning. That is why the nine MCP rungs are
+  nine files rather than sub-bullets — nesting them would have put ten
+  unverifiable ids in one body.
 - **Design a backlog epic before filing it.** Run `/feature-torture` on a
   design-first item to reach a verdict (ship / reshape / park / split / kill);
   file issues only for the slices that come out scoped. The report lands in
@@ -416,3 +434,9 @@ issues, so a scoped roadmap item with no issue is invisible):
   live in the roadmap alone) is checkable. Reconciling the roadmap stays a
   human read; the script's own docstring records why. Run it before a planning
   pass.
+- **`just roadmap` recompiles and validates the roadmap** — schema, duplicate
+  ids, and links to a feature id nothing declares. It is the roadmap's
+  counterpart to `board-check`: that one checks the board against the issues,
+  this one checks the roadmap against itself. The `roadmap` CI job runs
+  `validate` and then rebuilds and diffs, so a hand-edited `ROADMAP.md` or a
+  forgotten regeneration fails the PR.

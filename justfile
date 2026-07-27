@@ -44,6 +44,22 @@ board-check:
 board-check-selftest:
     python3 scripts/board_check.py --selftest
 
+# Recompile ROADMAP.md from `.roadmap/`. ROADMAP.md is an artifact — edit the
+# feature files, never it. Run this and commit both, or the `roadmap` CI job
+# fails on the diff. Needs roadmark from git until a release carries #34:
+#   cargo install --locked --git https://github.com/bastien-gallay/roadmark
+[doc("Recompile ROADMAP.md from .roadmap/, then validate the source")]
+roadmap:
+    roadmark generate -o ROADMAP.md
+    roadmark validate
+
+# Read-only: schema, duplicate ids, dead cross-references, and whether the
+# committed ROADMAP.md still matches its source. Warnings (an empty body, prose
+# naming something that isn't a feature) print without failing.
+[doc("Check the roadmap source without rewriting ROADMAP.md")]
+roadmap-check:
+    roadmark validate
+
 # Build the shipping binary (host target) — the input the packager bundles.
 build-release:
     cargo build --release -p termherd-app

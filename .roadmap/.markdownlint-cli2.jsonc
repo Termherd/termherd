@@ -1,0 +1,16 @@
+{
+  // Feature files are roadmap *source*, not standalone documents: TOML
+  // frontmatter fenced by `+++`, then a body roadmark assembles into
+  // ROADMAP.md. Two rules only make sense once assembled, so they are off here
+  // and still enforced everywhere else. Everything else — 80 columns above
+  // all — applies exactly as it does to the rest of the docs.
+  "config": {
+    // A feature file opens on `+++`, never on a heading; its heading is the
+    // `### <a id>` anchor roadmark emits around the body.
+    "MD041": false,
+    // `[F-mcp-keys](#f-mcp-keys)` resolves in the generated file, where every
+    // anchor lives. `roadmark validate` is what checks these — and unlike
+    // MD051 it also catches a link to a feature that does not exist at all.
+    "MD051": false
+  }
+}

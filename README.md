@@ -12,7 +12,8 @@ This is an early scaffold. Status, scope, and design live in:
 
 - [`docs/PRD.md`](docs/PRD.md) — Product Requirements Document
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — Architecture
-- [`ROADMAP.md`](ROADMAP.md) — feature buckets (MoSCoW)
+- [`ROADMAP.md`](ROADMAP.md) — feature buckets (MoSCoW); generated from
+  `.roadmap/` by [roadmark](https://github.com/bastien-gallay/roadmark)
 - [`CHANGELOG.md`](CHANGELOG.md)
 
 ## Install
