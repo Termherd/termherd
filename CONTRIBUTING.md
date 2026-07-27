@@ -26,8 +26,9 @@ Where issue numbers **do** belong:
 
 - **Commit messages and PR descriptions** — cite `#NN`, `Closes #NN`, etc.
   freely. This is the durable link.
-- **`ROADMAP.md` and `docs/PRD.md` prose** — feature epics reference their
-  tracking issues so the roadmap and the board stay in sync.
+- **`.roadmap/features/*.md` and `docs/PRD.md` prose** — feature epics
+  reference their tracking issues so the roadmap and the board stay in sync.
+  Edit the feature file, not the generated `ROADMAP.md`, then `just roadmap`.
 
 Where they **don't**:
 

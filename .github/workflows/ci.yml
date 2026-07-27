@@ -46,6 +46,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       cargo: ${{ steps.filter.outputs.cargo }}
       markdown: ${{ steps.filter.outputs.markdown }}
+      roadmap: ${{ steps.filter.outputs.roadmap }}
       workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -76,6 +77,13 @@ jobs:
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
+            # `roadmap` = the compiled roadmap and everything it is compiled
+            # from. ROADMAP.md is in both filters on purpose: markdownlint
+            # ignores it (it is an artifact) while this gate is the only thing
+            # that checks it, by rebuilding it.
+            roadmap:
+              - '.roadmap/**'
+              - 'ROADMAP.md'
             workflows:
               - '.github/workflows/**'
 
@@ -252,6 +260,40 @@ jobs:
       - name: Run actionlint
         run: ${{ steps.install.outputs.path }} -color
 
+  roadmap:
+    name: roadmap
+    needs: changes
+    if: needs.changes.outputs.roadmap == 'true'
+    runs-on: ubuntu-latest
+    # The roadmap is compiled: `.roadmap/` is the source, ROADMAP.md the
+    # artifact. Two things can go wrong and both are caught here.
+    #   - `validate` reads the source alone: schema, duplicate ids, and links
+    #     to a feature id nothing declares. Warnings (an empty body, prose
+    #     naming a non-feature) are printed and do not fail.
+    #   - the rebuild-and-diff catches the case `validate` cannot see from the
+    #     source: someone edited ROADMAP.md by hand, or changed a feature and
+    #     forgot to regenerate. `validate` compares anchors, which agree when
+    #     only prose moved; only the bytes tell the whole truth.
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@stable
+      # Pinned to a commit, not a version: the published 0.6.0 still requires a
+      # `[fields.horizon]` declaration even when no feature carries a horizon,
+      # which this project deliberately does not (priority lives on the board).
+      # Switch to a `--version` once a release carries roadmark #34.
+      - name: Install roadmark
+        run: |
+          cargo install --locked --git https://github.com/bastien-gallay/roadmark \
+            --rev 2ed4d56 roadmark
+      - run: roadmark validate
+      - name: Rebuild and compare
+        run: |
+          roadmark generate -o /tmp/ROADMAP.expected.md
+          if ! diff -u ROADMAP.md /tmp/ROADMAP.expected.md; then
+            echo "::error file=ROADMAP.md::ROADMAP.md is stale — run \`just roadmap\` and commit the result."
+            exit 1
+          fi
+
   markdown:
     name: markdownlint
     needs: changes
@@ -278,7 +320,7 @@ jobs:
   ci-success:
     name: ci-success
     if: always()
-    needs: [changes, fmt, clippy, test, deny, machete, deps, intra-arch, actionlint, markdown]
+    needs: [changes, fmt, clippy, test, deny, machete, deps, intra-arch, actionlint, markdown, roadmap]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required job failed or was cancelled

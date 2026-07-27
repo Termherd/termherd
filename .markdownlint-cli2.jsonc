@@ -13,10 +13,17 @@
   // and `.local/` are gitignored working notes: CI never sees them (fresh
   // clone), so linting them locally only reports errors no one can act on and
   // teaches you to skim past the summary line.
+  //
+  // ROADMAP.md is compiled from `.roadmap/` by roadmark, so we lint the source
+  // and not the artifact — the prose it contains is checked in the feature
+  // files it comes from, at the same 80 columns. Linting it too would report
+  // errors no one can fix by editing it: its own "DO NOT EDIT" banner is 86
+  // columns and hardcoded (roadmark #54).
   "ignores": [
     "target/**",
     "node_modules/**",
     "CLAUDE.md",
+    "ROADMAP.md",
     ".personal/**",
     ".local/**"
   ]
