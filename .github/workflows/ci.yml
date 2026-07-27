@@ -84,6 +84,11 @@ jobs:
             roadmap:
               - '.roadmap/**'
               - 'ROADMAP.md'
+              # The job's own definition, including the roadmark version it
+              # pins — the same reason `rust` watches the scripts it runs. A
+              # bump that changes rendering must be caught by the PR that makes
+              # it, not by the next one to touch a feature file.
+              - '.github/workflows/ci.yml'
             workflows:
               - '.github/workflows/**'
 
