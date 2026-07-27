@@ -46,8 +46,8 @@ board-check-selftest:
 
 # Recompile ROADMAP.md from `.roadmap/`. ROADMAP.md is an artifact — edit the
 # feature files, never it. Run this and commit both, or the `roadmap` CI job
-# fails on the diff. Needs roadmark from git until a release carries #34:
-#   cargo install --locked --git https://github.com/bastien-gallay/roadmark
+# fails on the diff. CI pins the version, so match it locally:
+#   cargo install roadmark --version 0.7.0 --locked
 [doc("Recompile ROADMAP.md from .roadmap/, then validate the source")]
 roadmap:
     roadmark generate -o ROADMAP.md
