@@ -84,6 +84,11 @@ jobs:
             roadmap:
               - '.roadmap/**'
               - 'ROADMAP.md'
+              # The job's own definition, including the roadmark version it
+              # pins — the same reason `rust` watches the scripts it runs. A
+              # bump that changes rendering must be caught by the PR that makes
+              # it, not by the next one to touch a feature file.
+              - '.github/workflows/ci.yml'
             workflows:
               - '.github/workflows/**'
 
@@ -277,14 +282,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@stable
-      # Pinned to a commit, not a version: the published 0.6.0 still requires a
-      # `[fields.horizon]` declaration even when no feature carries a horizon,
-      # which this project deliberately does not (priority lives on the board).
-      # Switch to a `--version` once a release carries roadmark #34.
+      # Pinned exactly: roadmark's output is what this job diffs against, so a
+      # version bump that changes rendering must land as a visible ROADMAP.md
+      # diff in its own PR, never as a mystery failure on someone else's.
       - name: Install roadmark
-        run: |
-          cargo install --locked --git https://github.com/bastien-gallay/roadmark \
-            --rev 2ed4d56 roadmark
+        run: cargo install roadmark --version 0.7.0 --locked
       - run: roadmark validate
       - name: Rebuild and compare
         run: |
