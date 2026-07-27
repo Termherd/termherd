@@ -12,6 +12,7 @@
 //! reads the activity off the PTY's own foreground process group. It is a
 //! fallback, subordinate to the marks — see [`Activity`].
 
+use portable_pty::MasterPty;
 use termherd_claude::osc::OscSignal;
 use termherd_core::SessionStatus;
 
@@ -117,6 +118,24 @@ fn fold_status(current: SessionStatus, signals: &[OscSignal]) -> SessionStatus {
         };
     }
     status
+}
+
+/// The process group currently owning `master`, or `None` where the platform
+/// has no such notion.
+///
+/// That absence is a **compile-time** fork, not a runtime one: `portable_pty`
+/// declares `process_group_leader` only under `cfg(unix)`, because ConPTY has
+/// no foreground process group to report. Naming the fork here keeps it in one
+/// audited file (`scripts/check-os-cfg-containment.sh`) and lets the watcher
+/// thread stay portable.
+#[cfg(unix)]
+pub(crate) fn foreground_leader(master: &dyn MasterPty) -> Option<i32> {
+    master.process_group_leader()
+}
+
+#[cfg(not(unix))]
+pub(crate) fn foreground_leader(_master: &dyn MasterPty) -> Option<i32> {
+    None
 }
 
 /// The activity a PTY's foreground process group implies: the shell itself in

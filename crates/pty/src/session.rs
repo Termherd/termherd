@@ -24,7 +24,7 @@ use crate::events::{EventSink, PtyEvent};
 use crate::grid::{Palette, apply_select, indexed_rgb, snapshot};
 use crate::input::wheel_bytes;
 use crate::prompt::decode_marks;
-use crate::status::{Activity, foreground_status};
+use crate::status::{Activity, foreground_leader, foreground_status};
 
 /// Read buffer for the per-session reader thread.
 const READ_BUF: usize = 8192;
@@ -230,10 +230,16 @@ pub(crate) fn spawn_watcher(
     std::thread::Builder::new()
         .name(format!("pty-fg-{}", session.0.get()))
         .spawn(move || {
+            // Where the platform has no foreground process group there is
+            // nothing to watch; ticking forever to report `None` would cost a
+            // thread per session for no answer.
+            if !cfg!(unix) {
+                return;
+            }
             loop {
                 std::thread::sleep(FOREGROUND_POLL);
                 let leader = match master.lock() {
-                    Ok(master) => master.process_group_leader(),
+                    Ok(master) => foreground_leader(master.as_ref()),
                     // A poisoned lock means the manager panicked mid-resize;
                     // the stand-in is optional, so end quietly.
                     Err(_) => break,
@@ -383,9 +389,18 @@ pub(crate) fn spawn_term(
                         // the process while the last output chunks may still be
                         // in flight. Give them a short quiet window — a crash
                         // message is exactly what the surviving screen must show.
-                        while let Ok(TermCmd::Bytes(bytes)) = ctrl_rx.recv_timeout(EOF_DRAIN_QUIET)
-                        {
-                            parser.advance(&mut term, &bytes);
+                        loop {
+                            match ctrl_rx.recv_timeout(EOF_DRAIN_QUIET) {
+                                Ok(TermCmd::Bytes(bytes)) => parser.advance(&mut term, &bytes),
+                                // Anything else — chiefly a foreground poll,
+                                // which ticks four times a second — says
+                                // nothing about a session that has already
+                                // exited, but it must not *end* the drain:
+                                // matching only `Bytes` here would abandon the
+                                // trailing output this window exists to catch.
+                                Ok(_) => continue,
+                                Err(_) => break,
+                            }
                         }
                         break;
                     }

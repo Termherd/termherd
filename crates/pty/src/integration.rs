@@ -34,7 +34,8 @@ pub(crate) struct Integration {
 /// process group (`crate::status::foreground_status`).
 ///
 /// `home` is where the user's own startup files live, replayed by the generated
-/// ones. `None` leaves the replay to the shell's own default lookup.
+/// ones; `None` replays nothing (see [`replay`]). The hooks themselves never
+/// depend on it.
 pub(crate) fn integration_for(
     program: &str,
     dir: &Path,
@@ -55,9 +56,6 @@ pub(crate) fn integration_for(
 /// directory is the way in — and the reason each generated file must replay the
 /// user's counterpart, which taking `ZDOTDIR` over has displaced.
 fn zsh(dir: &Path, home: Option<&Path>) -> Integration {
-    // zsh's own default when ZDOTDIR is unset is `$HOME`; keep that meaning for
-    // the replay rather than inventing one.
-    let source = home.map(Path::to_path_buf).unwrap_or_default();
     let hooks = "\
 termherd_precmd() { printf '\\033]133;D\\007\\033]133;A\\007' }\n\
 termherd_preexec() { printf '\\033]133;C\\007' }\n\
@@ -69,7 +67,7 @@ add-zsh-hook preexec termherd_preexec\n";
     let files = [".zshenv", ".zprofile", ".zshrc", ".zlogin"]
         .into_iter()
         .map(|name| {
-            let mut contents = replay(&source.join(name));
+            let mut contents = replay(home, name);
             if name == ".zshrc" {
                 contents.push_str(hooks);
             }
@@ -87,9 +85,8 @@ add-zsh-hook preexec termherd_preexec\n";
 /// displaced by an environment variable — but `--rcfile` *replaces* the one it
 /// would have read, so the replay is still needed.
 fn bash(dir: &Path, home: Option<&Path>) -> Integration {
-    let source = home.map(Path::to_path_buf).unwrap_or_default();
     let rcfile = dir.join("termherd.bash");
-    let mut contents = replay(&source.join(".bashrc"));
+    let mut contents = replay(home, ".bashrc");
     // `PROMPT_COMMAND` runs before each prompt; the DEBUG trap fires before
     // each command. Both are appended, never assigned, so a user who set them
     // in their own rc keeps theirs.
@@ -119,17 +116,26 @@ function termherd_preexec --on-event fish_preexec; printf '\\033]133;C\\007'; en
     }
 }
 
-/// The line that loads the user's own startup file, guarded on it existing — a
-/// fresh account has none, and an unguarded `source` would print an error into
-/// the first line of every terminal termherd opens.
+/// The line that loads the user's own `name` startup file, guarded on it
+/// existing — a fresh account has none, and an unguarded `source` would print an
+/// error into the first line of every terminal termherd opens.
 ///
 /// The `if` form rather than `[ -f x ] && . x`: the latter *evaluates to 1* when
 /// the file is absent, and the last startup file read leaves that status behind
 /// for the shell's first command. A bare `exit` inherits it, so the session ends
 /// unclean and its tab does not auto-close — an integration that quietly changes
-/// what exiting means.
-fn replay(path: &Path) -> String {
-    format!("if [ -f {0} ]; then . {0}; fi\n", path.display())
+/// what exiting means. The path is quoted, so a home directory containing a
+/// space is sourced rather than mis-parsed into `[: too many arguments`.
+///
+/// No home means **no line at all**. Falling back to the bare `name` would make
+/// it relative, and the session's working directory is the *project* — so the
+/// shell would source whatever `.zshrc` a cloned repository happens to carry.
+fn replay(home: Option<&Path>, name: &str) -> String {
+    let Some(home) = home else {
+        return String::new();
+    };
+    let path = home.join(name).display().to_string();
+    format!("if [ -f \"{path}\" ]; then . \"{path}\"; fi\n")
 }
 
 #[cfg(test)]
@@ -305,6 +311,37 @@ mod tests {
         assert!(
             rc.contains("133;A"),
             "the hooks are unconditional, got {rc}"
+        );
+    }
+
+    #[test]
+    fn a_recipe_without_a_known_home_sources_nothing_at_all() {
+        // A bare `.zshrc` would be *relative*, and the session's working
+        // directory is the project — so the shell would source whatever a
+        // cloned repository happens to carry. Nothing to replay means no line.
+        let it = integration_for("/bin/zsh", dir(), None).expect("zsh has a recipe");
+        for (path, contents) in &it.files {
+            assert!(
+                !contents.contains(". ."),
+                "{} must source nothing, got {contents}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn the_replay_quotes_the_path_it_sources() {
+        // An unquoted path with a space in it makes `[ -f a b ]` fail with
+        // "too many arguments": the user's own rc is then silently never
+        // loaded, and the error prints on the first line of every terminal.
+        let spaced = Path::new("/Users/some one");
+        let rc = file_named(
+            &integration_for("/bin/zsh", dir(), Some(spaced)).expect("zsh has a recipe"),
+            ".zshrc",
+        );
+        assert!(
+            rc.contains("\"/Users/some one/.zshrc\""),
+            "the sourced path must be quoted, got {rc}"
         );
     }
 }
