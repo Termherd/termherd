@@ -21,14 +21,21 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     fold into the same `SessionStatus`. Where the injection cannot apply (an
     unknown shell, an unwritable temp directory) the PTY's foreground process
     group stands in, retired for good by the first mark or Claude signal so it
-    can never contradict what the terminal says about itself. ConPTY exposes no
-    foreground group, so that fallback is silent on Windows.
+    can never contradict what the terminal says about itself. The bash and fish
+    recipes need a command-line argument, which is never added to the platform's
+    *default* program — it would demote the login shell to an ordinary one and
+    change which startup files run — so those two are integrated only when the
+    shell is named in the settings; zsh needs no argument and always is. ConPTY
+    exposes no foreground group, so that fallback is silent on Windows.
   - **The Claude channel was switchable off by the user.** With
     `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` set in `~/.claude/settings.json` the
     CLI emits no OSC title at all — and that `env` block outranks the
     environment termherd spawns with, so exporting the variable back had no
     effect. A Claude launch now passes a private `--settings` overlay, which
     outranks it in turn and merges with (never replaces) the user's settings.
+    `--settings` arrived in Claude Code 1.0.61, which the README now states as
+    the CLI floor for launching Claude sessions — an older one rejects the flag
+    and the launch fails rather than merely losing its status.
 - The CLI's own product name (`✳ Claude Code`), which it reports as its title
   until it has something session-specific to say, no longer renames the hosting
   tab — a tab would have traded its project name for the program's.

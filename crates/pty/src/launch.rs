@@ -50,6 +50,10 @@ pub(crate) fn launch_command(
 /// the user's settings rather than replacing them, so nothing else they
 /// configured is lost. `None` (logged, not fatal) if the write fails: the
 /// session then launches with whatever title setting the user has.
+///
+/// `--settings` arrived in Claude Code **1.0.61**, which is therefore the CLI
+/// floor termherd's README states: an older one rejects the flag and the launch
+/// fails outright, rather than merely losing its status.
 pub(crate) fn write_title_settings(session: SessionId) -> Option<PathBuf> {
     let path = std::env::temp_dir().join(format!("termherd-settings-{}.json", session.0.get()));
     let json = r#"{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":"0"}}"#;
@@ -89,6 +93,23 @@ pub(crate) fn apply_integration(session: SessionId, program: &str, cmd: &mut Com
     let Some(integration) = integration_for(program, &dir, home.as_deref()) else {
         return;
     };
+    // A recipe carrying arguments cannot be applied to the platform's *default*
+    // program: `portable_pty` marks that builder by its empty argv, so the first
+    // argument both turns it into an ordinary command and drops the `-basename`
+    // argv0 that makes it a **login shell** — silently changing which startup
+    // files the user's shell reads. Wanting a status is not a reason to change
+    // how someone's shell starts, so the recipe is declined and the foreground
+    // poll stands in. A shell the user configured explicitly already carries its
+    // own argv, so it takes the recipe.
+    if !integration.args.is_empty() && cmd.is_default_prog() {
+        tracing::debug!(
+            session = session.0.get(),
+            program,
+            "shell integration needs arguments the default login shell cannot take; \
+             this session's activity falls back on its foreground process"
+        );
+        return;
+    }
     if let Err(error) = write_startup_files(&dir, &integration.files) {
         tracing::warn!(
             %error,
@@ -337,6 +358,43 @@ mod tests {
             "an existing directory must never be adopted"
         );
         let _ = std::fs::remove_dir_all(&planted);
+    }
+
+    #[test]
+    fn a_recipe_needing_arguments_is_declined_for_the_default_login_shell() {
+        // `portable_pty` marks the platform default program by its empty argv,
+        // and panics on the first argument added to it — so bash's `--rcfile`
+        // recipe would have crashed every session on a machine whose default
+        // shell is bash, which is most Linux ones. Even without the panic, the
+        // argument would demote the login shell to an ordinary one and change
+        // which startup files run. Declining costs the marks, not the session.
+        let session = SessionId(std::num::NonZeroU64::new(93).expect("nonzero"));
+        let mut cmd = CommandBuilder::new_default_prog();
+        apply_integration(session, "/bin/bash", &mut cmd);
+        assert!(
+            cmd.is_default_prog(),
+            "the default login shell must be left exactly as it was"
+        );
+        assert!(
+            !std::env::temp_dir().join("termherd-shell-93").exists(),
+            "and nothing is written for a recipe that will not be applied"
+        );
+    }
+
+    #[test]
+    fn an_explicitly_configured_shell_still_takes_an_arguments_recipe() {
+        // The same recipe is fine on a shell the user named: that builder
+        // already carries its own argv, so there is no login-shell argv0 to
+        // lose and no panic to trip.
+        let session = SessionId(std::num::NonZeroU64::new(92).expect("nonzero"));
+        let mut cmd = CommandBuilder::new("/bin/bash");
+        apply_integration(session, "/bin/bash", &mut cmd);
+        assert!(
+            cmd.get_argv().iter().any(|arg| arg == "--rcfile"),
+            "got {:?}",
+            cmd.get_argv()
+        );
+        discard_private_files(session);
     }
 
     #[test]
