@@ -30,7 +30,8 @@ cargo machete                      # unused deps; if cargo-machete installed
 just check-deps                    # hexagonal crate dependency rule (deps point inward)
 just check-arch                    # intra-crate module boundaries + OS-cfg containment (+ length report)
 
-# Markdown is also gated in CI (ROADMAP.md is ignored — it is generated)
+# Markdown is also gated in CI (ROADMAP.md included — a lint failure there is a
+# roadmark bug, not something to fix by editing the artifact)
 markdownlint-cli2                  # uses .markdownlint-cli2.jsonc
 just roadmap                       # recompile ROADMAP.md from .roadmap/, then validate
 

@@ -14,16 +14,14 @@
   // clone), so linting them locally only reports errors no one can act on and
   // teaches you to skim past the summary line.
   //
-  // ROADMAP.md is compiled from `.roadmap/` by roadmark, so we lint the source
-  // and not the artifact — the prose it contains is checked in the feature
-  // files it comes from, at the same 80 columns. Linting it too would report
-  // errors no one can fix by editing it: its own "DO NOT EDIT" banner is 86
-  // columns and hardcoded (roadmark #54).
+  // ROADMAP.md is generated, and is linted anyway: an artifact nobody may edit
+  // is exactly the one whose lint failures are a generator bug worth seeing.
+  // It was excluded only while roadmark emitted an 86-column banner no local
+  // edit could shorten; the generator now wraps it.
   "ignores": [
     "target/**",
     "node_modules/**",
     "CLAUDE.md",
-    "ROADMAP.md",
     ".personal/**",
     ".local/**"
   ]

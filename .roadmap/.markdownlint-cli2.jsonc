@@ -5,8 +5,8 @@
   // and still enforced everywhere else. Everything else — 80 columns above
   // all — applies exactly as it does to the rest of the docs.
   "config": {
-    // A feature file opens on `+++`, never on a heading; its heading is the
-    // `### <a id>` anchor roadmark emits around the body.
+    // A feature file opens on `+++`, never on a heading; the `###` heading and
+    // its anchor are emitted by roadmark around the body.
     "MD041": false,
     // `[F-mcp-keys](#f-mcp-keys)` resolves in the generated file, where every
     // anchor lives. `roadmark validate` is what checks these — and unlike
