@@ -130,11 +130,18 @@ function termherd_preexec --on-event fish_preexec; printf '\\033]133;C\\007'; en
 /// No home means **no line at all**. Falling back to the bare `name` would make
 /// it relative, and the session's working directory is the *project* — so the
 /// shell would source whatever `.zshrc` a cloned repository happens to carry.
+///
+/// The separator is a literal `/`, not the host's: this string is a line of
+/// POSIX shell, so the separator belongs to the *script's* grammar rather than
+/// to the filesystem the script was generated on. `Path::join` would write a
+/// backslash when the generator runs on Windows, where the shell reads it as an
+/// escape and sources nothing.
 fn replay(home: Option<&Path>, name: &str) -> String {
     let Some(home) = home else {
         return String::new();
     };
-    let path = home.join(name).display().to_string();
+    let home = home.display().to_string();
+    let path = format!("{}/{name}", home.trim_end_matches(['/', '\\']));
     format!("if [ -f \"{path}\" ]; then . \"{path}\"; fi\n")
 }
 
@@ -325,6 +332,25 @@ mod tests {
                 !contents.contains(". ."),
                 "{} must source nothing, got {contents}",
                 path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn the_replay_joins_with_one_separator_whatever_the_home_ends_with() {
+        // The separator is written by hand rather than by `Path::join`, since
+        // the line is POSIX shell and must not carry the host's separator. A
+        // hand-written join owns the case `join` used to handle: a home that
+        // already ends in one, which would otherwise source `//.zshrc`.
+        for home in ["/Users/someone", "/Users/someone/"] {
+            let rc = file_named(
+                &integration_for("/bin/zsh", dir(), Some(Path::new(home)))
+                    .expect("zsh has a recipe"),
+                ".zshrc",
+            );
+            assert!(
+                rc.contains("\"/Users/someone/.zshrc\""),
+                "home {home:?} must source one path, got {rc}"
             );
         }
     }
