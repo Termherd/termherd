@@ -130,13 +130,21 @@ with `wait_for_status` and then `read_terminal`. Do **not** poll `snapshot` in
 a loop — it races the transition you are watching for, which is why the wait
 rung exists.
 
-**That loop does not currently run (#236).** No session leaves `starting`, so
-`wait_for_status` only ever settles by timing out, and the advice above leaves
-a caller with no recourse at all. Until it is fixed, treat the wait as a bounded
-sleep and read the terminal after it. The same stuck status also stops a close
-confirmation arming for a *shell* — `has_running_process` needs `Busy` or
-`Attention` — which is why a Claude session, which always confirms, is the
-reliable way to exercise that prompt.
+**That loop did not run until #236, and now does.** Every session used to sit
+on `starting`, so `wait_for_status` only ever settled by timing out. Two
+independent holes, both closed: a plain shell spoke none of the Claude OSC
+dialect the status fold understood, and now runs with an injected OSC 133
+shell-integration snippet — with the PTY's foreground process group standing in
+where the snippet cannot apply, and nothing at all under ConPTY; and a
+`CLAUDE_CODE_DISABLE_TERMINAL_TITLE` in the user's own `~/.claude/settings.json`
+silenced the Claude channel outright, which a private `--settings` overlay on
+the launch line now outranks. That overlay is why termherd needs **Claude Code
+1.0.61 or newer** — an older CLI rejects the flag and the launch fails.
+
+The same stuck status also kept a close confirmation from arming for a *shell*
+(`has_running_process` needs `Busy` or `Attention`); that follows from the fix
+rather than needing one of its own, so a shell running a command now confirms
+as a Claude session always did.
 
 `screenshot` is the pixel companion to the text `snapshot`, for the render,
 colour and glyph questions text cannot answer. Reach for it *last*: a
@@ -205,16 +213,16 @@ overlay ladder and its outcome named once, since three readers consult them.
 round trip), the last child of the #90 epic. With `screenshot` and the keyboard
 tools the capability is otherwise whole in three parts: drive the UI, see the
 pixels, read the terminal — what lets an agent verify a gesture fix instead of
-only proposing it. Note the order: #196 *composes* the wait that #236 currently
-breaks, so building it first means building on a synchronisation that never
-fires.
+only proposing it. #196 *composes* the wait, which #236 had to fix first —
+building it on a synchronisation that never fired would have been building on
+sand, and that ordering constraint is now discharged.
 
-Two defects of this surface are known and filed. **#236** — no session leaves
-`starting`, so `wait_for_status` never settles (above). **#237** — an open
-sidebar session-rename swallows every key including `escape`, so it parks the
-whole control surface until a human clears it with the mouse. That second one
-is the failure mode the synthesised-key-event design exists to prevent: it is
-prevented for the confirmation prompts, and not for that one.
+One defect of this surface is still open. **#237** — an open sidebar
+session-rename swallows every key including `escape`, so it parks the whole
+control surface until a human clears it with the mouse. It is the failure mode
+the synthesised-key-event design exists to prevent: prevented for the
+confirmation prompts, and not for that one. (**#236**, the sibling defect that
+left every session on `starting`, is fixed — see the wait rung above.)
 
 **Looks like a contradiction, is not.** `docs/ARCHITECTURE.md` §15 lists an
 `mcp` crate as *deferred (Unsure)*. That is a **different feature** —
@@ -296,6 +304,18 @@ exists). Do not relax them locally.
   on every block. Any further exception needs the same — OS-FFI that can't be
   expressed safely, quarantined in its own `cfg`-gated module — not a relaxation
   scattered through otherwise-safe code.
+- **A `cfg`-gated API is not compiled by the PR gate — cross-check it
+  yourself.** The `cross-os` job does not run on pull requests, so
+  `cargo check --target x86_64-pc-windows-msvc` is the *only* thing standing
+  between a Unix-only call and a broken packaging build. `#236` called
+  `MasterPty::process_group_leader`, which `portable-pty` declares under
+  `#[cfg(unix)]`, from an ungated file: green on every PR check, and it would
+  not compile for Windows. Worse, the code's own doc-comment asserted the
+  opposite ("`portable_pty` reports none on Windows") — true of the *value*,
+  but the method is absent, so there was nothing to return none. Whenever a
+  diff touches a dependency's platform-conditional surface, add the target once
+  (`rustup target add x86_64-pc-windows-msvc`) and check both ways: the change
+  compiles, and reverting it fails.
 - **Function length is gated.** `clippy::too_many_lines` (threshold 150 in
   `clippy.toml`) fails CI on over-long functions — a proxy for local
   complexity. A function that exceeds it on purpose (a flat dispatcher / layout

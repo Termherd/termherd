@@ -2389,9 +2389,11 @@ mod key_routing {
 
     #[test]
     fn resuming_a_known_session_titles_the_tab_with_its_session_name() {
-        // Claude (2.1.195) emits no OSC title, so the live-title override
-        // never fires here — the tab must take the session's name from the
-        // scanned digest instead of the generic `project 🤖` kind label.
+        // Claude reports only its own product name as an OSC title until it
+        // has something session-specific to say, and the decoder discards that
+        // as naming the program rather than the session — so the live-title
+        // override never fires here, and the tab must take the session's name
+        // from the scanned digest instead of the generic `project 🤖` label.
         let (mut shell, _pty) = shell_with_terminal();
         browse_named(
             &mut shell,

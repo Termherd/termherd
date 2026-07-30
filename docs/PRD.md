@@ -172,8 +172,11 @@ Abbreviated acceptance criteria.
 
 ### Status, shortcuts, settings
 
-- FR8 — Derive busy / waiting-for-input / permission-blocked from the terminal
-  OSC stream and surface it per session in the sidebar and on the tab.
+- FR8 — Derive busy / waiting-for-input / permission-blocked per session and
+  surface it in the sidebar and on the tab. Two terminal dialects feed it: a
+  Claude session's own OSC stream, and — since a plain shell speaks none of
+  that — the OSC 133 shell-integration marks an injected snippet makes a shell
+  report. Where neither applies, the PTY's foreground process group stands in.
 - FR9 — A **configurable keymap** drives the workspace: switch/close tab, split
   h/v, move focus, focus search, open new session — all reachable by keyboard;
   bindings persist.

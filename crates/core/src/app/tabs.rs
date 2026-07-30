@@ -90,9 +90,11 @@ impl App {
     }
 
     /// The tab title for a new session (FR4): the scanned digest name for a
-    /// resumed Claude session — current Claude renders status in-band and emits
-    /// no OSC title, so without this every resumed tab in a repo would read
-    /// alike — else the kind label `{project} {glyph}`. A fresh or unscanned
+    /// resumed Claude session — current Claude renders status in-band and
+    /// reports only its own product name as an OSC title, which the decoder
+    /// discards as naming the program rather than the session, so without this
+    /// every resumed tab in a repo would read alike — else the kind label
+    /// `{project} {glyph}`. A fresh or unscanned
     /// session keeps the kind label; an OSC title still wins later. The kind
     /// glyphs are the caller's (view-side constants), so core carries no
     /// presentation literals.
