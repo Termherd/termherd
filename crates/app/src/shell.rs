@@ -2966,6 +2966,33 @@ mod key_routing {
         );
     }
 
+    #[test]
+    fn only_escape_leaves_an_overlay_and_an_ordinary_key_does_not() {
+        // The other half of the sweep above, and not a formality: an exit that
+        // fires on *every* key is worse than none, since typing into a rename
+        // field would discard the edit at the first letter. Mutation testing
+        // named this gap — the escape test alone cannot tell the two apart.
+        let mut dismissed = Vec::new();
+        for owner in KeyboardOwner::ALL {
+            let (mut shell, _pty) = shell_with_terminal();
+            arm_overlay(&mut shell, owner);
+
+            let _ = shell.on_key(press(
+                Key::Character("x".into()),
+                Modifiers::default(),
+                Some("x"),
+            ));
+
+            if shell.keyboard_owner().is_none() {
+                dismissed.push(owner.label());
+            }
+        }
+        assert!(
+            dismissed.is_empty(),
+            "these overlays let an ordinary key dismiss them: {dismissed:?}"
+        );
+    }
+
     /// Put `shell` into the state `owner` names.
     ///
     /// The `match` is what makes the sweep above honest: a new `KeyboardOwner`
