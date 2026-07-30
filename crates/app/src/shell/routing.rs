@@ -47,6 +47,22 @@ pub(super) enum KeyboardOwner {
 }
 
 impl KeyboardOwner {
+    /// Every rung of the ladder, for a caller that must visit all of them —
+    /// today, the test asserting each one can be left from the keyboard.
+    ///
+    /// A hand-written list is only safe because it sits against the exhaustive
+    /// `match` below: a new variant fails to compile there, in this file, where
+    /// this array is the next thing the author reads.
+    #[cfg(test)]
+    pub(super) const ALL: [Self; 6] = [
+        Self::TabRename,
+        Self::SessionRename,
+        Self::Quit,
+        Self::TabClose(0),
+        Self::Archive,
+        Self::Doc,
+    ];
+
     /// The name an external caller reads when this overlay consumed its press.
     pub(super) fn label(self) -> &'static str {
         match self {
@@ -131,6 +147,18 @@ fn classify_confirm(event: &keyboard::Event) -> ConfirmKey {
         } => ConfirmKey::Cancel,
         _ => ConfirmKey::Swallow,
     }
+}
+
+/// Escape, the one key every overlay must answer: it is how a caller with no
+/// mouse — which is every MCP caller — gets the keyboard back.
+fn is_escape(event: &keyboard::Event) -> bool {
+    matches!(
+        event,
+        keyboard::Event::KeyPressed {
+            key: Key::Named(Named::Escape),
+            ..
+        }
+    )
 }
 
 impl Shell {
@@ -298,8 +326,7 @@ impl Shell {
     fn overlay_key(&mut self, owner: KeyboardOwner, event: &keyboard::Event) -> Task<Message> {
         match owner {
             KeyboardOwner::TabRename => self.tab_rename_key(event),
-            // The sidebar's rename field owns its own typing entirely.
-            KeyboardOwner::SessionRename => Task::none(),
+            KeyboardOwner::SessionRename => self.session_rename_key(event),
             KeyboardOwner::Quit => self.quit_confirm_key(event),
             KeyboardOwner::TabClose(index) => self.tab_close_confirm_key(event, index),
             KeyboardOwner::Archive => self.archive_confirm_key(event),
@@ -310,12 +337,18 @@ impl Shell {
     /// Escape abandons a tab rename; Enter and a blur commit it elsewhere, so
     /// every other key is swallowed.
     fn tab_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
-        if let keyboard::Event::KeyPressed {
-            key: Key::Named(Named::Escape),
-            ..
-        } = event
-        {
+        if is_escape(event) {
             return self.update(Message::CancelTabRename);
+        }
+        Task::none()
+    }
+
+    /// Escape abandons a session rename — the outcome a blur already gives it,
+    /// where a tab rename commits. The field owns every other key: it is a live
+    /// text input, and Enter reaches it through the widget.
+    fn session_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        if is_escape(event) {
+            return self.update(Message::CancelRename);
         }
         Task::none()
     }
@@ -353,9 +386,14 @@ impl Shell {
         }
     }
 
-    /// The doc editor handles its own keys; only the save chord (Cmd/Ctrl+S) is
-    /// intercepted.
+    /// The doc editor handles its own keys; only the save chord (Cmd/Ctrl+S)
+    /// and Escape are intercepted. Escape closes the editor exactly as its own
+    /// close button does — unsaved edits included, since matching the gesture
+    /// it stands in for beats inventing a second, stricter one here.
     fn open_doc_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        if is_escape(event) {
+            return self.update(Message::CloseDoc);
+        }
         if let keyboard::Event::KeyPressed { key, modifiers, .. } = event
             && modifiers.command()
             && matches!(key, Key::Character(c) if c.as_str() == "s")
