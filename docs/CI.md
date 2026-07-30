@@ -19,8 +19,9 @@ every change, not by reviewer memory. They cluster on three axes:
 - **Supply-chain hygiene** — `cargo-deny`, `cargo-machete`, SHA-pinned
   actions.
 
-Two more gates keep the meta-layer honest: `actionlint` (the workflows
-themselves) and `markdownlint` (the prose).
+Three more gates keep the meta-layer honest: `actionlint` (the workflows
+themselves), `markdownlint` (the prose), and `roadmap` (the generated
+`ROADMAP.md` against the `.roadmap/` sources it is compiled from).
 
 ---
 
@@ -38,6 +39,7 @@ themselves) and `markdownlint` (the prose).
 | Architecture (modules) | `ci` · `intra-crate-arch` | Intra-crate module boundaries + OS-cfg containment; file-length report | PR, push→main | ubuntu | yes (report-only length signal) |
 | Workflow lint | `ci` · `actionlint` | Valid, shellcheck-clean workflow YAML | PR, push→main | ubuntu | yes |
 | Docs lint | `ci` · `markdownlint` | 80-col Markdown prose | PR, push→main | ubuntu | yes |
+| Roadmap | `ci` · `roadmap` | `.roadmap/` schema and cross-references; `ROADMAP.md` still matches its source | PR, push→main | ubuntu | yes |
 | Merge gate | `ci` · `ci-success` | Aggregates every PR job into one required check | PR, push→main | ubuntu | yes (the one required check) |
 | SAST | `codeql` · `Analyze (Rust)` | Taint / cross-function security & quality | push→main, weekly | ubuntu | baseline |
 | CLI release | `release` · `plan…announce` | Build archives + curl\|sh / PowerShell installers, cut the GitHub Release | tag push (validates on PR) | mac · win · ubuntu | release-time |
@@ -68,11 +70,12 @@ This is the cheapest place to catch a failure — do it before opening a PR.
 
 Everything fans out in parallel (no inter-job ordering):
 
-- **`ci`** — a `changes` classifier plus nine gate jobs (`fmt`, `clippy`,
+- **`ci`** — a `changes` classifier plus ten gate jobs (`fmt`, `clippy`,
   `test`, `cargo-deny`, `cargo-machete`, `dependency-rule`, `intra-crate-arch`,
-  `actionlint`, `markdownlint`), each gated on its file category and fanned into
-  the `ci-success` aggregator. Jobs whose category didn't change report `skipped`
-  (a docs-only PR skips all the Rust jobs) and `ci-success` still passes.
+  `actionlint`, `markdownlint`, `roadmap`), each gated on its file category and
+  fanned into the `ci-success` aggregator. Jobs whose category didn't change
+  report `skipped` (a docs-only PR skips all the Rust jobs) and `ci-success`
+  still passes.
   `cross-os` is **skipped** on PRs. Branch protection requires only
   `ci-success`.
 - **`codeql`** — does **not** run on PRs (push→main + weekly only); see the
@@ -129,16 +132,17 @@ before you tag.
 
 Trigger: `push`→`main`, `push` release tag, `pull_request`→`main`,
 `workflow_dispatch`. A `changes` job classifies the diff (via
-`dorny/paths-filter`); the nine gate jobs each run **only when their category
+`dorny/paths-filter`); the ten gate jobs each run **only when their category
 changed**, then fan into one aggregator, plus a cross-OS signal:
 
 ```text
-changes  ── emits booleans: rust · cargo · markdown · workflows
+changes  ── emits booleans: rust · cargo · markdown · workflows · roadmap
    │
    ├─ rust     → fmt   clippy   test   intra-crate-arch   (skipped on docs-only PR)
    ├─ cargo    → cargo-deny   cargo-machete   dependency-rule
    ├─ markdown → markdownlint
-   └─ workflows→ actionlint
+   ├─ workflows→ actionlint
+   └─ roadmap  → roadmap
                       └──────────────┬──────────────┘
                                      ▼
                                 ci-success   ← the one required check for `main`
@@ -146,7 +150,7 @@ changes  ── emits booleans: rust · cargo · markdown · workflows
 cross-os (mac · win)  ← non-PR only, when rust changed (or a tag); signal only
 ```
 
-The nine gate jobs run ubuntu-only. `ci-success` (`if: always()`) `needs:`
+The ten gate jobs run ubuntu-only. `ci-success` (`if: always()`) `needs:`
 `changes` + all of them and is the single status check pinned in branch
 protection, so the required-checks list stays stable as jobs come and go.
 
@@ -158,6 +162,14 @@ dependency-metadata jobs (`cargo-*`, `dependency-rule`, gated on the narrower
 why the aggregator matters: because protection pins only `ci-success` (which
 always runs), we never rely on GitHub counting a skipped *required* check as a
 pass, and `cross-os` may stay a matrix without wedging PRs.
+
+**A filter watches its job's own inputs, including the workflow file.** The
+`cargo` filter covers the dep script it runs; the `roadmap` filter covers
+`ci.yml`, because the `roadmark` version is pinned there and a PR that bumps it
+must exercise the job it changes. Leaving that out is silent: the pin-bump PR
+goes green without the job ever running, so the first real check happens after
+merge. Gate a new job on its category, and make sure that category includes
+whatever the job reads.
 
 `cross-os` carries the macOS + Windows coverage that `clippy`/`test` used to via
 a 3-OS matrix — moved off the PR path so the merge gate stays fast and cheap.
@@ -263,6 +275,7 @@ The toolchain is pinned to **Rust 1.95.0 / edition 2024**
 | `dependency-rule` | `just check-deps` (or `./scripts/check-crate-deps.sh`) |
 | `intra-crate-arch` | `just check-arch` (module boundaries + OS-cfg + length report) |
 | `markdownlint` | `markdownlint-cli2` (uses `.markdownlint-cli2.jsonc`) |
+| `roadmap` | `just roadmap` (needs the pinned `roadmark`; the version is in the job) |
 
 `actionlint` and `codeql` are not part of the routine local loop — they run
 in CI. To pre-empt `actionlint`, run the `actionlint` binary over
