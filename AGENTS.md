@@ -80,6 +80,23 @@ TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app   # second instance
 `temp_dir()` honours `$TMPDIR`, so both run. Launch detached when you need to
 keep interacting with the original window (e.g. to compare quit behaviour).
 
+**Running inside a termherd shell also breaks `cargo test`.** That shell
+exports `ZDOTDIR=$TMPDIR/termherd-shell-<id>`, and a PTY test writing its own
+startup files to the same path produces a `.zshenv` that sources itself
+(`job table full or recursion limit exceeded`). The failure lands on
+`typing_exit_into_a_real_shell_closes_the_tab_end_to_end` and reads as a
+regression in whatever you just changed. Neutralise the inheritance before
+blaming the diff:
+
+```bash
+env -u ZDOTDIR TMPDIR="$(mktemp -d)" cargo test --workspace
+```
+
+The product bug behind it (#244) — nesting is not guarded, so a shell launched
+from a termherd that was itself launched from a termherd shell never starts —
+is open; this workaround is only how to get a trustworthy test run until it
+closes.
+
 ### Capturing state for the AI dev loop (#108)
 
 Press **⌘⇧S** (macOS) / **Ctrl+Shift+S** (rebindable as `capture`) to dump the
