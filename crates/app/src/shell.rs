@@ -543,9 +543,10 @@ impl Message {
     /// UI that should cancel an in-progress inline rename. This is an explicit
     /// allowlist, not a blocklist: anything unlisted (PTY output, scans, window
     /// and key events, and the rename's own `StartRename`/`RenameInput`/
-    /// `CommitRename`/`CancelRename`) leaves the edit untouched. Defaulting to "don't dismiss"
-    /// is the safe side — a missed button is a minor gap, whereas a stray
-    /// background message dismissing the edit would make renaming impossible.
+    /// `CommitRename`/`CancelRename`) leaves the edit untouched. Defaulting to
+    /// "don't dismiss" is the safe side — a missed button is a minor gap,
+    /// whereas a stray background message dismissing the edit would make
+    /// renaming impossible.
     fn dismisses_rename(&self) -> bool {
         matches!(
             self,
@@ -2943,6 +2944,11 @@ mod key_routing {
         // here instead of shipping. Failures accumulate rather than stopping at
         // the first: a sweep that names one offender reads as "and the rest are
         // fine", which is the assumption that let this one through.
+        //
+        // What it does *not* claim: that leaving is harmless. It asserts the
+        // owner let go, not what letting go cost — the doc editor satisfies it
+        // while discarding unsaved edits. A rung whose exit destroys state
+        // needs its own test saying so; this one only rules out the parking.
         let mut swallowed = Vec::new();
         for owner in KeyboardOwner::ALL {
             let (mut shell, _pty) = shell_with_terminal();
@@ -3004,7 +3010,10 @@ mod key_routing {
                 let _ = shell.update(Message::StartTabRename { index: 0, current });
             }
             KeyboardOwner::SessionRename => {
-                shell.renaming = Some(("sid".to_string(), "half-typed".to_string()));
+                let _ = shell.update(Message::StartRename {
+                    session: "sid".to_string(),
+                    current: "half-typed".to_string(),
+                });
             }
             KeyboardOwner::Quit => shell.closing_window = Some(window::Id::unique()),
             KeyboardOwner::TabClose(index) => shell.closing = Some(index),

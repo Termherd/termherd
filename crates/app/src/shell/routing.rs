@@ -136,21 +136,24 @@ pub(super) enum KeyVerdict {
 /// Enter confirms, Escape cancels; everything else (and any non-press event) is
 /// swallowed so it can't reach the terminal beneath the prompt.
 fn classify_confirm(event: &keyboard::Event) -> ConfirmKey {
+    if is_escape(event) {
+        return ConfirmKey::Cancel;
+    }
     match event {
         keyboard::Event::KeyPressed {
             key: Key::Named(Named::Enter),
             ..
         } => ConfirmKey::Confirm,
-        keyboard::Event::KeyPressed {
-            key: Key::Named(Named::Escape),
-            ..
-        } => ConfirmKey::Cancel,
         _ => ConfirmKey::Swallow,
     }
 }
 
 /// Escape, the one key every overlay must answer: it is how a caller with no
 /// mouse — which is every MCP caller — gets the keyboard back.
+///
+/// Modifiers are ignored, so `Shift+Escape` and `Cmd+Escape` leave too. No
+/// platform binds them to anything an overlay could mean, and a caller
+/// fumbling a modifier while trying to escape should still escape.
 fn is_escape(event: &keyboard::Event) -> bool {
     matches!(
         event,
@@ -388,8 +391,10 @@ impl Shell {
 
     /// The doc editor handles its own keys; only the save chord (Cmd/Ctrl+S)
     /// and Escape are intercepted. Escape closes the editor exactly as its own
-    /// close button does — unsaved edits included, since matching the gesture
-    /// it stands in for beats inventing a second, stricter one here.
+    /// close button does — unsaved edits included, since a stricter gesture for
+    /// the key alone would leave the button's identical hole standing while
+    /// looking closed. Discarding a modified doc without asking is a defect on
+    /// both paths, tracked on its own.
     fn open_doc_key(&mut self, event: &keyboard::Event) -> Task<Message> {
         if is_escape(event) {
             return self.update(Message::CloseDoc);

@@ -778,7 +778,13 @@ what closed it for good is the test shape. Asserting per prompt would have
 fixed the reported one and left the class open, so the sweep is driven off a
 `KeyboardOwner::ALL` sitting against a compiler-checked `match` — and it
 immediately named a second offender nobody had filed, the doc editor, closable
-only by its own button. It also accumulates rather than stopping at the first
+only by its own button. That one comes with a **known trade, taken knowingly**:
+`escape` closes the editor exactly as its button does, unsaved edits included,
+because inventing a stricter gesture for the key alone would have left the
+button's identical hole standing while looking closed. Discarding a modified
+doc without asking is a real defect on *both* paths and is filed as its own
+(#248) — widened here, not created here, and not half-fixed inside a keyboard
+PR. It also accumulates rather than stopping at the first
 failure: a sweep that names one offender reads as *and the rest are fine*,
 which is the assumption that let this one through. Tidy-first prerequisite:
 `PaneRename` announced itself as `session-rename` in its own `label()`, in the

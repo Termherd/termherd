@@ -244,11 +244,15 @@ blur it stands in for.
 The interesting part is what closed it for good: the fix carries a sweep driven
 off `KeyboardOwner::ALL` rather than a test per prompt, and that sweep found a
 *second* offender nobody had reported — the doc editor, closable only by its own
-button. A rung added without an exit fails there now. It is the general form of
-the "test that claims to be exhaustive" rule below: the sweep is honest because
-`arm_overlay`'s `match` is compiler-checked, so a new variant cannot slip past
-it. (**#236**, the sibling defect that left every session on `starting`, is
-fixed — see the wait rung above.)
+button. A rung added without an exit fails there now. `escape` there closes
+exactly as the button does, discarding unsaved edits: a known trade, since a
+stricter gesture for the key alone would leave the button's identical hole
+standing. Losing a modified doc silently is a defect on both paths and is #248.
+
+The sweep is the general form of the "test that claims to be exhaustive" rule
+below: it is honest because `arm_overlay`'s `match` is compiler-checked, so a
+new variant cannot slip past it. (**#236**, the sibling defect that left every
+session on `starting`, is fixed — see the wait rung above.)
 
 One gap remains and is **not** a variant of this: `enter` reaches neither rename
 through MCP, because both commit via the widget's `on_submit`, which a
