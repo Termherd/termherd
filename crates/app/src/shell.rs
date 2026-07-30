@@ -484,6 +484,9 @@ enum Message {
     RenameInput(String),
     /// Commit the inline rename (Enter or the ✓ button).
     CommitRename,
+    /// Abandon the inline rename (Escape), keeping the previous title — the
+    /// same outcome a blur gives, which is what the sidebar's field does.
+    CancelRename,
     /// Open a plan / memory doc in the main pane (F-plans-memory).
     OpenDoc {
         label: String,
@@ -540,9 +543,10 @@ impl Message {
     /// UI that should cancel an in-progress inline rename. This is an explicit
     /// allowlist, not a blocklist: anything unlisted (PTY output, scans, window
     /// and key events, and the rename's own `StartRename`/`RenameInput`/
-    /// `CommitRename`) leaves the edit untouched. Defaulting to "don't dismiss"
-    /// is the safe side — a missed button is a minor gap, whereas a stray
-    /// background message dismissing the edit would make renaming impossible.
+    /// `CommitRename`/`CancelRename`) leaves the edit untouched. Defaulting to
+    /// "don't dismiss" is the safe side — a missed button is a minor gap,
+    /// whereas a stray background message dismissing the edit would make
+    /// renaming impossible.
     fn dismisses_rename(&self) -> bool {
         matches!(
             self,
@@ -1072,6 +1076,10 @@ impl Shell {
                 }
                 None => Task::none(),
             },
+            Message::CancelRename => {
+                self.renaming = None;
+                Task::none()
+            }
             Message::OpenDoc { label, path } => {
                 let read_path = path.clone();
                 Task::perform(
@@ -1238,6 +1246,7 @@ impl Shell {
 /// precedence wiring that the pure `termherd_pty::key_bytes` tests cannot.
 #[cfg(test)]
 mod key_routing {
+    use super::routing::KeyboardOwner;
     use super::*;
     use crate::settings::ConfirmClose;
     use iced::keyboard::key::{Named, NativeCode, Physical};
@@ -2882,6 +2891,142 @@ mod key_routing {
             derived,
             "an abandoned rename leaves the derived title intact"
         );
+    }
+
+    #[test]
+    fn escape_abandons_a_session_rename_without_touching_the_title() {
+        // The sidebar's rename cancels on blur, where a tab's commits — so
+        // escape must discard the edit, matching the gesture it stands in for.
+        let (mut shell, _pty) = shell_with_terminal();
+        browse_named(&mut shell, "sid", "/p", "derived summary", None);
+        let record = shell.core.sidebar.projects[0].sessions[0].clone();
+        let derived = shell.core.session_title(&record);
+
+        shell.renaming = Some(("sid".to_string(), "half-typed".to_string()));
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+
+        assert!(shell.renaming.is_none(), "Escape abandons the edit");
+        assert_eq!(
+            shell.core.session_title(&record),
+            derived,
+            "an abandoned rename leaves the derived title intact"
+        );
+    }
+
+    #[test]
+    fn escape_frees_the_control_surface_from_a_session_rename() {
+        // The reason this bug matters beyond the sidebar: every press answers
+        // `overlay` while the field is open, and no press could clear it. The
+        // verdict stays `overlay` — the rename did consume the key — but the
+        // press after it must find the ladder empty.
+        let (mut shell, _pty) = shell_with_terminal();
+        shell.renaming = Some(("sid".to_string(), "half-typed".to_string()));
+
+        assert_eq!(
+            press_chord(&mut shell, "escape"),
+            PressStep::Overlay("session-rename".to_owned()),
+            "the rename consumes the key it acts on, like every other overlay"
+        );
+        assert!(shell.keyboard_owner().is_none(), "and then lets go");
+        assert_eq!(
+            press_chord(&mut shell, &mod_spec("d")),
+            PressStep::Ran("split-vertical".to_owned()),
+            "the surface takes chords again"
+        );
+    }
+
+    #[test]
+    fn every_overlay_that_owns_the_keyboard_can_be_left_from_the_keyboard() {
+        // The invariant this bug broke, stated once for the whole ladder rather
+        // than per prompt: an overlay that takes the keyboard and answers no key
+        // parks the app for anyone without a mouse — which is every MCP caller.
+        // Driven off `KeyboardOwner::ALL`, so a rung added without an exit fails
+        // here instead of shipping. Failures accumulate rather than stopping at
+        // the first: a sweep that names one offender reads as "and the rest are
+        // fine", which is the assumption that let this one through.
+        //
+        // What it does *not* claim: that leaving is harmless. It asserts the
+        // owner let go, not what letting go cost — the doc editor satisfies it
+        // while discarding unsaved edits. A rung whose exit destroys state
+        // needs its own test saying so; this one only rules out the parking.
+        let mut swallowed = Vec::new();
+        for owner in KeyboardOwner::ALL {
+            let (mut shell, _pty) = shell_with_terminal();
+            arm_overlay(&mut shell, owner);
+            assert_eq!(
+                shell.keyboard_owner().map(KeyboardOwner::label),
+                Some(owner.label()),
+                "{} must be armed before the sweep means anything",
+                owner.label()
+            );
+
+            let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+
+            if shell.keyboard_owner().is_some() {
+                swallowed.push(owner.label());
+            }
+        }
+        assert!(
+            swallowed.is_empty(),
+            "these overlays swallow escape and cannot be left from the keyboard: {swallowed:?}"
+        );
+    }
+
+    #[test]
+    fn only_escape_leaves_an_overlay_and_an_ordinary_key_does_not() {
+        // The other half of the sweep above, and not a formality: an exit that
+        // fires on *every* key is worse than none, since typing into a rename
+        // field would discard the edit at the first letter. Mutation testing
+        // named this gap — the escape test alone cannot tell the two apart.
+        let mut dismissed = Vec::new();
+        for owner in KeyboardOwner::ALL {
+            let (mut shell, _pty) = shell_with_terminal();
+            arm_overlay(&mut shell, owner);
+
+            let _ = shell.on_key(press(
+                Key::Character("x".into()),
+                Modifiers::default(),
+                Some("x"),
+            ));
+
+            if shell.keyboard_owner().is_none() {
+                dismissed.push(owner.label());
+            }
+        }
+        assert!(
+            dismissed.is_empty(),
+            "these overlays let an ordinary key dismiss them: {dismissed:?}"
+        );
+    }
+
+    /// Put `shell` into the state `owner` names.
+    ///
+    /// The `match` is what makes the sweep above honest: a new `KeyboardOwner`
+    /// variant fails to compile here rather than quietly escaping it.
+    fn arm_overlay(shell: &mut Shell, owner: KeyboardOwner) {
+        match owner {
+            KeyboardOwner::TabRename => {
+                let current = shell.core.workspace.tabs[0].display_title().to_owned();
+                let _ = shell.update(Message::StartTabRename { index: 0, current });
+            }
+            KeyboardOwner::SessionRename => {
+                let _ = shell.update(Message::StartRename {
+                    session: "sid".to_string(),
+                    current: "half-typed".to_string(),
+                });
+            }
+            KeyboardOwner::Quit => shell.closing_window = Some(window::Id::unique()),
+            KeyboardOwner::TabClose(index) => shell.closing = Some(index),
+            KeyboardOwner::Archive => shell.archiving = Some("sess".to_string()),
+            KeyboardOwner::Doc => {
+                let _ = shell.update(Message::DocLoaded {
+                    label: "CLAUDE.md".to_string(),
+                    path: PathBuf::from("/nowhere/CLAUDE.md"),
+                    content: "notes".to_string(),
+                    mtime: None,
+                });
+            }
+        }
     }
 
     #[test]

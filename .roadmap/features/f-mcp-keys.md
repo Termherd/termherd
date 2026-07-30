@@ -54,3 +54,29 @@ interesting. Tidy-first prerequisite: the overlay ladder was stated twice — as
 keypress discards and the tool reports (one decision, two readers, as #216 did
 for the snapshot). `core` gained `Action::name()`, total where `config_name()`
 was partial, so `activate-tab-N` round-trips too. Depends on #193/#194
+
+**#237 — the corollary the design had not actually paid.** The rung's whole
+argument was that an agent must be able to answer any prompt it can arm, and
+one rung of the ladder did not: an open sidebar session-rename took the
+keyboard and replied to no key, so every press answered `overlay` and none
+could lift it. Mouse-only, which is no one, over MCP. The fix is two lines;
+what closed it for good is the test shape. Asserting per prompt would have
+fixed the reported one and left the class open, so the sweep is driven off a
+`KeyboardOwner::ALL` sitting against a compiler-checked `match` — and it
+immediately named a second offender nobody had filed, the doc editor, closable
+only by its own button. That one comes with a **known trade, taken knowingly**:
+`escape` closes the editor exactly as its button does, unsaved edits included,
+because inventing a stricter gesture for the key alone would have left the
+button's identical hole standing while looking closed. Discarding a modified
+doc without asking is a real defect on *both* paths and is filed as its own
+(#248) — widened here, not created here, and not half-fixed inside a keyboard
+PR. It also accumulates rather than stopping at the first
+failure: a sweep that names one offender reads as *and the rest are fine*,
+which is the assumption that let this one through. Tidy-first prerequisite:
+`PaneRename` announced itself as `session-rename` in its own `label()`, in the
+MCP reply, and in the tests — the code was the only name that disagreed. Left
+open on purpose: `enter` reaches neither rename over MCP, since both commit
+through the widget's `on_submit`, which no synthesised key event touches. That
+is a missing capability, not a parked surface — `escape` always gets the
+keyboard back — so it is a separate ticket (#246) rather than a passenger on
+this fix
