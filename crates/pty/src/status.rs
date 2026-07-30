@@ -142,9 +142,10 @@ pub(crate) fn foreground_leader(_master: &dyn MasterPty) -> Option<i32> {
 /// the foreground means nothing is running (`Idle`); any other process group
 /// owns the terminal, so a command is (`Busy`).
 ///
-/// `None` is "the platform cannot say" — ConPTY has no foreground process group,
-/// so `portable_pty` reports none on Windows, and a session there stays on
-/// whatever its marks said. Reporting an invented status would be worse than
+/// `None` is "the platform cannot say" — ConPTY has no foreground process group
+/// at all, so `portable_pty` does not even *declare* the accessor off Unix (see
+/// [`foreground_leader`], which is where that fork lives). A session there stays
+/// on whatever its marks said. Reporting an invented status would be worse than
 /// reporting none: a caller would wait on it.
 pub(crate) fn foreground_status(leader: Option<i32>, shell: Option<u32>) -> Option<SessionStatus> {
     let (leader, shell) = (leader?, i32::try_from(shell?).ok()?);

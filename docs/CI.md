@@ -315,7 +315,9 @@ here so an exception is never a surprise:
   (macos-module gate), `instance.rs` (per-OS lock naming), `window_geometry.rs`
   (Linux placement), `shell/effects/os.rs` (OS effect handoffs),
   `shell/session_ops.rs` (macOS quit reroute), `pty/src/kill.rs` (kill
-  reconciliation), `pty/src/status.rs` (Unix-only mcp-config perms). The
+  reconciliation), `pty/src/launch.rs` (Unix-only perms on the private
+  mcp-config and settings files), `pty/src/status.rs` (the foreground process
+  group is a Unix-only notion). The
   runtime-boolean `cfg!(target_os = …)` form is unrestricted — it compiles on
   every platform, so it hides nothing. Add a file (with its reason) only when a
   new OS fork genuinely needs its own home.

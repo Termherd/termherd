@@ -52,13 +52,17 @@ impl LiveSession {
     }
 }
 
-/// Per-session activity surfaced in the sidebar and on tabs (FR8). Derived
-/// from the terminal OSC stream by `termherd_claude::osc`.
+/// Per-session activity surfaced in the sidebar and on tabs (FR8).
+///
+/// Derived in the `pty` adapter from whichever source the terminal offers: a
+/// Claude session's own OSC stream (`termherd_claude::osc`), a plain shell's
+/// OSC 133 shell-integration marks, or — where neither speaks — the PTY's
+/// foreground process group. `core` only records the verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionStatus {
     /// Spawned; no activity classified yet.
     Starting,
-    /// Claude is working (OSC busy / spinner).
+    /// Work is running: Claude's spinner, or a command the shell reported.
     Busy,
     /// Idle, or waiting at a prompt for input.
     Idle,
