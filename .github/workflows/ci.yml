@@ -286,7 +286,7 @@ jobs:
       # version bump that changes rendering must land as a visible ROADMAP.md
       # diff in its own PR, never as a mystery failure on someone else's.
       - name: Install roadmark
-        run: cargo install roadmark --version 0.7.0 --locked
+        run: cargo install roadmark --version 0.8.1 --locked
       - run: roadmark validate
       - name: Rebuild and compare
         run: |
