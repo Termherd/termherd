@@ -33,7 +33,7 @@ pub(super) enum KeyboardOwner {
     /// The inline tab-title field.
     TabRename,
     /// The sidebar's inline session-rename field.
-    PaneRename,
+    SessionRename,
     /// The macOS Cmd+Q quit confirmation.
     Quit,
     /// The close-confirmation for the tab at this index, which the prompt needs
@@ -51,7 +51,7 @@ impl KeyboardOwner {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::TabRename => "tab-rename",
-            Self::PaneRename => "session-rename",
+            Self::SessionRename => "session-rename",
             Self::Quit => "quit-confirm",
             Self::TabClose(_) => "tab-close-confirm",
             Self::Archive => "archive-confirm",
@@ -275,7 +275,7 @@ impl Shell {
             return Some(KeyboardOwner::TabRename);
         }
         if self.renaming.is_some() {
-            return Some(KeyboardOwner::PaneRename);
+            return Some(KeyboardOwner::SessionRename);
         }
         if self.quit_pending() {
             return Some(KeyboardOwner::Quit);
@@ -299,7 +299,7 @@ impl Shell {
         match owner {
             KeyboardOwner::TabRename => self.tab_rename_key(event),
             // The sidebar's rename field owns its own typing entirely.
-            KeyboardOwner::PaneRename => Task::none(),
+            KeyboardOwner::SessionRename => Task::none(),
             KeyboardOwner::Quit => self.quit_confirm_key(event),
             KeyboardOwner::TabClose(index) => self.tab_close_confirm_key(event, index),
             KeyboardOwner::Archive => self.archive_confirm_key(event),
