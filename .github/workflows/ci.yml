@@ -140,6 +140,38 @@ jobs:
           tool: nextest
       - run: cargo nextest run --workspace
 
+  # The portable crates, on Windows, on every PR. `cross-os` below covers more
+  # but runs only after merge, and that gap let a Windows-only defect through:
+  # the shell integration built a POSIX path with `Path::join`, so the user's
+  # own startup file was never sourced. It compiled everywhere — no
+  # `cargo check --target` could have caught it — and only a *test run on
+  # Windows* would have. Post-merge coverage found it three merges later, on
+  # the wrong commit.
+  #
+  # Deliberately narrower than `cross-os`: `app` is excluded, because building
+  # `iced` twice per PR is the cost that made cross-OS a post-merge job in the
+  # first place. `core`, `claude`, `pty` and `scan` carry the path handling,
+  # codec and process logic where hosts actually diverge, and they build in a
+  # fraction of the time. macOS is excluded too — it is a Unix, and the
+  # divergence this guards against is Windows'.
+  portable:
+    name: portable (windows)
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
+        with:
+          tool: nextest
+      - run: cargo clippy -p termherd-core -p termherd-claude -p termherd-pty -p termherd-scan -p termherd-mcp --all-targets -- -D warnings
+      - run: cargo nextest run -p termherd-core -p termherd-claude -p termherd-pty -p termherd-scan -p termherd-mcp
+
   # Cross-OS coverage: clippy + tests on macOS and Windows. Skipped on PRs to
   # keep the merge gate fast/cheap; runs on push→main (post-merge baseline) and
   # on release tags so platform-specific breakage surfaces before a release. A
@@ -312,7 +344,9 @@ jobs:
   # `needs:` every per-PR gate, so protection pins one stable name
   # (`ci-success`) that never changes as jobs are added or removed. `cross-os`
   # is intentionally excluded — it is skipped on PRs and is a signal, not a
-  # merge gate. `if: always()` so this job still runs (and fails) when a
+  # merge gate. `portable` is *included*: it is the Windows coverage that does
+  # run on PRs, and it exists precisely because a signal nobody is paged for
+  # caught a defect three merges after it landed. `if: always()` so this job still runs (and fails) when a
   # dependency fails rather than being skipped.
   #
   # Path-filtered gates that don't apply to a change report `skipped`, which is
@@ -322,7 +356,7 @@ jobs:
   ci-success:
     name: ci-success
     if: always()
-    needs: [changes, fmt, clippy, test, deny, machete, deps, intra-arch, actionlint, markdown, roadmap]
+    needs: [changes, fmt, clippy, test, portable, deny, machete, deps, intra-arch, actionlint, markdown, roadmap]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required job failed or was cancelled
