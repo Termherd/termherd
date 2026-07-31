@@ -32,6 +32,7 @@ themselves), `markdownlint` (the prose), and `roadmap` (the generated
 | Formatting | `ci` · `rustfmt` | Consistent layout (`cargo fmt`) | PR, push→main | ubuntu | yes |
 | Lint + complexity | `ci` · `clippy` | Clippy `-D warnings`; `unwrap`/`expect`/`panic` (core/claude), `too_many_lines`, `todo`/`unimplemented` | PR, push→main | ubuntu | yes |
 | Tests | `ci` · `test` | `cargo nextest run --workspace` | PR, push→main | ubuntu | yes |
+| Portable crates on Windows | `ci` · `portable` | clippy + `nextest` for `core`, `claude`, `pty`, `scan`, `mcp` — everything but the GUI | PR, push→main | win | yes |
 | Cross-OS clippy + tests | `ci` · `cross-os` | Same clippy + `nextest` on macOS & Windows | push→main, tag (skipped on PR) | mac · win | signal |
 | Licenses / CVEs / sources | `ci` · `cargo-deny` | Disallowed licences, RUSTSEC advisories, unknown registries | PR, push→main | ubuntu | yes |
 | Unused deps | `ci` · `cargo-machete` | Declared-but-unused dependencies | PR, push→main | ubuntu | yes |
@@ -70,8 +71,8 @@ This is the cheapest place to catch a failure — do it before opening a PR.
 
 Everything fans out in parallel (no inter-job ordering):
 
-- **`ci`** — a `changes` classifier plus ten gate jobs (`fmt`, `clippy`,
-  `test`, `cargo-deny`, `cargo-machete`, `dependency-rule`, `intra-crate-arch`,
+- **`ci`** — a `changes` classifier plus eleven gate jobs (`fmt`, `clippy`,
+  `test`, `portable`, `cargo-deny`, `cargo-machete`, `dependency-rule`, `intra-crate-arch`,
   `actionlint`, `markdownlint`, `roadmap`), each gated on its file category and
   fanned into the `ci-success` aggregator. Jobs whose category didn't change
   report `skipped` (a docs-only PR skips all the Rust jobs) and `ci-success`
@@ -132,13 +133,13 @@ before you tag.
 
 Trigger: `push`→`main`, `push` release tag, `pull_request`→`main`,
 `workflow_dispatch`. A `changes` job classifies the diff (via
-`dorny/paths-filter`); the ten gate jobs each run **only when their category
+`dorny/paths-filter`); the eleven gate jobs each run **only when their category
 changed**, then fan into one aggregator, plus a cross-OS signal:
 
 ```text
 changes  ── emits booleans: rust · cargo · markdown · workflows · roadmap
    │
-   ├─ rust     → fmt   clippy   test   intra-crate-arch   (skipped on docs-only PR)
+   ├─ rust     → fmt  clippy  test  portable  intra-crate-arch  (skipped on docs)
    ├─ cargo    → cargo-deny   cargo-machete   dependency-rule
    ├─ markdown → markdownlint
    ├─ workflows→ actionlint
@@ -150,7 +151,7 @@ changes  ── emits booleans: rust · cargo · markdown · workflows · roadma
 cross-os (mac · win)  ← non-PR only, when rust changed (or a tag); signal only
 ```
 
-The ten gate jobs run ubuntu-only. `ci-success` (`if: always()`) `needs:`
+Every gate job but `portable` runs ubuntu-only. `ci-success` (`if: always()`) `needs:`
 `changes` + all of them and is the single status check pinned in branch
 protection, so the required-checks list stays stable as jobs come and go.
 
@@ -162,6 +163,18 @@ dependency-metadata jobs (`cargo-*`, `dependency-rule`, gated on the narrower
 why the aggregator matters: because protection pins only `ci-success` (which
 always runs), we never rely on GitHub counting a skipped *required* check as a
 pass, and `cross-os` may stay a matrix without wedging PRs.
+
+**Post-merge coverage is not coverage of the merge.** `cross-os` runs after the
+fact *and* is path-filtered on `rust`, so a Windows-only defect can land and
+then sit through any number of docs-only merges before the next Rust push
+triggers the job — which then reports against that push rather than the one
+that caused it. That is exactly how the shell integration shipped a POSIX path
+built with `Path::join`: green on its PR, red three merges later on someone
+else's. `portable` closes the gap by running the non-GUI crates on Windows on
+every PR, and it is in `ci-success`'s `needs:` — where `cross-os`, a signal
+nobody is paged for, deliberately is not. The GUI crate stays post-merge:
+building `iced` twice per PR is the cost that put cross-OS after the merge in
+the first place, and it is not where hosts diverge.
 
 **A filter watches its job's own inputs, including the workflow file.** The
 `cargo` filter covers the dep script it runs; the `roadmap` filter covers
@@ -270,6 +283,7 @@ The toolchain is pinned to **Rust 1.95.0 / edition 2024**
 | `rustfmt` | `cargo fmt --all --check` |
 | `clippy` (+ `too_many_lines`, panic-free) | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `test` | `cargo test --workspace` (CI uses `cargo nextest run --workspace`) |
+| `portable` | no local mirror — it is a *Windows* run. Nearest approximation: `cargo check -p termherd-pty --target x86_64-pc-windows-msvc`, which catches compile breakage but never behaviour |
 | `cargo-deny` | `cargo deny check` (needs `cargo-deny`) |
 | `cargo-machete` | `cargo machete` (needs `cargo-machete`) |
 | `dependency-rule` | `just check-deps` (or `./scripts/check-crate-deps.sh`) |

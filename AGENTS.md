@@ -49,6 +49,14 @@ skips the dependency-metadata jobs. All gates fan into one required check,
 protection pins that single check. Gate any new job on its category; never make
 a path-filtered job a *required* check directly.
 
+One job runs somewhere other than ubuntu: **`portable`** builds and tests every
+crate but `app` on **Windows, on every PR**. The wider `cross-os` matrix still
+runs only after merge, which is how a Windows-only defect once landed green and
+surfaced three merges later against an unrelated push. So: a change to `core`,
+`claude`, `pty`, `scan` or `mcp` is checked on Windows before it merges, and
+there is no local mirror for it — `cargo check --target` catches compile
+breakage, never behaviour.
+
 Full CI reference — every gate, its goal, when it runs, how to mirror it, and
 the sanctioned exceptions — lives in [`docs/CI.md`](docs/CI.md).
 
