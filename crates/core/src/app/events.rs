@@ -69,12 +69,13 @@ pub enum Event {
         session: SessionId,
         title: String,
     },
-    /// The shell announced the directory it is now in (OSC 7). Everything that
-    /// reads a session's directory — the snapshot an agent sees, the capture
-    /// dump, the directory a split inherits, "new shell here" — means the
-    /// *current* one, so the launch directory is replaced rather than kept
-    /// beside it. A tab keeps the label it was opened with: a `cd` moves the
-    /// session, it does not rename what the user opened.
+    /// The shell announced the directory it is now in (OSC 7). All four
+    /// readers of a session's directory — the snapshot an agent sees (and the
+    /// capture dump sharing it), the directory a split inherits, the "new shell
+    /// / new Claude here" shortcuts, and the tab card — mean the *current* one,
+    /// so the launch directory is replaced rather than kept beside it. A tab
+    /// keeps the label it was opened with: a `cd` moves the session, it does
+    /// not rename what the user opened.
     SessionCwdChanged {
         session: SessionId,
         cwd: String,

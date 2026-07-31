@@ -263,8 +263,9 @@ The same injected snippet answers a second question at the same prompt hook:
 **where** the shell is. It announces its directory as an OSC 7 `file://` url,
 which `pty` decodes into `Event::SessionCwdChanged`, so `LiveSession.cwd`
 follows a `cd` instead of freezing on the launch directory — and the four
-readers of it (the MCP / capture snapshot, the directory a split inherits,
-"new shell here", the tab card) stop reporting where the session started. A
+readers of it — the MCP / capture snapshot, the directory a split inherits,
+the "new shell / new Claude here" shortcuts, and the tab card — stop reporting
+where the session started. A
 shell with no recipe announces nothing and keeps its launch directory, the same
 degradation as its status.
 

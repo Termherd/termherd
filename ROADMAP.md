@@ -511,7 +511,8 @@ itself as the path the session runs in, was false from the user's first `cd`
 onward, with no signal that anything had moved. It has four readers and the
 clicked-file feature that surfaced it is none of them: the MCP `snapshot` (so
 any agent building a relative command), the ⌘⇧S capture written to disk, the
-directory a split inherits, and the "new shell / new Claude here" shortcuts.
+directory a split inherits, the "new shell / new Claude here" shortcuts, and
+the tab card.
 That is why it graduated as its own entry rather than as a slice of
 [F-builtin-terminal](#f-builtin-terminal)'s file-link refinement — the lie
 exists without the click, and closing it is worth doing without waiting for

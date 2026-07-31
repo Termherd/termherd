@@ -27,9 +27,18 @@ use std::path::{Path, PathBuf};
 /// filesystem or a `CommandBuilder`.
 ///
 /// The path is handed to `printf` as an argument rather than spliced into the
-/// format string, so a directory containing a `%` stays itself; it is otherwise
-/// sent raw, un-percent-encoded, which the decoder accepts by design (a shell
-/// has no encoder of its own to reach for).
+/// format string, so a `%` in a directory name is not read as a format
+/// directive — and it is escaped to `%25` on the way out, so the decoder cannot
+/// mistake a real `/tmp/100%20` for a path with a space in it. That escape is
+/// the *only* one: every other character rides raw, because the decoder passes
+/// through what it cannot read as an escape, and a shell has no url encoder to
+/// reach for. Escaping the one ambiguous character is what makes the round trip
+/// exact rather than merely forgiving.
+///
+/// zsh and bash spell it `${PWD//\%/%25}` — the backslash is load-bearing:
+/// unescaped, zsh reads the pattern as an anchor and appends `%25` to the path
+/// instead of replacing anything, which bash does not. Verified against both,
+/// since no `cargo check` sees inside a generated shell string.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Integration {
     /// Files to write, as (absolute path, contents).
@@ -76,7 +85,7 @@ const RECIPES: &[(&str, Recipe)] = &[("zsh", zsh), ("bash", bash), ("fish", fish
 /// user's counterpart, which taking `ZDOTDIR` over has displaced.
 fn zsh(dir: &Path, home: Option<&Path>) -> Integration {
     let hooks = "\
-termherd_precmd() { printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' \"$HOST\" \"$PWD\" }\n\
+termherd_precmd() { printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' \"$HOST\" \"${PWD//\\%/%25}\" }\n\
 termherd_preexec() { printf '\\033]133;C\\007' }\n\
 autoload -Uz add-zsh-hook\n\
 add-zsh-hook precmd termherd_precmd\n\
@@ -110,7 +119,7 @@ fn bash(dir: &Path, home: Option<&Path>) -> Integration {
     // each command. Both are appended, never assigned, so a user who set them
     // in their own rc keeps theirs.
     contents.push_str(
-        "termherd_precmd() { printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' \"$HOSTNAME\" \"$PWD\"; }\n\
+        "termherd_precmd() { printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' \"$HOSTNAME\" \"${PWD//\\%/%25}\"; }\n\
          termherd_preexec() { printf '\\033]133;C\\007'; }\n\
          PROMPT_COMMAND=\"termherd_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}\"\n\
          trap 'termherd_preexec' DEBUG\n",
@@ -126,7 +135,7 @@ fn bash(dir: &Path, home: Option<&Path>) -> Integration {
 /// displaced and no file is needed: the hooks go inline.
 fn fish(_dir: &Path, _home: Option<&Path>) -> Integration {
     let init = "\
-function termherd_prompt --on-event fish_prompt; printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' \"$hostname\" \"$PWD\"; end; \
+function termherd_prompt --on-event fish_prompt; printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' \"$hostname\" (string replace -a '%' '%25' -- \"$PWD\"); end; \
 function termherd_preexec --on-event fish_preexec; printf '\\033]133;C\\007'; end";
     Integration {
         files: Vec::new(),
@@ -269,6 +278,18 @@ mod tests {
     /// three sweeps below walk [`RECIPES`] itself, so a dialect added to the
     /// table without hooks fails them rather than being missed by a list of the
     /// shells someone remembered to type.
+    /// The url a snippet announces: what sits between the `]7;` introducer and
+    /// the BEL the shell will print (`\007`, two literal characters here).
+    fn announced_url(snippet: &str) -> &str {
+        snippet
+            .split("]7;")
+            .nth(1)
+            .expect("the recipe announces a directory")
+            .split("\\007")
+            .next()
+            .expect("split always yields a first part")
+    }
+
     fn instrumentation(recipe: Recipe) -> String {
         let it = recipe(dir(), home());
         let written: String = it.files.iter().map(|(_, c)| c.as_str()).collect();
@@ -293,13 +314,35 @@ mod tests {
     fn every_recipe_reads_the_directory_at_each_prompt_not_at_startup() {
         // The point is following a `cd`: a path baked in when the file is
         // generated would report the launch directory forever, which is the
-        // very bug this closes. The shell's own live variable is the fix — and
-        // all three dialects spell it the same.
+        // very bug this closes. The shell's own live variable is the fix — read
+        // through an expansion whose spelling differs per dialect, so the
+        // assertion is on the variable rather than on one way of reading it.
         for (shell, recipe) in RECIPES {
             let snippet = instrumentation(*recipe);
             assert!(
-                snippet.contains("$PWD"),
-                "{shell} must announce $PWD, got {snippet}"
+                snippet.contains("PWD"),
+                "{shell} must announce PWD, got {snippet}"
+            );
+            assert_eq!(
+                announced_url(&snippet),
+                "file://%s%s",
+                "{shell} must announce host and path as printf arguments, so no \
+                 directory can be baked into the url itself"
+            );
+        }
+    }
+
+    #[test]
+    fn every_recipe_escapes_the_one_character_the_decoder_could_misread() {
+        // A directory really called `100%20` would otherwise be announced
+        // literally and come back with a space in it — the decoder inventing a
+        // path rather than merely tolerating an odd one. `%` is the only
+        // character with that property, so it is the only one escaped.
+        for (shell, recipe) in RECIPES {
+            let snippet = instrumentation(*recipe);
+            assert!(
+                snippet.contains("%25"),
+                "{shell} must escape a literal % in the path, got {snippet}"
             );
         }
     }
@@ -312,15 +355,7 @@ mod tests {
         // lesson, applied to a second generated string.
         for (shell, recipe) in RECIPES {
             let snippet = instrumentation(*recipe);
-            // The url is what sits between the `]7;` introducer and the BEL
-            // the shell will print (`\007` in the snippet, two literal chars).
-            let url = snippet
-                .split("]7;")
-                .nth(1)
-                .expect("the recipe announces a directory")
-                .split("\\007")
-                .next()
-                .expect("split always yields a first part");
+            let url = announced_url(&snippet);
             assert!(
                 url.starts_with("file://") && !url.contains('\\'),
                 "{shell} must announce a url carrying no backslash, got {url}"

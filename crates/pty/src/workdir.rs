@@ -3,8 +3,9 @@
 //!
 //! Without it a session's directory is the one it was *launched* in, frozen for
 //! the life of the terminal — so `PaneSnapshot.cwd` misreports the moment the
-//! user types `cd`, and every reader of it (the MCP surface, the ⌘⇧S capture,
-//! the directory a split inherits, "new shell here") inherits that lie.
+//! user types `cd`, and all four readers of it — the MCP snapshot (and the ⌘⇧S
+//! capture sharing it), the directory a split inherits, the "new shell / new
+//! Claude here" shortcuts, and the tab card — inherit that lie.
 //!
 //! Like the prompt marks in [`crate::prompt`], this is the *shell's* dialect,
 //! not Claude's: the CLI never writes OSC 7. Only the wire scan is shared
@@ -14,9 +15,18 @@
 //! Stateless: the announcement carried by a chunk is decoded from that chunk
 //! alone, and a sequence split across two PTY chunks is not recognised.
 //!
-//! What the terminal writes is taken at its word, exactly as its title is: any
-//! program in the session can announce a directory, so the reported path is
-//! where the session *says* it is, and is never treated as proof a path exists.
+//! What the terminal writes is taken at its word: anything that reaches the
+//! PTY — a `cat` of a crafted file, a build's output — can announce a
+//! directory, so the reported path is where the session *says* it is and never
+//! proof that a path exists. That is a **stronger primitive than the title**
+//! the same reasoning covers, and worth saying plainly rather than by analogy:
+//! a spoofed title is cosmetic, while `cwd` is where the next process starts —
+//! a split and the "new shell / new Claude here" shortcuts launch there, and a
+//! directory chooses which `.envrc`, git config and repo-local tooling apply.
+//! Every integrated terminal carries the same exposure, and the same bound
+//! keeps it honest: termherd only ever *starts* something in that directory in
+//! response to the user asking for it, and never reads or writes a file there
+//! off the announcement alone.
 
 use termherd_claude::osc::osc_sequences;
 
@@ -24,9 +34,14 @@ use termherd_claude::osc::osc_sequences;
 const WORKING_DIRECTORY: u32 = 7;
 
 /// The working directory announced in one PTY output chunk, or `None` when the
-/// chunk carries no usable announcement. The **last** announcement wins: a
-/// chunk can carry a whole `cd`-and-prompt cycle, and the newest one is the
-/// shell's current answer.
+/// chunk carries no usable announcement.
+///
+/// The last **usable** announcement wins — the newest one is the shell's
+/// current answer, and a chunk routinely carries a whole `cd`-and-prompt cycle.
+/// When the newest is not a local `file:` url the scan keeps walking backwards
+/// rather than reporting nothing: an earlier announcement in the same chunk is
+/// stale by milliseconds, where reporting nothing would leave the session on a
+/// directory it left a `cd` ago.
 pub(crate) fn decode_cwd(chunk: &str) -> Option<String> {
     // The scan is not free and the overwhelming majority of chunks are plain
     // output, so skip it unless something OSC-shaped is present at all.
@@ -54,10 +69,12 @@ fn path_of(payload: &str) -> Option<String> {
 /// One directory, spelled one way — so two spellings of the same place do not
 /// read as a `cd` that never happened.
 ///
-/// A trailing slash goes (shells disagree on it), except at the root, which is
-/// nothing but its slash. A Windows url carries a leading one before the drive
-/// (`file:///C:/…`) that belongs to the url and not to the path — kept, the
-/// path names no file.
+/// A trailing slash goes, since shells disagree on it — except where the slash
+/// is all that makes the path a root: `/` on Unix, and `C:/` on Windows, where
+/// a bare `C:` names the drive's *current* directory instead and would send the
+/// next spawned shell somewhere else entirely. A Windows url also carries a
+/// leading slash before the drive (`file:///C:/…`) that belongs to the url
+/// rather than to the path.
 fn tidy(path: &str) -> String {
     let path = path
         .strip_prefix('/')
@@ -67,6 +84,8 @@ fn tidy(path: &str) -> String {
     if trimmed.is_empty() {
         // Nothing but separators: the root, however many were written.
         "/".to_owned()
+    } else if is_drive_rooted(trimmed) && trimmed.len() == 2 {
+        format!("{trimmed}/")
     } else {
         trimmed.to_owned()
     }
@@ -223,6 +242,23 @@ mod tests {
         assert_eq!(
             decode_cwd(&announce("", "/C:/Users/someone")),
             Some("C:/Users/someone".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_windows_drive_root_keeps_the_slash_that_makes_it_a_root() {
+        // `C:` alone is not the root of the drive: it names that drive's
+        // *current* directory, so trimming the slash off `C:/` would send the
+        // next shell launched here somewhere else entirely.
+        assert_eq!(
+            decode_cwd(&announce("", "/C:/")),
+            Some("C:/".to_owned()),
+            "a drive root is its slash, exactly as `/` is on Unix"
+        );
+        assert_eq!(
+            decode_cwd(&announce("", "/C:/Users/")),
+            Some("C:/Users".to_owned()),
+            "below the root the trailing slash is still noise"
         );
     }
 
