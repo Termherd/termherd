@@ -20,7 +20,9 @@ const DEFAULT_ROWS: u16 = 24;
 #[derive(Debug, Clone)]
 pub struct LiveSession {
     pub id: SessionId,
-    /// Real project path the PTY runs in, if known.
+    /// The directory the PTY is in, if known: the one it was launched in until
+    /// the shell announces otherwise ([`Event::SessionCwdChanged`]), so every
+    /// reader sees where the session *is* rather than where it started.
     pub cwd: Option<String>,
     /// What this terminal is running — a shell or a (possibly resumed) Claude
     /// session. The resumed-id lets the sidebar map a browsed session row to its
@@ -545,6 +547,109 @@ mod tests {
             }
             other => panic!("expected one Spawn, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_shell_that_announces_a_directory_moves_the_session_into_it() {
+        // The launch directory is what the session *started* in; every reader
+        // of `cwd` — the MCP snapshot, the capture dump, a split, "new shell
+        // here" — asks where it *is*. One field, replaced in place.
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Shell,
+            title: "proj".into(),
+        }));
+        let id = app.workspace.focused_session().expect("a focused session");
+        let effects = app.apply(Event::SessionCwdChanged {
+            session: id,
+            cwd: "/proj/crates/pty".into(),
+        });
+        assert_eq!(app.sessions[&id].cwd.as_deref(), Some("/proj/crates/pty"));
+        assert!(
+            effects.is_empty(),
+            "recording where a shell is drives no I/O, got {effects:?}"
+        );
+    }
+
+    #[test]
+    fn a_session_launched_without_a_directory_learns_one_from_its_shell() {
+        // A shell opened with no known directory reports `None` to every
+        // reader; its own announcement is the only thing that can fill it.
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: None,
+            launch: Launch::Shell,
+            title: "a".into(),
+        }));
+        let id = app.workspace.focused_session().expect("a focused session");
+        app.apply(Event::SessionCwdChanged {
+            session: id,
+            cwd: "/tmp".into(),
+        });
+        assert_eq!(app.sessions[&id].cwd.as_deref(), Some("/tmp"));
+    }
+
+    #[test]
+    fn an_announcement_from_a_session_that_is_gone_changes_nothing() {
+        // The PTY thread and the core are not in lockstep: a chunk decoded just
+        // before a pane closed still arrives afterwards.
+        let mut app = App::new();
+        let id = launch(&mut app, "a");
+        app.apply(Event::CloseFocusedPane);
+        let effects = app.apply(Event::SessionCwdChanged {
+            session: id,
+            cwd: "/tmp".into(),
+        });
+        assert!(effects.is_empty());
+        assert!(!app.sessions.contains_key(&id));
+    }
+
+    #[test]
+    fn a_split_inherits_the_directory_the_shell_moved_to() {
+        // The inheritance reads `Session.cwd`, so following a `cd` is what
+        // makes "split here" land where the user actually is.
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Shell,
+            title: "proj".into(),
+        }));
+        let id = app.workspace.focused_session().expect("a focused session");
+        app.apply(Event::SessionCwdChanged {
+            session: id,
+            cwd: "/proj/docs".into(),
+        });
+        let effects = app.apply(Event::SplitFocused(SplitDir::Vertical));
+        let new = app.workspace.focused_session().expect("focused pane");
+        assert_eq!(app.sessions[&new].cwd.as_deref(), Some("/proj/docs"));
+        match effects.as_slice() {
+            [Effect::Spawn(spec)] => assert_eq!(spec.cwd.as_deref(), Some("/proj/docs")),
+            other => panic!("expected one Spawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_cd_moves_the_session_without_renaming_the_tab() {
+        // The tab is what the user opened — a project, a session. Following the
+        // shell into a subdirectory must not relabel it, or a build that cds
+        // around would rewrite the workspace under the user's eyes.
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Shell,
+            title: "proj".into(),
+        }));
+        let id = app.workspace.focused_session().expect("a focused session");
+        app.apply(Event::SessionCwdChanged {
+            session: id,
+            cwd: "/proj/crates/core".into(),
+        });
+        assert_eq!(
+            app.workspace.tabs[0].display_title(),
+            "proj",
+            "a `cd` moves the session, not the tab it lives in"
+        );
     }
 
     #[test]

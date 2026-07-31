@@ -23,6 +23,10 @@ pub enum PtyEvent {
     },
     /// The session's reported title changed; drives the tab label.
     Title { session: SessionId, title: String },
+    /// The shell announced the directory it is now in (OSC 7), and it differs
+    /// from the last one reported — so a `cd` stops being invisible to
+    /// everything that reads a session's directory.
+    Cwd { session: SessionId, cwd: String },
     /// An OSC 9 notification fired: Claude wants the user. Carries the
     /// raw payload text, forwarded to the OS notification centre on top of the
     /// in-app `Attention` status (which `Status` already conveys).

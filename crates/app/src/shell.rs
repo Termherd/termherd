@@ -370,6 +370,11 @@ enum Message {
         session: SessionId,
         title: String,
     },
+    /// A session's shell announced the directory it moved to (OSC 7).
+    PtyCwd {
+        session: SessionId,
+        cwd: String,
+    },
     /// A session fired an OSC 9 notification; forward it to the OS.
     PtyNotify {
         session: SessionId,
@@ -817,6 +822,12 @@ impl Shell {
                 let effects = self
                     .core
                     .apply(termherd_core::Event::SessionTitleChanged { session, title });
+                self.perform(effects)
+            }
+            Message::PtyCwd { session, cwd } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::SessionCwdChanged { session, cwd });
                 self.perform(effects)
             }
             Message::PtyNotify { session, body } => {
@@ -3758,6 +3769,65 @@ mod key_routing {
             "typing `exit` into a real shell must auto-close its tab"
         );
         assert!(pty.is_empty(), "the dead session's PTY entry is released");
+    }
+
+    /// End-to-end directory tracking: a **real PTY** running the platform
+    /// default shell, a typed `cd`, and the real `update` loop. The only test
+    /// that proves the integration recipe reaches the user's own shell —
+    /// everything below it asserts a snippet or a decoded string, neither of
+    /// which can tell whether the shell ran the hook.
+    ///
+    /// It only asserts on Unix: the recipe covers zsh, bash and fish, and a
+    /// shell without one announces nothing at all (the documented fallback), so
+    /// under ConPTY the loop below could only measure its own deadline. The
+    /// skip is a runtime `cfg!`, not a `#[cfg]` — the body must still compile
+    /// on every platform, which is the whole point of the OS-cfg quarantine.
+    #[test]
+    fn a_cd_in_a_real_shell_moves_the_session_end_to_end() {
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        if !cfg!(unix) {
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: termherd_pty::EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let pty = Arc::new(termherd_pty::PtyManager::new(
+            sink,
+            None,
+            termherd_pty::Palette::default(),
+        ));
+        let mut shell = shell_over(pty.clone());
+        let root = std::env::temp_dir();
+        let elsewhere = root.join("termherd-cwd-e2e");
+        std::fs::create_dir_all(&elsewhere).expect("a directory to cd into");
+        let _ = shell.launch(root.to_string_lossy().into_owned(), Launch::Shell);
+        let session = shell.core.workspace.focused_session().expect("focused");
+
+        pty.write(session, b"cd termherd-cwd-e2e\r\n")
+            .expect("type the cd");
+
+        let landed =
+            |shell: &Shell| focused_cwd(shell).is_some_and(|cwd| cwd.ends_with("termherd-cwd-e2e"));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !landed(&shell) && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(event) => {
+                    let _ = shell.update(streams::pty_message(event));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let _ = pty.kill(session);
+        assert!(
+            landed(&shell),
+            "a `cd` in a real shell must move the session, got {:?}",
+            focused_cwd(&shell)
+        );
     }
 
     #[test]

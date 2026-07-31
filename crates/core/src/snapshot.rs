@@ -221,7 +221,10 @@ pub struct PaneSnapshot {
     pub handle: u64,
     /// Whether it runs a shell or the Claude CLI.
     pub kind: SessionKind,
-    /// Real project path the session runs in, if known.
+    /// The directory the session is in, if known — followed as the shell
+    /// announces it (OSC 7), so it tracks a `cd` rather than freezing on the
+    /// launch directory. A shell termherd has no integration recipe for
+    /// announces nothing, and keeps reporting where it was launched.
     pub cwd: Option<String>,
     /// Current activity.
     pub status: SessionStatus,

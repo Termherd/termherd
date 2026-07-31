@@ -60,6 +60,7 @@ pub(super) fn pty_message(event: PtyEvent) -> Message {
         PtyEvent::Output { session, screen } => Message::PtyOutput { session, screen },
         PtyEvent::Status { session, status } => Message::PtyStatus { session, status },
         PtyEvent::Title { session, title } => Message::PtyTitle { session, title },
+        PtyEvent::Cwd { session, cwd } => Message::PtyCwd { session, cwd },
         PtyEvent::Notification { session, body } => Message::PtyNotify { session, body },
         PtyEvent::Exited { session, clean } => Message::PtyExited { session, clean },
         // The clipboard is global, so the requesting session no longer

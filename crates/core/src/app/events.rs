@@ -69,6 +69,16 @@ pub enum Event {
         session: SessionId,
         title: String,
     },
+    /// The shell announced the directory it is now in (OSC 7). Everything that
+    /// reads a session's directory — the snapshot an agent sees, the capture
+    /// dump, the directory a split inherits, "new shell here" — means the
+    /// *current* one, so the launch directory is replaced rather than kept
+    /// beside it. A tab keeps the label it was opened with: a `cd` moves the
+    /// session, it does not rename what the user opened.
+    SessionCwdChanged {
+        session: SessionId,
+        cwd: String,
+    },
     /// The user clicked a tab to bring it to the front (FR5).
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.

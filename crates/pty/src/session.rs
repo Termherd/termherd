@@ -17,6 +17,8 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb};
 use portable_pty::{Child, ChildKiller, MasterPty};
 use termherd_claude::osc::{OscSignal, decode_chunk};
+
+use crate::workdir::decode_cwd;
 use termherd_core::workspace::SessionId;
 use termherd_core::{ScrollTarget, SelectOp, SessionStatus};
 
@@ -295,6 +297,7 @@ pub(crate) fn spawn_term(
             let mut parser: Processor = Processor::new();
             let mut activity = Activity::starting();
             let mut title: Option<String> = None;
+            let mut cwd: Option<String> = None;
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
             let mut clean = false;
@@ -320,6 +323,15 @@ pub(crate) fn spawn_term(
                                     body: body.clone(),
                                 });
                             }
+                        }
+                        // Follow the shell into whatever directory it reports.
+                        // Only a change is forwarded: the announcement rides
+                        // every prompt, so most of them repeat the last one.
+                        if let Some(next) = decode_cwd(&text)
+                            && cwd.as_deref() != Some(next.as_str())
+                        {
+                            cwd = Some(next.clone());
+                            term_sink(PtyEvent::Cwd { session, cwd: next });
                         }
                         // Follow Claude's reported title; the last title in
                         // the chunk wins, and only a change is forwarded.

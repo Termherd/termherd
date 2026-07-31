@@ -23,6 +23,8 @@
 //!   and their removal at teardown.
 //! - `prompt` — the OSC 133 shell-integration marks a shell reports its
 //!   prompt and command boundaries with; a pure leaf.
+//! - `workdir` — the OSC 7 announcement a shell makes of the directory it is
+//!   in, so a `cd` is not invisible; a pure leaf beside `prompt`.
 //! - `integration` — the per-shell recipe (env, args, rc-file contents) that
 //!   makes a shell emit those marks; pure data, performed by `launch`.
 //! - `status` — where a session's activity comes from: the fold over Claude's
@@ -34,8 +36,8 @@
 //!   implementation that owns every session.
 //!
 //! Dependency direction: `manager → session → {grid, status, events, kill}`,
-//! with `input`, `prompt` and `integration` free leaves and `status` reading
-//! `prompt`.
+//! with `input`, `prompt`, `workdir` and `integration` free leaves and
+//! `status` reading `prompt`.
 
 mod events;
 mod grid;
@@ -47,6 +49,7 @@ mod manager;
 mod prompt;
 mod session;
 mod status;
+mod workdir;
 
 pub use events::{EventSink, PtyEvent};
 pub use grid::{Palette, Screen, ScreenCell};

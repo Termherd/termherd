@@ -187,6 +187,12 @@ impl App {
                 self.workspace.set_session_title(session, title);
                 Vec::new()
             }
+            Event::SessionCwdChanged { session, cwd } => {
+                if let Some(s) = self.sessions.get_mut(&session) {
+                    s.cwd = Some(cwd);
+                }
+                Vec::new()
+            }
             Event::ActivateTab(index) => {
                 self.workspace.activate(index);
                 Vec::new()
