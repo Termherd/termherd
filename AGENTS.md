@@ -352,6 +352,20 @@ exists). Do not relax them locally.
   diff touches a dependency's platform-conditional surface, add the target once
   (`rustup target add x86_64-pc-windows-msvc`) and check both ways: the change
   compiles, and reverting it fails.
+- **Cross-compiling is not the whole hazard — code that *runs* differently per
+  host is worse, because no `cargo check` catches it.** `#239`'s shell
+  integration built the replayed startup path with `Path::join`, which writes
+  the host's separator into what is a line of **POSIX shell**: correct on Unix,
+  a backslash escape on Windows, so the user's own rc was silently never
+  sourced. It compiled everywhere and three tests asserted the Unix spelling.
+  Because `cross-os` skips PRs *and* is path-filtered on `rust`, two docs-only
+  merges went by before the next `.rs` push to `main` surfaced it — the break
+  was attributed to that push, not to the one that caused it. The rule:
+  **a string destined for another grammar takes that grammar's separators, not
+  `std::path`'s.** When a `Path` is being rendered into a script, a URL, or a
+  wire format, join by hand. And when `main` goes red on a Rust push, check
+  whether the previous Rust push is the real author before reading the diff in
+  front of you.
 - **Function length is gated.** `clippy::too_many_lines` (threshold 150 in
   `clippy.toml`) fails CI on over-long functions — a proxy for local
   complexity. A function that exceeds it on purpose (a flat dispatcher / layout
