@@ -346,6 +346,7 @@ mod tests {
                     PtyEvent::Status { .. }
                     | PtyEvent::Title { .. }
                     | PtyEvent::Notification { .. }
+                    | PtyEvent::Cwd { .. }
                     | PtyEvent::SelectionCopied { .. },
                 ) => continue,
                 Ok(PtyEvent::Exited { .. }) => break,

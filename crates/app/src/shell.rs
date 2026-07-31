@@ -370,6 +370,11 @@ enum Message {
         session: SessionId,
         title: String,
     },
+    /// A session's shell announced the directory it moved to (OSC 7).
+    PtyCwd {
+        session: SessionId,
+        cwd: String,
+    },
     /// A session fired an OSC 9 notification; forward it to the OS.
     PtyNotify {
         session: SessionId,
@@ -817,6 +822,12 @@ impl Shell {
                 let effects = self
                     .core
                     .apply(termherd_core::Event::SessionTitleChanged { session, title });
+                self.perform(effects)
+            }
+            Message::PtyCwd { session, cwd } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::SessionCwdChanged { session, cwd });
                 self.perform(effects)
             }
             Message::PtyNotify { session, body } => {
@@ -3715,6 +3726,25 @@ mod key_routing {
         );
     }
 
+    /// Serialises the tests that spawn a **real** PTY. Session ids restart at 1
+    /// with each `Shell`, and the shell-integration files live in
+    /// `$TMPDIR/termherd-shell-<id>` — so two of these running at once both
+    /// claim session 1's directory, and whichever writes second deletes the
+    /// other's startup file out from under a shell that has not read it yet.
+    /// The victim then runs unintegrated, announces nothing, and fails on its
+    /// deadline looking like a code regression. Production is spared by the
+    /// single-instance lock, which is why this guard belongs here and not in
+    /// the adapter.
+    static REAL_PTY: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Take [`REAL_PTY`], surviving a sibling that panicked while holding it —
+    /// the lock orders these tests, it does not protect data.
+    fn one_real_pty_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+        REAL_PTY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     /// End-to-end auto-close: a **real PTY** running the platform default
     /// shell, a typed `exit`, and the real `update` loop — everything but the
     /// iced runtime (whose event glue, [`streams::pty_message`], this test
@@ -3724,6 +3754,8 @@ mod key_routing {
     fn typing_exit_into_a_real_shell_closes_the_tab_end_to_end() {
         use std::sync::mpsc;
         use std::time::{Duration, Instant};
+
+        let _serialised = one_real_pty_at_a_time();
 
         let (tx, rx) = mpsc::channel::<PtyEvent>();
         let sink: termherd_pty::EventSink = Arc::new(move |ev| {
@@ -3758,6 +3790,87 @@ mod key_routing {
             "typing `exit` into a real shell must auto-close its tab"
         );
         assert!(pty.is_empty(), "the dead session's PTY entry is released");
+    }
+
+    /// Whether `program` is on the `PATH` as an executable file — what decides
+    /// whether the end-to-end test below has a shell to measure. Extensionless
+    /// on purpose: the shells with a recipe are all Unix ones, and a host
+    /// without them is exactly the host that must skip.
+    fn on_path(program: &str) -> bool {
+        std::env::var_os("PATH")
+            .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(program).is_file()))
+    }
+
+    /// End-to-end directory tracking: a **real PTY** running a real shell, a
+    /// typed `cd`, and the real `update` loop. The only test that proves the
+    /// integration recipe reaches a shell at all — everything below it asserts
+    /// a snippet or a decoded string, neither of which can tell whether the
+    /// shell ran the hook.
+    ///
+    /// The shell is **pinned to `bash`** rather than left to the host's login
+    /// shell: the recipe covers zsh, bash and fish, so a host running `dash`,
+    /// `nu` or bare `/bin/sh` would announce nothing by design and the loop
+    /// below could only burn its deadline — failing as if the code had broken.
+    /// The precondition is therefore "a shell with a recipe is installed", not
+    /// "this is Unix", and the skip tests exactly that. It is a runtime check,
+    /// never a `#[cfg]`: the body must compile on every platform, which is the
+    /// whole point of the OS-cfg quarantine.
+    #[test]
+    fn a_cd_in_a_real_shell_moves_the_session_end_to_end() {
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        if !on_path("bash") {
+            return;
+        }
+        let _serialised = one_real_pty_at_a_time();
+
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: termherd_pty::EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let pty = Arc::new(termherd_pty::PtyManager::new(
+            sink,
+            Some(termherd_pty::Shell {
+                program: "bash".to_owned(),
+                args: Vec::new(),
+            }),
+            termherd_pty::Palette::default(),
+        ));
+        let mut shell = shell_over(pty.clone());
+        // Named for this process: two concurrent runs must not race over one
+        // directory, and the run that made it is the run that removes it. The
+        // `%` is deliberate — it is the one character the shell escapes on the
+        // way out and the decoder resolves on the way in, so a real directory
+        // called `…100%20…` must not come back with a space in it.
+        let leaf = format!("termherd-cwd-e2e-{}-100%20", std::process::id());
+        let root = std::env::temp_dir();
+        let elsewhere = root.join(&leaf);
+        std::fs::create_dir_all(&elsewhere).expect("a directory to cd into");
+        let _ = shell.launch(root.to_string_lossy().into_owned(), Launch::Shell);
+        let session = shell.core.workspace.focused_session().expect("focused");
+
+        pty.write(session, format!("cd '{leaf}'\r\n").as_bytes())
+            .expect("type the cd");
+
+        let landed = |shell: &Shell| focused_cwd(shell).is_some_and(|cwd| cwd.ends_with(&leaf));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !landed(&shell) && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(event) => {
+                    let _ = shell.update(streams::pty_message(event));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let _ = pty.kill(session);
+        let outcome = focused_cwd(&shell);
+        std::fs::remove_dir_all(&elsewhere).ok();
+        assert!(
+            outcome.as_deref().is_some_and(|cwd| cwd.ends_with(&leaf)),
+            "a `cd` in a real shell must move the session, got {outcome:?}"
+        );
     }
 
     #[test]

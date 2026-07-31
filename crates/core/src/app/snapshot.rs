@@ -356,6 +356,29 @@ mod tests {
     }
 
     #[test]
+    fn a_panes_directory_is_the_one_its_shell_is_in_not_the_one_it_started_in() {
+        // The field documents itself as the path the session runs in, and an
+        // agent builds relative commands from it. Reporting the launch
+        // directory after a `cd` sends that agent to the wrong place with no
+        // signal that anything moved.
+        let mut app = App::new();
+        let handle = launch_claude_in(&mut app, "/proj", "work");
+        let session = SessionId(std::num::NonZeroU64::new(handle).expect("nonzero"));
+        app.apply(Event::SessionCwdChanged {
+            session,
+            cwd: "/proj/crates/pty".into(),
+        });
+
+        let snap = app.snapshot(&only_sections(&[Section::Tabs]), &SnapshotInputs::default());
+        let tabs = snap.tabs.expect("tabs were requested");
+        assert_eq!(
+            tabs[0].panes[0].cwd.as_deref(),
+            Some("/proj/crates/pty"),
+            "the snapshot must follow the shell, not the launch"
+        );
+    }
+
+    #[test]
     fn empty_workspace_tabs_section_is_present_but_empty() {
         let snap =
             App::new().snapshot(&only_sections(&[Section::Tabs]), &SnapshotInputs::default());

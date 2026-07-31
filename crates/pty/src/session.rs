@@ -17,6 +17,7 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb};
 use portable_pty::{Child, ChildKiller, MasterPty};
 use termherd_claude::osc::{OscSignal, decode_chunk};
+
 use termherd_core::workspace::SessionId;
 use termherd_core::{ScrollTarget, SelectOp, SessionStatus};
 
@@ -25,6 +26,7 @@ use crate::grid::{Palette, apply_select, indexed_rgb, snapshot};
 use crate::input::wheel_bytes;
 use crate::prompt::decode_marks;
 use crate::status::{Activity, foreground_leader, foreground_status};
+use crate::workdir::decode_cwd;
 
 /// Read buffer for the per-session reader thread.
 const READ_BUF: usize = 8192;
@@ -193,6 +195,24 @@ pub(crate) fn spawn_waiter(
         })
 }
 
+/// Record what a chunk reported for a value the terminal keeps announcing —
+/// its directory, its title — and hand it back **only when it is news**,
+/// updating `seen` as it goes. `None` in means the chunk said nothing, which is
+/// not the same as saying the same thing again, and neither is worth an event.
+///
+/// One function for both, because both hold the same rule: the announcement
+/// rides every prompt, so most repeat the last one, and forwarding those would
+/// wake the whole update loop to change nothing. Stated twice it would drift on
+/// the first edit that touched one of them.
+fn news(seen: &mut Option<String>, reported: Option<String>) -> Option<String> {
+    let reported = reported?;
+    if seen.as_deref() == Some(reported.as_str()) {
+        return None;
+    }
+    *seen = Some(reported.clone());
+    Some(reported)
+}
+
 /// Emit a [`PtyEvent::Status`] when `activity` has moved off `before`. Both
 /// sources — the OSC fold and the foreground poll — report through here, so a
 /// status change is logged and published in exactly one place.
@@ -295,6 +315,7 @@ pub(crate) fn spawn_term(
             let mut parser: Processor = Processor::new();
             let mut activity = Activity::starting();
             let mut title: Option<String> = None;
+            let mut cwd: Option<String> = None;
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
             let mut clean = false;
@@ -321,18 +342,18 @@ pub(crate) fn spawn_term(
                                 });
                             }
                         }
-                        // Follow Claude's reported title; the last title in
-                        // the chunk wins, and only a change is forwarded.
-                        if let Some(next) = signals.iter().rev().find_map(|s| match s {
-                            OscSignal::Title(t) => Some(t),
+                        // Follow the shell into whatever directory it reports.
+                        if let Some(cwd) = news(&mut cwd, decode_cwd(&text)) {
+                            term_sink(PtyEvent::Cwd { session, cwd });
+                        }
+                        // Follow Claude's reported title; the last title in the
+                        // chunk wins.
+                        let reported = signals.iter().rev().find_map(|s| match s {
+                            OscSignal::Title(t) => Some(t.clone()),
                             _ => None,
-                        }) && title.as_deref() != Some(next.as_str())
-                        {
-                            title = Some(next.clone());
-                            term_sink(PtyEvent::Title {
-                                session,
-                                title: next.clone(),
-                            });
+                        });
+                        if let Some(title) = news(&mut title, reported) {
+                            term_sink(PtyEvent::Title { session, title });
                         }
                         parser.advance(&mut term, &bytes);
                     }
@@ -430,6 +451,45 @@ pub(crate) fn spawn_term(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_repeated_announcement_is_not_news() {
+        // The directory and the title both ride every prompt, so most chunks
+        // repeat what the last one said. Forwarding those would wake the update
+        // loop to change nothing — and, for the directory, do it once per
+        // command for the whole life of the session.
+        let mut seen = None;
+        assert_eq!(
+            news(&mut seen, Some("/tmp".to_owned())),
+            Some("/tmp".to_owned()),
+            "the first announcement is always news"
+        );
+        assert_eq!(
+            news(&mut seen, Some("/tmp".to_owned())),
+            None,
+            "the same value again is not"
+        );
+        assert_eq!(
+            news(&mut seen, Some("/tmp/x".to_owned())),
+            Some("/tmp/x".to_owned()),
+            "a different value is news again"
+        );
+    }
+
+    #[test]
+    fn saying_nothing_neither_reports_nor_forgets() {
+        // A chunk of plain output announces nothing. That is not the session
+        // going back to an unknown directory: the last one still stands, and
+        // the next repeat of it must still be silent.
+        let mut seen = Some("/tmp".to_owned());
+        assert_eq!(news(&mut seen, None), None);
+        assert_eq!(
+            seen.as_deref(),
+            Some("/tmp"),
+            "silence must not clear what was last announced"
+        );
+        assert_eq!(news(&mut seen, Some("/tmp".to_owned())), None);
+    }
 
     /// A writer that banks everything written, so a test can read back the
     /// replies [`PtyResponder`] sends to the child process.
