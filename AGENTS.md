@@ -88,22 +88,25 @@ TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app   # second instance
 `temp_dir()` honours `$TMPDIR`, so both run. Launch detached when you need to
 keep interacting with the original window (e.g. to compare quit behaviour).
 
-**Running inside a termherd shell also breaks `cargo test`.** That shell
-exports `ZDOTDIR=$TMPDIR/termherd-shell-<id>`, and a PTY test writing its own
-startup files to the same path produces a `.zshenv` that sources itself
-(`job table full or recursion limit exceeded`). The failure lands on
-`typing_exit_into_a_real_shell_closes_the_tab_end_to_end` and reads as a
-regression in whatever you just changed. Neutralise the inheritance before
-blaming the diff:
+**`cargo test` used to need `env -u ZDOTDIR` when run from inside a termherd
+shell — it no longer does.** That shell exports
+`ZDOTDIR=$TMPDIR/termherd-shell-<id>`, which a nested termherd read as the
+user's own home: with the session ids restarting at 1 each run, the `.zshenv`
+it then generated sourced *itself* (`job table full or recursion limit
+exceeded`) and the shell never reached a prompt. It surfaced as
+`typing_exit_into_a_real_shell_closes_the_tab_end_to_end` timing out and read
+as a regression in whatever you had just changed. Fixed in #244: a directory
+named `termherd-shell-*` is never replayed from, and the zsh recipe exports
+`TERMHERD_ORIG_ZDOTDIR` so the real home crosses any nesting depth.
+
+To reproduce that class of bug deliberately, poison the variable on the command
+line — a test cannot do it for itself, since `std::env::set_var` is `unsafe` in
+edition 2024 and the workspace denies `unsafe_code`:
 
 ```bash
-env -u ZDOTDIR TMPDIR="$(mktemp -d)" cargo test --workspace
+env ZDOTDIR="$TMPDIR/termherd-shell-1" cargo test -p termherd-app \
+  typing_exit_into_a_real_shell
 ```
-
-The product bug behind it (#244) — nesting is not guarded, so a shell launched
-from a termherd that was itself launched from a termherd shell never starts —
-is open; this workaround is only how to get a trustworthy test run until it
-closes.
 
 ### Capturing state for the AI dev loop (#108)
 

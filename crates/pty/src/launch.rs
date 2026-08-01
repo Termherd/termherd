@@ -9,7 +9,7 @@ use portable_pty::CommandBuilder;
 use termherd_core::workspace::SessionId;
 use termherd_core::{Launch, McpConfig};
 
-use crate::integration::integration_for;
+use crate::integration::{SHELL_DIR_PREFIX, integration_for, replay_home};
 
 /// The line to type into the freshly spawned shell to start a [`Launch`], or
 /// `None` for a plain shell (the bare shell *is* the deliverable). Typing keeps
@@ -84,12 +84,9 @@ pub(crate) fn write_title_settings(session: SessionId) -> Option<PathBuf> {
 /// group ([`crate::status::foreground_status`]). A degradation, not a failure,
 /// so it is logged rather than propagated.
 pub(crate) fn apply_integration(session: SessionId, program: &str, cmd: &mut CommandBuilder) {
-    let dir = std::env::temp_dir().join(format!("termherd-shell-{}", session.0.get()));
-    // zsh's own replay source is `$ZDOTDIR`, falling back to `$HOME` — read it
-    // *before* the recipe overwrites `ZDOTDIR` for the child.
-    let home = std::env::var_os("ZDOTDIR")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from);
+    let dir = shell_dir(session);
+    // Read *before* the recipe overwrites `ZDOTDIR` for the child.
+    let home = replay_home(|key| std::env::var_os(key));
     let Some(integration) = integration_for(program, &dir, home.as_deref()) else {
         return;
     };
@@ -127,6 +124,15 @@ pub(crate) fn apply_integration(session: SessionId, program: &str, cmd: &mut Com
     }
 }
 
+/// The private per-session directory a shell-integration recipe is written
+/// into. Named once, because three readers need the same answer: the launch
+/// that writes it, the teardown that removes it, and — through
+/// [`SHELL_DIR_PREFIX`] — the nested launch that must not mistake it for the
+/// user's own home.
+fn shell_dir(session: SessionId) -> PathBuf {
+    std::env::temp_dir().join(format!("{SHELL_DIR_PREFIX}{}", session.0.get()))
+}
+
 /// Create the private directory and write every startup file into it.
 fn write_startup_files(dir: &Path, files: &[(PathBuf, String)]) -> std::io::Result<()> {
     if files.is_empty() {
@@ -156,7 +162,7 @@ fn write_startup_files(dir: &Path, files: &[(PathBuf, String)]) -> std::io::Resu
 pub(crate) fn discard_private_files(session: SessionId) {
     let temp = std::env::temp_dir();
     let id = session.0.get();
-    let _ = std::fs::remove_dir_all(temp.join(format!("termherd-shell-{id}")));
+    let _ = std::fs::remove_dir_all(shell_dir(session));
     let _ = std::fs::remove_file(temp.join(format!("termherd-mcp-{id}.json")));
     let _ = std::fs::remove_file(temp.join(format!("termherd-settings-{id}.json")));
 }
@@ -262,6 +268,20 @@ mod tests {
         Path::new("/tmp/termherd-settings-3.json")
     }
 
+    /// What a launch *set* on the builder, as opposed to what the builder
+    /// merely reports: `get_env` answers from the inherited process environment
+    /// when nothing overrode it. Every variable these tests are about — TERM,
+    /// TERM_PROGRAM, ZDOTDIR — is one a termherd session exports to its own
+    /// shells, so a test run from inside termherd finds them all there and an
+    /// assertion that nothing was set passes for the wrong reason. Reading only
+    /// the builder's own overrides is what makes the claim independent of where
+    /// the test was launched from.
+    fn set_on(cmd: &CommandBuilder, key: &str) -> Option<String> {
+        cmd.iter_extra_env_as_str()
+            .find(|(name, _)| *name == key)
+            .map(|(_, value)| value.to_owned())
+    }
+
     #[test]
     fn terminal_env_advertises_iterm2_for_status_osc() {
         // Claude only emits its status OSC stream under iTerm2, so the
@@ -269,18 +289,12 @@ mod tests {
         // indicator stays frozen on the launch status.
         let mut cmd = CommandBuilder::new("/bin/sh");
         apply_terminal_env(&mut cmd);
-        assert_eq!(
-            cmd.get_env("TERM_PROGRAM"),
-            Some(std::ffi::OsStr::new("iTerm.app"))
-        );
+        assert_eq!(set_on(&cmd, "TERM_PROGRAM").as_deref(), Some("iTerm.app"));
         assert!(
-            cmd.get_env("TERM_PROGRAM_VERSION").is_some(),
+            set_on(&cmd, "TERM_PROGRAM_VERSION").is_some(),
             "a version must accompany TERM_PROGRAM for any version gating"
         );
-        assert_eq!(
-            cmd.get_env("TERM"),
-            Some(std::ffi::OsStr::new("xterm-256color"))
-        );
+        assert_eq!(set_on(&cmd, "TERM").as_deref(), Some("xterm-256color"));
     }
 
     #[test]
@@ -291,17 +305,18 @@ mod tests {
         let mut cmd = CommandBuilder::new("/bin/zsh");
         apply_integration(session, "/bin/zsh", &mut cmd);
 
-        let zdotdir = cmd
-            .get_env("ZDOTDIR")
-            .and_then(|value| value.to_str())
-            .map(PathBuf::from)
-            .expect("the spawned shell is pointed at the private directory");
-        let rc = std::fs::read_to_string(zdotdir.join(".zshrc")).expect("the rc was written");
+        let dir = shell_dir(session);
+        assert_eq!(
+            set_on(&cmd, "ZDOTDIR"),
+            Some(dir.display().to_string()),
+            "the spawned shell is pointed at its own private directory"
+        );
+        let rc = std::fs::read_to_string(dir.join(".zshrc")).expect("the rc was written");
         assert!(
             rc.contains("133;A"),
             "the written rc carries the hooks, got {rc}"
         );
-        let _ = std::fs::remove_dir_all(&zdotdir);
+        discard_private_files(session);
     }
 
     #[test]
@@ -310,14 +325,15 @@ mod tests {
         // meets the first run's directory. Refusing it there would cost that
         // session its marks for good — a bug that only shows up after a crash.
         let session = SessionId(std::num::NonZeroU64::new(96).expect("nonzero"));
-        let stale = std::env::temp_dir().join("termherd-shell-96");
+        let stale = shell_dir(session);
         std::fs::create_dir_all(&stale).expect("leave a stale directory");
         std::fs::write(stale.join(".zshrc"), "stale\n").expect("with stale contents");
 
         let mut cmd = CommandBuilder::new("/bin/zsh");
         apply_integration(session, "/bin/zsh", &mut cmd);
-        assert!(
-            cmd.get_env("ZDOTDIR").is_some(),
+        assert_eq!(
+            set_on(&cmd, "ZDOTDIR"),
+            Some(stale.display().to_string()),
             "our own leftovers must be cleared, not treated as hostile"
         );
         let rc = std::fs::read_to_string(stale.join(".zshrc")).expect("rewritten");
@@ -333,7 +349,7 @@ mod tests {
         let mut cmd = CommandBuilder::new("/bin/zsh");
         apply_integration(session, "/bin/zsh", &mut cmd);
         let overlay = write_title_settings(session).expect("overlay written");
-        let dir = std::env::temp_dir().join("termherd-shell-95");
+        let dir = shell_dir(session);
         assert!(dir.exists() && overlay.exists(), "both exist while it runs");
 
         discard_private_files(session);
@@ -369,6 +385,10 @@ mod tests {
         // argument would demote the login shell to an ordinary one and change
         // which startup files run. Declining costs the marks, not the session.
         let session = SessionId(std::num::NonZeroU64::new(93).expect("nonzero"));
+        // Cleared first: this is the one test that asserts an *absence* under
+        // the shared temp directory, so a directory left by an earlier failed
+        // — or mutated — run would fail it for reasons that are not its own.
+        discard_private_files(session);
         let mut cmd = CommandBuilder::new_default_prog();
         apply_integration(session, "/bin/bash", &mut cmd);
         assert!(
@@ -376,7 +396,7 @@ mod tests {
             "the default login shell must be left exactly as it was"
         );
         assert!(
-            !std::env::temp_dir().join("termherd-shell-93").exists(),
+            !shell_dir(session).exists(),
             "and nothing is written for a recipe that will not be applied"
         );
     }
@@ -398,11 +418,32 @@ mod tests {
     }
 
     #[test]
+    fn a_nested_run_does_not_replay_from_the_directory_it_inherited() {
+        // The only assertion that crosses the real `std::env` wiring, and it
+        // can only run where the bug exists: a test process launched from a
+        // termherd shell, whose environment carries a generated ZDOTDIR. CI
+        // inherits none, so there it asserts nothing — which is the whole
+        // claim, not a caveat on a broader one. The rule itself is proved
+        // against a stand-in environment in `crate::integration`.
+        let Some(inherited) = std::env::var_os("ZDOTDIR").map(PathBuf::from) else {
+            return;
+        };
+        if !crate::integration::is_generated_shell_dir(&inherited) {
+            return;
+        }
+        assert_ne!(
+            replay_home(|key| std::env::var_os(key)),
+            Some(inherited),
+            "a run nested inside a termherd shell must reach past what it inherited"
+        );
+    }
+
+    #[test]
     fn performing_an_unknown_shells_recipe_leaves_the_command_alone() {
         let session = SessionId(std::num::NonZeroU64::new(98).expect("nonzero"));
         let mut cmd = CommandBuilder::new("/usr/bin/nu");
         apply_integration(session, "/usr/bin/nu", &mut cmd);
-        assert_eq!(cmd.get_env("ZDOTDIR"), None);
+        assert_eq!(set_on(&cmd, "ZDOTDIR"), None);
         assert!(cmd.get_argv().len() <= 1, "no arguments were appended");
     }
 

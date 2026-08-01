@@ -7,6 +7,23 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (nested launches)
+
+- A shell opened by a termherd that was itself launched from a termherd shell
+  now starts (#244). The shell integration hands zsh a private `ZDOTDIR`, so
+  everything descending from that shell — including another termherd — inherited
+  it and read it as the user's own home. Session ids restart at 1 with each run,
+  so the inherited directory was usually the *same* one the new session was
+  about to write: its generated `.zshenv` sourced itself and the shell died on
+  `job table full or recursion limit exceeded` without reaching a prompt,
+  leaving its session on `starting`. Where the ids differed it started, but
+  replayed another session's hooks and never reached the user's own `.zshrc`.
+  A directory termherd generated is no longer replayed from — recognised by its
+  name, since a nested instance can run under a different `TMPDIR` — and the zsh
+  recipe now exports `TERMHERD_ORIG_ZDOTDIR` beside the private one, so a
+  `ZDOTDIR` the user set themselves survives any depth of nesting rather than
+  degrading to `$HOME`.
+
 ### Fixed (session status)
 
 - Sessions no longer sit on `starting` forever, which made `wait_for_status`
