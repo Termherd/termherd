@@ -21,7 +21,74 @@
 //! over `ZDOTDIR` without replaying what it displaced would silently drop the
 //! user's prompt, aliases and PATH — a far worse bug than the one being fixed.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+
+/// The name every private per-session directory a recipe is materialised under
+/// begins with. `crate::launch` builds the directory from it and
+/// [`is_generated_shell_dir`] recognises one by it, so the name a nested launch
+/// has to see through is the name it was given.
+pub(crate) const SHELL_DIR_PREFIX: &str = "termherd-shell-";
+
+/// Where the zsh recipe records the directory it displaced, so a termherd
+/// launched from the shell it starts can still find the user's own.
+///
+/// `ZDOTDIR` alone cannot say this: by the time the nested instance reads it,
+/// it holds the private directory the outer one installed. The variable is
+/// inherited like any other, so it crosses however many ordinary processes sit
+/// between the two — only the recipe that displaces `ZDOTDIR` has to set it.
+///
+/// It outranks `ZDOTDIR`, which costs one case: a `ZDOTDIR` set on the launch
+/// line *from inside* a termherd shell is ignored in favour of what the outer
+/// instance recorded. A deliberate override and a displaced one are the same
+/// two characters of environment, and there is no third variable to tell them
+/// apart — so the ordering picks the reading that cannot silently break a
+/// shell, over the one that honours a rarer intent.
+const HANDOFF: &str = "TERMHERD_ORIG_ZDOTDIR";
+
+/// Where the user's own startup files live — the directory the generated ones
+/// replay from ([`replay`]) — chosen from `sources` in preference order and
+/// read through `lookup`, so the choice is testable without touching the
+/// process environment.
+///
+/// `sources` belongs to the dialect ([`Dialect::replay_sources`]): only zsh
+/// reads a directory out of the environment, so only zsh can be handed one
+/// termherd wrote, and only zsh consults the [`HANDOFF`].
+///
+/// Two kinds of candidate are stepped over rather than taken.
+///
+/// **A directory termherd generated.** A termherd launched from a termherd
+/// shell inherits a `ZDOTDIR` pointing at that shell's private files; replaying
+/// from there makes the new session's `.zshenv` source itself when the session
+/// ids collide — the shell then never reaches a prompt — and chain another
+/// session's hooks when they do not. Refusing it covers the cases the handoff
+/// cannot reach: a directory left by an older termherd, or one whose own
+/// `$HOME` was unreadable.
+///
+/// **An empty value.** `ZDOTDIR=` is set, so it is *found*, and names the
+/// filesystem root — the generated files would replay `/.zshrc`. Skipping it
+/// reaches the next candidate, which is what an unset variable would have done.
+///
+/// Nothing left to replay is the degradation [`replay`] documents; replaying
+/// the wrong thing is not.
+fn replay_home(sources: &[&str], lookup: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    sources
+        .iter()
+        .filter_map(|key| lookup(key))
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .find(|candidate| !is_generated_shell_dir(candidate))
+}
+
+/// Whether `path` is a private per-session directory termherd wrote.
+///
+/// Recognised by its **name**, not by the temp directory it sits in: a nested
+/// instance can run under a different `TMPDIR` than the one that exported the
+/// variable, so the parent proves nothing about who wrote it.
+pub(crate) fn is_generated_shell_dir(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name.to_string_lossy().starts_with(SHELL_DIR_PREFIX))
+}
 
 /// What a shell needs to report itself. Pure data: nothing here touches the
 /// filesystem or a `CommandBuilder`.
@@ -54,19 +121,22 @@ pub(crate) struct Integration {
 /// which is not a failure: that session simply falls back on the foreground
 /// process group (`crate::status::foreground_status`).
 ///
-/// `home` is where the user's own startup files live, replayed by the generated
-/// ones; `None` replays nothing (see [`replay`]). The hooks themselves never
-/// depend on it.
+/// `lookup` reads the environment the launch inherited; where the user's own
+/// startup files live is resolved from it *per dialect* ([`replay_home`]), so
+/// the resolution and the recipe that consumes it can never disagree about
+/// which shell is being instrumented. Nothing found replays nothing (see
+/// [`replay`]); the hooks themselves never depend on it.
 pub(crate) fn integration_for(
     program: &str,
     dir: &Path,
-    home: Option<&Path>,
+    lookup: impl Fn(&str) -> Option<OsString>,
 ) -> Option<Integration> {
     // The configured shell may be an absolute path, a bare name, or (on
     // Windows) carry an extension; all that identifies the dialect is the stem.
     let shell = Path::new(program).file_stem()?.to_str()?;
-    let (_, recipe) = RECIPES.iter().find(|(name, _)| *name == shell)?;
-    Some(recipe(dir, home))
+    let dialect = DIALECTS.iter().find(|dialect| dialect.name == shell)?;
+    let home = replay_home(dialect.replay_sources, lookup);
+    Some((dialect.recipe)(dir, home.as_deref()))
 }
 
 /// How one dialect is instrumented, given its private directory and the user's
@@ -74,15 +144,52 @@ pub(crate) fn integration_for(
 /// keep the table one shape.
 type Recipe = fn(&Path, Option<&Path>) -> Integration;
 
+/// One shell dialect termherd knows how to instrument.
+struct Dialect {
+    /// The shell's name, as a launch program's file stem spells it.
+    name: &'static str,
+    /// How its startup files and command line are built.
+    recipe: Recipe,
+    /// Where *this* dialect looks for the user's own startup files, in
+    /// preference order. zsh is the only one that reads a directory out of the
+    /// environment — bash and fish read `$HOME` and nothing else, so handing
+    /// them a `ZDOTDIR` would send them looking for a `.bashrc` in a directory
+    /// that holds zsh configuration, find none, and silently drop the user's
+    /// real one.
+    replay_sources: &'static [&'static str],
+}
+
 /// Every shell dialect termherd knows how to instrument. The dispatch above and
 /// the tests below both read *this* list, so a dialect added here without hooks
 /// fails the sweep rather than being missed by a hand-written enumeration of
 /// the shells someone remembered.
-const RECIPES: &[(&str, Recipe)] = &[("zsh", zsh), ("bash", bash), ("fish", fish)];
+const DIALECTS: &[Dialect] = &[
+    Dialect {
+        name: "zsh",
+        recipe: zsh,
+        replay_sources: &[HANDOFF, "ZDOTDIR", "HOME"],
+    },
+    Dialect {
+        name: "bash",
+        recipe: bash,
+        replay_sources: &["HOME"],
+    },
+    Dialect {
+        name: "fish",
+        recipe: fish,
+        replay_sources: &["HOME"],
+    },
+];
 
 /// zsh reads every startup file from `ZDOTDIR`, so pointing it at a private
 /// directory is the way in — and the reason each generated file must replay the
 /// user's counterpart, which taking `ZDOTDIR` over has displaced.
+///
+/// It is also the reason this recipe exports [`HANDOFF`]: the shell it starts
+/// carries the displaced `ZDOTDIR` in its environment, and a termherd launched
+/// from that shell would otherwise read it as the user's own. Nothing is
+/// exported when there is no home to record — an empty variable is still
+/// *found* by the next resolver, which would then replay from `/`.
 fn zsh(dir: &Path, home: Option<&Path>) -> Integration {
     let hooks = "\
 termherd_precmd() { printf '\\033]133;D\\007\\033]133;A\\007\\033]7;file://%s%s\\007' \"$HOST\" \"${PWD//\\%/%25}\" }\n\
@@ -102,9 +209,13 @@ add-zsh-hook preexec termherd_preexec\n";
             (dir.join(name), contents)
         })
         .collect();
+    let mut env = vec![("ZDOTDIR".to_owned(), dir.display().to_string())];
+    if let Some(home) = home {
+        env.push((HANDOFF.to_owned(), home.display().to_string()));
+    }
     Integration {
         files,
-        env: vec![("ZDOTDIR".to_owned(), dir.display().to_string())],
+        env,
         args: Vec::new(),
     }
 }
@@ -175,14 +286,374 @@ fn replay(home: Option<&Path>, name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
     /// The private per-session directory a recipe is materialised under.
     fn dir() -> &'static Path {
         Path::new("/tmp/termherd-shell-7")
     }
-    fn home() -> Option<&'static Path> {
-        Some(Path::new("/Users/someone"))
+    /// The environment an ordinary launch inherits: a home, nothing displaced.
+    fn user_env() -> impl Fn(&str) -> Option<OsString> {
+        env_of(&[("HOME", "/Users/someone")])
+    }
+
+    /// The sources one dialect reads, taken from the table the dispatch itself
+    /// reads — a hand-written list here could assert an order the code no
+    /// longer uses.
+    fn sources_of(shell: &str) -> &'static [&'static str] {
+        DIALECTS
+            .iter()
+            .find(|dialect| dialect.name == shell)
+            .expect("a dialect termherd knows")
+            .replay_sources
+    }
+
+    /// The variable the zsh recipe is expected to export so the user's own
+    /// directory survives a nested launch. Spelled out rather than shared with
+    /// the code under test: it is a contract with shells already running, so a
+    /// rename must fail here rather than pass silently on both sides.
+    const EXPECTED_HANDOFF: &str = "TERMHERD_ORIG_ZDOTDIR";
+
+    /// A stand-in process environment for [`replay_home`].
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+        let pairs: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        move |key| {
+            pairs
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| OsString::from(v))
+        }
+    }
+
+    /// A directory termherd generated, as an inherited variable would carry it.
+    const GENERATED: &str = "/var/folders/s0/T/termherd-shell-33";
+
+    #[test]
+    fn a_zdotdir_termherd_installed_is_never_the_replay_source() {
+        // The whole bug: a termherd launched from a termherd shell inherits a
+        // ZDOTDIR pointing at generated files. Replaying from there makes the
+        // new session's `.zshenv` source *itself* when the session ids collide
+        // — the shell then never starts — and chain another session's hooks
+        // when they do not. Either way the user's own rc is never reached.
+        assert_eq!(
+            replay_home(
+                sources_of("zsh"),
+                env_of(&[("ZDOTDIR", GENERATED), ("HOME", "/Users/someone")])
+            )
+            .as_deref(),
+            Some(Path::new("/Users/someone")),
+        );
+    }
+
+    #[test]
+    fn a_zdotdir_the_user_set_themselves_is_still_the_replay_source() {
+        // Skipping every ZDOTDIR would be a cure worse than the disease:
+        // someone whose zsh configuration lives outside $HOME would silently
+        // lose all of it the moment termherd opened a shell.
+        assert_eq!(
+            replay_home(
+                sources_of("zsh"),
+                env_of(&[
+                    ("ZDOTDIR", "/Users/someone/.config/zsh"),
+                    ("HOME", "/Users/someone"),
+                ])
+            )
+            .as_deref(),
+            Some(Path::new("/Users/someone/.config/zsh")),
+        );
+    }
+
+    #[test]
+    fn an_empty_variable_is_stepped_over_rather_than_replayed_from_the_root() {
+        // `ZDOTDIR=` is *set*, so it is found — and it names the filesystem
+        // root. The generated files would replay `/.zshrc`, which is nobody's
+        // configuration and may not even be readable. Stepping over it reaches
+        // the candidate an unset variable would have reached.
+        assert_eq!(
+            replay_home(
+                sources_of("zsh"),
+                env_of(&[("ZDOTDIR", ""), ("HOME", "/Users/someone")]),
+            )
+            .as_deref(),
+            Some(Path::new("/Users/someone")),
+        );
+        assert_eq!(
+            replay_home(sources_of("zsh"), env_of(&[("HOME", "")])),
+            None,
+            "with nothing else to fall back on, nothing is replayed at all"
+        );
+    }
+
+    #[test]
+    fn only_zsh_takes_its_startup_directory_from_the_environment() {
+        // Walks the dialect table, so a dialect added with the wrong sources
+        // fails here rather than being missed by a list someone typed.
+        let env = env_of(&[
+            ("ZDOTDIR", "/Users/someone/.config/zsh"),
+            ("HOME", "/Users/someone"),
+        ]);
+        for Dialect {
+            name,
+            replay_sources,
+            ..
+        } in DIALECTS
+        {
+            let expected = if *name == "zsh" {
+                "/Users/someone/.config/zsh"
+            } else {
+                "/Users/someone"
+            };
+            assert_eq!(
+                replay_home(replay_sources, &env).as_deref(),
+                Some(Path::new(expected)),
+                "{name} reads the wrong source",
+            );
+        }
+    }
+
+    #[test]
+    fn a_zdotdir_does_not_follow_the_user_into_a_shell_that_never_reads_one() {
+        // The same rule where it is observable: bash reads `$HOME` and nothing
+        // else, so handing it a ZDOTDIR sends it looking for a `.bashrc` among
+        // zsh configuration. The guarded `if [ -f ]` finds none and the user's
+        // real rc is dropped without a word — the silent half of the failure.
+        let rc = file_named(
+            &integration_for(
+                "/bin/bash",
+                dir(),
+                env_of(&[
+                    ("ZDOTDIR", "/Users/someone/.config/zsh"),
+                    ("HOME", "/Users/someone"),
+                ]),
+            )
+            .expect("bash has a recipe"),
+            "termherd.bash",
+        );
+        assert!(
+            rc.contains("\"/Users/someone/.bashrc\"") && !rc.contains(".config/zsh"),
+            "bash must replay the user's own rc, got {rc}"
+        );
+    }
+
+    #[test]
+    fn the_handoff_outranks_a_zdotdir_of_either_kind() {
+        // What carries the user's own directory across a nesting level: the
+        // parent exported it beside the private ZDOTDIR that displaced it, so
+        // it is read first — and it is the only candidate that can still be
+        // right when the ZDOTDIR beside it is one termherd wrote.
+        assert_eq!(
+            replay_home(
+                sources_of("zsh"),
+                env_of(&[
+                    (EXPECTED_HANDOFF, "/Users/someone/.config/zsh"),
+                    ("ZDOTDIR", GENERATED),
+                    ("HOME", "/Users/someone"),
+                ])
+            )
+            .as_deref(),
+            Some(Path::new("/Users/someone/.config/zsh")),
+        );
+    }
+
+    #[test]
+    fn a_handoff_that_is_itself_generated_is_refused_like_any_other() {
+        // Nothing about being read first makes a value trustworthy — the
+        // variable crosses process boundaries and anything can set it. The
+        // refusal is a property of the *directory*, applied to every candidate.
+        assert_eq!(
+            replay_home(
+                sources_of("zsh"),
+                env_of(&[
+                    (EXPECTED_HANDOFF, GENERATED),
+                    ("ZDOTDIR", GENERATED),
+                    ("HOME", "/Users/someone"),
+                ])
+            )
+            .as_deref(),
+            Some(Path::new("/Users/someone")),
+        );
+    }
+
+    #[test]
+    fn a_generated_directory_is_recognised_by_its_name_not_by_where_it_sits() {
+        // An inner instance can run under a different TMPDIR than the one that
+        // exported the variable, so the parent directory proves nothing about
+        // who wrote it. Only the name termherd itself chose does.
+        for elsewhere in [
+            "/var/folders/s0/T/termherd-shell-33",
+            "/tmp/claude-501/termherd-shell-2",
+            "/tmp/termherd-shell-7",
+        ] {
+            assert_eq!(
+                replay_home(
+                    sources_of("zsh"),
+                    env_of(&[("ZDOTDIR", elsewhere), ("HOME", "/Users/someone")])
+                )
+                .as_deref(),
+                Some(Path::new("/Users/someone")),
+                "{elsewhere} is one of ours wherever it sits",
+            );
+        }
+        // And a directory that merely reads like one is the user's business.
+        for theirs in [
+            "/Users/someone/termherd-shellish",
+            "/Users/someone/termherd-shell",
+            "/Users/someone/.config/termherd",
+        ] {
+            assert_eq!(
+                replay_home(
+                    sources_of("zsh"),
+                    env_of(&[("ZDOTDIR", theirs), ("HOME", "/Users/someone")])
+                )
+                .as_deref(),
+                Some(Path::new(theirs)),
+                "{theirs} is not ours to refuse",
+            );
+        }
+    }
+
+    #[test]
+    fn nothing_to_replay_beats_replaying_from_a_generated_directory() {
+        // No candidate left means no `source` line at all, which is the
+        // degradation `replay` already documents: the user loses their prompt
+        // and aliases. Sourcing the generated files instead loses the shell.
+        assert_eq!(
+            replay_home(
+                sources_of("zsh"),
+                env_of(&[(EXPECTED_HANDOFF, GENERATED), ("ZDOTDIR", GENERATED)])
+            ),
+            None,
+        );
+        assert_eq!(replay_home(sources_of("zsh"), env_of(&[])), None);
+    }
+
+    #[test]
+    fn zsh_hands_the_users_own_directory_to_whatever_it_launches() {
+        // The private ZDOTDIR this recipe exports is exactly what a termherd
+        // launched from the resulting shell would inherit and replay from. The
+        // handoff beside it is how that instance still finds the real one.
+        let it = zsh(dir(), Some(Path::new("/Users/someone")));
+        assert_eq!(
+            it.env
+                .iter()
+                .find(|(key, _)| key == EXPECTED_HANDOFF)
+                .map(|(_, value)| value.as_str()),
+            Some("/Users/someone"),
+            "got {:?}",
+            it.env,
+        );
+        assert_eq!(
+            it.env
+                .iter()
+                .find(|(key, _)| key == "ZDOTDIR")
+                .map(|(_, value)| value.as_str()),
+            Some("/tmp/termherd-shell-7"),
+            "the handoff is set beside the private directory, not instead of it",
+        );
+    }
+
+    #[test]
+    fn zsh_hands_on_nothing_rather_than_an_empty_directory() {
+        // An exported empty variable is still *found* by the next resolver,
+        // which would then replay from `/` — worse than the ZDOTDIR it was
+        // meant to correct, and silently so.
+        let it = zsh(dir(), None);
+        assert!(
+            it.env.iter().all(|(key, _)| key != EXPECTED_HANDOFF),
+            "got {:?}",
+            it.env,
+        );
+    }
+
+    #[test]
+    fn a_generated_startup_file_never_sources_itself() {
+        // The catastrophic half of the report, spelled as what the user sees:
+        // when the inherited ZDOTDIR and the directory this session is about to
+        // write are the *same* path — which restarting session ids make likely
+        // rather than rare — every generated file replays itself, and the shell
+        // dies on `job table full or recursion limit exceeded` without ever
+        // reaching a prompt.
+        let dir = Path::new("/var/folders/s0/T/termherd-shell-1");
+        let home = replay_home(
+            sources_of("zsh"),
+            env_of(&[
+                ("ZDOTDIR", "/var/folders/s0/T/termherd-shell-1"),
+                ("HOME", "/Users/someone"),
+            ]),
+        );
+        for (path, contents) in zsh(dir, home.as_deref()).files {
+            assert!(
+                !contents.contains(&path.display().to_string()),
+                "{} sources itself: {contents}",
+                path.display(),
+            );
+        }
+    }
+
+    /// One nesting level: the environment a shell launched by this level sees,
+    /// given the environment its termherd inherited. The parent's variables
+    /// survive except where the recipe overrides them — which is what makes a
+    /// stale `ZDOTDIR` reach the next instance in the first place.
+    fn launched_from(env: &[(String, String)], dir: &Path) -> Vec<(String, String)> {
+        let home = replay_home(sources_of("zsh"), |key| {
+            env.iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| OsString::from(v))
+        });
+        let mut env = env.to_vec();
+        for (key, value) in zsh(dir, home.as_deref()).env {
+            match env.iter_mut().find(|(k, _)| *k == key) {
+                Some(entry) => entry.1 = value,
+                None => env.push((key, value)),
+            }
+        }
+        env
+    }
+
+    proptest! {
+        /// The reported scenario, played to arbitrary depth: each termherd is
+        /// launched from a shell the previous one opened, so it inherits that
+        /// shell's environment. Session ids restart at 1 every run, so the
+        /// generated directories collide across levels — the ticket's worst
+        /// case, drawn from a range small enough that they usually do.
+        #[test]
+        fn the_users_own_directory_survives_any_depth_of_nesting(
+            depth in 1usize..7,
+            ids in prop::collection::vec(1u64..4, 7),
+            temps in prop::collection::vec(0usize..3, 7),
+            zdotdir_of_their_own in any::<bool>(),
+        ) {
+            let temp_dirs = ["/var/folders/s0/T", "/tmp", "/tmp/claude-501"];
+            let theirs = if zdotdir_of_their_own {
+                "/Users/someone/.config/zsh"
+            } else {
+                "/Users/someone"
+            };
+            let mut env = vec![("HOME".to_owned(), "/Users/someone".to_owned())];
+            if zdotdir_of_their_own {
+                env.push(("ZDOTDIR".to_owned(), theirs.to_owned()));
+            }
+
+            for level in 0..depth {
+                let dir = Path::new(temp_dirs[temps[level]])
+                    .join(format!("{SHELL_DIR_PREFIX}{}", ids[level]));
+                let resolved = replay_home(sources_of("zsh"), |key| {
+                    env.iter().find(|(k, _)| k == key).map(|(_, v)| OsString::from(v))
+                });
+                prop_assert_eq!(
+                    resolved.as_deref(),
+                    Some(Path::new(theirs)),
+                    "level {} replayed from the wrong directory",
+                    level,
+                );
+                env = launched_from(&env, &dir);
+            }
+        }
     }
 
     /// The single file a recipe writes, by suffix — every recipe here writes at
@@ -198,7 +669,7 @@ mod tests {
 
     #[test]
     fn zsh_is_pointed_at_a_private_zdotdir() {
-        let it = integration_for("/bin/zsh", dir(), home()).expect("zsh has a recipe");
+        let it = integration_for("/bin/zsh", dir(), user_env()).expect("zsh has a recipe");
         assert_eq!(
             it.env
                 .iter()
@@ -216,7 +687,7 @@ mod tests {
     #[test]
     fn the_zsh_startup_file_emits_all_three_marks() {
         let rc = file_named(
-            &integration_for("/bin/zsh", dir(), home()).expect("zsh has a recipe"),
+            &integration_for("/bin/zsh", dir(), user_env()).expect("zsh has a recipe"),
             ".zshrc",
         );
         assert!(
@@ -233,7 +704,7 @@ mod tests {
         // Taking over ZDOTDIR displaces every file zsh would have read. Each
         // generated one must load its counterpart first, or the user loses
         // their prompt, aliases and PATH the moment termherd launches a shell.
-        let it = integration_for("/bin/zsh", dir(), home()).expect("zsh has a recipe");
+        let it = integration_for("/bin/zsh", dir(), user_env()).expect("zsh has a recipe");
         for name in [".zshrc", ".zshenv", ".zprofile", ".zlogin"] {
             let contents = file_named(&it, name);
             assert!(
@@ -248,7 +719,7 @@ mod tests {
         // A fresh account has no ~/.zshrc; sourcing it unguarded would print an
         // error into the very first line of every terminal termherd opens.
         let rc = file_named(
-            &integration_for("/bin/zsh", dir(), home()).expect("zsh has a recipe"),
+            &integration_for("/bin/zsh", dir(), user_env()).expect("zsh has a recipe"),
             ".zshrc",
         );
         assert!(
@@ -263,7 +734,7 @@ mod tests {
         // startup file read hands that status to the shell's first command: a
         // bare `exit` then ends the session unclean and its tab never
         // auto-closes. Guarding must not change what exiting means.
-        let it = integration_for("/bin/zsh", dir(), home()).expect("zsh has a recipe");
+        let it = integration_for("/bin/zsh", dir(), user_env()).expect("zsh has a recipe");
         for (path, contents) in &it.files {
             assert!(
                 !contents.contains("] && ."),
@@ -273,11 +744,6 @@ mod tests {
         }
     }
 
-    /// Everything a dialect's recipe puts in front of the shell — every file it
-    /// writes and every argument it appends — as one string to assert on. The
-    /// three sweeps below walk [`RECIPES`] itself, so a dialect added to the
-    /// table without hooks fails them rather than being missed by a list of the
-    /// shells someone remembered to type.
     /// The url a snippet announces: what sits between the `]7;` introducer and
     /// the BEL the shell will print (`\007`, two literal characters here).
     fn announced_url(snippet: &str) -> &str {
@@ -290,8 +756,13 @@ mod tests {
             .expect("split always yields a first part")
     }
 
+    /// Everything a dialect's recipe puts in front of the shell — every file it
+    /// writes and every argument it appends — as one string to assert on. The
+    /// sweeps below walk [`DIALECTS`] itself, so a dialect added to the table
+    /// without hooks fails them rather than being missed by a list of the
+    /// shells someone remembered to type.
     fn instrumentation(recipe: Recipe) -> String {
-        let it = recipe(dir(), home());
+        let it = recipe(dir(), Some(Path::new("/Users/someone")));
         let written: String = it.files.iter().map(|(_, c)| c.as_str()).collect();
         format!("{written}{}", it.args.join(" "))
     }
@@ -301,11 +772,11 @@ mod tests {
         // Without OSC 7 a session's directory is the one it launched in,
         // frozen — so `PaneSnapshot.cwd` misreports from the first `cd`, and
         // a split inherits a directory the user left long ago.
-        for (shell, recipe) in RECIPES {
+        for Dialect { name, recipe, .. } in DIALECTS {
             let snippet = instrumentation(*recipe);
             assert!(
                 snippet.contains("]7;file://"),
-                "{shell} must announce its directory, got {snippet}"
+                "{name} must announce its directory, got {snippet}"
             );
         }
     }
@@ -317,16 +788,16 @@ mod tests {
         // very bug this closes. The shell's own live variable is the fix — read
         // through an expansion whose spelling differs per dialect, so the
         // assertion is on the variable rather than on one way of reading it.
-        for (shell, recipe) in RECIPES {
+        for Dialect { name, recipe, .. } in DIALECTS {
             let snippet = instrumentation(*recipe);
             assert!(
                 snippet.contains("PWD"),
-                "{shell} must announce PWD, got {snippet}"
+                "{name} must announce PWD, got {snippet}"
             );
             assert_eq!(
                 announced_url(&snippet),
                 "file://%s%s",
-                "{shell} must announce host and path as printf arguments, so no \
+                "{name} must announce host and path as printf arguments, so no \
                  directory can be baked into the url itself"
             );
         }
@@ -338,11 +809,11 @@ mod tests {
         // literally and come back with a space in it — the decoder inventing a
         // path rather than merely tolerating an odd one. `%` is the only
         // character with that property, so it is the only one escaped.
-        for (shell, recipe) in RECIPES {
+        for Dialect { name, recipe, .. } in DIALECTS {
             let snippet = instrumentation(*recipe);
             assert!(
                 snippet.contains("%25"),
-                "{shell} must escape a literal % in the path, got {snippet}"
+                "{name} must escape a literal % in the path, got {snippet}"
             );
         }
     }
@@ -353,19 +824,19 @@ mod tests {
         // grammars separate with `/`, whatever the host that generated the file
         // uses. A `\` reaching either one breaks both — the replay fix's
         // lesson, applied to a second generated string.
-        for (shell, recipe) in RECIPES {
+        for Dialect { name, recipe, .. } in DIALECTS {
             let snippet = instrumentation(*recipe);
             let url = announced_url(&snippet);
             assert!(
                 url.starts_with("file://") && !url.contains('\\'),
-                "{shell} must announce a url carrying no backslash, got {url}"
+                "{name} must announce a url carrying no backslash, got {url}"
             );
         }
     }
 
     #[test]
     fn bash_is_pointed_at_a_private_rcfile() {
-        let it = integration_for("/bin/bash", dir(), home()).expect("bash has a recipe");
+        let it = integration_for("/bin/bash", dir(), user_env()).expect("bash has a recipe");
         let rcfile = it
             .args
             .windows(2)
@@ -391,7 +862,8 @@ mod tests {
     fn fish_gets_its_hooks_as_an_init_command() {
         // fish has no rcfile flag; `--init-command` runs after its own config,
         // so nothing of the user's is displaced in the first place.
-        let it = integration_for("/usr/local/bin/fish", dir(), home()).expect("fish has a recipe");
+        let it =
+            integration_for("/usr/local/bin/fish", dir(), user_env()).expect("fish has a recipe");
         let init = it
             .args
             .windows(2)
@@ -414,7 +886,7 @@ mod tests {
         // versioned build; all of them are still zsh.
         for program in ["zsh", "/bin/zsh", "/opt/homebrew/bin/zsh"] {
             assert!(
-                integration_for(program, dir(), home()).is_some(),
+                integration_for(program, dir(), user_env()).is_some(),
                 "{program} should be recognised as zsh"
             );
         }
@@ -424,14 +896,14 @@ mod tests {
     fn an_unknown_shell_gets_no_recipe_rather_than_a_broken_one() {
         // Guessing would corrupt the startup of a shell whose grammar we do not
         // know. No recipe simply means the foreground poll stands in.
-        assert_eq!(integration_for("/usr/bin/nu", dir(), home()), None);
-        assert_eq!(integration_for("pwsh", dir(), home()), None);
+        assert_eq!(integration_for("/usr/bin/nu", dir(), user_env()), None);
+        assert_eq!(integration_for("pwsh", dir(), user_env()), None);
     }
 
     #[test]
     fn a_recipe_without_a_known_home_still_produces_working_hooks() {
         // `home` only drives the replay; the marks must not depend on it.
-        let it = integration_for("/bin/zsh", dir(), None).expect("zsh has a recipe");
+        let it = integration_for("/bin/zsh", dir(), env_of(&[])).expect("zsh has a recipe");
         let rc = file_named(&it, ".zshrc");
         assert!(
             rc.contains("133;A"),
@@ -444,7 +916,7 @@ mod tests {
         // A bare `.zshrc` would be *relative*, and the session's working
         // directory is the project — so the shell would source whatever a
         // cloned repository happens to carry. Nothing to replay means no line.
-        let it = integration_for("/bin/zsh", dir(), None).expect("zsh has a recipe");
+        let it = integration_for("/bin/zsh", dir(), env_of(&[])).expect("zsh has a recipe");
         for (path, contents) in &it.files {
             assert!(
                 !contents.contains(". ."),
@@ -462,7 +934,7 @@ mod tests {
         // already ends in one, which would otherwise source `//.zshrc`.
         for home in ["/Users/someone", "/Users/someone/"] {
             let rc = file_named(
-                &integration_for("/bin/zsh", dir(), Some(Path::new(home)))
+                &integration_for("/bin/zsh", dir(), env_of(&[("HOME", home)]))
                     .expect("zsh has a recipe"),
                 ".zshrc",
             );
@@ -478,9 +950,10 @@ mod tests {
         // An unquoted path with a space in it makes `[ -f a b ]` fail with
         // "too many arguments": the user's own rc is then silently never
         // loaded, and the error prints on the first line of every terminal.
-        let spaced = Path::new("/Users/some one");
+        let spaced = "/Users/some one";
         let rc = file_named(
-            &integration_for("/bin/zsh", dir(), Some(spaced)).expect("zsh has a recipe"),
+            &integration_for("/bin/zsh", dir(), env_of(&[("HOME", spaced)]))
+                .expect("zsh has a recipe"),
             ".zshrc",
         );
         assert!(
