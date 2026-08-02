@@ -144,15 +144,22 @@ fn trailing_number(chars: &[char], start: usize, end: usize) -> (usize, Option<u
         .map_or((end, None), |n| (digits - 1, Some(n)))
 }
 
-/// Extensions whose OS association is "run this", not "show this".
+/// Extensions known to make an OS opener **run** something rather than show it.
 ///
-/// Every entry names a *program*, never a document: there is no editor a user
-/// would expect `.exe` or `.app` to open in. Source files are deliberately
-/// absent — see [`runs_on_open`] for why that is a real hole and not an
-/// oversight.
-const EXECUTED_BY_ASSOCIATION: [&str; 22] = [
-    "app", "command", "desktop", "exe", "com", "bat", "cmd", "scr", "pif", "msi", "msp", "cpl",
-    "hta", "jar", "vb", "vbs", "vbe", "ws", "wsf", "wsh", "ps1", "reg",
+/// A denylist, and therefore incomplete by construction — see [`runs_on_open`],
+/// which is where that limitation is spelled out rather than glossed over here.
+/// Every entry names a *program* or a launcher: there is no editor a user would
+/// expect `.exe`, `.app` or `.lnk` to open in.
+const EXECUTED_BY_ASSOCIATION: &[&str] = &[
+    // macOS bundles and launchers
+    "app", "command", "terminal", "workflow", "pkg", "mpkg",    // Linux
+    "desktop", // Windows executables and installers
+    "exe", "com", "bat", "cmd", "scr", "pif", "msi", "msp", "cpl", "msc",
+    // Windows launchers: a shortcut runs whatever it points at, and `.url`,
+    // `.scf` and `.inf` are the classic file-that-is-really-an-action set.
+    "lnk", "url", "scf", "inf", // Script hosts
+    "hta", "vb", "vbs", "vbe", "ws", "wsf", "wsh", "ps1", "reg", // Cross-platform
+    "jar",
 ];
 
 /// Whether opening `path` through the OS default handler would **run** it
@@ -164,14 +171,22 @@ const EXECUTED_BY_ASSOCIATION: [&str; 22] = [
 /// and a `ls` of an untrusted clone is enough to put `payload.app` on screen,
 /// so a click must not be able to launch it.
 ///
-/// **This is a mitigation, not a guarantee, and it is far weaker on Windows.**
-/// On macOS and Linux the set of extensions that execute is small and closed —
-/// the list above genuinely covers it. On Windows the association table decides,
-/// and it maps `.js` to Windows Script Host, `.py` to the interpreter, and so on
-/// for every scripting language installed. Adding those here would refuse
-/// exactly the source files the feature exists to open, so they are left out
-/// knowingly. Windows' real fix is the configurable editor command, which never
-/// consults an association at all.
+/// **This is a mitigation, not a guarantee.** It is a denylist of extensions,
+/// so it protects against what is on it and nothing else; the list above is the
+/// set that was known when it was written, not a proof of coverage. Two
+/// limitations are known and deliberate rather than accidental:
+///
+/// - On Windows the association table decides, and it maps `.js` to Windows
+///   Script Host, `.py` to the interpreter, and so on for every scripting
+///   language installed. Adding those would refuse exactly the source files the
+///   feature exists to open, so they are left out knowingly.
+/// - The list is applied on every host, so a Linux user cannot open a `.exe` to
+///   inspect it. Erring toward refusal is the safe direction, and per-OS
+///   branching in `core` would be `cfg` leaking where it is not allowed.
+///
+/// The real fix for both is the configurable editor command, which never
+/// consults an association at all. Judge the **canonical** path: a symlink's
+/// name says nothing about what the opener will reach.
 #[must_use]
 pub fn runs_on_open(path: &std::path::Path) -> bool {
     // A macOS bundle is a directory, so match on the name's own tail rather
@@ -192,7 +207,7 @@ pub fn runs_on_open(path: &std::path::Path) -> bool {
 fn is_path_shaped(target: &[char]) -> bool {
     // Separators alone name no file: a lone `/` exists on every Unix host, so
     // without this every mountpoint column of `df` output would underline.
-    if !target.iter().any(|c| !matches!(c, '/' | '\\')) {
+    if target.iter().all(|c| matches!(c, '/' | '\\')) {
         return false;
     }
     if target.contains(&'/') || target.contains(&'\\') {
@@ -308,6 +323,14 @@ mod tests {
             "/a/menu.desktop",
             "/a/lib.jar",
             "/a/script.ps1",
+            // Launchers: the file is not the program, it names one.
+            "/a/innocent.lnk",
+            "/a/link.url",
+            "/a/share.scf",
+            "/a/setup.inf",
+            "/a/open.terminal",
+            "/a/run.workflow",
+            "/a/install.pkg",
         ] {
             assert!(runs_on_open(Path::new(program)), "{program} runs on open");
         }

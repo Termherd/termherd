@@ -11,7 +11,9 @@ use crate::metadata::Overlay;
 use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
 
-use super::{LaunchSpec, PathRequest, ScrollTarget, SelectOp, SessionStatus, TargetProbe, Zoom};
+use super::{
+    LaunchSpec, PathRequest, ResolvedPath, ScrollTarget, SelectOp, SessionStatus, TargetProbe, Zoom,
+};
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -168,7 +170,7 @@ pub enum Event {
     /// echoed so `core` can tell which question was answered.
     PathResolved {
         request: PathRequest,
-        path: Option<std::path::PathBuf>,
+        resolved: Option<ResolvedPath>,
     },
     /// A session emitted an OSC 9 notification — Claude wants the user.
     /// `body` is the raw payload Claude sent ("needs your attention", a

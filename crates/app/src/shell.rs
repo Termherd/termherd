@@ -534,7 +534,7 @@ enum Message {
     /// `None` when it names none.
     PathResolved {
         request: termherd_core::PathRequest,
-        path: Option<PathBuf>,
+        resolved: Option<termherd_core::ResolvedPath>,
     },
     /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
@@ -1204,10 +1204,10 @@ impl Shell {
                     .apply(termherd_core::Event::ActivateTarget { session, probe });
                 self.perform(effects)
             }
-            Message::PathResolved { request, path } => {
+            Message::PathResolved { request, resolved } => {
                 let effects = self
                     .core
-                    .apply(termherd_core::Event::PathResolved { request, path });
+                    .apply(termherd_core::Event::PathResolved { request, resolved });
                 self.perform(effects)
             }
             Message::CaptureScreenshot {

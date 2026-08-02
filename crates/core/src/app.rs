@@ -38,7 +38,8 @@ use settings::FontState;
 pub use effects::Effect;
 pub use events::Event;
 pub use hover::{
-    HoverTarget, PathPurpose, PathRequest, PathRoots, ProbeKind, TargetProbe, TermHover,
+    HoverTarget, PathPurpose, PathRequest, PathRoots, ProbeKind, ResolvedPath, TargetProbe,
+    TermHover,
 };
 pub use session::{Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
@@ -280,7 +281,7 @@ impl App {
             Event::Zoom(zoom) => self.zoom(zoom),
             Event::TermTarget { session, probe } => self.set_term_target(session, probe),
             Event::ActivateTarget { session, probe } => self.activate_target(session, probe),
-            Event::PathResolved { request, path } => self.path_resolved(&request, path),
+            Event::PathResolved { request, resolved } => self.path_resolved(&request, resolved),
             Event::SessionNotified { session, body } => self.notify_session(session, body),
             Event::Capture(inputs) => vec![Effect::Capture(self.build_capture(&inputs))],
             Event::ToggleRecord { max_frames } => self.toggle_record(max_frames),

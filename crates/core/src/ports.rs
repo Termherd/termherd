@@ -4,10 +4,9 @@
 //! Signatures grow as adapters land (scan in M1, store in M1, pty in M2).
 //! The dependency rule: `core` declares ports, never imports adapters.
 
-use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::app::{PathRoots, ScrollTarget, SelectOp, SpawnSpec};
+use crate::app::{PathRoots, ResolvedPath, ScrollTarget, SelectOp, SpawnSpec};
 use crate::browser::SessionRecord;
 use crate::workspace::SessionId;
 
@@ -45,7 +44,10 @@ pub trait PathResolver: Send + Sync {
     /// and `pytest` each print relative to a different directory, so the same
     /// text can be meaningful from more than one — and the innermost match is
     /// the one the user meant.
-    fn resolve(&self, candidate: &str, roots: &PathRoots) -> Option<PathBuf>;
+    ///
+    /// Returns both the path to open and the same file with its symlinks
+    /// followed, because policy has to judge the second — see [`ResolvedPath`].
+    fn resolve(&self, candidate: &str, roots: &PathRoots) -> Option<ResolvedPath>;
 }
 
 /// Real signatures land with the `store` adapter in M1.

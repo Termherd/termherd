@@ -97,6 +97,24 @@ pub struct PathRequest {
     pub col: Option<u32>,
 }
 
+/// A candidate that turned out to be a real file, in the two forms the two
+/// decisions about it need.
+///
+/// They differ only when a symlink is involved, and that difference is the
+/// whole point: `notes.md -> payload.app` is a document by name and a program
+/// by nature, and the OS opener follows the link. Judging the name would let a
+/// clone carrying one symlink walk straight past [`crate::paths::runs_on_open`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPath {
+    /// What to hand the opener: lexically collapsed, symlinks left intact — so
+    /// what opens is the path the user pointed at, and (on Windows) not a
+    /// `\\?\` verbatim form the shell handler mishandles.
+    pub path: PathBuf,
+    /// The same file with every symlink followed, falling back to `path` when
+    /// the filesystem could not say. **This is what policy judges.**
+    pub real: PathBuf,
+}
+
 /// The directories a relative candidate could be relative *to*, most specific
 /// first. `core` names them; the adapter walks and stats them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -130,18 +148,12 @@ impl App {
             if self.hovers(session) {
                 self.hover = None;
             }
-            if self
-                .pending_path
-                .as_ref()
-                .is_some_and(|p| p.session == session)
-            {
-                self.pending_path = None;
-            }
+            self.clear_pending_for(session);
             return Vec::new();
         };
         match probe.kind {
             ProbeKind::Url(url) => {
-                self.pending_path = None;
+                self.clear_pending_for(session);
                 self.hover = Some(TermHover {
                     session,
                     row: probe.row,
@@ -188,15 +200,21 @@ impl App {
     pub(super) fn path_resolved(
         &mut self,
         request: &PathRequest,
-        path: Option<PathBuf>,
+        resolved: Option<ResolvedPath>,
     ) -> Vec<Effect> {
         // A program is not a document: the OS handler would run it, and a `ls`
         // of an untrusted clone is enough to put one on screen. Filtered here,
         // once, rather than at each of the two outcomes below — so a target
         // that cannot be opened cannot be underlined either, and the two can
-        // never drift apart. See `paths::runs_on_open` for what this covers
-        // and, more importantly, what it does not.
-        let path = path.filter(|p| !crate::paths::runs_on_open(p));
+        // never drift apart.
+        //
+        // Judged on `real`, never on `path`: a symlink named `notes.md` that
+        // points at `payload.app` is a document by name and a program by
+        // nature, and it is the nature the opener acts on. See
+        // `paths::runs_on_open` for what this covers and what it does not.
+        let path = resolved
+            .filter(|r| !crate::paths::runs_on_open(&r.real))
+            .map(|r| r.path);
         match request.purpose {
             PathPurpose::Hover => {
                 // The pointer may have moved on while the `stat` ran. Applying a
@@ -239,8 +257,10 @@ impl App {
         session: SessionId,
         probe: TargetProbe,
     ) -> Vec<Effect> {
-        self.hover = None;
-        self.pending_path = None;
+        if self.hovers(session) {
+            self.hover = None;
+        }
+        self.clear_pending_for(session);
         match probe.kind {
             ProbeKind::Url(url) => {
                 let url = url.trim();
@@ -288,6 +308,22 @@ impl App {
         self.hover.as_ref().is_some_and(|h| h.session == session)
     }
 
+    /// Drop the outstanding resolution **only if it is this session's**.
+    ///
+    /// One predicate rather than the condition written out at each of the three
+    /// sites that clear it: every canvas in the tree sees every pointer event,
+    /// so "whoever speaks last wins" is never the rule here — and an invariant
+    /// spelled three times drifts on the first edit that touches one of them.
+    fn clear_pending_for(&mut self, session: SessionId) {
+        if self
+            .pending_path
+            .as_ref()
+            .is_some_and(|pending| pending.session == session)
+        {
+            self.pending_path = None;
+        }
+    }
+
     /// The clickable target under the pointer, if any.
     #[must_use]
     pub const fn term_hover(&self) -> Option<&TermHover> {
@@ -319,6 +355,14 @@ mod tests {
                 line: Some(42),
                 col: None,
             },
+        }
+    }
+
+    /// A resolution with no symlink in the way: the two forms coincide.
+    fn plain(path: &str) -> ResolvedPath {
+        ResolvedPath {
+            path: path.into(),
+            real: path.into(),
         }
     }
 
@@ -407,12 +451,70 @@ mod tests {
         });
         app.apply(Event::PathResolved {
             request,
-            path: Some("/repo/src/main.rs".into()),
+            resolved: Some(plain("/repo/src/main.rs")),
         });
         assert!(
             app.term_hover().is_some(),
             "the resolution survived the sibling pane's empty report"
         );
+    }
+
+    #[test]
+    fn no_branch_clears_another_sessions_pending_resolution() {
+        // The session-scoped rule holds at *every* site that clears it, not
+        // just at the empty-probe one. Two of the three used to clear
+        // unconditionally: one invariant, three spellings, two of them wrong.
+        // Derived from the branches themselves rather than a hand-listed set,
+        // so a new way to clear cannot quietly opt out.
+        /// One way the app clears state, named so the failure says which.
+        type Clear = (&'static str, Box<dyn Fn(&mut App)>);
+        let clears: [Clear; 3] = [
+            (
+                "an empty probe",
+                Box::new(|app: &mut App| {
+                    app.apply(Event::TermTarget {
+                        session: sid(2),
+                        probe: None,
+                    });
+                }),
+            ),
+            (
+                "a URL settling",
+                Box::new(|app: &mut App| {
+                    app.apply(Event::TermTarget {
+                        session: sid(2),
+                        probe: Some(url_probe()),
+                    });
+                }),
+            ),
+            (
+                "an activation",
+                Box::new(|app: &mut App| {
+                    app.apply(Event::ActivateTarget {
+                        session: sid(2),
+                        probe: url_probe(),
+                    });
+                }),
+            ),
+        ];
+        for (what, act) in clears {
+            let mut app = App::new();
+            let effects = app.apply(Event::TermTarget {
+                session: sid(1),
+                probe: Some(path_probe()),
+            });
+            let (request, _) = resolve_request(&effects);
+            let request = request.clone();
+            act(&mut app);
+            app.apply(Event::PathResolved {
+                request,
+                resolved: Some(plain("/repo/src/main.rs")),
+            });
+            assert!(
+                app.term_hover().is_some_and(|h| h.session == sid(1)),
+                "{what} in another pane must not cancel this resolution"
+            );
+        }
     }
 
     #[test]
@@ -452,7 +554,7 @@ mod tests {
             resolved
                 .apply(Event::PathResolved {
                     request: pending,
-                    path: Some("/repo/src/main.rs".into()),
+                    resolved: Some(plain("/repo/src/main.rs")),
                 })
                 .is_empty()
         );
@@ -470,7 +572,7 @@ mod tests {
         assert!(
             app.apply(Event::PathResolved {
                 request,
-                path: None
+                resolved: None
             })
             .is_empty()
         );
@@ -494,7 +596,7 @@ mod tests {
         });
         app.apply(Event::PathResolved {
             request: stale,
-            path: Some("/repo/src/main.rs".into()),
+            resolved: Some(plain("/repo/src/main.rs")),
         });
         assert_eq!(app.term_hover(), None);
     }
@@ -569,7 +671,7 @@ mod tests {
         let request = request.clone();
         let opened = app.apply(Event::PathResolved {
             request: request.clone(),
-            path: Some("/repo/src/main.rs".into()),
+            resolved: Some(plain("/repo/src/main.rs")),
         });
         assert!(matches!(
             opened.as_slice(),
@@ -583,7 +685,7 @@ mod tests {
         assert!(
             app.apply(Event::PathResolved {
                 request,
-                path: None
+                resolved: None
             })
             .is_empty()
         );
@@ -616,7 +718,7 @@ mod tests {
             // The resolver found it: it really is on disk.
             app.apply(Event::PathResolved {
                 request,
-                path: Some(format!("/repo/{program}").into()),
+                resolved: Some(plain(&format!("/repo/{program}"))),
             });
             assert_eq!(app.term_hover(), None, "{program} must not underline");
 
@@ -629,12 +731,66 @@ mod tests {
             assert!(
                 app.apply(Event::PathResolved {
                     request,
-                    path: Some(format!("/repo/{program}").into()),
+                    resolved: Some(plain(&format!("/repo/{program}"))),
                 })
                 .is_empty(),
                 "{program} must not open"
             );
         }
+    }
+
+    #[test]
+    fn a_symlink_is_judged_by_what_it_points_at_not_by_its_name() {
+        // The counterpart of the adapter's symlink test, on this side of the
+        // port: given a document name and a program behind it, the refusal must
+        // follow the program. Reading `path` here instead of `real` is exactly
+        // the bug, and it would look correct.
+        let probe = TargetProbe {
+            row: 3,
+            start: 0,
+            end: 8,
+            kind: ProbeKind::Path {
+                candidate: "notes.md".into(),
+                line: None,
+                col: None,
+            },
+        };
+        let disguised = ResolvedPath {
+            path: "/repo/notes.md".into(),
+            real: "/repo/payload.app".into(),
+        };
+
+        let mut app = App::new();
+        let effects = app.apply(Event::TermTarget {
+            session: sid(1),
+            probe: Some(probe.clone()),
+        });
+        let (request, _) = resolve_request(&effects);
+        let request = request.clone();
+        app.apply(Event::PathResolved {
+            request,
+            resolved: Some(disguised.clone()),
+        });
+        assert_eq!(
+            app.term_hover(),
+            None,
+            "a document name over a program is not underlined"
+        );
+
+        let opened = app.apply(Event::ActivateTarget {
+            session: sid(1),
+            probe,
+        });
+        let (request, _) = resolve_request(&opened);
+        let request = request.clone();
+        assert!(
+            app.apply(Event::PathResolved {
+                request,
+                resolved: Some(disguised),
+            })
+            .is_empty(),
+            "and it does not open either"
+        );
     }
 
     #[test]

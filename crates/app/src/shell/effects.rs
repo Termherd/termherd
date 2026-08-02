@@ -80,10 +80,10 @@ impl Shell {
                 let resolver = self.path_resolver.clone();
                 return Task::perform(
                     async move {
-                        let path = resolver.resolve(&request.candidate, &roots);
-                        (request, path)
+                        let resolved = resolver.resolve(&request.candidate, &roots);
+                        (request, resolved)
                     },
-                    |(request, path)| Message::PathResolved { request, path },
+                    |(request, resolved)| Message::PathResolved { request, resolved },
                 );
             }
             Effect::Notify { title, body } => notify(&title, &body),
