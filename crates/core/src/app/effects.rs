@@ -10,7 +10,7 @@ use crate::metadata::Overlay;
 use crate::snapshot::WorkspaceSnapshot;
 use crate::workspace::SessionId;
 
-use super::{ScrollTarget, SelectOp, SpawnSpec};
+use super::{PathRequest, PathRoots, ScrollTarget, SelectOp, SpawnSpec};
 
 /// Side effects the runtime must perform. The iced shell turns these into
 /// `pty`-adapter calls (`docs/ARCHITECTURE.md` §8).
@@ -45,6 +45,26 @@ pub enum Effect {
     SaveCollapsed(HashSet<String>),
     /// Open a URL in the OS default handler; the shell performs it.
     OpenUrl(String),
+    /// Check whether a path-shaped run of terminal text names a real file, via
+    /// [`ports::PathResolver`](crate::ports::PathResolver). The answer comes
+    /// back as [`Event::PathResolved`](super::Event::PathResolved), carrying
+    /// `request` so `core` knows which question it answers.
+    ///
+    /// This is the effect that keeps `core` pure while still letting prose like
+    /// `and/or` be told from `src/main.rs`: only the filesystem knows, and only
+    /// an adapter may ask it.
+    ResolvePath {
+        request: PathRequest,
+        roots: PathRoots,
+    },
+    /// Open a resolved file in the OS default handler. `line`/`col` are what
+    /// the terminal printed beside it; the OS handoff cannot honour them, so
+    /// they ride along for the configurable editor command that follows.
+    OpenPath {
+        path: std::path::PathBuf,
+        line: Option<u32>,
+        col: Option<u32>,
+    },
     /// Post a desktop notification to the OS notification centre. The
     /// shell performs it; `title` names the session/project that wants the
     /// user, `body` is Claude's message.

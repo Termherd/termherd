@@ -24,6 +24,11 @@ pub struct LiveSession {
     /// the shell announces otherwise ([`Event::SessionCwdChanged`]), so every
     /// reader sees where the session *is* rather than where it started.
     pub cwd: Option<String>,
+    /// The directory the PTY was *launched* in, never rewritten. `cwd` moves
+    /// with every `cd`, so after one it is the only remaining trace of the
+    /// project a session belongs to — which is the outermost root a path
+    /// printed in this terminal could be relative to.
+    pub launch_cwd: Option<String>,
     /// What this terminal is running — a shell or a (possibly resumed) Claude
     /// session. The resumed-id lets the sidebar map a browsed session row to its
     /// live activity (FR8); read it via [`Launch::resume_id`].
@@ -254,6 +259,7 @@ impl App {
         self.sessions.insert(LiveSession {
             id,
             cwd: spec.cwd.clone(),
+            launch_cwd: spec.cwd.clone(),
             launch: spec.launch.clone(),
             status: SessionStatus::Starting,
         });
@@ -287,6 +293,7 @@ impl App {
         self.sessions.insert(LiveSession {
             id,
             cwd: cwd.clone(),
+            launch_cwd: cwd.clone(),
             launch: Launch::Shell,
             status: SessionStatus::Starting,
         });

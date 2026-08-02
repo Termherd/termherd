@@ -6,8 +6,7 @@
 //! resulting spans, so every one is exhaustively unit-testable.
 
 use iced::{Rectangle, mouse};
-use termherd_core::workspace::SessionId;
-use termherd_core::{HoverTarget, SelectSide, TermHover};
+use termherd_core::{ProbeKind, SelectSide, TargetProbe};
 use termherd_pty::Screen;
 
 /// The grid cell under the cursor, if any.
@@ -48,24 +47,43 @@ pub(super) fn cell_side(cursor: mouse::Cursor, bounds: Rectangle, cols: u16) -> 
 /// The clickable target under grid cell `(col, row)`, if any. Builds the row's
 /// text from its cells — one char per cell, so a `core::links` char-index span
 /// maps straight onto columns — and returns the span containing `col`.
-pub(super) fn link_at(
-    screen: &Screen,
-    session: SessionId,
-    col: u16,
-    row: u16,
-) -> Option<TermHover> {
+///
+/// A URL wins over a path: `https://ex.io/a/b` is path-shaped after its scheme,
+/// and opening it in an editor is never what was meant. What comes back is a
+/// *probe*, not an answer — only `core`, through the resolver port, can say
+/// whether a path-shaped run is a file.
+pub(super) fn target_at(screen: &Screen, col: u16, row: u16) -> Option<TargetProbe> {
     let line = screen.lines.get(row as usize)?;
     let text: String = line.iter().map(|cell| cell.c).collect();
-    let span = termherd_core::links::detect(&text)
+    let here = col as usize;
+    let read = |span: core::ops::Range<usize>| -> String {
+        line.get(span)
+            .map(|c| c.iter().map(|c| c.c).collect())
+            .unwrap_or_default()
+    };
+    if let Some(span) = termherd_core::links::detect(&text)
         .into_iter()
-        .find(|span| span.contains(&(col as usize)))?;
-    let url: String = line[span.clone()].iter().map(|cell| cell.c).collect();
-    Some(TermHover {
-        session,
+        .find(|span| span.contains(&here))
+    {
+        return Some(TargetProbe {
+            row,
+            start: span.start as u16,
+            end: span.end as u16,
+            kind: ProbeKind::Url(read(span)),
+        });
+    }
+    let span = termherd_core::paths::detect(&text)
+        .into_iter()
+        .find(|span| span.range.contains(&here))?;
+    Some(TargetProbe {
         row,
-        start: span.start as u16,
-        end: span.end as u16,
-        target: HoverTarget::Url(url),
+        start: span.range.start as u16,
+        end: span.range.end as u16,
+        kind: ProbeKind::Path {
+            candidate: read(span.target),
+            line: span.line,
+            col: span.col,
+        },
     })
 }
 
@@ -178,16 +196,39 @@ mod tests {
     }
 
     #[test]
-    fn link_at_finds_the_url_under_a_column() {
+    fn target_at_finds_the_url_under_a_column() {
         // the column maps onto the detected span and yields its URL.
         let screen = screen_from("see https://ex.io now");
-        let session = SessionId(std::num::NonZeroU64::MIN);
-        let link = link_at(&screen, session, 6, 0).expect("column 6 is inside the URL");
-        assert_eq!(link.target, HoverTarget::Url("https://ex.io".into()));
-        assert_eq!((link.session, link.row), (session, 0));
-        assert_eq!((link.start, link.end), (4, 17));
-        // A column off the URL has no link.
-        assert!(link_at(&screen, session, 0, 0).is_none());
+        let probe = target_at(&screen, 6, 0).expect("column 6 is inside the URL");
+        assert_eq!(probe.kind, ProbeKind::Url("https://ex.io".into()));
+        assert_eq!((probe.row, probe.start, probe.end), (0, 4, 17));
+        // A column off any target has none.
+        assert!(target_at(&screen, 0, 0).is_none());
+    }
+
+    #[test]
+    fn target_at_finds_a_path_candidate_and_splits_its_position() {
+        let screen = screen_from("at crates/pty/src/grid.rs:184 now");
+        let probe = target_at(&screen, 10, 0).expect("column 10 is inside the path");
+        assert_eq!(
+            probe.kind,
+            ProbeKind::Path {
+                candidate: "crates/pty/src/grid.rs".into(),
+                line: Some(184),
+                col: None,
+            }
+        );
+        // The whole run underlines, `:184` included — that is what was aimed at.
+        assert_eq!((probe.start, probe.end), (3, 29));
+    }
+
+    #[test]
+    fn a_url_wins_over_the_path_shape_inside_it() {
+        // `https://ex.io/a/b` is path-shaped after its scheme. Opening it in an
+        // editor is never what was meant.
+        let screen = screen_from("see https://ex.io/a/b now");
+        let probe = target_at(&screen, 15, 0).expect("column 15 is inside the URL");
+        assert_eq!(probe.kind, ProbeKind::Url("https://ex.io/a/b".into()));
     }
 
     #[test]

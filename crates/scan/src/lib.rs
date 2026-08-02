@@ -32,6 +32,7 @@
 
 mod cache;
 mod derive;
+mod paths;
 mod repo;
 mod walk;
 mod watch;
@@ -46,6 +47,7 @@ use tracing::{debug, warn};
 use cache::ScanCache;
 use walk::scan_root;
 
+pub use paths::FsPathResolver;
 pub use repo::repo_root;
 pub use watch::{WatchHandle, watch_changes};
 

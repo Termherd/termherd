@@ -9,6 +9,7 @@ pub mod docscope;
 pub mod keymap;
 pub mod links;
 pub mod metadata;
+pub mod paths;
 pub mod ports;
 pub mod record;
 pub mod snapshot;
@@ -16,7 +17,8 @@ pub mod workspace;
 
 pub use app::{
     App, DEFAULT_FONT_SIZE, Effect, Event, HoverTarget, Launch, LaunchSpec, LiveSession, McpConfig,
-    ScrollTarget, SelectOp, SelectSide, SessionStatus, SidebarFold, SpawnSpec, TermHover, Zoom,
+    PathPurpose, PathRequest, PathRoots, ProbeKind, ScrollTarget, SelectOp, SelectSide,
+    SessionStatus, SidebarFold, SpawnSpec, TargetProbe, TermHover, Zoom,
 };
 pub use browser::{ProjectGroup, SessionRecord};
 pub use keymap::{Action, ActionBinding, ChordError, KeyChord, Keymap, action_catalog};

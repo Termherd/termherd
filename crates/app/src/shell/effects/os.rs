@@ -11,6 +11,15 @@ use termherd_core::ports::PtyError;
 #[cfg(target_os = "macos")]
 const MACOS_BUNDLE_ID: &str = "dev.termherd";
 
+/// Hand a resolved file to the OS default handler — the same three openers a
+/// URL takes, since each accepts a path as readily as a URL. The `:line` the
+/// terminal printed cannot survive this handoff: no OS opener takes a
+/// position. Carrying it this far is what lets the configurable editor command
+/// honour it later without re-deriving anything.
+pub(super) fn open_path(path: &std::path::Path) -> Result<(), PtyError> {
+    open_url(&path.to_string_lossy())
+}
+
 /// Hand a detected link to the OS default handler. Fire-and-forget: the
 /// child opener is spawned, not waited on. `url` has already been validated by
 /// `core` (a recognised scheme, trimmed), and is always passed as a single

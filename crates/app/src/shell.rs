@@ -21,7 +21,7 @@ use iced::advanced::widget::{self, operate, operation::focusable};
 use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::widget::text_editor;
 use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
-use termherd_core::ports::{ProjectScanner, PtyHost};
+use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
     ConfigInput, Keymap, Launch, Overlay, ScrollTarget, SelectOp, SessionRecord, SessionStatus,
@@ -143,6 +143,7 @@ impl Startup {
 pub fn run(
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
+    path_resolver: Arc<dyn PathResolver>,
     pty: Arc<dyn PtyHost>,
     pty_rx: UnboundedReceiver<PtyEvent>,
     live_bridge: LiveBridge,
@@ -164,6 +165,7 @@ pub fn run(
                 config,
                 scanner.clone(),
                 watch_root.clone(),
+                path_resolver.clone(),
                 pty.clone(),
                 pty_output.clone(),
                 live_bridge.clone(),
@@ -232,6 +234,9 @@ struct Shell {
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
     scan_error: Option<String>,
+    /// Checks whether a path-shaped run of terminal text names a real file.
+    /// The one thing that tells `src/main.rs` from `and/or`.
+    path_resolver: Arc<dyn PathResolver>,
     /// The PTY host adapter; effects from `core` are performed against it.
     pty: Arc<dyn PtyHost>,
     /// Streams PTY output/exit into the subscription (taken once).
@@ -514,9 +519,21 @@ enum Message {
     CloseDoc,
     /// The clickable target now under the pointer in a terminal, or `None` when
     /// the pointer left every one. The canvas finds it; `core` owns it.
-    TermHover(Option<termherd_core::TermHover>),
-    /// Open a Ctrl/Cmd+clicked terminal link in the OS default handler.
-    OpenUrl(String),
+    TermTarget {
+        session: termherd_core::SessionId,
+        probe: Option<termherd_core::TargetProbe>,
+    },
+    /// The user Ctrl/Cmd+clicked a terminal target — a URL or a file path.
+    ActivateTarget {
+        session: termherd_core::SessionId,
+        probe: termherd_core::TargetProbe,
+    },
+    /// A path candidate came back from the resolver: the file it names, or
+    /// `None` when it names none.
+    PathResolved {
+        request: termherd_core::PathRequest,
+        path: Option<PathBuf>,
+    },
     /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
     /// runs off the UI thread, so this only spawns it.
@@ -608,6 +625,7 @@ impl Shell {
         bounds: WindowConfig,
         scanner: Arc<dyn ProjectScanner>,
         watch_root: Option<PathBuf>,
+        path_resolver: Arc<dyn PathResolver>,
         pty: Arc<dyn PtyHost>,
         pty_output: PtyOutput,
         live_bridge: LiveBridge,
@@ -631,6 +649,7 @@ impl Shell {
             scanner,
             watch_root,
             scan_error: None,
+            path_resolver,
             pty,
             pty_output,
             bridge_requests,
@@ -1160,12 +1179,22 @@ impl Shell {
                 self.open_doc = None;
                 Task::none()
             }
-            Message::TermHover(hover) => {
-                let effects = self.core.apply(termherd_core::Event::TermHover(hover));
+            Message::TermTarget { session, probe } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::TermTarget { session, probe });
                 self.perform(effects)
             }
-            Message::OpenUrl(url) => {
-                let effects = self.core.apply(termherd_core::Event::OpenUrl(url));
+            Message::ActivateTarget { session, probe } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::ActivateTarget { session, probe });
+                self.perform(effects)
+            }
+            Message::PathResolved { request, path } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::PathResolved { request, path });
                 self.perform(effects)
             }
             Message::CaptureScreenshot {
@@ -1407,6 +1436,7 @@ mod key_routing {
             WindowConfig::default(),
             Arc::new(EmptyScanner),
             None,
+            Arc::new(termherd_scan::FsPathResolver),
             pty,
             PtyOutput::new(rx),
             test_live_bridge(),
@@ -3506,6 +3536,7 @@ mod key_routing {
             WindowConfig::default(),
             Arc::new(EmptyScanner),
             None,
+            Arc::new(termherd_scan::FsPathResolver),
             pty.clone(),
             PtyOutput::new(rx),
             test_live_bridge(),

@@ -4,9 +4,10 @@
 //! Signatures grow as adapters land (scan in M1, store in M1, pty in M2).
 //! The dependency rule: `core` declares ports, never imports adapters.
 
+use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::app::{ScrollTarget, SelectOp, SpawnSpec};
+use crate::app::{PathRoots, ScrollTarget, SelectOp, SpawnSpec};
 use crate::browser::SessionRecord;
 use crate::workspace::SessionId;
 
@@ -25,6 +26,26 @@ pub trait ProjectScanner: Send + Sync {
 pub enum ScanError {
     #[error("projects directory not readable: {0}")]
     Unreadable(String),
+}
+
+/// Turn a path-shaped run of terminal text into a file that actually exists.
+/// Implemented by `crates/scan`, called when the pointer rests on a candidate
+/// with the link modifier held, and again on the click.
+///
+/// **This is the filter that makes the feature usable.** `core::paths::detect`
+/// is deliberately syntactic, so `and/or` and `http/2` reach here looking
+/// exactly like `src/main.rs`; returning [`None`] for them is what keeps half
+/// the screen from underlining. A candidate that resolves nowhere — prose, or a
+/// real path on the far side of an ssh session — is simply not a link.
+pub trait PathResolver: Send + Sync {
+    /// The existing file `candidate` names, or [`None`].
+    ///
+    /// An absolute candidate is checked as-is. A relative one is tried against
+    /// each root in [`PathRoots`] in order, most specific first: `cargo`, `git`
+    /// and `pytest` each print relative to a different directory, so the same
+    /// text can be meaningful from more than one — and the innermost match is
+    /// the one the user meant.
+    fn resolve(&self, candidate: &str, roots: &PathRoots) -> Option<PathBuf>;
 }
 
 /// Real signatures land with the `store` adapter in M1.

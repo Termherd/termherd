@@ -9,13 +9,13 @@ use iced::advanced::text::Shaping;
 use iced::widget::canvas::{self, Frame, Geometry, Text};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme, mouse};
 use termherd_core::workspace::SessionId;
-use termherd_core::{HoverTarget, SelectOp, SelectSide, TermHover};
+use termherd_core::{HoverTarget, ProbeKind, SelectOp, SelectSide, TargetProbe, TermHover};
 use termherd_pty::Screen;
 
 use crate::shell::Message;
 
 use super::cell_size;
-use super::selection::{cell_at, cell_side, link_at, word_at, word_text};
+use super::selection::{cell_at, cell_side, target_at, word_at, word_text};
 
 /// A canvas program that draws the visible terminal grid with per-cell colour
 /// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
@@ -62,10 +62,10 @@ pub(in crate::shell) struct TermState {
     /// the selection; a bare click (press and release on one cell) clears it.
     dragged: bool,
     owner: Option<SessionId>,
-    /// The last hover this canvas published, kept **only** to avoid re-sending
+    /// The last probe this canvas published, kept **only** to avoid re-sending
     /// the same one on every pointer move. `core` holds the hover that is
     /// actually drawn; this is an outbound echo, not a second source of truth.
-    sent: Option<TermHover>,
+    sent: Option<TargetProbe>,
     /// The last left-button press, kept so iced's click tracker can tell a
     /// double-click (select the word/filename under it) from a single one.
     last_click: Option<Click>,
@@ -181,16 +181,18 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 let (col, row) = cell_at(cursor, bounds, self.screen)?;
                 // Ctrl/Cmd+click on a link opens it rather than selecting.
                 if self.link_modifier
-                    && let Some(link) = link_at(self.screen, self.session, col, row)
+                    && let Some(probe) = target_at(self.screen, col, row)
                 {
                     // The click hands off to the OS (often stealing focus, so
                     // no further pointer events arrive); `core` drops the hover
-                    // as it opens, so the hand cursor and underline don't
+                    // as it activates, so the hand cursor and underline don't
                     // outlive the gesture. Forget the echo too, so the next
-                    // move over the same link re-publishes it.
+                    // move over the same target re-publishes it.
                     state.sent = None;
-                    let HoverTarget::Url(url) = link.target;
-                    return Some(canvas::Action::publish(Message::OpenUrl(url)));
+                    return Some(canvas::Action::publish(Message::ActivateTarget {
+                        session: self.session,
+                        probe,
+                    }));
                 }
                 // Shift+click extends the existing selection: keep its anchor
                 // and move the head to the clicked cell, entering the drag
@@ -257,10 +259,13 @@ impl canvas::Program<Message> for TerminalView<'_> {
                     .link_modifier
                     .then(|| cell_at(cursor, bounds, self.screen))
                     .flatten()
-                    .and_then(|(col, row)| link_at(self.screen, self.session, col, row));
+                    .and_then(|(col, row)| target_at(self.screen, col, row));
                 (next != state.sent).then(|| {
                     state.sent = next.clone();
-                    canvas::Action::publish(Message::TermHover(next))
+                    canvas::Action::publish(Message::TermTarget {
+                        session: self.session,
+                        probe: next,
+                    })
                 })
             }
             mouse::Event::ButtonReleased(mouse::Button::Left) if state.selecting => {
@@ -685,6 +690,44 @@ mod tests {
     }
 
     #[test]
+    fn hovering_a_path_publishes_a_candidate_and_underlines_nothing_yet() {
+        // The canvas cannot know whether a path-shaped run is a file, so it
+        // publishes a candidate and draws nothing until `core` answers.
+        use canvas::Program;
+        let screen = screen_from("crates/pty/src/grid.rs:184");
+        let len = "crates/pty/src/grid.rs:184".len();
+        let view = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: true,
+            hover: None,
+            shift: false,
+            font_size: 14.0,
+            dimmed: false,
+        };
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
+        assert_eq!(
+            state.sent,
+            Some(TargetProbe {
+                row: 0,
+                start: 0,
+                end: len as u16,
+                kind: ProbeKind::Path {
+                    candidate: "crates/pty/src/grid.rs".into(),
+                    line: Some(184),
+                    col: None,
+                },
+            })
+        );
+        assert_ne!(
+            view.mouse_interaction(&state, test_bounds(), at_col(len, 2)),
+            mouse::Interaction::Pointer,
+            "an unresolved candidate is not yet clickable"
+        );
+    }
+
+    #[test]
     fn the_hand_cursor_follows_cores_hover_and_its_session() {
         // The canvas is reused across tabs, so a hover belonging to another
         // session must not turn *this* pane's pointer into a hand.
@@ -764,15 +807,14 @@ mod tests {
         };
         let mut state = TermState::default();
         let action = held.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
-        assert!(action.is_some(), "entering a link publishes a hover");
+        assert!(action.is_some(), "entering a link publishes a probe");
         assert_eq!(
             state.sent,
-            Some(TermHover {
-                session: sid(1),
+            Some(TargetProbe {
                 row: 0,
                 start: 0,
                 end: len as u16,
-                target: HoverTarget::Url("https://ex.io".into()),
+                kind: ProbeKind::Url("https://ex.io".into()),
             })
         );
         // Staying on the same link publishes nothing further — the echo exists

@@ -28,7 +28,7 @@ mod window_geometry;
 
 use std::sync::Arc;
 
-use termherd_core::ports::{ProjectScanner, PtyHost, ScanError};
+use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost, ScanError};
 use termherd_pty::{EventSink, PtyEvent, PtyManager, Shell};
 use termherd_scan::FsScanner;
 use tracing::{info, warn};
@@ -111,7 +111,18 @@ fn main() -> iced::Result {
     };
     let startup =
         shell::Startup::from_settings(&settings, metadata_store::load(), collapsed_store::load());
-    let result = shell::run(scanner, watch_root, pty, pty_rx, live_bridge, startup);
+    // Terminal path candidates are checked against the real filesystem — the
+    // one thing that tells `src/main.rs` from prose like `and/or`.
+    let path_resolver: Arc<dyn PathResolver> = Arc::new(termherd_scan::FsPathResolver);
+    let result = shell::run(
+        scanner,
+        watch_root,
+        path_resolver,
+        pty,
+        pty_rx,
+        live_bridge,
+        startup,
+    );
     // Keep the single-instance guard and the async substrate alive until the GUI
     // exits: dropping the bridge handle would close the request channel, and
     // dropping the runtime would tear down any transport task hosted on it.

@@ -20,7 +20,7 @@ use termherd_core::{
 
 use super::bridge::Request;
 use super::{Message, Shell};
-use os::{notify, open_url};
+use os::{notify, open_path, open_url};
 
 impl Shell {
     /// Carry out every effect `core` asked for, returning any async follow-up
@@ -68,6 +68,25 @@ impl Shell {
             }
             // Opening a link and a desktop notification are OS handoffs.
             Effect::OpenUrl(url) => open_url(&url),
+            Effect::OpenPath { path, .. } => open_path(&path),
+            // A `stat` per root is filesystem work: it runs off the UI thread,
+            // and its answer comes back as an event like any other.
+            Effect::ResolvePath { request, roots } => {
+                let resolver = self.path_resolver.clone();
+                return Task::perform(
+                    async move {
+                        let candidate = request.candidate.clone();
+                        let path = tokio::task::spawn_blocking(move || {
+                            resolver.resolve(&candidate, &roots)
+                        })
+                        .await
+                        .ok()
+                        .flatten();
+                        (request, path)
+                    },
+                    |(request, path)| Message::PathResolved { request, path },
+                );
+            }
             Effect::Notify { title, body } => notify(&title, &body),
             // Capture writes the dump and schedules the PNG; record drives the
             // encoder thread. Both return a task the loop above batches in.
