@@ -516,6 +516,18 @@ issues, so a scoped roadmap item with no issue is invisible):
   live in the roadmap alone) is checkable. Reconciling the roadmap stays a
   human read; the script's own docstring records why. Run it before a planning
   pass.
+- **Filing an issue is not the end of filing it.** Since 2026-08-02 the
+  project's *Auto-add to project* workflow puts every new issue on the board by
+  itself, so an issue filed from now on is never *absent* — only unclassified,
+  its `Horizon`, `Effort` and `Severity`/`Class` empty, which keeps it out of
+  every prioritised view until someone fills them. Fill them in the same pass
+  that files the issue. What escapes is not filing, it is filing *while doing
+  something else*: #244, #246 and #248 were opened within seven hours of each
+  other, each in the middle of the work that produced it, and none of the three
+  reached the board at all until a check three days later put them there by
+  hand. The auto-add is what turns that omission from invisible into
+  reportable — an unclassified item is a `board-check` warning, where an
+  absent one showed up nowhere but in the one command nobody had run.
 - **`just roadmap` recompiles and validates the roadmap** — schema, duplicate
   ids, and links to a feature id nothing declares. It is the roadmap's
   counterpart to `board-check`: that one checks the board against the issues,

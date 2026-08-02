@@ -10,6 +10,12 @@ three ways that happens:
   * an open issue missing a field its native type owes
   * a board item whose `Status` and `Horizon` disagree about having shipped
 
+The first is a backstop rather than the common case: since 2026-08-02 the
+project's *Auto-add to project* workflow puts every new issue on the board by
+itself, so absence now means either that the issue predates that date or that
+the workflow has since been turned off — both worth knowing. What escapes
+routinely is the second finding: an item present but unclassified.
+
 What each type owes:
 
   | type      | Horizon | Class | Severity | Effort |
