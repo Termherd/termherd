@@ -11,7 +11,7 @@ use crate::metadata::Overlay;
 use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
 
-use super::{LaunchSpec, ScrollTarget, SelectOp, SessionStatus, Zoom};
+use super::{LaunchSpec, ScrollTarget, SelectOp, SessionStatus, TermHover, Zoom};
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -148,6 +148,11 @@ pub enum Event {
     FontSizeLoaded(f32),
     /// Zoom the terminal font in/out/back to base.
     Zoom(Zoom),
+    /// The clickable target now under the pointer in a terminal, or `None`
+    /// when the pointer left every target (or the modifier is not held). The
+    /// shell finds the span — only it holds the grid — and `core` owns the
+    /// answer, so one place decides what is underlined. See [`TermHover`].
+    TermHover(Option<TermHover>),
     /// The user Ctrl/Cmd+clicked a detected link in a terminal.
     OpenUrl(String),
     /// A session emitted an OSC 9 notification — Claude wants the user.

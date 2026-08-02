@@ -6,18 +6,9 @@
 //! resulting spans, so every one is exhaustively unit-testable.
 
 use iced::{Rectangle, mouse};
-use termherd_core::SelectSide;
+use termherd_core::workspace::SessionId;
+use termherd_core::{HoverTarget, SelectSide, TermHover};
 use termherd_pty::Screen;
-
-/// A link the pointer is hovering with Ctrl/Cmd held — what to highlight and,
-/// on click, what to open.
-#[derive(Clone, PartialEq, Eq)]
-pub(super) struct HoverLink {
-    pub(super) row: u16,
-    pub(super) start: u16,
-    pub(super) end: u16,
-    pub(super) url: String,
-}
 
 /// The grid cell under the cursor, if any.
 pub(super) fn cell_at(
@@ -54,21 +45,27 @@ pub(super) fn cell_side(cursor: mouse::Cursor, bounds: Rectangle, cols: u16) -> 
     }
 }
 
-/// The link under grid cell `(col, row)`, if any. Builds the row's text
-/// from its cells — one char per cell, so a `core::links` char-index span maps
-/// straight onto columns — and returns the span containing `col`.
-pub(super) fn link_at(screen: &Screen, col: u16, row: u16) -> Option<HoverLink> {
+/// The clickable target under grid cell `(col, row)`, if any. Builds the row's
+/// text from its cells — one char per cell, so a `core::links` char-index span
+/// maps straight onto columns — and returns the span containing `col`.
+pub(super) fn link_at(
+    screen: &Screen,
+    session: SessionId,
+    col: u16,
+    row: u16,
+) -> Option<TermHover> {
     let line = screen.lines.get(row as usize)?;
     let text: String = line.iter().map(|cell| cell.c).collect();
     let span = termherd_core::links::detect(&text)
         .into_iter()
         .find(|span| span.contains(&(col as usize)))?;
     let url: String = line[span.clone()].iter().map(|cell| cell.c).collect();
-    Some(HoverLink {
+    Some(TermHover {
+        session,
         row,
         start: span.start as u16,
         end: span.end as u16,
-        url,
+        target: HoverTarget::Url(url),
     })
 }
 
@@ -184,11 +181,13 @@ mod tests {
     fn link_at_finds_the_url_under_a_column() {
         // the column maps onto the detected span and yields its URL.
         let screen = screen_from("see https://ex.io now");
-        let link = link_at(&screen, 6, 0).expect("column 6 is inside the URL");
-        assert_eq!(link.url, "https://ex.io");
+        let session = SessionId(std::num::NonZeroU64::MIN);
+        let link = link_at(&screen, session, 6, 0).expect("column 6 is inside the URL");
+        assert_eq!(link.target, HoverTarget::Url("https://ex.io".into()));
+        assert_eq!((link.session, link.row), (session, 0));
         assert_eq!((link.start, link.end), (4, 17));
         // A column off the URL has no link.
-        assert!(link_at(&screen, 0, 0).is_none());
+        assert!(link_at(&screen, session, 0, 0).is_none());
     }
 
     #[test]

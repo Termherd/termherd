@@ -9,13 +9,13 @@ use iced::advanced::text::Shaping;
 use iced::widget::canvas::{self, Frame, Geometry, Text};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme, mouse};
 use termherd_core::workspace::SessionId;
-use termherd_core::{SelectOp, SelectSide};
+use termherd_core::{HoverTarget, SelectOp, SelectSide, TermHover};
 use termherd_pty::Screen;
 
 use crate::shell::Message;
 
 use super::cell_size;
-use super::selection::{HoverLink, cell_at, cell_side, link_at, word_at, word_text};
+use super::selection::{cell_at, cell_side, link_at, word_at, word_text};
 
 /// A canvas program that draws the visible terminal grid with per-cell colour
 /// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
@@ -31,6 +31,11 @@ pub(in crate::shell) struct TerminalView<'a> {
     /// Whether the link-open modifier (Ctrl/Cmd) is held, so a hovered link
     /// highlights and a click opens it instead of selecting text.
     pub(in crate::shell) link_modifier: bool,
+    /// The clickable target under the pointer, owned by `core::App`. The canvas
+    /// *finds* it (only it holds the grid) but does not keep it: whether a span
+    /// is a target can depend on an answer that arrives asynchronously, and an
+    /// answer is an `Event`, which only `core` can take.
+    pub(in crate::shell) hover: Option<&'a TermHover>,
     /// Whether Shift is held, so a click extends the existing selection to the
     /// clicked cell (keep the anchor, move the head) instead of restarting it.
     pub(in crate::shell) shift: bool,
@@ -57,9 +62,10 @@ pub(in crate::shell) struct TermState {
     /// the selection; a bare click (press and release on one cell) clears it.
     dragged: bool,
     owner: Option<SessionId>,
-    /// The link currently under the pointer while the modifier is held:
-    /// its row, column span `[start, end)`, and the URL to open on click.
-    hover: Option<HoverLink>,
+    /// The last hover this canvas published, kept **only** to avoid re-sending
+    /// the same one on every pointer move. `core` holds the hover that is
+    /// actually drawn; this is an outbound echo, not a second source of truth.
+    sent: Option<TermHover>,
     /// The last left-button press, kept so iced's click tracker can tell a
     /// double-click (select the word/filename under it) from a single one.
     last_click: Option<Click>,
@@ -175,13 +181,16 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 let (col, row) = cell_at(cursor, bounds, self.screen)?;
                 // Ctrl/Cmd+click on a link opens it rather than selecting.
                 if self.link_modifier
-                    && let Some(link) = link_at(self.screen, col, row)
+                    && let Some(link) = link_at(self.screen, self.session, col, row)
                 {
                     // The click hands off to the OS (often stealing focus, so
-                    // no further pointer events arrive); drop the hover now so
-                    // the hand cursor and underline don't outlive the gesture.
-                    state.hover = None;
-                    return Some(canvas::Action::publish(Message::OpenUrl(link.url)));
+                    // no further pointer events arrive); `core` drops the hover
+                    // as it opens, so the hand cursor and underline don't
+                    // outlive the gesture. Forget the echo too, so the next
+                    // move over the same link re-publishes it.
+                    state.sent = None;
+                    let HoverTarget::Url(url) = link.target;
+                    return Some(canvas::Action::publish(Message::OpenUrl(url)));
                 }
                 // Shift+click extends the existing selection: keep its anchor
                 // and move the head to the clicked cell, entering the drag
@@ -248,10 +257,10 @@ impl canvas::Program<Message> for TerminalView<'_> {
                     .link_modifier
                     .then(|| cell_at(cursor, bounds, self.screen))
                     .flatten()
-                    .and_then(|(col, row)| link_at(self.screen, col, row));
-                (next != state.hover).then(|| {
-                    state.hover = next;
-                    canvas::Action::request_redraw()
+                    .and_then(|(col, row)| link_at(self.screen, self.session, col, row));
+                (next != state.sent).then(|| {
+                    state.sent = next.clone();
+                    canvas::Action::publish(Message::TermHover(next))
                 })
             }
             mouse::Event::ButtonReleased(mouse::Button::Left) if state.selecting => {
@@ -281,7 +290,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
 
     fn draw(
         &self,
-        state: &TermState,
+        _state: &TermState,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -336,8 +345,8 @@ impl canvas::Program<Message> for TerminalView<'_> {
         // clickable-link affordance. Gated on the live modifier flag so
         // releasing Ctrl/Cmd clears the highlight even without a mouse move.
         if self.link_modifier
-            && state.owner == Some(self.session)
-            && let Some(link) = &state.hover
+            && let Some(link) = self.hover
+            && link.session == self.session
         {
             let x = link.start as f32 * cell_w;
             let w = (link.end.saturating_sub(link.start)) as f32 * cell_w;
@@ -380,11 +389,11 @@ impl canvas::Program<Message> for TerminalView<'_> {
     /// pointer when off the terminal entirely.
     fn mouse_interaction(
         &self,
-        state: &TermState,
+        _state: &TermState,
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if self.link_modifier && state.owner == Some(self.session) && state.hover.is_some() {
+        if self.link_modifier && self.hover.is_some_and(|h| h.session == self.session) {
             mouse::Interaction::Pointer
         } else if cursor.position_in(bounds).is_some() {
             mouse::Interaction::Text
@@ -471,6 +480,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
@@ -498,6 +508,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
@@ -522,6 +533,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
@@ -552,6 +564,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
@@ -569,6 +582,7 @@ mod tests {
             screen: &screen,
             session: sid(2),
             link_modifier: false,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
@@ -624,6 +638,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: true,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
@@ -635,10 +650,12 @@ mod tests {
     }
 
     #[test]
-    fn modifier_click_on_a_link_drops_the_hover() {
-        // The OS handoff may steal focus, so no later pointer event can be
-        // relied on to reconcile the hover: the click itself must clear it,
-        // or the hand cursor and underline stick until an extra mouse move.
+    fn modifier_click_on_a_link_forgets_the_published_hover() {
+        // `core` drops the hover as it opens (the OS handoff may steal focus,
+        // so no later pointer event can be relied on). The canvas must forget
+        // its echo in the same breath, or the next move back onto the same link
+        // would dedupe against a hover `core` no longer holds — and the
+        // underline would never come back.
         use canvas::Program;
         let screen = screen_from("https://ex.io");
         let len = "https://ex.io".len();
@@ -646,6 +663,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: true,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
@@ -653,15 +671,55 @@ mod tests {
         let mut state = TermState::default();
         let _ = view.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
         assert!(
-            state.hover.is_some(),
-            "the link is hovered before the click"
+            state.sent.is_some(),
+            "the link is published before the click"
         );
         let _ = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
-        assert!(state.hover.is_none(), "the click consumes the hover");
+        assert!(state.sent.is_none(), "the click forgets the echo");
+        // With no hover from `core`, the pointer is not a hand.
         assert_ne!(
             view.mouse_interaction(&state, test_bounds(), at_col(len, 2)),
             mouse::Interaction::Pointer,
             "opening a link must not leave a hand cursor behind"
+        );
+    }
+
+    #[test]
+    fn the_hand_cursor_follows_cores_hover_and_its_session() {
+        // The canvas is reused across tabs, so a hover belonging to another
+        // session must not turn *this* pane's pointer into a hand.
+        use canvas::Program;
+        let screen = screen_from("https://ex.io");
+        let hover = TermHover {
+            session: sid(1),
+            row: 0,
+            start: 0,
+            end: 13,
+            target: HoverTarget::Url("https://ex.io".into()),
+        };
+        let state = TermState::default();
+        let bounds = test_bounds();
+        let mine = TerminalView {
+            screen: &screen,
+            session: sid(1),
+            link_modifier: true,
+            hover: Some(&hover),
+            shift: false,
+            font_size: 14.0,
+            dimmed: false,
+        };
+        assert_eq!(
+            mine.mouse_interaction(&state, bounds, at(10.0, 10.0)),
+            mouse::Interaction::Pointer
+        );
+        let other = TerminalView {
+            session: sid(2),
+            ..mine
+        };
+        assert_eq!(
+            other.mouse_interaction(&state, bounds, at(10.0, 10.0)),
+            mouse::Interaction::Text,
+            "another session's hover is not this pane's"
         );
     }
 
@@ -675,6 +733,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: true,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
@@ -688,37 +747,48 @@ mod tests {
     }
 
     #[test]
-    fn hover_highlights_a_link_only_with_the_modifier_held() {
+    fn hover_is_published_only_with_the_modifier_held() {
         use canvas::Program;
         let screen = screen_from("https://ex.io");
         let len = "https://ex.io".len();
-        // Modifier held → moving over the link records it for highlighting.
+        // Modifier held → moving over the link publishes it, tagged with the
+        // session whose grid it was found in.
         let held = TerminalView {
             screen: &screen,
             session: sid(1),
             link_modifier: true,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
         };
         let mut state = TermState::default();
-        let _ = held.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
+        let action = held.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
+        assert!(action.is_some(), "entering a link publishes a hover");
         assert_eq!(
-            state.hover.as_ref().map(|h| h.url.as_str()),
-            Some("https://ex.io")
+            state.sent,
+            Some(TermHover {
+                session: sid(1),
+                row: 0,
+                start: 0,
+                end: len as u16,
+                target: HoverTarget::Url("https://ex.io".into()),
+            })
         );
-        // No modifier → no hovered link is tracked.
+        // Staying on the same link publishes nothing further — the echo exists
+        // to keep every pointer move from re-sending an unchanged hover.
+        let again = held.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
+        assert!(again.is_none(), "an unchanged hover is not re-published");
+
+        // No modifier → nothing is published.
         let bare = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: false,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            hover: None,
+            ..held
         };
         let mut state = TermState::default();
         let _ = bare.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
-        assert!(state.hover.is_none());
+        assert_eq!(state.sent, None);
     }
 
     #[test]
@@ -732,6 +802,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            hover: None,
             shift: true,
             font_size: 14.0,
             dimmed: false,
@@ -759,6 +830,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            hover: None,
             shift: true,
             font_size: 14.0,
             dimmed: false,
@@ -782,6 +854,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
@@ -811,6 +884,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,
@@ -833,6 +907,7 @@ mod tests {
             screen: &screen,
             session: sid(1),
             link_modifier: false,
+            hover: None,
             shift: false,
             font_size: 14.0,
             dimmed: false,

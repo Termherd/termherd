@@ -512,6 +512,9 @@ enum Message {
     DocSaved(Result<SystemTime, crate::docs::SaveError>),
     /// Close the doc viewer, returning to the terminal.
     CloseDoc,
+    /// The clickable target now under the pointer in a terminal, or `None` when
+    /// the pointer left every one. The canvas finds it; `core` owns it.
+    TermHover(Option<termherd_core::TermHover>),
     /// Open a Ctrl/Cmd+clicked terminal link in the OS default handler.
     OpenUrl(String),
     /// The window screenshot for a capture finished; encode it to PNG at
@@ -1156,6 +1159,10 @@ impl Shell {
             Message::CloseDoc => {
                 self.open_doc = None;
                 Task::none()
+            }
+            Message::TermHover(hover) => {
+                let effects = self.core.apply(termherd_core::Event::TermHover(hover));
+                self.perform(effects)
             }
             Message::OpenUrl(url) => {
                 let effects = self.core.apply(termherd_core::Event::OpenUrl(url));

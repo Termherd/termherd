@@ -21,6 +21,7 @@ use crate::workspace::{SessionId, Workspace};
 mod capture;
 mod effects;
 mod events;
+mod hover;
 mod metadata;
 mod notify;
 mod record;
@@ -36,6 +37,7 @@ use settings::FontState;
 
 pub use effects::Effect;
 pub use events::Event;
+pub use hover::{HoverTarget, TermHover};
 pub use session::{Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
@@ -66,6 +68,9 @@ pub struct App {
     /// frame timer and encoder live in the `app`; `core` only counts frames
     /// against the cap and decides capture/finish.
     recording: Option<Recording>,
+    /// The clickable target under the pointer while the link modifier is held,
+    /// or `None`. Private — read through [`Self::term_hover`]. See [`TermHover`].
+    hover: Option<TermHover>,
     /// Whether the OS says the window has focus, from
     /// [`Event::WindowFocusChanged`]. Starts `false` (unknown) so a session
     /// notification is forwarded to the OS until a real focus signal proves
@@ -267,7 +272,8 @@ impl App {
             Event::ToggleExpanded(path) => self.toggle_expanded(path),
             Event::FontSizeLoaded(size) => self.load_font_size(size),
             Event::Zoom(zoom) => self.zoom(zoom),
-            Event::OpenUrl(url) => Self::open_url(url),
+            Event::TermHover(hover) => self.set_term_hover(hover),
+            Event::OpenUrl(url) => self.open_url(url),
             Event::SessionNotified { session, body } => self.notify_session(session, body),
             Event::Capture(inputs) => vec![Effect::Capture(self.build_capture(&inputs))],
             Event::ToggleRecord { max_frames } => self.toggle_record(max_frames),
@@ -282,7 +288,12 @@ impl App {
     /// Open a Ctrl/Cmd+clicked link in the OS default handler. Only a
     /// non-blank string reaches the handler; a blank or schemeless one is
     /// dropped rather than shelling out on it.
-    fn open_url(url: String) -> Vec<Effect> {
+    ///
+    /// Activating a target consumes the hover: the click hands off to the OS
+    /// and often steals focus, so no pointer event would arrive to clear the
+    /// underline and the hand cursor.
+    fn open_url(&mut self, url: String) -> Vec<Effect> {
+        self.hover = None;
         let url = url.trim();
         if url.is_empty() {
             Vec::new()
