@@ -37,8 +37,128 @@ pub struct PathSpan {
 /// earn a filesystem probe. URLs are skipped: [`crate::links`] owns those, and
 /// a scheme's `//` would otherwise read as a separator.
 #[must_use]
-pub fn detect(_line: &str) -> Vec<PathSpan> {
-    Vec::new()
+pub fn detect(line: &str) -> Vec<PathSpan> {
+    let chars: Vec<char> = line.chars().collect();
+    let masked = url_mask(line, chars.len());
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if masked[i] || !is_path_char(chars[i]) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && !masked[i] && is_path_char(chars[i]) {
+            i += 1;
+        }
+        if let Some(span) = span_of(&chars, start..i) {
+            spans.push(span);
+        }
+    }
+    spans
+}
+
+/// Which characters of `line` belong to a URL, so the path scan can treat them
+/// as boundaries. Without this, `https://ex.io/a/b` is one long path-shaped run
+/// — its scheme is alphanumeric and `:` and `/` are both path characters — and
+/// the same cells would light up as two different kinds of link.
+fn url_mask(line: &str, len: usize) -> Vec<bool> {
+    let mut masked = vec![false; len];
+    for span in crate::links::detect(line) {
+        for cell in masked.get_mut(span).into_iter().flatten() {
+            *cell = true;
+        }
+    }
+    masked
+}
+
+/// Whether `c` can sit inside a path run. Deliberately the vocabulary a
+/// double-click already treats as one word, so `~/src/main.rs:42` selects and
+/// detects as the same unit. Whitespace and prose delimiters (`,`, quotes,
+/// brackets) are boundaries; `:` is in, because a `:line` suffix has to survive
+/// the scan to be peeled off after it.
+fn is_path_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '\\' | '~' | ':' | '@' | '+')
+}
+
+/// Turn one raw run into a span, or [`None`] when it is not path-shaped.
+fn span_of(chars: &[char], raw: Range<usize>) -> Option<PathSpan> {
+    let end = trim_trailing(chars, raw.start, raw.end);
+    let range = raw.start..end;
+    if range.is_empty() {
+        return None;
+    }
+    let (target_end, line, col) = peel_position(chars, &range);
+    let target = range.start..target_end;
+    if target.is_empty() || !is_path_shaped(&chars[target.clone()]) {
+        return None;
+    }
+    Some(PathSpan {
+        range,
+        target,
+        line,
+        col,
+    })
+}
+
+/// Drop trailing characters that are valid inside a path but, at the very end,
+/// are prose: the full stop closing a sentence and the colon a compiler puts
+/// after a location. Both are in the run only because they are legal mid-path.
+fn trim_trailing(chars: &[char], start: usize, mut end: usize) -> usize {
+    while end > start && matches!(chars[end - 1], '.' | ':') {
+        end -= 1;
+    }
+    end
+}
+
+/// Split a trailing `:line[:col]` off the run, returning where the path itself
+/// ends. Only digits count, and only from the end — which is what keeps the `C:`
+/// of a Windows drive from reading as a position.
+fn peel_position(chars: &[char], range: &Range<usize>) -> (usize, Option<u32>, Option<u32>) {
+    let (without_last, last) = trailing_number(chars, range.start, range.end);
+    let Some(last) = last else {
+        return (range.end, None, None);
+    };
+    // `path:line:col` — the second number peels only if a first one is behind
+    // it, so `C:\a\b:9` reads as a line, not a column.
+    let (without_both, first) = trailing_number(chars, range.start, without_last);
+    first.map_or((without_last, Some(last), None), |first| {
+        (without_both, Some(first), Some(last))
+    })
+}
+
+/// Peel a `:<digits>` off the end of `start..end`, returning where it began and
+/// its value. A run of digits that cannot be a line number is not a position —
+/// truncating it would silently point at the wrong line.
+fn trailing_number(chars: &[char], start: usize, end: usize) -> (usize, Option<u32>) {
+    let mut digits = end;
+    while digits > start && chars[digits - 1].is_ascii_digit() {
+        digits -= 1;
+    }
+    if digits == end || digits == start || chars[digits - 1] != ':' {
+        return (end, None);
+    }
+    let value: String = chars[digits..end].iter().collect();
+    value
+        .parse::<u32>()
+        .map_or((end, None), |n| (digits - 1, Some(n)))
+}
+
+/// Whether a run is worth a filesystem probe: it carries a path separator, or
+/// it is a dotted filename. A bare word is not — every word under the pointer
+/// would otherwise cost a `stat`, which is the cost this predicate exists to
+/// avoid.
+fn is_path_shaped(target: &[char]) -> bool {
+    if target.contains(&'/') || target.contains(&'\\') {
+        return true;
+    }
+    // A dotted tail like `Cargo.toml`: the dot must separate two non-empty
+    // parts, so a leading `.foo` (a hidden file, no extension) does not qualify
+    // on its own.
+    target
+        .iter()
+        .position(|&c| c == '.')
+        .is_some_and(|dot| dot > 0 && dot + 1 < target.len())
 }
 
 #[cfg(test)]

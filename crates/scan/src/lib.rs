@@ -73,10 +73,8 @@ impl FsScanner {
     /// `None` when no home directory can be determined.
     #[must_use]
     pub fn claude_default() -> Option<Self> {
-        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-        Some(Self::new(
-            PathBuf::from(home).join(".claude").join("projects"),
-        ))
+        let home = paths::home_dir()?;
+        Some(Self::new(home.join(".claude").join("projects")))
     }
 
     /// The projects root this scanner walks.

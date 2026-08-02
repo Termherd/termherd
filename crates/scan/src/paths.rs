@@ -23,21 +23,88 @@ use crate::repo::repo_root;
 pub struct FsPathResolver;
 
 impl PathResolver for FsPathResolver {
-    fn resolve(&self, _candidate: &str, _roots: &PathRoots) -> Option<PathBuf> {
-        None
+    fn resolve(&self, candidate: &str, roots: &PathRoots) -> Option<PathBuf> {
+        // `~/…` is the shell's spelling, not the filesystem's: joined onto a
+        // root it would name a directory literally called `~`.
+        if let Some(expanded) = expand_home(candidate) {
+            return expanded.exists().then_some(expanded);
+        }
+        let path = Path::new(candidate);
+        if path.is_absolute() {
+            return path.exists().then(|| normalise(path));
+        }
+        search_roots(roots)
+            .into_iter()
+            .map(|root| normalise(&root.join(path)))
+            .find(|full| full.exists())
     }
+}
+
+/// The user's home directory: `%USERPROFILE%` (Windows) then `$HOME` (Unix).
+pub(crate) fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
 }
 
 /// The roots to try for a relative candidate, innermost first and without
 /// repeats: the live directory, the repository holding it, then the launch
 /// directory.
-fn search_roots(_roots: &PathRoots) -> Vec<PathBuf> {
-    Vec::new()
+///
+/// The order *is* the disambiguation rule. A session sitting in `crates/pty`
+/// sees `lib.rs` printed by two different tools meaning two different files;
+/// the one relative to where it stands is the one the user is looking at. The
+/// deduplication is not cosmetic either — a session that never left its repo
+/// root would otherwise `stat` the same directory three times per candidate.
+fn search_roots(roots: &PathRoots) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    let candidates = [
+        roots.cwd.clone(),
+        roots.cwd.as_deref().and_then(repo_root),
+        roots.launch_cwd.clone(),
+    ];
+    for root in candidates.into_iter().flatten() {
+        if !out.contains(&root) {
+            out.push(root);
+        }
+    }
+    out
 }
 
-/// Expand a leading `~` against the user's home directory.
-fn expand_home(_candidate: &str) -> Option<PathBuf> {
-    None
+/// Expand a leading `~` against the user's home directory, or [`None`] when the
+/// candidate does not start with one.
+fn expand_home(candidate: &str) -> Option<PathBuf> {
+    let rest = candidate.strip_prefix('~')?;
+    let home = home_dir()?;
+    let rest = rest.trim_start_matches(['/', '\\']);
+    Some(if rest.is_empty() {
+        home
+    } else {
+        home.join(rest)
+    })
+}
+
+/// Collapse `.` and `..` lexically, so `<root>/./src/main.rs` is the same path
+/// as `<root>/src/main.rs` — which the caller compares and the OS opener shows.
+/// Purely textual: it never follows a symlink, so it cannot turn a path the
+/// terminal printed into a different file.
+fn normalise(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            // Only pop a real directory name: popping past a root, or past a
+            // leading `..`, would climb somewhere the text never named.
+            Component::ParentDir
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) =>
+            {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

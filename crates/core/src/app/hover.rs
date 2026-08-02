@@ -117,10 +117,54 @@ impl App {
     /// has spoken.
     pub(super) fn set_term_target(
         &mut self,
-        _session: SessionId,
-        _probe: Option<TargetProbe>,
+        session: SessionId,
+        probe: Option<TargetProbe>,
     ) -> Vec<Effect> {
-        Vec::new()
+        let Some(probe) = probe else {
+            self.hover = None;
+            self.pending_path = None;
+            return Vec::new();
+        };
+        match probe.kind {
+            ProbeKind::Url(url) => {
+                self.pending_path = None;
+                self.hover = Some(TermHover {
+                    session,
+                    row: probe.row,
+                    start: probe.start,
+                    end: probe.end,
+                    target: HoverTarget::Url(url),
+                });
+                Vec::new()
+            }
+            ProbeKind::Path {
+                candidate,
+                line,
+                col,
+            } => {
+                let request = PathRequest {
+                    session,
+                    purpose: PathPurpose::Hover,
+                    row: probe.row,
+                    start: probe.start,
+                    end: probe.end,
+                    candidate,
+                    line,
+                    col,
+                };
+                // Already the outstanding question: re-asking would `stat` the
+                // same path again on every pointer move within one span.
+                if self.pending_path.as_ref() == Some(&request) {
+                    return Vec::new();
+                }
+                self.hover = None;
+                self.pending_path = Some(request.clone());
+                vec![Effect::ResolvePath {
+                    roots: self.path_roots(session),
+                    request,
+                }]
+            }
+        }
     }
 
     /// A resolution came back. Which of the two questions it answers decides
@@ -129,10 +173,38 @@ impl App {
     /// an error for every `and/or` on screen.
     pub(super) fn path_resolved(
         &mut self,
-        _request: &PathRequest,
-        _path: Option<PathBuf>,
+        request: &PathRequest,
+        path: Option<PathBuf>,
     ) -> Vec<Effect> {
-        Vec::new()
+        match request.purpose {
+            PathPurpose::Hover => {
+                // The pointer may have moved on while the `stat` ran. Applying a
+                // stale answer would underline a span the pointer has left.
+                if self.pending_path.as_ref() != Some(request) {
+                    return Vec::new();
+                }
+                self.pending_path = None;
+                self.hover = path.map(|path| TermHover {
+                    session: request.session,
+                    row: request.row,
+                    start: request.start,
+                    end: request.end,
+                    target: HoverTarget::Path {
+                        path,
+                        line: request.line,
+                        col: request.col,
+                    },
+                });
+                Vec::new()
+            }
+            PathPurpose::Open => path.map_or_else(Vec::new, |path| {
+                vec![Effect::OpenPath {
+                    path,
+                    line: request.line,
+                    col: request.col,
+                }]
+            }),
+        }
     }
 
     /// The user Ctrl/Cmd+clicked a target. A URL opens straight away; a path is
@@ -143,10 +215,51 @@ impl App {
     /// focus, so no pointer event would arrive to clear the underline.
     pub(super) fn activate_target(
         &mut self,
-        _session: SessionId,
-        _probe: TargetProbe,
+        session: SessionId,
+        probe: TargetProbe,
     ) -> Vec<Effect> {
-        Vec::new()
+        self.hover = None;
+        self.pending_path = None;
+        match probe.kind {
+            ProbeKind::Url(url) => {
+                let url = url.trim();
+                if url.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![Effect::OpenUrl(url.to_owned())]
+                }
+            }
+            ProbeKind::Path {
+                candidate,
+                line,
+                col,
+            } => vec![Effect::ResolvePath {
+                roots: self.path_roots(session),
+                request: PathRequest {
+                    session,
+                    purpose: PathPurpose::Open,
+                    row: probe.row,
+                    start: probe.start,
+                    end: probe.end,
+                    candidate,
+                    line,
+                    col,
+                },
+            }],
+        }
+    }
+
+    /// The directories a session's relative paths could be relative to. An
+    /// unknown session yields none rather than nothing to resolve against —
+    /// the adapter treats an empty set as "only an absolute path can match".
+    fn path_roots(&self, session: SessionId) -> PathRoots {
+        self.sessions
+            .get(&session)
+            .map(|live| PathRoots {
+                cwd: live.cwd.as_ref().map(PathBuf::from),
+                launch_cwd: live.launch_cwd.as_ref().map(PathBuf::from),
+            })
+            .unwrap_or_default()
     }
 
     /// The clickable target under the pointer, if any.
@@ -414,7 +527,17 @@ mod tests {
         // `cwd` follows every `cd`, so it alone loses the project the session
         // belongs to; the launch directory is the only remaining trace.
         let mut app = App::new();
-        let session = launch(&mut app, "work");
+        let session = match app
+            .apply(Event::LaunchSession(LaunchSpec {
+                cwd: Some("/proj".into()),
+                launch: Launch::Shell,
+                title: "work".into(),
+            }))
+            .as_slice()
+        {
+            [Effect::Spawn(spec)] => spec.session,
+            other => panic!("expected Spawn, got {other:?}"),
+        };
         app.apply(Event::SessionCwdChanged {
             session,
             cwd: "/proj/crates/pty".into(),
@@ -428,9 +551,23 @@ mod tests {
             roots.cwd.as_deref(),
             Some(std::path::Path::new("/proj/crates/pty"))
         );
-        assert!(
-            roots.launch_cwd.is_some(),
+        assert_eq!(
+            roots.launch_cwd.as_deref(),
+            Some(std::path::Path::new("/proj")),
             "the launch directory survives a cd"
         );
+    }
+
+    #[test]
+    fn an_unknown_session_yields_no_roots_rather_than_nothing_at_all() {
+        // A probe can outlive its session (a tab closed under the pointer).
+        // Empty roots mean "only an absolute path can match" — not a panic.
+        let mut app = App::new();
+        let effects = app.apply(Event::TermTarget {
+            session: sid(99),
+            probe: Some(path_probe()),
+        });
+        let (_, roots) = resolve_request(&effects);
+        assert_eq!(roots, &PathRoots::default());
     }
 }

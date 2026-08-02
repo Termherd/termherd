@@ -9,7 +9,7 @@ use iced::advanced::text::Shaping;
 use iced::widget::canvas::{self, Frame, Geometry, Text};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme, mouse};
 use termherd_core::workspace::SessionId;
-use termherd_core::{HoverTarget, ProbeKind, SelectOp, SelectSide, TargetProbe, TermHover};
+use termherd_core::{SelectOp, SelectSide, TargetProbe, TermHover};
 use termherd_pty::Screen;
 
 use crate::shell::Message;
@@ -415,6 +415,7 @@ fn rgb([r, g, b]: [u8; 3]) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use termherd_core::{HoverTarget, ProbeKind};
 
     /// The cell height at the default font — the tests' historical metric.
     const CELL_H: f32 = 18.0;
