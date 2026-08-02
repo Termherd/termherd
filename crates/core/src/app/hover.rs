@@ -190,6 +190,13 @@ impl App {
         request: &PathRequest,
         path: Option<PathBuf>,
     ) -> Vec<Effect> {
+        // A program is not a document: the OS handler would run it, and a `ls`
+        // of an untrusted clone is enough to put one on screen. Filtered here,
+        // once, rather than at each of the two outcomes below — so a target
+        // that cannot be opened cannot be underlined either, and the two can
+        // never drift apart. See `paths::runs_on_open` for what this covers
+        // and, more importantly, what it does not.
+        let path = path.filter(|p| !crate::paths::runs_on_open(p));
         match request.purpose {
             PathPurpose::Hover => {
                 // The pointer may have moved on while the `stat` ran. Applying a
@@ -580,6 +587,54 @@ mod tests {
             })
             .is_empty()
         );
+    }
+
+    #[test]
+    fn a_program_is_neither_underlined_nor_opened() {
+        // One `ls` of an untrusted clone puts `payload.app` on screen. The OS
+        // handler would run it, so it is not a link — and refusing it at the
+        // hover as well as the click is what makes that visible before the
+        // click rather than after.
+        let probe = |candidate: &str| TargetProbe {
+            row: 3,
+            start: 0,
+            end: 11,
+            kind: ProbeKind::Path {
+                candidate: candidate.into(),
+                line: None,
+                col: None,
+            },
+        };
+        for program in ["payload.app", "report.command", "readme.EXE", "run.desktop"] {
+            let mut app = App::new();
+            let effects = app.apply(Event::TermTarget {
+                session: sid(1),
+                probe: Some(probe(program)),
+            });
+            let (request, _) = resolve_request(&effects);
+            let request = request.clone();
+            // The resolver found it: it really is on disk.
+            app.apply(Event::PathResolved {
+                request,
+                path: Some(format!("/repo/{program}").into()),
+            });
+            assert_eq!(app.term_hover(), None, "{program} must not underline");
+
+            let opened = app.apply(Event::ActivateTarget {
+                session: sid(1),
+                probe: probe(program),
+            });
+            let (request, _) = resolve_request(&opened);
+            let request = request.clone();
+            assert!(
+                app.apply(Event::PathResolved {
+                    request,
+                    path: Some(format!("/repo/{program}").into()),
+                })
+                .is_empty(),
+                "{program} must not open"
+            );
+        }
     }
 
     #[test]

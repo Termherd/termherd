@@ -144,6 +144,47 @@ fn trailing_number(chars: &[char], start: usize, end: usize) -> (usize, Option<u
         .map_or((end, None), |n| (digits - 1, Some(n)))
 }
 
+/// Extensions whose OS association is "run this", not "show this".
+///
+/// Every entry names a *program*, never a document: there is no editor a user
+/// would expect `.exe` or `.app` to open in. Source files are deliberately
+/// absent — see [`runs_on_open`] for why that is a real hole and not an
+/// oversight.
+const EXECUTED_BY_ASSOCIATION: [&str; 22] = [
+    "app", "command", "desktop", "exe", "com", "bat", "cmd", "scr", "pif", "msi", "msp", "cpl",
+    "hta", "jar", "vb", "vbs", "vbe", "ws", "wsf", "wsh", "ps1", "reg",
+];
+
+/// Whether opening `path` through the OS default handler would **run** it
+/// rather than show it.
+///
+/// The handoff this feature ends in (`open` / `explorer` / `xdg-open`) is not
+/// "view this file" — it is "do whatever the association says", which for a
+/// program means execute. A path here comes from whatever the terminal printed,
+/// and a `ls` of an untrusted clone is enough to put `payload.app` on screen,
+/// so a click must not be able to launch it.
+///
+/// **This is a mitigation, not a guarantee, and it is far weaker on Windows.**
+/// On macOS and Linux the set of extensions that execute is small and closed —
+/// the list above genuinely covers it. On Windows the association table decides,
+/// and it maps `.js` to Windows Script Host, `.py` to the interpreter, and so on
+/// for every scripting language installed. Adding those here would refuse
+/// exactly the source files the feature exists to open, so they are left out
+/// knowingly. Windows' real fix is the configurable editor command, which never
+/// consults an association at all.
+#[must_use]
+pub fn runs_on_open(path: &std::path::Path) -> bool {
+    // A macOS bundle is a directory, so match on the name's own tail rather
+    // than asking the filesystem what kind of entry it is.
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            EXECUTED_BY_ASSOCIATION
+                .iter()
+                .any(|banned| ext.eq_ignore_ascii_case(banned))
+        })
+}
+
 /// Whether a run is worth a filesystem probe: it carries a path separator, or
 /// it is a dotted filename. A bare word is not — every word under the pointer
 /// would otherwise cost a `stat`, which is the cost this predicate exists to
@@ -254,6 +295,44 @@ mod tests {
         // One character either side is enough — the bounds are exclusive of
         // the empty part, not of a short one.
         assert_eq!(runs("a.b:12"), ["a.b:12"]);
+    }
+
+    #[test]
+    fn a_program_is_told_from_a_document_case_insensitively() {
+        use std::path::Path;
+        for program in [
+            "/a/payload.app",
+            "/a/report.command",
+            "/a/READ.EXE",
+            "/a/x.Bat",
+            "/a/menu.desktop",
+            "/a/lib.jar",
+            "/a/script.ps1",
+        ] {
+            assert!(runs_on_open(Path::new(program)), "{program} runs on open");
+        }
+        for document in [
+            "/a/src/main.rs",
+            "/a/Cargo.toml",
+            "/a/README",
+            "/a/notes.md",
+            "/a/crates/pty",
+        ] {
+            assert!(!runs_on_open(Path::new(document)), "{document} does not");
+        }
+    }
+
+    #[test]
+    fn source_files_windows_would_execute_are_deliberately_still_openable() {
+        use std::path::Path;
+        // Not an oversight, and the reason `runs_on_open` is a mitigation
+        // rather than a guarantee: Windows maps these to an interpreter, but
+        // refusing them would refuse the very files this feature exists to
+        // open. Pinned so the trade-off is a decision someone has to revisit,
+        // not something a later edit silently reverses either way.
+        for source in ["/a/app.js", "/a/tool.py", "/a/task.rb", "/a/build.sh"] {
+            assert!(!runs_on_open(Path::new(source)), "{source} stays openable");
+        }
     }
 
     #[test]

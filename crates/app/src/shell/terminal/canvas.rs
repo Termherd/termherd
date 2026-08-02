@@ -9,7 +9,7 @@ use iced::advanced::text::Shaping;
 use iced::widget::canvas::{self, Frame, Geometry, Text};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme, mouse};
 use termherd_core::workspace::SessionId;
-use termherd_core::{SelectOp, SelectSide, TargetProbe, TermHover};
+use termherd_core::{HoverTarget, ProbeKind, SelectOp, SelectSide, TargetProbe, TermHover};
 use termherd_pty::Screen;
 
 use crate::shell::Message;
@@ -109,6 +109,34 @@ impl ScrollAccumulator {
 }
 
 impl TerminalView<'_> {
+    /// The hover to draw: `core`'s answer, but only while the grid still shows
+    /// the span it was found in.
+    ///
+    /// `TermHover` is anchored to viewport cells, and output scrolls those
+    /// cells out from under it — with the modifier held over a path while
+    /// `cargo test` streams, nothing would arrive to reconcile the underline,
+    /// so it would sit on a rectangle now showing unrelated text. Re-reading
+    /// the grid here is cheaper than clearing on every byte of output, which
+    /// would make the underline flicker on any terminal that repaints.
+    ///
+    /// The click is unaffected either way — it re-reads the grid itself — so
+    /// this is purely about not showing a clickable affordance that has moved.
+    fn live_hover(&self) -> Option<&TermHover> {
+        let hover = self.hover.filter(|h| h.session == self.session)?;
+        let probe = target_at(self.screen, hover.start, hover.row)?;
+        let same_cells =
+            probe.row == hover.row && probe.start == hover.start && probe.end == hover.end;
+        let same_kind = match (&probe.kind, &hover.target) {
+            (ProbeKind::Url(found), HoverTarget::Url(shown)) => found == shown,
+            // A resolved path cannot be compared back to the candidate text it
+            // came from, so matching cells and kind is the strongest check
+            // available — and enough, since a click re-resolves regardless.
+            (ProbeKind::Path { .. }, HoverTarget::Path { .. }) => true,
+            _ => false,
+        };
+        (same_cells && same_kind).then_some(hover)
+    }
+
     /// The grid line and selection side for the pointer's cell — the coordinate
     /// the terminal anchors a selection to. `line = row - display_offset` matches
     /// the snapshot's cell mapping, so it survives scroll.
@@ -350,8 +378,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
         // clickable-link affordance. Gated on the live modifier flag so
         // releasing Ctrl/Cmd clears the highlight even without a mouse move.
         if self.link_modifier
-            && let Some(link) = self.hover
-            && link.session == self.session
+            && let Some(link) = self.live_hover()
         {
             let x = link.start as f32 * cell_w;
             let w = (link.end.saturating_sub(link.start)) as f32 * cell_w;
@@ -398,7 +425,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if self.link_modifier && self.hover.is_some_and(|h| h.session == self.session) {
+        if self.link_modifier && self.live_hover().is_some() {
             mouse::Interaction::Pointer
         } else if cursor.position_in(bounds).is_some() {
             mouse::Interaction::Text
@@ -415,7 +442,6 @@ fn rgb([r, g, b]: [u8; 3]) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use termherd_core::{HoverTarget, ProbeKind};
 
     /// The cell height at the default font — the tests' historical metric.
     const CELL_H: f32 = 18.0;
@@ -764,6 +790,62 @@ mod tests {
             other.mouse_interaction(&state, bounds, at(10.0, 10.0)),
             mouse::Interaction::Text,
             "another session's hover is not this pane's"
+        );
+    }
+
+    #[test]
+    fn the_underline_does_not_survive_the_text_scrolling_out_from_under_it() {
+        // With the modifier held over a link while output streams, no pointer
+        // event arrives to reconcile the hover — so the affordance is checked
+        // against the grid instead of trusted.
+        use canvas::Program;
+        let hover = TermHover {
+            session: sid(1),
+            row: 0,
+            start: 0,
+            end: 13,
+            target: HoverTarget::Url("https://ex.io".into()),
+        };
+        let state = TermState::default();
+        let bounds = test_bounds();
+
+        let unchanged = screen_from("https://ex.io");
+        let still_there = TerminalView {
+            screen: &unchanged,
+            session: sid(1),
+            link_modifier: true,
+            hover: Some(&hover),
+            shift: false,
+            font_size: 14.0,
+            dimmed: false,
+        };
+        assert_eq!(
+            still_there.mouse_interaction(&state, bounds, at(10.0, 10.0)),
+            mouse::Interaction::Pointer,
+            "the same text is still clickable"
+        );
+
+        // The row now holds something else entirely.
+        let scrolled = screen_from("running 3 tests");
+        let moved_on = TerminalView {
+            screen: &scrolled,
+            ..still_there
+        };
+        assert_eq!(
+            moved_on.mouse_interaction(&state, bounds, at(10.0, 10.0)),
+            mouse::Interaction::Text,
+            "a hand cursor over unrelated text is a lie"
+        );
+
+        // A *different* link at the same cells is not the one that was hovered.
+        let other = screen_from("https://no.io");
+        let different = TerminalView {
+            screen: &other,
+            ..still_there
+        };
+        assert_eq!(
+            different.mouse_interaction(&state, bounds, at(10.0, 10.0)),
+            mouse::Interaction::Text
         );
     }
 
