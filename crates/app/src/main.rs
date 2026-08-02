@@ -113,7 +113,7 @@ fn main() -> iced::Result {
         shell::Startup::from_settings(&settings, metadata_store::load(), collapsed_store::load());
     // Terminal path candidates are checked against the real filesystem — the
     // one thing that tells `src/main.rs` from prose like `and/or`.
-    let path_resolver: Arc<dyn PathResolver> = Arc::new(termherd_scan::FsPathResolver);
+    let path_resolver: Arc<dyn PathResolver> = Arc::new(termherd_scan::FsPathResolver::new());
     let result = shell::run(
         scanner,
         watch_root,

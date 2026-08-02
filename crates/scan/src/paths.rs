@@ -19,14 +19,34 @@ use termherd_core::ports::PathResolver;
 use crate::repo::repo_root;
 
 /// Resolves terminal path candidates against the real filesystem.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FsPathResolver;
+#[derive(Debug, Default, Clone)]
+pub struct FsPathResolver {
+    /// The home directory a leading `~` expands against. A field rather than a
+    /// read at the point of use so the `~` branch is reachable from a test —
+    /// the ambient `$HOME` is whatever the machine running them happens to
+    /// have, which makes an assertion about it worth nothing.
+    home: Option<PathBuf>,
+}
+
+impl FsPathResolver {
+    /// A resolver expanding `~` against the user's real home directory.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { home: home_dir() }
+    }
+
+    /// A resolver expanding `~` against `home`.
+    #[must_use]
+    pub fn with_home(home: Option<PathBuf>) -> Self {
+        Self { home }
+    }
+}
 
 impl PathResolver for FsPathResolver {
     fn resolve(&self, candidate: &str, roots: &PathRoots) -> Option<PathBuf> {
         // `~/…` is the shell's spelling, not the filesystem's: joined onto a
         // root it would name a directory literally called `~`.
-        if let Some(expanded) = expand_home(candidate, home_dir().as_deref()) {
+        if let Some(expanded) = expand_home(candidate, self.home.as_deref()) {
             return expanded.exists().then_some(expanded);
         }
         let path = Path::new(candidate);
@@ -62,6 +82,11 @@ pub(crate) fn home_dir() -> Option<PathBuf> {
 /// the one relative to where it stands is the one the user is looking at. The
 /// deduplication is not cosmetic either — a session that never left its repo
 /// root would otherwise `stat` the same directory three times per candidate.
+///
+/// Not free: finding the repository walks every ancestor of the cwd looking for
+/// a `.git`, so this is O(depth) stats, recomputed per candidate. Acceptable
+/// only because it runs off the UI thread and at most once per span the pointer
+/// rests on — if either of those stops being true, cache it.
 fn search_roots(roots: &PathRoots) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let candidates = [
@@ -149,7 +174,7 @@ mod tests {
         let repo = repo(tmp.path());
         for prose in ["and/or", "http/2", "a/b", "N/A"] {
             assert_eq!(
-                FsPathResolver.resolve(prose, &roots(Some(&repo), None)),
+                FsPathResolver::default().resolve(prose, &roots(Some(&repo), None)),
                 None,
                 "{prose} must not resolve"
             );
@@ -162,7 +187,7 @@ mod tests {
         let repo = repo(tmp.path());
         let abs = repo.join("src").join("main.rs");
         assert_eq!(
-            FsPathResolver.resolve(&abs.to_string_lossy(), &PathRoots::default()),
+            FsPathResolver::default().resolve(&abs.to_string_lossy(), &PathRoots::default()),
             Some(abs)
         );
     }
@@ -172,7 +197,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("nope.rs");
         assert_eq!(
-            FsPathResolver.resolve(&missing.to_string_lossy(), &PathRoots::default()),
+            FsPathResolver::default().resolve(&missing.to_string_lossy(), &PathRoots::default()),
             None
         );
     }
@@ -185,7 +210,7 @@ mod tests {
         let repo = repo(tmp.path());
         let deep = repo.join("crates").join("pty");
         assert_eq!(
-            FsPathResolver.resolve("crates/pty/lib.rs", &roots(Some(&deep), None)),
+            FsPathResolver::default().resolve("crates/pty/lib.rs", &roots(Some(&deep), None)),
             Some(repo.join("crates").join("pty").join("lib.rs"))
         );
     }
@@ -199,7 +224,7 @@ mod tests {
         fs::write(repo.join("lib.rs"), "").unwrap();
         let deep = repo.join("crates").join("pty");
         assert_eq!(
-            FsPathResolver.resolve("lib.rs", &roots(Some(&deep), None)),
+            FsPathResolver::default().resolve("lib.rs", &roots(Some(&deep), None)),
             Some(deep.join("lib.rs")),
             "the cwd beats the repo root"
         );
@@ -214,7 +239,7 @@ mod tests {
         let elsewhere = tmp.path().join("elsewhere");
         fs::create_dir(&elsewhere).unwrap();
         assert_eq!(
-            FsPathResolver.resolve("src/main.rs", &roots(Some(&elsewhere), Some(&repo))),
+            FsPathResolver::default().resolve("src/main.rs", &roots(Some(&elsewhere), Some(&repo))),
             Some(repo.join("src").join("main.rs"))
         );
     }
@@ -224,7 +249,7 @@ mod tests {
         // A session whose directory was never known: nothing to be relative to,
         // and no panic for it.
         assert_eq!(
-            FsPathResolver.resolve("src/main.rs", &PathRoots::default()),
+            FsPathResolver::default().resolve("src/main.rs", &PathRoots::default()),
             None
         );
     }
@@ -234,7 +259,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let repo = repo(tmp.path());
         assert_eq!(
-            FsPathResolver.resolve("./src/main.rs", &roots(Some(&repo), None)),
+            FsPathResolver::default().resolve("./src/main.rs", &roots(Some(&repo), None)),
             Some(repo.join("src").join("main.rs"))
         );
     }
@@ -268,16 +293,27 @@ mod tests {
 
     #[test]
     fn a_tilde_candidate_resolves_end_to_end_when_it_exists() {
-        // The expansion is only half of it: the expanded path is still checked,
-        // so a `~/…` that names nothing is not a link either.
+        // Through `resolve`, not through `expand_home`: a test that re-does the
+        // existence check itself would still pass with the whole `~` branch of
+        // `resolve` deleted, which is the bug it exists to catch.
         let tmp = tempfile::tempdir().unwrap();
         let home = repo(tmp.path());
+        let resolver = FsPathResolver::with_home(Some(home.clone()));
         assert_eq!(
-            expand_home("~/src/main.rs", Some(&home)).filter(|p| p.exists()),
-            Some(home.join("src").join("main.rs"))
+            resolver.resolve("~/src/main.rs", &PathRoots::default()),
+            Some(home.join("src").join("main.rs")),
+            "a `~` path resolves with no root at all — the home is the root"
         );
         assert_eq!(
-            expand_home("~/nope.rs", Some(&home)).filter(|p| p.exists()),
+            resolver.resolve("~/nope.rs", &PathRoots::default()),
+            None,
+            "the expanded path is still checked"
+        );
+        // With no home known, `~/…` is not silently treated as relative to a
+        // root — that would resolve a directory literally called `~`.
+        let homeless = FsPathResolver::with_home(None);
+        assert_eq!(
+            homeless.resolve("~/src/main.rs", &roots(Some(&home), None)),
             None
         );
     }
@@ -291,7 +327,7 @@ mod tests {
         let repo = repo(tmp.path());
         let deep = repo.join("crates").join("pty");
         assert_eq!(
-            FsPathResolver.resolve("../../src/main.rs", &roots(Some(&deep), None)),
+            FsPathResolver::default().resolve("../../src/main.rs", &roots(Some(&deep), None)),
             Some(repo.join("src").join("main.rs"))
         );
     }
@@ -321,7 +357,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let repo = repo(tmp.path());
         assert_eq!(
-            FsPathResolver.resolve("crates/pty", &roots(Some(&repo), None)),
+            FsPathResolver::default().resolve("crates/pty", &roots(Some(&repo), None)),
             Some(repo.join("crates").join("pty"))
         );
     }

@@ -121,8 +121,22 @@ impl App {
         probe: Option<TargetProbe>,
     ) -> Vec<Effect> {
         let Some(probe) = probe else {
-            self.hover = None;
-            self.pending_path = None;
+            // Only the session that *holds* the hover may clear it. Every
+            // canvas in the tree sees every pointer event, so in a split the
+            // pane the pointer just left reports "nothing here" in the same
+            // batch as the pane it entered reports a target — and an
+            // unconditional clear would delete, half the time, the hover that
+            // was just set beside it.
+            if self.hovers(session) {
+                self.hover = None;
+            }
+            if self
+                .pending_path
+                .as_ref()
+                .is_some_and(|p| p.session == session)
+            {
+                self.pending_path = None;
+            }
             return Vec::new();
         };
         match probe.kind {
@@ -262,6 +276,11 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// Whether the current hover belongs to `session`.
+    fn hovers(&self, session: SessionId) -> bool {
+        self.hover.as_ref().is_some_and(|h| h.session == session)
+    }
+
     /// The clickable target under the pointer, if any.
     #[must_use]
     pub const fn term_hover(&self) -> Option<&TermHover> {
@@ -333,6 +352,60 @@ mod tests {
             .is_empty()
         );
         assert_eq!(app.term_hover(), None);
+    }
+
+    #[test]
+    fn one_panes_empty_hover_does_not_clear_another_panes() {
+        // In a split, every canvas sees every pointer event: the pane the
+        // pointer left reports "nothing here" in the same batch as the pane it
+        // entered reports a target. An unconditional clear would delete the
+        // hover that was just set beside it — in one of the two travel
+        // directions, so the underline would work going one way and not back.
+        let mut app = App::new();
+        app.apply(Event::TermTarget {
+            session: sid(1),
+            probe: Some(url_probe()),
+        });
+        app.apply(Event::TermTarget {
+            session: sid(2),
+            probe: None,
+        });
+        assert!(
+            app.term_hover().is_some(),
+            "the other pane's empty report is not about this hover"
+        );
+        // The pane that owns it still clears it.
+        app.apply(Event::TermTarget {
+            session: sid(1),
+            probe: None,
+        });
+        assert_eq!(app.term_hover(), None);
+    }
+
+    #[test]
+    fn one_panes_empty_hover_does_not_cancel_another_panes_resolution() {
+        // Same hazard one step earlier: dropping the pending request would
+        // make the answer arrive stale and be discarded, so the underline
+        // would never appear at all.
+        let mut app = App::new();
+        let effects = app.apply(Event::TermTarget {
+            session: sid(1),
+            probe: Some(path_probe()),
+        });
+        let (request, _) = resolve_request(&effects);
+        let request = request.clone();
+        app.apply(Event::TermTarget {
+            session: sid(2),
+            probe: None,
+        });
+        app.apply(Event::PathResolved {
+            request,
+            path: Some("/repo/src/main.rs".into()),
+        });
+        assert!(
+            app.term_hover().is_some(),
+            "the resolution survived the sibling pane's empty report"
+        );
     }
 
     #[test]

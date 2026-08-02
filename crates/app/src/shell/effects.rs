@@ -69,19 +69,18 @@ impl Shell {
             // Opening a link and a desktop notification are OS handoffs.
             Effect::OpenUrl(url) => open_url(&url),
             Effect::OpenPath { path, .. } => open_path(&path),
-            // A `stat` per root is filesystem work: it runs off the UI thread,
-            // and its answer comes back as an event like any other.
+            // Resolving walks and stats directories, so it runs on the task
+            // executor rather than the UI thread, and its answer comes back as
+            // an event like any other. The blocking call sits directly in the
+            // async block — the same shape as the scan and the PNG encode.
+            // `tokio::spawn_blocking` would *look* more correct and be fatal:
+            // iced's executor here is the `futures` thread pool, with no tokio
+            // context, so the call would panic and take a pool worker with it.
             Effect::ResolvePath { request, roots } => {
                 let resolver = self.path_resolver.clone();
                 return Task::perform(
                     async move {
-                        let candidate = request.candidate.clone();
-                        let path = tokio::task::spawn_blocking(move || {
-                            resolver.resolve(&candidate, &roots)
-                        })
-                        .await
-                        .ok()
-                        .flatten();
+                        let path = resolver.resolve(&request.candidate, &roots);
                         (request, path)
                     },
                     |(request, path)| Message::PathResolved { request, path },

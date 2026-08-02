@@ -149,6 +149,11 @@ fn trailing_number(chars: &[char], start: usize, end: usize) -> (usize, Option<u
 /// would otherwise cost a `stat`, which is the cost this predicate exists to
 /// avoid.
 fn is_path_shaped(target: &[char]) -> bool {
+    // Separators alone name no file: a lone `/` exists on every Unix host, so
+    // without this every mountpoint column of `df` output would underline.
+    if !target.iter().any(|c| !matches!(c, '/' | '\\')) {
+        return false;
+    }
     if target.contains(&'/') || target.contains(&'\\') {
         return true;
     }
@@ -249,6 +254,17 @@ mod tests {
         // One character either side is enough — the bounds are exclusive of
         // the empty part, not of a short one.
         assert_eq!(runs("a.b:12"), ["a.b:12"]);
+    }
+
+    #[test]
+    fn separators_alone_name_no_file() {
+        // A lone `/` exists on every Unix host, so it would resolve and become
+        // a link — underlining the mountpoint column of every `df`.
+        assert!(runs("/").is_empty());
+        assert!(runs("Filesystem  Size  Mounted on\n").is_empty());
+        assert!(runs(r"\\").is_empty());
+        // A separator with anything attached is still a candidate.
+        assert_eq!(runs("/etc"), ["/etc"]);
     }
 
     #[test]

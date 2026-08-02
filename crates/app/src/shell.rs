@@ -1452,7 +1452,7 @@ mod key_routing {
         Ports {
             scanner: Arc::new(EmptyScanner),
             watch_root: None,
-            path_resolver: Arc::new(termherd_scan::FsPathResolver),
+            path_resolver: Arc::new(termherd_scan::FsPathResolver::new()),
             pty,
             pty_output: PtyOutput::new(rx),
         }
