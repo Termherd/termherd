@@ -9,7 +9,7 @@ use portable_pty::CommandBuilder;
 use termherd_core::workspace::SessionId;
 use termherd_core::{Launch, McpConfig};
 
-use crate::integration::{SHELL_DIR_PREFIX, integration_for, replay_home};
+use crate::integration::{SHELL_DIR_PREFIX, integration_for};
 
 /// The line to type into the freshly spawned shell to start a [`Launch`], or
 /// `None` for a plain shell (the bare shell *is* the deliverable). Typing keeps
@@ -85,9 +85,7 @@ pub(crate) fn write_title_settings(session: SessionId) -> Option<PathBuf> {
 /// so it is logged rather than propagated.
 pub(crate) fn apply_integration(session: SessionId, program: &str, cmd: &mut CommandBuilder) {
     let dir = shell_dir(session);
-    // Read *before* the recipe overwrites `ZDOTDIR` for the child.
-    let home = replay_home(|key| std::env::var_os(key));
-    let Some(integration) = integration_for(program, &dir, home.as_deref()) else {
+    let Some(integration) = integration_for(program, &dir, |key| std::env::var_os(key)) else {
         return;
     };
     // A recipe carrying arguments cannot be applied to the platform's *default*
@@ -423,19 +421,29 @@ mod tests {
         // can only run where the bug exists: a test process launched from a
         // termherd shell, whose environment carries a generated ZDOTDIR. CI
         // inherits none, so there it asserts nothing — which is the whole
-        // claim, not a caveat on a broader one. The rule itself is proved
-        // against a stand-in environment in `crate::integration`.
+        // claim, not a caveat on a broader one, and it says so on the way out
+        // rather than reading as coverage from its name. The rule itself is
+        // proved against a stand-in environment in `crate::integration`.
         let Some(inherited) = std::env::var_os("ZDOTDIR").map(PathBuf::from) else {
+            eprintln!("skipped: nothing inherited a ZDOTDIR — this run is not nested");
             return;
         };
         if !crate::integration::is_generated_shell_dir(&inherited) {
+            eprintln!("skipped: the inherited ZDOTDIR is the user's own, not one termherd wrote");
             return;
         }
-        assert_ne!(
-            replay_home(|key| std::env::var_os(key)),
-            Some(inherited),
-            "a run nested inside a termherd shell must reach past what it inherited"
-        );
+        let session = SessionId(std::num::NonZeroU64::new(91).expect("nonzero"));
+        let integration =
+            integration_for("/bin/zsh", &shell_dir(session), |key| std::env::var_os(key))
+                .expect("zsh has a recipe");
+        let inherited = inherited.display().to_string();
+        for (path, contents) in integration.files {
+            assert!(
+                !contents.contains(&inherited),
+                "{} replays what this run inherited: {contents}",
+                path.display(),
+            );
+        }
     }
 
     #[test]
