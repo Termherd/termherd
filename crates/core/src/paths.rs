@@ -230,6 +230,28 @@ mod tests {
     }
 
     #[test]
+    fn a_dot_must_separate_two_non_empty_parts_to_count_as_an_extension() {
+        // Both bounds of the dotted-filename rule, reached through a peeled
+        // position suffix — which is the only way a target can still end in a
+        // dot once trailing prose punctuation has been trimmed.
+        //
+        // A leading dot is a hidden file, not an extension: `.rs` names a
+        // directory entry, and accepting it would make every `.` in prose a
+        // probe. A trailing dot names nothing at all.
+        assert!(
+            runs(".rs:12").is_empty(),
+            "a leading dot is not an extension"
+        );
+        assert!(
+            runs("foo.:12").is_empty(),
+            "a trailing dot is not one either"
+        );
+        // One character either side is enough — the bounds are exclusive of
+        // the empty part, not of a short one.
+        assert_eq!(runs("a.b:12"), ["a.b:12"]);
+    }
+
+    #[test]
     fn a_bare_word_with_neither_separator_nor_extension_is_not_a_candidate() {
         // The cheapness guarantee: without this, every word under the pointer
         // would cost a filesystem probe.

@@ -26,7 +26,7 @@ impl PathResolver for FsPathResolver {
     fn resolve(&self, candidate: &str, roots: &PathRoots) -> Option<PathBuf> {
         // `~/…` is the shell's spelling, not the filesystem's: joined onto a
         // root it would name a directory literally called `~`.
-        if let Some(expanded) = expand_home(candidate) {
+        if let Some(expanded) = expand_home(candidate, home_dir().as_deref()) {
             return expanded.exists().then_some(expanded);
         }
         let path = Path::new(candidate);
@@ -41,6 +41,12 @@ impl PathResolver for FsPathResolver {
 }
 
 /// The user's home directory: `%USERPROFILE%` (Windows) then `$HOME` (Unix).
+///
+/// Deliberately untested, and the only thing here that is: pointing it
+/// somewhere known needs `std::env::set_var`, which is `unsafe` in edition 2024
+/// and denied workspace-wide. Everything that *decides* anything from a home
+/// directory takes it as an argument instead — see [`expand_home`] — so this
+/// stays a two-line lookup with no branch worth pinning.
 pub(crate) fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -71,14 +77,18 @@ fn search_roots(roots: &PathRoots) -> Vec<PathBuf> {
     out
 }
 
-/// Expand a leading `~` against the user's home directory, or [`None`] when the
-/// candidate does not start with one.
-fn expand_home(candidate: &str) -> Option<PathBuf> {
+/// Expand a leading `~` against `home`, or [`None`] when the candidate does not
+/// start with one (or no home is known).
+///
+/// `home` is a parameter rather than read here so the expansion is a pure
+/// function: the ambient `$HOME` is whatever the machine running the tests
+/// happens to have, which makes an assertion about it worth nothing.
+fn expand_home(candidate: &str, home: Option<&Path>) -> Option<PathBuf> {
     let rest = candidate.strip_prefix('~')?;
-    let home = home_dir()?;
+    let home = home?;
     let rest = rest.trim_start_matches(['/', '\\']);
     Some(if rest.is_empty() {
-        home
+        home.to_path_buf()
     } else {
         home.join(rest)
     })
@@ -88,17 +98,17 @@ fn expand_home(candidate: &str) -> Option<PathBuf> {
 /// as `<root>/src/main.rs` — which the caller compares and the OS opener shows.
 /// Purely textual: it never follows a symlink, so it cannot turn a path the
 /// terminal printed into a different file.
+///
+/// Every path reaching here is absolute (a root joined with the candidate, or
+/// an absolute candidate), so a `..` can only ever be popping a real directory
+/// name or already sitting at the root — where `PathBuf::pop` is a no-op.
 fn normalise(path: &Path) -> PathBuf {
     use std::path::Component;
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
             Component::CurDir => {}
-            // Only pop a real directory name: popping past a root, or past a
-            // leading `..`, would climb somewhere the text never named.
-            Component::ParentDir
-                if matches!(out.components().next_back(), Some(Component::Normal(_))) =>
-            {
+            Component::ParentDir => {
                 out.pop();
             }
             other => out.push(other),
@@ -233,15 +243,57 @@ mod tests {
     fn a_tilde_candidate_expands_against_the_home_directory() {
         // `~/…` is the shell's spelling, not the filesystem's: it means nothing
         // joined onto a root, so it is expanded rather than tried.
-        let Some(home) = expand_home("~") else {
-            return; // no home on this host; nothing to assert
-        };
-        assert!(home.is_absolute());
+        let home = Path::new("/home/someone");
+        assert_eq!(expand_home("~", Some(home)).as_deref(), Some(home));
         assert_eq!(
-            expand_home("~/x").as_deref(),
+            expand_home("~/x/y.rs", Some(home)).as_deref(),
+            Some(home.join("x/y.rs").as_path())
+        );
+        // Windows spells it with a backslash; the shell's `~` is the same.
+        assert_eq!(
+            expand_home(r"~\x", Some(home)).as_deref(),
             Some(home.join("x").as_path())
         );
-        assert_eq!(expand_home("relative/x"), None, "only `~` expands");
+        assert_eq!(
+            expand_home("relative/x", Some(home)),
+            None,
+            "only a leading `~` expands"
+        );
+        assert_eq!(
+            expand_home("~/x", None),
+            None,
+            "no home means no expansion, not a path rooted at `~`"
+        );
+    }
+
+    #[test]
+    fn a_tilde_candidate_resolves_end_to_end_when_it_exists() {
+        // The expansion is only half of it: the expanded path is still checked,
+        // so a `~/…` that names nothing is not a link either.
+        let tmp = tempfile::tempdir().unwrap();
+        let home = repo(tmp.path());
+        assert_eq!(
+            expand_home("~/src/main.rs", Some(&home)).filter(|p| p.exists()),
+            Some(home.join("src").join("main.rs"))
+        );
+        assert_eq!(
+            expand_home("~/nope.rs", Some(&home)).filter(|p| p.exists()),
+            None
+        );
+    }
+
+    #[test]
+    fn a_parent_relative_candidate_resolves_to_a_collapsed_path() {
+        // `../src/main.rs` from `crates/pty` must come back as the clean path,
+        // not as `<repo>/crates/pty/../../src/main.rs`: both open the same file,
+        // but the second is what the user sees in the editor's title bar.
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = repo(tmp.path());
+        let deep = repo.join("crates").join("pty");
+        assert_eq!(
+            FsPathResolver.resolve("../../src/main.rs", &roots(Some(&deep), None)),
+            Some(repo.join("src").join("main.rs"))
+        );
     }
 
     #[test]
