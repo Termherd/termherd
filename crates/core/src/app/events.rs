@@ -148,6 +148,11 @@ pub enum Event {
     ToggleExpanded(String),
     /// The terminal base font size from settings.
     FontSizeLoaded(f32),
+    /// The editor command from settings, or `None` when the file stays silent
+    /// (or configures one that could not be parsed). It decides both how a
+    /// clicked file opens and whether a program-by-association may be opened
+    /// at all — one value, so the two can never disagree.
+    OpenCommandLoaded(Option<crate::open::OpenCommand>),
     /// Zoom the terminal font in/out/back to base.
     Zoom(Zoom),
     /// The clickable target now under the pointer in a terminal, or `None`

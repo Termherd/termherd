@@ -48,6 +48,54 @@
     "app": "confirmWhenActive"
   },
 
+  // ── Opening a file (Ctrl/Cmd+click on a path in the terminal) ───────────
+  // The command run for every file termherd opens. Omit the whole block to
+  // hand the file to the OS default handler instead (`open` / `explorer` /
+  // `xdg-open`), which is the default.
+  //
+  // Templates: {path} (required), {line}, {col}. A file the terminal printed
+  // without a position opens at 1:1, so a command stays well-formed whether or
+  // not the terminal printed a position — `code -g {path}:{line}:{col}` and
+  // the `+{line}` shape both.
+  //
+  // Give a GUI editor. The child's stdin/stdout/stderr are closed, not this
+  // app's: a terminal editor (vim, emacs -nw) would start with no window and
+  // no terminal, invisible and unkillable from here. To reach one, launch it
+  // through a terminal emulator — e.g.
+  //   "command": ["wezterm", "start", "--", "vim", "+{line}", "{path}"]
+  //
+  // The command is run as argv, never through a shell: the string below is
+  // split on whitespace BEFORE {path} is filled in, so a filename containing
+  // spaces, quotes or `&` can never become a second argument. Use the array
+  // form when the program's own path contains spaces:
+  //   "command": ["/Applications/My Editor.app/Contents/MacOS/edit", "{path}"]
+  //
+  // The program is run directly, not through a shell — so `~` is NOT expanded
+  // (write the full path) and the name is looked up in the PATH the app itself
+  // was started with. An app launched from Finder/Explorer inherits a minimal
+  // PATH that often lacks `code`, `subl` and friends: if the click does
+  // nothing (and a notification says the command failed), give the absolute
+  // path to the binary.
+  //
+  // On WINDOWS that same rule bites the example above: VS Code installs
+  // `code.cmd`, and a direct spawn only ever appends `.exe` — a bare "code"
+  // is not found. Write "code.cmd", or the absolute path to `Code.exe`.
+  //
+  // A placeholder in the program name is refused: what the terminal printed
+  // chooses the file, never the executable. An empty command, one without
+  // {path}, or one with an unknown {placeholder} is logged and ignored — the
+  // OS handoff applies instead. A command that fails to start (a typo, an
+  // editor that isn't installed) raises a desktop notification.
+  //
+  // Configuring this also lifts a restriction: without a command, a path that
+  // the OS would RUN rather than show (.app, .exe, .desktop, …) is neither
+  // underlined nor opened, because the handoff obeys the file association. An
+  // explicit editor consults no association, so those files open like any
+  // other.
+  "open": {
+    "command": "code -g {path}:{line}:{col}"
+  },
+
   // ── Terminal appearance ──────────────────────────────────────────────────
   "terminal": {
     // Base font size in pixels (clamped to 6–40). The zoom shortcuts

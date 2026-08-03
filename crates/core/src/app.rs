@@ -24,6 +24,7 @@ mod events;
 mod hover;
 mod metadata;
 mod notify;
+mod open;
 mod record;
 mod session;
 mod settings;
@@ -63,6 +64,9 @@ pub struct App {
     /// Terminal font sizing: the configured base plus zoom steps. Private —
     /// the effective size is read through [`Self::font_size`]. See `FontState`.
     font: FontState,
+    /// The configured editor command, or `None` for the OS handoff. Private —
+    /// consulted through [`Self::open_target`]. See [`crate::open`].
+    open: Option<crate::open::OpenCommand>,
     /// LIFO stack of recently closed tabs, for reopen. Capped at
     /// `MAX_CLOSED_TABS` so a long session can't grow it without bound;
     /// closing past the cap drops the oldest entry.
@@ -278,6 +282,7 @@ impl App {
             Event::SessionLimitLoaded(limit) => self.load_session_limit(limit),
             Event::ToggleExpanded(path) => self.toggle_expanded(path),
             Event::FontSizeLoaded(size) => self.load_font_size(size),
+            Event::OpenCommandLoaded(command) => self.load_open_command(command),
             Event::Zoom(zoom) => self.zoom(zoom),
             Event::TermTarget { session, probe } => self.set_term_target(session, probe),
             Event::ActivateTarget { session, probe } => self.activate_target(session, probe),

@@ -57,14 +57,11 @@ pub enum Effect {
         request: PathRequest,
         roots: PathRoots,
     },
-    /// Open a resolved file in the OS default handler. `line`/`col` are what
-    /// the terminal printed beside it; the OS handoff cannot honour them, so
-    /// they ride along for the configurable editor command that follows.
-    OpenPath {
-        path: std::path::PathBuf,
-        line: Option<u32>,
-        col: Option<u32>,
-    },
+    /// Open a resolved file — in the configured editor command, or in the OS
+    /// default handler when none is configured. The choice and the argv are
+    /// settled here, in `core`; the shell only spawns what it is handed. See
+    /// [`OpenTarget`](crate::open::OpenTarget).
+    OpenPath(crate::open::OpenTarget),
     /// Post a desktop notification to the OS notification centre. The
     /// shell performs it; `title` names the session/project that wants the
     /// user, `body` is Claude's message.

@@ -14,13 +14,32 @@ use std::time::SystemTime;
 
 use iced::{Task, window};
 use termherd_core::{
-    Effect, Launch, McpConfig, Section, SessionId, SnapshotFilter, SnapshotInputs, SpawnSpec,
-    TerminalScope, WorkspaceSnapshot,
+    Effect, Launch, McpConfig, OpenTarget, Section, SessionId, SnapshotFilter, SnapshotInputs,
+    SpawnSpec, TerminalScope, WorkspaceSnapshot, ports::PtyError,
 };
 
 use super::bridge::Request;
 use super::{Message, Shell};
-use os::{notify, open_path, open_url};
+use os::{notify, open_path, open_url, spawn_editor};
+
+/// Open a resolved file. The configured command fails *visibly* — a click
+/// that opens nothing is indistinguishable from a click that missed, and
+/// the user is the only one who can fix a typo in `settings.json`. Falling
+/// back to the OS handler here would be worse than silence: it would reopen
+/// the association hole on precisely the path where nothing else worked.
+fn open_target(target: OpenTarget) -> Result<(), PtyError> {
+    match target {
+        OpenTarget::SystemHandler { path } => open_path(&path),
+        OpenTarget::Editor { program, args } => {
+            spawn_editor(&program, &args).inspect_err(|error| {
+                let _ = notify(
+                    "TermHerd",
+                    &format!("The configured open command failed: {program} ({error})"),
+                );
+            })
+        }
+    }
+}
 
 impl Shell {
     /// Carry out every effect `core` asked for, returning any async follow-up
@@ -68,7 +87,7 @@ impl Shell {
             }
             // Opening a link and a desktop notification are OS handoffs.
             Effect::OpenUrl(url) => open_url(&url),
-            Effect::OpenPath { path, .. } => open_path(&path),
+            Effect::OpenPath(target) => open_target(target),
             // Resolving walks and stats directories, so it runs on the task
             // executor rather than the UI thread, and its answer comes back as
             // an event like any other. The blocking call sits directly in the
