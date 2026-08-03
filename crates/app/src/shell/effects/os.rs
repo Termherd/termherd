@@ -14,10 +14,25 @@ const MACOS_BUNDLE_ID: &str = "dev.termherd";
 /// Hand a resolved file to the OS default handler — the same three openers a
 /// URL takes, since each accepts a path as readily as a URL. The `:line` the
 /// terminal printed cannot survive this handoff: no OS opener takes a
-/// position. Carrying it this far is what lets the configurable editor command
-/// honour it later without re-deriving anything.
+/// position, which is the whole reason the configured command exists.
 pub(super) fn open_path(path: &std::path::Path) -> Result<(), PtyError> {
     open_url(&path.to_string_lossy())
+}
+
+/// Run the user's configured editor command. `core` already substituted the
+/// argv, so this spawns it as-is: a real executable with its arguments, never
+/// a line a shell re-parses — the same rule as [`open_url`], and here it is
+/// load-bearing twice over, since one of those arguments is a path the
+/// terminal printed.
+///
+/// Fire-and-forget like every other handoff: the error this returns is the
+/// spawn's alone (no such program, no permission), never the editor's exit.
+pub(super) fn spawn_editor(program: &str, args: &[String]) -> Result<(), PtyError> {
+    std::process::Command::new(program)
+        .args(args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| PtyError::Io(e.to_string()))
 }
 
 /// Hand a detected link to the OS default handler. Fire-and-forget: the
@@ -102,4 +117,18 @@ pub(super) fn notify(title: &str, body: &str) -> Result<(), PtyError> {
         })
         .map(|_| ())
         .map_err(|e| PtyError::Io(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_editor_reports_the_failure_rather_than_swallowing_it() {
+        // The caller turns this error into a desktop notification: a typo in
+        // `settings.json` must reach the only person who can fix it, since a
+        // click that opens nothing looks exactly like a click that missed.
+        let outcome = spawn_editor("termherd-no-such-editor-b7c1", &["{path}".to_owned()]);
+        assert!(matches!(outcome, Err(PtyError::Io(_))));
+    }
 }

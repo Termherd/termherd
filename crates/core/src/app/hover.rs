@@ -210,10 +210,11 @@ impl App {
         //
         // Judged on `real`, never on `path`: a symlink named `notes.md` that
         // points at `payload.app` is a document by name and a program by
-        // nature, and it is the nature the opener acts on. See
-        // `paths::runs_on_open` for what this covers and what it does not.
+        // nature, and it is the nature the opener acts on. Whether the refusal
+        // applies at all is `App::refuses_to_open`'s call — a configured editor
+        // command consults no association, so it has nothing to protect.
         let path = resolved
-            .filter(|r| !crate::paths::runs_on_open(&r.real))
+            .filter(|r| !self.refuses_to_open(&r.real))
             .map(|r| r.path);
         match request.purpose {
             PathPurpose::Hover => {
@@ -237,11 +238,11 @@ impl App {
                 Vec::new()
             }
             PathPurpose::Open => path.map_or_else(Vec::new, |path| {
-                vec![Effect::OpenPath {
+                vec![Effect::OpenPath(self.open_target(
                     path,
-                    line: request.line,
-                    col: request.col,
-                }]
+                    request.line,
+                    request.col,
+                ))]
             }),
         }
     }
@@ -673,9 +674,12 @@ mod tests {
             request: request.clone(),
             resolved: Some(plain("/repo/src/main.rs")),
         });
+        // No command configured: the OS handler, which cannot honour the `:42`
+        // the terminal printed. The position is not lost on the way — it is
+        // applied by `open_target`, and this handoff has nowhere to put it.
         assert!(matches!(
             opened.as_slice(),
-            [Effect::OpenPath { path, line: Some(42), col: None }]
+            [Effect::OpenPath(crate::open::OpenTarget::SystemHandler { path })]
                 if path == std::path::Path::new("/repo/src/main.rs")
         ));
 
@@ -736,6 +740,87 @@ mod tests {
                 .is_empty(),
                 "{program} must not open"
             );
+        }
+    }
+
+    #[test]
+    fn a_configured_command_opens_the_position_the_os_handoff_could_not() {
+        let mut app = App::new();
+        app.apply(Event::OpenCommandLoaded(Some(
+            crate::open::OpenCommand::parse("code -g {path}:{line}:{col}").expect("valid command"),
+        )));
+        let effects = app.apply(Event::ActivateTarget {
+            session: sid(1),
+            probe: path_probe(),
+        });
+        let (request, _) = resolve_request(&effects);
+        let request = request.clone();
+        let opened = app.apply(Event::PathResolved {
+            request,
+            resolved: Some(plain("/repo/src/main.rs")),
+        });
+        match opened.as_slice() {
+            [Effect::OpenPath(crate::open::OpenTarget::Editor { program, args })] => {
+                assert_eq!(program, "code");
+                assert_eq!(args, &["-g", "/repo/src/main.rs:42:1"]);
+            }
+            other => panic!("expected an editor open, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_configured_command_underlines_and_opens_what_the_association_would_run() {
+        // The refusal exists because the OS handler runs a program instead of
+        // showing it. An explicit command asks no association, so the same
+        // `payload.app` — and the `.exe` the Windows table never let the
+        // denylist cover — become ordinary files again, underline included.
+        for program in ["payload.app", "build.exe"] {
+            let probe = TargetProbe {
+                row: 3,
+                start: 0,
+                end: 11,
+                kind: ProbeKind::Path {
+                    candidate: program.into(),
+                    line: None,
+                    col: None,
+                },
+            };
+            let mut app = App::new();
+            app.apply(Event::OpenCommandLoaded(Some(
+                crate::open::OpenCommand::parse("code {path}").expect("valid command"),
+            )));
+
+            let effects = app.apply(Event::TermTarget {
+                session: sid(1),
+                probe: Some(probe.clone()),
+            });
+            let (request, _) = resolve_request(&effects);
+            let request = request.clone();
+            app.apply(Event::PathResolved {
+                request,
+                resolved: Some(plain(&format!("/repo/{program}"))),
+            });
+            assert!(
+                app.term_hover().is_some(),
+                "{program} is a file the editor can show"
+            );
+
+            let opened = app.apply(Event::ActivateTarget {
+                session: sid(1),
+                probe,
+            });
+            let (request, _) = resolve_request(&opened);
+            let request = request.clone();
+            let opened = app.apply(Event::PathResolved {
+                request,
+                resolved: Some(plain(&format!("/repo/{program}"))),
+            });
+            match opened.as_slice() {
+                [Effect::OpenPath(crate::open::OpenTarget::Editor { args, .. })] => {
+                    assert_eq!(args, &[format!("/repo/{program}")]);
+                }
+                other => panic!("expected {program} to open in the editor, got {other:?}"),
+            }
         }
     }
 

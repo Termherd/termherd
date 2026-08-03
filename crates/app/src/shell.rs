@@ -106,6 +106,8 @@ pub struct Startup {
     pub font_size: f32,
     /// Close-confirmation policy for tab close and app quit.
     pub close: CloseSettings,
+    /// The editor command from settings, or `None` for the OS default handler.
+    pub open: Option<termherd_core::OpenCommand>,
     /// Adapter-owned config bits for the MCP `snapshot` tool's config section
     /// (the live font size is stamped by `core`, not carried here).
     pub config: ConfigInput,
@@ -129,6 +131,7 @@ impl Startup {
             session_limit: settings.session_limit(),
             font_size: settings.font_size(),
             close: settings.close,
+            open: settings.open_command(),
             config: ConfigInput {
                 terminal_scheme: settings.terminal.colors.scheme.clone(),
                 record_fps: record.fps,
@@ -180,6 +183,7 @@ pub fn run(
                     session_limit: startup.session_limit,
                     font_size: startup.font_size,
                     close: startup.close,
+                    open: startup.open.clone(),
                     config: startup.config.clone(),
                 },
             );
@@ -656,6 +660,7 @@ impl Shell {
             startup.session_limit,
         ));
         core.apply(termherd_core::Event::FontSizeLoaded(startup.font_size));
+        core.apply(termherd_core::Event::OpenCommandLoaded(startup.open));
         Self {
             core,
             bounds,
@@ -1416,6 +1421,7 @@ mod key_routing {
             session_limit: 0,
             font_size: 14.0,
             close: CloseSettings::default(),
+            open: None,
             config: test_config_input(),
         }
     }
@@ -1467,6 +1473,54 @@ mod key_routing {
             test_live_bridge(),
             test_startup(),
         )
+    }
+
+    #[test]
+    fn a_configured_open_command_reaches_core_from_settings_json() {
+        // The one seam neither crate's own tests cover: `settings.json` →
+        // `Startup` → `Event::OpenCommandLoaded`. A command that parses in
+        // isolation but never reaches `core` would leave the click opening
+        // through the OS, and every unit test would still pass.
+        let settings: crate::settings::Settings =
+            serde_json::from_str(r#"{ "open": { "command": "code -g {path}:{line}:{col}" } }"#)
+                .expect("valid json");
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let mut shell = Shell::new(
+            WindowConfig::default(),
+            test_ports(Arc::new(RecordingPty::default()), rx),
+            test_live_bridge(),
+            Startup::from_settings(&settings, Overlay::default(), HashSet::new()),
+        );
+
+        let request = termherd_core::PathRequest {
+            session: termherd_core::SessionId(std::num::NonZeroU64::MIN),
+            purpose: termherd_core::PathPurpose::Open,
+            row: 3,
+            start: 0,
+            end: 11,
+            candidate: "src/main.rs".to_owned(),
+            line: Some(42),
+            col: None,
+        };
+        let effects = shell.core.apply(termherd_core::Event::PathResolved {
+            request,
+            resolved: Some(termherd_core::ResolvedPath {
+                path: "/repo/src/main.rs".into(),
+                real: "/repo/src/main.rs".into(),
+            }),
+        });
+        match effects.as_slice() {
+            [
+                termherd_core::Effect::OpenPath(termherd_core::OpenTarget::Editor {
+                    program,
+                    args,
+                }),
+            ] => {
+                assert_eq!(program, "code");
+                assert_eq!(args, &["-g", "/repo/src/main.rs:42:1"]);
+            }
+            other => panic!("expected the configured editor, got {other:?}"),
+        }
     }
 
     /// A `Shell` with one terminal open and focused, plus its recording PTY.
@@ -3570,6 +3624,7 @@ mod key_routing {
                 session_limit: 0,
                 font_size: 14.0,
                 close: CloseSettings::default(),
+                open: None,
                 config: test_config_input(),
             },
         );

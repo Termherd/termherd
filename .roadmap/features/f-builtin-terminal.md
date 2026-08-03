@@ -25,12 +25,20 @@ port checks it against the filesystem — the check, not the regex, is what keep
 prose like `and/or` from lighting up half the screen. Resolution tries the live
 `cwd` from [F-terminal-cwd](#f-terminal-cwd), then the repository holding it,
 then the launch directory, because `cargo`, `git` and `pytest` each print
-relative to a different root. It opens through the OS handler, which leaves two
-debts closing together in #257: the `:line` it parses is carried to the effect
-but cannot be honoured, and opening by association means a path that *is* a
-program must be refused rather than run — a refusal that is airtight on
-macOS/Linux and mostly nominal on Windows, where the association table maps
-every installed interpreter. Two contract bugs sit on the same surface: mouse reporting
+relative to a different root. It opened through the OS handler, which left two
+debts that closed together in #257 — an `open.command` in `settings.json`, with
+`{path}` / `{line}` / `{col}` templates. Configured, it replaces the handoff:
+the `:line` the terminal printed is finally honoured, and since an explicit
+command consults no file association, the refusal that kept a path which *is* a
+program from being opened has nothing left to protect and is lifted with it.
+That refusal was airtight on macOS/Linux and mostly nominal on Windows, where
+the association table maps every installed interpreter — so the command does not
+narrow that gap, it removes it. The command is argv and never a shell line: the
+configured string is split on whitespace *before* `{path}` is substituted, so a
+filename cannot become a second argument, and a placeholder in the program name
+is refused outright — what the terminal printed picks the file, never the
+executable. Unconfigured, the OS handoff and its refusal both stand.
+Two contract bugs sit on the same surface: mouse reporting
 isn't forwarded to the child (#155, vim) and the `emitted_lines_never_drift`
 property has a known failing scroll sequence whose seed was never committed
 (#102)

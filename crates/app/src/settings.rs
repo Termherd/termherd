@@ -39,6 +39,29 @@ pub struct Settings {
     /// prompts first. Absent → both confirm only while a session runs a
     /// foreground process, and close/quit an all-idle target silently.
     pub close: CloseSettings,
+    /// How a clicked file leaves termherd. Absent → the OS default handler.
+    pub open: OpenSettings,
+}
+
+/// The on-disk editor command. Absent (or unparsable) → the OS default
+/// handler, which is what shipped before the setting existed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenSettings {
+    /// The command run for every file termherd opens, with the `{path}`,
+    /// `{line}` and `{col}` templates. Sanitised by
+    /// [`Settings::open_command`].
+    pub command: Option<CommandSpec>,
+}
+
+/// A command as the file spells it — one line to split on whitespace, or an
+/// explicit argv. Both reach the same [`OpenCommand`]; the array form exists
+/// for a program path carrying spaces, which the split form cannot express.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CommandSpec {
+    Line(String),
+    Argv(Vec<String>),
 }
 
 /// One or several chords bound to an action — a bare string for the common
@@ -420,6 +443,23 @@ impl Settings {
         keymap
     }
 
+    /// The configured editor command, or `None` for the OS default handler.
+    /// A command that does not parse warns and degrades to that handoff — like
+    /// every other bad value here, it costs its own setting and nothing else.
+    #[must_use]
+    pub fn open_command(&self) -> Option<termherd_core::OpenCommand> {
+        let spec = self.open.command.as_ref()?;
+        let parsed = match spec {
+            CommandSpec::Line(line) => termherd_core::OpenCommand::parse(line),
+            CommandSpec::Argv(argv) => termherd_core::OpenCommand::from_words(argv.iter().cloned()),
+        };
+        parsed
+            .inspect_err(|error| {
+                warn!(%error, "invalid open command in settings; using the OS default handler");
+            })
+            .ok()
+    }
+
     /// Load persisted settings; any problem (no file, bad JSON) falls back to
     /// defaults — a corrupt config must never prevent startup.
     #[must_use]
@@ -693,6 +733,63 @@ mod tests {
         assert_eq!(json, "\"confirmWhenActive\"");
         let back: ConfirmClose = serde_json::from_str(&json).expect("deserialise");
         assert_eq!(back, ConfirmClose::ConfirmWhenActive);
+    }
+
+    /// The `(program, args)` a configured command renders, or a failed test.
+    fn opens(json: &str, path: &str, line: Option<u32>) -> (String, Vec<String>) {
+        let s: Settings = serde_json::from_str(json).expect("valid json");
+        let command = s.open_command().expect("a command");
+        match command.resolve(std::path::Path::new(path), line, None) {
+            termherd_core::OpenTarget::Editor { program, args } => (program, args),
+            other => panic!("expected an editor target, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_open_block_keeps_the_os_handoff() {
+        assert!(Settings::default().open_command().is_none());
+        let s: Settings = serde_json::from_str(r#"{ "theme": "light" }"#).expect("valid json");
+        assert!(s.open_command().is_none());
+    }
+
+    #[test]
+    fn an_open_command_deserialises_as_a_line_or_as_an_argv() {
+        let (program, args) = opens(
+            r#"{ "open": { "command": "code -g {path}:{line}:{col}" } }"#,
+            "/repo/f.rs",
+            Some(42),
+        );
+        assert_eq!(program, "code");
+        assert_eq!(args, vec!["-g", "/repo/f.rs:42:1"]);
+
+        // The array form is what expresses a program path containing spaces.
+        let (program, args) = opens(
+            r#"{ "open": { "command": ["/Applications/My Editor", "{path}"] } }"#,
+            "/repo/f.rs",
+            None,
+        );
+        assert_eq!(program, "/Applications/My Editor");
+        assert_eq!(args, vec!["/repo/f.rs"]);
+    }
+
+    #[test]
+    fn a_bad_open_command_degrades_alone() {
+        // Same contract as a bad colour: the setting falls back to the OS
+        // handoff, and the rest of the file survives — a typo in the editor
+        // command must not silently reset the keymap and theme.
+        for bad in [
+            r#""""#,
+            r#""code {file}""#,
+            r#""code -g""#,
+            r#""{path} -g {path}""#,
+            "[]",
+        ] {
+            let json = format!(r#"{{ "theme": "light", "open": {{ "command": {bad} }} }}"#);
+            let s: Settings =
+                serde_json::from_str(&json).expect("a bad command must not fail the whole parse");
+            assert!(s.open_command().is_none(), "{bad} must not configure");
+            assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
+        }
     }
 
     #[test]

@@ -9,6 +9,7 @@ pub mod docscope;
 pub mod keymap;
 pub mod links;
 pub mod metadata;
+pub mod open;
 pub mod paths;
 pub mod ports;
 pub mod record;
@@ -23,6 +24,7 @@ pub use app::{
 pub use browser::{ProjectGroup, SessionRecord};
 pub use keymap::{Action, ActionBinding, ChordError, KeyChord, Keymap, action_catalog};
 pub use metadata::{Overlay, RepoMeta, SessionMeta};
+pub use open::{OpenCommand, OpenCommandError, OpenTarget};
 pub use record::Recording;
 pub use snapshot::{
     ConfigInput, ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section, SessionKind,

@@ -184,9 +184,11 @@ const EXECUTED_BY_ASSOCIATION: &[&str] = &[
 ///   inspect it. Erring toward refusal is the safe direction, and per-OS
 ///   branching in `core` would be `cfg` leaking where it is not allowed.
 ///
-/// The real fix for both is the configurable editor command, which never
-/// consults an association at all. Judge the **canonical** path: a symlink's
-/// name says nothing about what the opener will reach.
+/// Both limitations end the same way, and the exit already exists: a
+/// configured `open.command` consults no association, so `App::refuses_to_open`
+/// stops calling this at all once the user has one. What is left here is the
+/// unconfigured default. Judge the **canonical** path: a symlink's name says
+/// nothing about what the opener will reach.
 #[must_use]
 pub fn runs_on_open(path: &std::path::Path) -> bool {
     // A macOS bundle is a directory, so match on the name's own tail rather
