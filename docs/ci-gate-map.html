@@ -224,8 +224,8 @@
 
   <div class="stats">
     <div class="stat"><div class="n accent">1</div><div class="l">required check on <code class="mono">main</code>: <code class="mono">ci-success</code></div></div>
-    <div class="stat"><div class="n">8</div><div class="l">gate jobs, each fired only on its file category</div></div>
-    <div class="stat"><div class="n">4</div><div class="l">change filters: <span class="mono">rust · cargo · markdown · workflows</span></div></div>
+    <div class="stat"><div class="n">12</div><div class="l">gate jobs, each fired only on its file category</div></div>
+    <div class="stat"><div class="n">6</div><div class="l">change filters: <span class="mono">rust · cargo · markdown · workflows · roadmap · book</span></div></div>
     <div class="stat"><div class="n">0</div><div class="l">Rust jobs on a docs-only PR (reported as <span class="mono">skipped</span>)</div></div>
   </div>
 
@@ -239,6 +239,8 @@
           <span class="tag filter">cargo</span>
           <span class="tag filter">markdown</span>
           <span class="tag filter">workflows</span>
+          <span class="tag filter">roadmap</span>
+          <span class="tag filter">book</span>
         </div>
       </div>
 
@@ -251,6 +253,8 @@
             <div class="job">rustfmt</div>
             <div class="job">clippy</div>
             <div class="job">test</div>
+            <div class="job">portable</div>
+            <div class="job">intra-crate-arch</div>
           </div>
         </div>
         <div class="node lane reveal">
@@ -271,6 +275,18 @@
           <div class="flt">workflows<span class="glob">.github/workflows/**</span></div>
           <div class="jobs">
             <div class="job">actionlint</div>
+          </div>
+        </div>
+        <div class="node lane reveal">
+          <div class="flt">roadmap<span class="glob">.roadmap/** · ROADMAP.md · ci.yml</span></div>
+          <div class="jobs">
+            <div class="job">roadmap</div>
+          </div>
+        </div>
+        <div class="node lane reveal">
+          <div class="flt">book<span class="glob">docs/book.toml · docs/src/** · docs/theme/**</span></div>
+          <div class="jobs">
+            <div class="job">mdbook</div>
           </div>
         </div>
       </div>
@@ -309,6 +325,11 @@
         <div class="cd">cargo-dist archives + installers and the GitHub Release; desktop bundles attached.</div>
         <div class="cm">runs: tag push matching <code class="mono">**N.N.N*</code>. Validates in plan-mode on PRs.</div>
       </div>
+      <div class="card reveal">
+        <div class="ct">docs-deploy <span class="tag baseline">publish</span></div>
+        <div class="cd">Builds the mdBook and publishes it to GitHub Pages. It proves nothing: the <code class="mono">mdbook</code> gate already did, on the PR.</div>
+        <div class="cm">runs: push→main under <code class="mono">docs/book.toml</code>, <code class="mono">docs/src/**</code>, <code class="mono">docs/theme/**</code>. Never on a PR.</div>
+      </div>
     </div>
     <p class="note"><b>CodeQL query suite:</b> stays on <code>security-and-quality</code> (the full pack).
       Trimming to <code>security-extended</code>, which drops the maintainability / quality queries, was
@@ -332,10 +353,15 @@
           <tr class="req"><td><span class="jn">dependency-rule</span></td><td class="small">hexagonal crate dep rule (deps point inward)</td><td><span class="tag filter">cargo</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr class="req"><td><span class="jn">actionlint</span></td><td class="small">valid, shellcheck-clean workflow YAML</td><td><span class="tag filter">workflows</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr class="req"><td><span class="jn">markdownlint</span></td><td class="small">80-col Markdown prose</td><td><span class="tag filter">markdown</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
-          <tr><td><span class="jn">ci-success</span></td><td class="small">aggregates the eight gates into one check</td><td class="small">always</td><td class="os">ubuntu</td><td><span class="tag pass">the check</span></td></tr>
+          <tr class="req"><td><span class="jn">portable</span></td><td class="small">clippy + tests for every crate but the GUI, on Windows</td><td><span class="tag filter">rust</span></td><td class="os">win</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">intra-crate-arch</span></td><td class="small">module boundaries · OS-cfg containment · length report</td><td><span class="tag filter">rust</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">roadmap</span></td><td class="small"><code>.roadmap/</code> schema; <code>ROADMAP.md</code> still matches its source</td><td><span class="tag filter">roadmap</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">mdbook</span></td><td class="small">the book builds; every <code>SUMMARY.md</code> link resolves</td><td><span class="tag filter">book</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr><td><span class="jn">ci-success</span></td><td class="small">aggregates the twelve gates into one check</td><td class="small">always</td><td class="os">ubuntu</td><td><span class="tag pass">the check</span></td></tr>
           <tr><td><span class="jn">cross-os</span></td><td class="small">clippy + tests on mac &amp; win</td><td class="small">non-PR · rust/tag</td><td class="os">mac · win</td><td><span class="tag signal">signal</span></td></tr>
           <tr><td><span class="jn">Analyze (Rust)</span></td><td class="small">CodeQL taint / cross-function SAST</td><td class="small">push→main · weekly</td><td class="os">ubuntu</td><td><span class="tag baseline">baseline</span></td></tr>
           <tr><td><span class="jn">release · package</span></td><td class="small">archives, installers, GitHub Release</td><td class="small">tag push</td><td class="os">mac · win · ubuntu</td><td><span class="tag release">release</span></td></tr>
+          <tr><td><span class="jn">docs-deploy</span></td><td class="small">publishes the book to GitHub Pages</td><td class="small">push→main · docs</td><td class="os">ubuntu</td><td><span class="tag baseline">publish</span></td></tr>
         </tbody>
       </table>
     </div>
@@ -358,6 +384,7 @@
           <li><span class="m">→</span><span>the PR gates re-run on the merged commit</span></li>
           <li><span class="m">+</span><span><code>cross-os</code> (mac · win) baseline</span></li>
           <li><span class="m">+</span><span>CodeQL <code>Analyze (Rust)</code></span></li>
+          <li><span class="m">+</span><span><code>docs-deploy</code> publishes the book to Pages, when <code>docs/</code> changed</span></li>
         </ul>
       </div>
       <div class="wcol reveal">
@@ -389,7 +416,10 @@ cargo test --workspace           <span class="c"># CI uses cargo nextest run</sp
 cargo deny check
 cargo machete
 just check-deps                  <span class="c"># hexagonal dependency rule</span>
-markdownlint-cli2                <span class="c"># uses .markdownlint-cli2.jsonc</span></pre>
+just check-arch                  <span class="c"># module boundaries · OS-cfg containment</span>
+markdownlint-cli2                <span class="c"># uses .markdownlint-cli2.jsonc</span>
+just roadmap                     <span class="c"># recompile ROADMAP.md, then validate</span>
+just docs                        <span class="c"># the book builds (mdbook)</span></pre>
     </div>
   </section>
 

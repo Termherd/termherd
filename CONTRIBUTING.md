@@ -52,7 +52,8 @@ Requirement tags the codebase already uses — `FR5`, `G1`, feature slugs like
 
 ## Before you push
 
-Mirror the CI gates locally (they are all blocking):
+The quickest local loop over the blocking gates — not all of them, and
+`docs/CI.md` has the full list:
 
 ```bash
 cargo fmt --all --check

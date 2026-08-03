@@ -415,7 +415,7 @@ Lints are declared once at the workspace root and tightened per crate:
 - CI runs `cargo clippy --workspace --all-targets -- -D warnings`: **every
   warning is blocking.** Mirror it locally before pushing.
 
-### CI gates (all blocking)
+### CI gates you can mirror locally
 
 ```bash
 cargo fmt --all --check
@@ -424,11 +424,20 @@ cargo nextest run --workspace          # `cargo test --workspace` locally
 cargo deny check                       # if cargo-deny installed
 cargo machete                          # unused deps; if cargo-machete installed
 just check-deps                        # hexagonal crate dependency rule
+just check-arch                        # module boundaries + OS-cfg containment
 markdownlint-cli2                      # 80-col prose; see .markdownlint-cli2.jsonc
+just roadmap                           # ROADMAP.md still matches .roadmap/
+just docs                              # the user manual builds (mdbook)
 ```
 
-CI also runs `actionlint` (workflow YAML) and CodeQL (SAST) — those aren't part
-of the routine local loop. For the **full picture** — every gate, what it
+This block is a *local loop*, not the gate list: the heading used to say "all
+blocking", which read as an inventory and was four jobs short (`portable`,
+`intra-crate-arch`, `roadmap`, `mdbook`). Two blocking gates have no local
+mirror at all — `portable`, because it is a *Windows* run, and `actionlint`.
+CodeQL runs too, but it is a post-merge baseline and not in `ci-success`, so it
+blocks nothing.
+
+For the **full picture** — every gate, what it
 protects, when it runs (PR / merge / schedule / release), how to mirror it, and
 the sanctioned exceptions — see the CI reference & runbook at
 [`docs/CI.md`](docs/CI.md).
