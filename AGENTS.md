@@ -237,8 +237,13 @@ mutation goes through an existing `Event`. The keyboard rung adds
 (the inverse of `chord_of`), and `routing::KeyboardOwner` / `KeyVerdict` — the
 overlay ladder and its outcome named once, since three readers consult them.
 
-**Still open.** `F-mcp-agent-loop` (#196 — the composed prompt→wait→read in one
-round trip), the last child of the #90 epic. With `screenshot` and the keyboard
+**Still open.** One feature and two defects: `F-mcp-agent-loop` (#196 — below),
+`enter` on the two renames (#246), and a doc editor that discards unsaved edits
+when it closes (#248). The last two are described where they arose, further
+down; neither blocks #196.
+
+`F-mcp-agent-loop` (#196 — the composed prompt→wait→read in one
+round trip) is the last child of the #90 epic. With `screenshot` and the keyboard
 tools the capability is otherwise whole in three parts: drive the UI, see the
 pixels, read the terminal — what lets an agent verify a gesture fix instead of
 only proposing it. #196 *composes* the wait, which #236 had to fix first —
