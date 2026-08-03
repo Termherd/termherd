@@ -17,10 +17,16 @@ the resulting `focused_handle`.
 A chord is dispatched as a **synthesised key event** fed to the app's key
 handler — the whole routing ladder, not just a keymap lookup.
 
-That is what makes <kbd>Escape</kbd> and <kbd>Enter</kbd> reachable: they are
-*overlay* keys, bound to no action. Without them an agent that armed a close
-confirmation would have no way to answer it, and would park the app until a
-human intervened.
+That is what makes <kbd>Escape</kbd> and <kbd>Enter</kbd> reachable at all:
+they are *overlay* keys, bound to no action. Without them an agent that armed a
+close confirmation would have no way to answer it, and would park the app until
+a human intervened.
+
+The two are not equally complete, and the difference matters to a caller.
+**`escape` leaves every prompt** — that is what guarantees an agent can always
+back out. **`enter` confirms the confirmation prompts but commits neither
+rename**, because both commit through a widget callback no synthesised event
+reaches ([#246](https://github.com/Termherd/termherd/issues/246)).
 
 The corollary: **an open overlay consumes an MCP press exactly as it consumes a
 keypress.** The step reports which prompt ate it, so a caller learns why its

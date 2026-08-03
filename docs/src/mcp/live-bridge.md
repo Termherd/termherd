@@ -115,6 +115,14 @@ A worked example, from inside a session TermHerd launched:
 
 ## What is still open
 
-`F-mcp-agent-loop` ([#196](https://github.com/Termherd/termherd/issues/196)) —
-the composed prompt → wait → read in **one** round trip — is the remaining
-piece. Today you compose it yourself from the three calls above.
+Three follow-ups, and they are independent of each other:
+
+| Gap | Issue |
+| --- | --- |
+| The composed prompt → wait → read in **one** round trip. Today you compose it yourself from the three calls above. | [#196](https://github.com/Termherd/termherd/issues/196) |
+| `enter` commits neither rename over MCP — see [Driving the keyboard](./keyboard.md). | [#246](https://github.com/Termherd/termherd/issues/246) |
+| The doc editor discards unsaved edits when it closes, by button or by `escape`. | [#248](https://github.com/Termherd/termherd/issues/248) |
+
+A fourth is not a gap in this surface but in who can reach it: the bridge is
+unreachable from anything termherd did not spawn — see
+[Two surfaces](./index.md).
