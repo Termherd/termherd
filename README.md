@@ -209,12 +209,19 @@ stable `handle` that survives a Claude-side session re-key.
 `press_keys` and `run_action` reach the app itself, not a terminal — typing
 into a session stays `run_in_session`'s job. A chord goes in as a synthesised
 key event down the real keyboard path, so an open prompt consumes it exactly as
-it would for a human, and `escape` / `enter` can answer that prompt. Each press
-reports what happened (`ran`, `inert`, `overlay`, `typed`, `unbound`), so
-"nothing visible changed" is never confused with "it worked".
+it would for a human. Each press reports what happened (`ran`, `inert`,
+`overlay`, `typed`, `unbound`), so "nothing visible changed" is never confused
+with "it worked".
 
-A composed prompt→wait→read in one round trip ([#196]) is the remaining
-follow-up.
+`escape` leaves **every** prompt, which is what keeps an agent from parking the
+app on one it cannot answer; a sidebar rename used to be the exception
+([#237]). `enter` confirms the confirmation prompts, but commits neither
+rename — those go through a widget callback no synthesised event reaches
+([#246]).
+
+Three follow-ups remain: a composed prompt→wait→read in one round trip
+([#196]), `enter` on the renames ([#246]), and a doc editor that discards
+unsaved edits when it closes ([#248]).
 
 ### The stdio server (manual)
 
@@ -239,6 +246,9 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 
 [#90]: https://github.com/Termherd/termherd/issues/90
 [#196]: https://github.com/Termherd/termherd/issues/196
+[#237]: https://github.com/Termherd/termherd/issues/237
+[#246]: https://github.com/Termherd/termherd/issues/246
+[#248]: https://github.com/Termherd/termherd/issues/248
 
 ## Test
 
