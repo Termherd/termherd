@@ -106,6 +106,36 @@ Values clamp: fps 1–60, `max_seconds` 1–600, `scale` 0.1–1.0.
 "record": { "fps": 8, "max_seconds": 30, "scale": 0.5 }
 ```
 
+### `open`
+
+The command a <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>-clicked file path opens in. Omit
+the block to hand the file to the OS default handler (`open` / `explorer` /
+`xdg-open`) — the default, which cannot honour a line number.
+
+```json
+"open": { "command": "code -g {path}:{line}:{col}" }
+```
+
+Templates: `{path}` (required), `{line}`, `{col}`. A path the terminal printed
+without a position opens at 1:1, so one command stays well-formed either way.
+
+| Rule | Why |
+| --- | --- |
+| Give a **GUI** editor | the child's standard streams are closed, so `vim` would start invisible and unkillable. Reach one through a terminal emulator: `["wezterm", "start", "--", "vim", "+{line}", "{path}"]` |
+| Run as argv, never a shell | the string is split on whitespace **before** `{path}` is filled in, so a filename with spaces or `&` can never become a second argument. Use the array form when the program's own path has spaces |
+| No `~`, no shell lookup | the program is spawned directly; write the full path. An app launched from Finder/Explorer inherits a minimal `PATH` that often lacks `code` |
+| Windows: `code.cmd` | a direct spawn only ever appends `.exe`, so a bare `"code"` is not found |
+| A placeholder in the *program* name is refused | what the terminal printed chooses the file, never the executable |
+
+An empty command, one without `{path}`, or one with an unknown placeholder is
+logged and ignored — the OS handoff applies instead. A command that fails to
+start raises a desktop notification.
+
+Configuring this also **lifts a restriction**: with no command, a path the OS
+would *run* rather than show (`.app`, `.exe`, `.desktop`) is neither underlined
+nor opened, because the handoff obeys the file association. An explicit editor
+consults no association, so those files open like any other.
+
 ### `keys`
 
 Keyboard overrides — one chord or a list per action, **replacing** that
@@ -129,8 +159,8 @@ or "switch me to a light theme" from any Claude session.
 The eight ids it covers today: `theme`, `shell.program`, `shell.args`,
 `terminal.colors.scheme`, `terminal.colors.foreground`,
 `terminal.colors.background`, `terminal.colors.cursor`,
-`terminal.colors.palette`. The `close`, `sidebar`, `record`, `keys` and
-`terminal.font_size` blocks are file-only for now; `keys` is published as a
+`terminal.colors.palette`. The `close`, `sidebar`, `record`, `open`, `keys`
+and `terminal.font_size` blocks are file-only for now; `keys` is published as a
 read-only resource.
 
 A `set_option` write lands in `settings.json` and **applies on restart**, like
@@ -149,6 +179,7 @@ any other edit to the file.
   },
   "sidebar": { "session_limit": 0 },
   "record": { "fps": 10, "max_seconds": 20, "scale": 0.5 },
+  "open": { "command": "code -g {path}:{line}:{col}" },
   "keys": {
     "toggle-sidebar": "ctrl+alt+b",
     "focus-next": "ctrl+alt+right"

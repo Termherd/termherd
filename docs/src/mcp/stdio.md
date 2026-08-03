@@ -45,7 +45,7 @@ Both speak the option **id** — a stable, dotted name:
 | `terminal.colors.palette` | array | the 16 ANSI colours — normal 0–7, bright 8–15 |
 
 That is the whole write surface today. The `close`, `sidebar`, `record`,
-`keys` and `terminal.font_size` blocks of
+`open`, `keys` and `terminal.font_size` blocks of
 [`settings.json`](../reference/settings.md) are file-only — `keys` is
 readable as a resource, below.
 

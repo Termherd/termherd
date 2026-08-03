@@ -64,24 +64,37 @@ roots:
 **A path underlines only once it has resolved.** An underline that turns out to
 point at nothing is worse than an underline one frame late.
 
+### What it opens the file *with*
+
+By default, the OS default handler — and that has two consequences worth
+knowing, both of which the `open` setting removes.
+
+**A line number cannot be honoured.** Detection splits `:184` off the target
+and carries it all the way through, but "open this file" is all the OS handoff
+can express.
+
 **Executable-by-association files are neither underlined nor opened.** Handing
 a path to the OS means "do what the association says", and for a program that
 means run it — an `ls` of an untrusted clone is enough to put `payload.app` on
 screen. The refusal happens where the resolved path arrives, so hover and click
 can never disagree: what will not open does not underline either, and you see
-the refusal before you click.
+the refusal before you click. It is a mitigation, not a guarantee: on macOS and
+Linux the set of extensions that execute is small and closed, but on Windows
+the association table maps `.js`, `.py` and every installed language onto an
+interpreter, and excluding those would refuse exactly the source files the
+feature exists to open.
 
-This is a mitigation, not a guarantee. On macOS and Linux the set of extensions
-that execute is small and closed, and the list really covers it. On Windows the
-association table decides, and it maps `.js`, `.py` and every installed
-language's extension onto an interpreter — excluding those would refuse exactly
-the source files the feature exists to open, so they are deliberately left in.
-The real Windows fix is a configurable editor command, which consults no
-association at all; it is not shipped.
+**Naming an editor removes both.** Set `open.command` with `{path}`, `{line}`
+and `{col}` templates — see [`settings.json`](../reference/settings.md) — and
+the click lands on the right line. An explicit editor consults no association
+either, so the refusal above lifts and those files open like any other. Give a
+**GUI** editor: the child's standard streams are closed, so a terminal editor
+would start invisible and unkillable. The command runs as argv, never through a
+shell, and it is split on whitespace *before* `{path}` is filled in — so a
+filename containing spaces or `&` can never become a second argument.
 
-Two other limits, known and accepted: a path that wraps across two lines is not
-detected (the same limit URLs have), and there is no `open.command` setting
-yet — the OS handler is what you get.
+One limit remains, known and accepted: a path that wraps across two lines is
+not detected, the same limit URLs have.
 
 ## Colours and font
 

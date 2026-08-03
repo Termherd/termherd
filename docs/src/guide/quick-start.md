@@ -95,8 +95,8 @@ session can reach, is in [Driving termherd over MCP](../mcp/index.md).
 There is no settings panel yet: edit `~/.termherd/settings.json`
 (`%USERPROFILE%\.termherd\settings.json` on Windows) and restart. Shell, theme,
 terminal colours and font size, close-confirmation policy, sidebar density, GIF
-recording budget, and every key binding live there —
-[full reference](../reference/settings.md).
+recording budget, the editor a clicked file path opens in, and every key
+binding live there — [full reference](../reference/settings.md).
 
 ## Where to go next
 
