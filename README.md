@@ -8,6 +8,14 @@ Inspired by [doctly/switchboard](https://github.com/doctly/switchboard), the
 Electron app it replatforms; see [`docs/background/`](docs/background/) for
 the full reasoning archive.
 
+## Documentation
+
+The user manual is an [mdBook](https://rust-lang.github.io/mdBook/) under
+[`docs/src/`](docs/src/) — philosophy, install, quick start, the workspace
+surfaces, the MCP control surface, shortcuts, and the settings file. Build it
+locally with `just docs` (or `just docs-serve` for live reload); `main`
+publishes it to GitHub Pages.
+
 This is an early scaffold. Status, scope, and design live in:
 
 - [`docs/PRD.md`](docs/PRD.md) — Product Requirements Document

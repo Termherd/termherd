@@ -59,7 +59,13 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 markdownlint-cli2                  # markdown is gated too
+just docs                          # the book must still build
 ```
+
+If your change is visible to a user, the manual under `docs/src/` changes with
+it, in the same PR — `AGENTS.md` carries the mapping from what you touched to
+which page says so. `just docs` proves the book builds; nothing proves it is
+still true.
 
 See [`docs/CI.md`](docs/CI.md) for the full gate reference and
 [`AGENTS.md`](AGENTS.md) for everything else.

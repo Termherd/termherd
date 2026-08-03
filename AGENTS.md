@@ -34,6 +34,7 @@ just check-arch                    # intra-crate module boundaries + OS-cfg cont
 # roadmark bug, not something to fix by editing the artifact)
 markdownlint-cli2                  # uses .markdownlint-cli2.jsonc
 just roadmap                       # recompile ROADMAP.md from .roadmap/, then validate
+just docs                          # build the user manual (mdbook); just docs-serve to preview
 
 # Planning hygiene — not a CI gate (needs a `project`-scoped token)
 just board-check                   # board/issue drift (0 clean · 1 drift · 2 unchecked)
@@ -475,6 +476,39 @@ exists). Do not relax them locally.
   glyph in the generated catalog — before assuming something is built.
 - **`ROADMAP.md` is generated. Never edit it.** Edit the feature file, then
   run `just roadmap` and commit both. CI rebuilds and diffs.
+
+### Keeping the book current
+
+**A user-visible change updates the book in the same PR.** The manual is an
+mdBook under [`docs/src/`](docs/src/) — `just docs` builds it, `just docs-serve`
+previews it with live reload. If a change alters what a user sees, types or
+configures, the page describing it changes with it. Not in a follow-up: a
+follow-up is how a book starts describing an interface that has already moved,
+and a manual that is confidently wrong is worse than one that is missing,
+because nobody re-derives what it claims.
+
+Four pages restate in prose what the code holds as data, which makes them the
+ones that rot first:
+
+| You changed | Update |
+| --- | --- |
+| `ACTIONS` / `Keymap::defaults` in `core::keymap` | `docs/src/reference/keyboard.md` |
+| the `settings.json` schema (and `docs/settings.example.jsonc` with it) | `docs/src/reference/settings.md` |
+| an MCP `#[tool(…)]`, its arguments or its outcomes | `docs/src/mcp/live-bridge.md`, `docs/src/mcp/keyboard.md` |
+| `OPTIONS` in `crates/mcp/src/lib.rs` | `docs/src/mcp/stdio.md` (the id table) |
+| a label in `crates/app/src/strings.rs` the book quotes | the matching `docs/src/workspace/` page |
+
+**No gate catches this.** The `book` CI job proves the book still *builds* and
+that `SUMMARY.md` resolves against the files on disk; nothing proves it still
+describes the binary. That is the same standing as the `#NN`-in-code rule above
+— enforced by review and by habit, not by a script.
+
+Two things this rule does *not* ask for. An internal refactor with no
+user-visible surface needs no book edit: its home is `AGENTS.md`,
+`docs/ARCHITECTURE.md` or `docs/CI.md`. And a page must stay honest about what
+has *not* shipped — where a feature is partial, say so on the page rather than
+describing the finished version, which is what lets the book be written ahead
+of the last rung without lying.
 
 ## How we track work
 

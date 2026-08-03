@@ -19,6 +19,14 @@
 /docs/reviews/*.pdf
 /docs/notes/*.pdf
 
+# mdbook build output — rebuilt by `just docs`, published from CI
+/docs/book/
+
+# The single-instance lock, when a run lands it in the working directory
+# instead of the temp dir — which is what an *empty* (not unset) TMPDIR
+# produces, since `std::env::temp_dir()` then yields a relative path.
+dev.termherd.lock
+
 # cargo-mutants scratch output (mutation testing runs locally / in CI)
 /mutants.out/
 /mutants.out.old/

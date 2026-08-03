@@ -46,6 +46,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       cargo: ${{ steps.filter.outputs.cargo }}
       markdown: ${{ steps.filter.outputs.markdown }}
+      book: ${{ steps.filter.outputs.book }}
       roadmap: ${{ steps.filter.outputs.roadmap }}
       workflows: ${{ steps.filter.outputs.workflows }}
     steps:
@@ -77,6 +78,14 @@ jobs:
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
+            # `book` = the mdbook sources and its config/theme. The build is
+            # the only thing that checks SUMMARY.md against the files on disk
+            # (`create-missing = false` turns a dead chapter link into a build
+            # failure), which markdownlint cannot see.
+            book:
+              - 'docs/book.toml'
+              - 'docs/src/**'
+              - 'docs/theme/**'
             # `roadmap` = the compiled roadmap and everything it is compiled
             # from. ROADMAP.md is in both filters on purpose: markdownlint
             # ignores it (it is an artifact) while this gate is the only thing
@@ -340,6 +349,23 @@ jobs:
           globs: '**/*.md'
           config: '.markdownlint-cli2.jsonc'
 
+  # Build the book. This is not a duplicate of `markdown`: markdownlint reads
+  # each file alone, while the build is the only thing that resolves the
+  # chapter map — `create-missing = false` fails on a SUMMARY.md link to a page
+  # that does not exist, which is the failure mode a growing book actually has.
+  # `docs-deploy.yml` publishes what this proved buildable.
+  book:
+    name: mdbook
+    needs: changes
+    if: needs.changes.outputs.book == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
+        with:
+          tool: mdbook
+      - run: mdbook build docs
+
   # Single required status check for the `main` branch-protection rule. It
   # `needs:` every per-PR gate, so protection pins one stable name
   # (`ci-success`) that never changes as jobs are added or removed. `cross-os`
@@ -356,7 +382,7 @@ jobs:
   ci-success:
     name: ci-success
     if: always()
-    needs: [changes, fmt, clippy, test, portable, deny, machete, deps, intra-arch, actionlint, markdown, roadmap]
+    needs: [changes, fmt, clippy, test, portable, deny, machete, deps, intra-arch, actionlint, markdown, roadmap, book]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required job failed or was cancelled
