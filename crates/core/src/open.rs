@@ -165,6 +165,11 @@ impl OpenCommand {
     /// Build from an explicit argv — the form for a program path that carries
     /// spaces, which the split form cannot express.
     ///
+    /// The program is taken as written: no `~` expansion, no shell lookup
+    /// beyond the `PATH` the process already has. That is the price of never
+    /// rendering this into a shell grammar, and the reason a bare `code` can
+    /// fail under a desktop-launched app.
+    ///
     /// # Errors
     /// See [`OpenCommandError`].
     pub fn from_words<I>(words: I) -> Result<Self, OpenCommandError>

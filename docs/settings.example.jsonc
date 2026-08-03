@@ -63,6 +63,13 @@
   // form when the program's own path contains spaces:
   //   "command": ["/Applications/My Editor.app/Contents/MacOS/edit", "{path}"]
   //
+  // The program is run directly, not through a shell — so `~` is NOT expanded
+  // (write the full path) and the name is looked up in the PATH the app itself
+  // was started with. An app launched from Finder/Explorer inherits a minimal
+  // PATH that often lacks `code`, `subl` and friends: if the click does
+  // nothing (and a notification says the command failed), give the absolute
+  // path to the binary.
+  //
   // A placeholder in the program name is refused: what the terminal printed
   // chooses the file, never the executable. An empty command, one without
   // {path}, or one with an unknown {placeholder} is logged and ignored — the
