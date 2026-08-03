@@ -11,7 +11,9 @@ use crate::metadata::Overlay;
 use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
 
-use super::{LaunchSpec, ScrollTarget, SelectOp, SessionStatus, Zoom};
+use super::{
+    LaunchSpec, PathRequest, ResolvedPath, ScrollTarget, SelectOp, SessionStatus, TargetProbe, Zoom,
+};
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -148,8 +150,28 @@ pub enum Event {
     FontSizeLoaded(f32),
     /// Zoom the terminal font in/out/back to base.
     Zoom(Zoom),
-    /// The user Ctrl/Cmd+clicked a detected link in a terminal.
-    OpenUrl(String),
+    /// The clickable target now under the pointer in a terminal, or `None`
+    /// when the pointer left every one (or the modifier is not held). The
+    /// shell finds the span — only it holds the grid — and `core` owns the
+    /// answer, so one place decides what is underlined. See [`TargetProbe`].
+    TermTarget {
+        session: SessionId,
+        probe: Option<TargetProbe>,
+    },
+    /// The user Ctrl/Cmd+clicked a target. One event for both natures: two
+    /// activation paths side by side would be the same invariant expressed
+    /// twice, and would drift on the first edit that touched one of them.
+    ActivateTarget {
+        session: SessionId,
+        probe: TargetProbe,
+    },
+    /// A path candidate came back from [`ports::PathResolver`](crate::ports::PathResolver):
+    /// the file it names, or [`None`] when it names none. The request is
+    /// echoed so `core` can tell which question was answered.
+    PathResolved {
+        request: PathRequest,
+        resolved: Option<ResolvedPath>,
+    },
     /// A session emitted an OSC 9 notification — Claude wants the user.
     /// `body` is the raw payload Claude sent ("needs your attention", a
     /// permission prompt, …). Routed to the OS notification centre on top of

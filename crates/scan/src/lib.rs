@@ -32,6 +32,7 @@
 
 mod cache;
 mod derive;
+mod paths;
 mod repo;
 mod walk;
 mod watch;
@@ -46,6 +47,7 @@ use tracing::{debug, warn};
 use cache::ScanCache;
 use walk::scan_root;
 
+pub use paths::FsPathResolver;
 pub use repo::repo_root;
 pub use watch::{WatchHandle, watch_changes};
 
@@ -71,10 +73,8 @@ impl FsScanner {
     /// `None` when no home directory can be determined.
     #[must_use]
     pub fn claude_default() -> Option<Self> {
-        let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-        Some(Self::new(
-            PathBuf::from(home).join(".claude").join("projects"),
-        ))
+        let home = paths::home_dir()?;
+        Some(Self::new(home.join(".claude").join("projects")))
     }
 
     /// The projects root this scanner walks.

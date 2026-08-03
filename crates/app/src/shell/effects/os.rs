@@ -11,10 +11,27 @@ use termherd_core::ports::PtyError;
 #[cfg(target_os = "macos")]
 const MACOS_BUNDLE_ID: &str = "dev.termherd";
 
+/// Hand a resolved file to the OS default handler — the same three openers a
+/// URL takes, since each accepts a path as readily as a URL. The `:line` the
+/// terminal printed cannot survive this handoff: no OS opener takes a
+/// position. Carrying it this far is what lets the configurable editor command
+/// honour it later without re-deriving anything.
+pub(super) fn open_path(path: &std::path::Path) -> Result<(), PtyError> {
+    open_url(&path.to_string_lossy())
+}
+
 /// Hand a detected link to the OS default handler. Fire-and-forget: the
-/// child opener is spawned, not waited on. `url` has already been validated by
-/// `core` (a recognised scheme, trimmed), and is always passed as a single
-/// argument — never through a shell — so it can't be reinterpreted.
+/// child opener is spawned, not waited on. The target is always passed as a
+/// single argument to a real executable — never as text a shell re-parses.
+///
+/// That last part is the whole reason Windows does **not** go through
+/// `cmd /C start`. `cmd` re-parses its command line and treats `&`, `|`, `^`
+/// and `%VAR%` as syntax, while Rust quotes an argument only when it contains
+/// whitespace. A file legitimately named `Q&A.md` would split in half, and a
+/// filename an attacker chose — a path in this app now comes from whatever the
+/// terminal printed — would run its second half as a command. `explorer.exe` is
+/// an ordinary executable, so the argument reaches it intact: the string is
+/// never rendered into `cmd`'s grammar in the first place.
 pub(super) fn open_url(url: &str) -> Result<(), PtyError> {
     use std::process::Command;
     let spawn = |mut cmd: Command| {
@@ -30,10 +47,12 @@ pub(super) fn open_url(url: &str) -> Result<(), PtyError> {
     }
     #[cfg(target_os = "windows")]
     {
-        // `start` treats the first quoted argument as the window title, so the
-        // empty "" keeps the URL from being swallowed as one.
-        let mut cmd = Command::new("cmd");
-        cmd.args(["/C", "start", "", url]);
+        // `explorer` hands both a path and a URL to the registered handler,
+        // exactly as `start` did, without a shell in between. Its exit status
+        // is famously unreliable, which costs nothing here: the spawn is
+        // fire-and-forget and never waited on.
+        let mut cmd = Command::new("explorer");
+        cmd.arg(url);
         spawn(cmd)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]

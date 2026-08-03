@@ -21,6 +21,7 @@ use crate::workspace::{SessionId, Workspace};
 mod capture;
 mod effects;
 mod events;
+mod hover;
 mod metadata;
 mod notify;
 mod record;
@@ -36,6 +37,10 @@ use settings::FontState;
 
 pub use effects::Effect;
 pub use events::Event;
+pub use hover::{
+    HoverTarget, PathPurpose, PathRequest, PathRoots, ProbeKind, ResolvedPath, TargetProbe,
+    TermHover,
+};
 pub use session::{Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
@@ -66,6 +71,13 @@ pub struct App {
     /// frame timer and encoder live in the `app`; `core` only counts frames
     /// against the cap and decides capture/finish.
     recording: Option<Recording>,
+    /// The clickable target under the pointer while the link modifier is held,
+    /// or `None`. Private — read through [`Self::term_hover`]. See [`TermHover`].
+    hover: Option<TermHover>,
+    /// The path resolution asked for and not yet answered. Kept so a reply that
+    /// arrives after the pointer has moved on is dropped rather than
+    /// underlining a span the pointer has left.
+    pending_path: Option<PathRequest>,
     /// Whether the OS says the window has focus, from
     /// [`Event::WindowFocusChanged`]. Starts `false` (unknown) so a session
     /// notification is forwarded to the OS until a real focus signal proves
@@ -267,7 +279,9 @@ impl App {
             Event::ToggleExpanded(path) => self.toggle_expanded(path),
             Event::FontSizeLoaded(size) => self.load_font_size(size),
             Event::Zoom(zoom) => self.zoom(zoom),
-            Event::OpenUrl(url) => Self::open_url(url),
+            Event::TermTarget { session, probe } => self.set_term_target(session, probe),
+            Event::ActivateTarget { session, probe } => self.activate_target(session, probe),
+            Event::PathResolved { request, resolved } => self.path_resolved(&request, resolved),
             Event::SessionNotified { session, body } => self.notify_session(session, body),
             Event::Capture(inputs) => vec![Effect::Capture(self.build_capture(&inputs))],
             Event::ToggleRecord { max_frames } => self.toggle_record(max_frames),
@@ -276,18 +290,6 @@ impl App {
                 self.window_focused = focused;
                 Vec::new()
             }
-        }
-    }
-
-    /// Open a Ctrl/Cmd+clicked link in the OS default handler. Only a
-    /// non-blank string reaches the handler; a blank or schemeless one is
-    /// dropped rather than shelling out on it.
-    fn open_url(url: String) -> Vec<Effect> {
-        let url = url.trim();
-        if url.is_empty() {
-            Vec::new()
-        } else {
-            vec![Effect::OpenUrl(url.to_owned())]
         }
     }
 
@@ -304,22 +306,6 @@ impl App {
 mod tests {
     use super::*;
     use crate::app::testsupport::*;
-
-    #[test]
-    fn open_url_emits_a_trimmed_open_effect() {
-        let mut app = App::new();
-        let effects = app.apply(Event::OpenUrl("  https://example.com  ".into()));
-        assert!(matches!(
-            effects.as_slice(),
-            [Effect::OpenUrl(u)] if u == "https://example.com"
-        ));
-    }
-
-    #[test]
-    fn open_url_ignores_a_blank_string() {
-        let mut app = App::new();
-        assert!(app.apply(Event::OpenUrl("   ".into())).is_empty());
-    }
 
     #[test]
     fn the_state_only_events_yield_no_effects() {

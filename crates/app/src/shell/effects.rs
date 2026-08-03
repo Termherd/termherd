@@ -20,7 +20,7 @@ use termherd_core::{
 
 use super::bridge::Request;
 use super::{Message, Shell};
-use os::{notify, open_url};
+use os::{notify, open_path, open_url};
 
 impl Shell {
     /// Carry out every effect `core` asked for, returning any async follow-up
@@ -68,6 +68,24 @@ impl Shell {
             }
             // Opening a link and a desktop notification are OS handoffs.
             Effect::OpenUrl(url) => open_url(&url),
+            Effect::OpenPath { path, .. } => open_path(&path),
+            // Resolving walks and stats directories, so it runs on the task
+            // executor rather than the UI thread, and its answer comes back as
+            // an event like any other. The blocking call sits directly in the
+            // async block — the same shape as the scan and the PNG encode.
+            // `tokio::spawn_blocking` would *look* more correct and be fatal:
+            // iced's executor here is the `futures` thread pool, with no tokio
+            // context, so the call would panic and take a pool worker with it.
+            Effect::ResolvePath { request, roots } => {
+                let resolver = self.path_resolver.clone();
+                return Task::perform(
+                    async move {
+                        let resolved = resolver.resolve(&request.candidate, &roots);
+                        (request, resolved)
+                    },
+                    |(request, resolved)| Message::PathResolved { request, resolved },
+                );
+            }
             Effect::Notify { title, body } => notify(&title, &body),
             // Capture writes the dump and schedules the PNG; record drives the
             // encoder thread. Both return a task the loop above batches in.

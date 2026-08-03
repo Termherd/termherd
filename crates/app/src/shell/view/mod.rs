@@ -166,6 +166,7 @@ impl Shell {
                     screen,
                     session,
                     link_modifier: self.link_modifier,
+                    hover: self.core.term_hover(),
                     shift: self.shift_modifier,
                     font_size: self.core.font_size(),
                     dimmed: !self.core.window_focused(),

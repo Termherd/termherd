@@ -21,7 +21,7 @@ use iced::advanced::widget::{self, operate, operation::focusable};
 use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::widget::text_editor;
 use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
-use termherd_core::ports::{ProjectScanner, PtyHost};
+use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
     ConfigInput, Keymap, Launch, Overlay, ScrollTarget, SelectOp, SessionRecord, SessionStatus,
@@ -143,6 +143,7 @@ impl Startup {
 pub fn run(
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
+    path_resolver: Arc<dyn PathResolver>,
     pty: Arc<dyn PtyHost>,
     pty_rx: UnboundedReceiver<PtyEvent>,
     live_bridge: LiveBridge,
@@ -162,10 +163,13 @@ pub fn run(
         move || {
             let mut shell = Shell::new(
                 config,
-                scanner.clone(),
-                watch_root.clone(),
-                pty.clone(),
-                pty_output.clone(),
+                Ports {
+                    scanner: scanner.clone(),
+                    watch_root: watch_root.clone(),
+                    path_resolver: path_resolver.clone(),
+                    pty: pty.clone(),
+                    pty_output: pty_output.clone(),
+                },
                 live_bridge.clone(),
                 Startup {
                     theme: startup.theme,
@@ -232,6 +236,9 @@ struct Shell {
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
     scan_error: Option<String>,
+    /// Checks whether a path-shaped run of terminal text names a real file.
+    /// The one thing that tells `src/main.rs` from `and/or`.
+    path_resolver: Arc<dyn PathResolver>,
     /// The PTY host adapter; effects from `core` are performed against it.
     pty: Arc<dyn PtyHost>,
     /// Streams PTY output/exit into the subscription (taken once).
@@ -512,8 +519,23 @@ enum Message {
     DocSaved(Result<SystemTime, crate::docs::SaveError>),
     /// Close the doc viewer, returning to the terminal.
     CloseDoc,
-    /// Open a Ctrl/Cmd+clicked terminal link in the OS default handler.
-    OpenUrl(String),
+    /// The clickable target now under the pointer in a terminal, or `None` when
+    /// the pointer left every one. The canvas finds it; `core` owns it.
+    TermTarget {
+        session: termherd_core::SessionId,
+        probe: Option<termherd_core::TargetProbe>,
+    },
+    /// The user Ctrl/Cmd+clicked a terminal target — a URL or a file path.
+    ActivateTarget {
+        session: termherd_core::SessionId,
+        probe: termherd_core::TargetProbe,
+    },
+    /// A path candidate came back from the resolver: the file it names, or
+    /// `None` when it names none.
+    PathResolved {
+        request: termherd_core::PathRequest,
+        resolved: Option<termherd_core::ResolvedPath>,
+    },
     /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
     /// runs off the UI thread, so this only spawns it.
@@ -600,16 +622,28 @@ impl Message {
     }
 }
 
+/// Everything the shell reaches the outside world through, constructed in
+/// `main()` and injected as one piece. Grouped because they travel together and
+/// are chosen together: swapping the real adapters for test doubles is one
+/// substitution, not five.
+pub(crate) struct Ports {
+    pub(crate) scanner: Arc<dyn ProjectScanner>,
+    /// The projects tree to watch for changes, when there is one.
+    pub(crate) watch_root: Option<PathBuf>,
+    pub(crate) path_resolver: Arc<dyn PathResolver>,
+    pub(crate) pty: Arc<dyn PtyHost>,
+    pub(crate) pty_output: PtyOutput,
+}
+
 impl Shell {
-    fn new(
-        bounds: WindowConfig,
-        scanner: Arc<dyn ProjectScanner>,
-        watch_root: Option<PathBuf>,
-        pty: Arc<dyn PtyHost>,
-        pty_output: PtyOutput,
-        live_bridge: LiveBridge,
-        startup: Startup,
-    ) -> Self {
+    fn new(bounds: WindowConfig, ports: Ports, live_bridge: LiveBridge, startup: Startup) -> Self {
+        let Ports {
+            scanner,
+            watch_root,
+            path_resolver,
+            pty,
+            pty_output,
+        } = ports;
         let LiveBridge {
             requests: bridge_requests,
             mcp_endpoint,
@@ -628,6 +662,7 @@ impl Shell {
             scanner,
             watch_root,
             scan_error: None,
+            path_resolver,
             pty,
             pty_output,
             bridge_requests,
@@ -1157,8 +1192,22 @@ impl Shell {
                 self.open_doc = None;
                 Task::none()
             }
-            Message::OpenUrl(url) => {
-                let effects = self.core.apply(termherd_core::Event::OpenUrl(url));
+            Message::TermTarget { session, probe } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::TermTarget { session, probe });
+                self.perform(effects)
+            }
+            Message::ActivateTarget { session, probe } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::ActivateTarget { session, probe });
+                self.perform(effects)
+            }
+            Message::PathResolved { request, resolved } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::PathResolved { request, resolved });
                 self.perform(effects)
             }
             Message::CaptureScreenshot {
@@ -1393,15 +1442,28 @@ mod key_routing {
         }
     }
 
+    /// The real scan-side adapters over a test PTY: an empty scanner, no watch
+    /// root, and the genuine path resolver — it only ever sees paths a test
+    /// wrote to a tempdir, so a double would test less.
+    fn test_ports(
+        pty: Arc<dyn PtyHost>,
+        rx: iced::futures::channel::mpsc::UnboundedReceiver<PtyEvent>,
+    ) -> Ports {
+        Ports {
+            scanner: Arc::new(EmptyScanner),
+            watch_root: None,
+            path_resolver: Arc::new(termherd_scan::FsPathResolver::new()),
+            pty,
+            pty_output: PtyOutput::new(rx),
+        }
+    }
+
     /// A `Shell` over the given PTY host, with no terminal open yet.
     fn shell_over(pty: Arc<dyn PtyHost>) -> Shell {
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
         Shell::new(
             WindowConfig::default(),
-            Arc::new(EmptyScanner),
-            None,
-            pty,
-            PtyOutput::new(rx),
+            test_ports(pty, rx),
             test_live_bridge(),
             test_startup(),
         )
@@ -3497,10 +3559,7 @@ mod key_routing {
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
         let shell = Shell::new(
             WindowConfig::default(),
-            Arc::new(EmptyScanner),
-            None,
-            pty.clone(),
-            PtyOutput::new(rx),
+            test_ports(pty.clone(), rx),
             test_live_bridge(),
             Startup {
                 theme: ThemeChoice::default(),

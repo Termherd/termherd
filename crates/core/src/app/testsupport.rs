@@ -7,6 +7,12 @@ use crate::snapshot::WorkspaceSnapshot;
 
 use super::*;
 
+/// A session id from a small literal, for tests that need an id without
+/// launching anything.
+pub(crate) fn sid(n: u64) -> SessionId {
+    SessionId(std::num::NonZeroU64::new(n).expect("test ids are non-zero"))
+}
+
 /// A browsed session record with the given id / project / first-prompt summary.
 pub(crate) fn record(id: &str, path: &str, summary: &str) -> SessionRecord {
     SessionRecord {
