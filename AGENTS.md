@@ -363,6 +363,15 @@ exists). Do not relax them locally.
   diff touches a dependency's platform-conditional surface, add the target once
   (`rustup target add x86_64-pc-windows-msvc`) and check both ways: the change
   compiles, and reverting it fails.
+  **A test that needs an OS-only API belongs in `tests/`, not in the
+  containment allow-list.** `check-os-cfg-containment.sh` scans `*/src/**`
+  only, so an integration test may use `std::os::unix::fs` freely — whereas
+  adding the adapter's own source file to the allow-list to accommodate one
+  test would licence OS-conditional *production* code there unnoticed, which is
+  what the quarantine exists to prevent. Budget for one surprise on the way:
+  `clippy.toml`'s `allow-expect-in-tests` recognises `#[cfg(test)]` items, not
+  a `tests/` binary, so such a file needs its own `#![allow(clippy::…)]` with a
+  reason.
 - **Cross-compiling is not the whole hazard — code that *runs* differently per
   host is worse, because no `cargo check` catches it.** `#239`'s shell
   integration built the replayed startup path with `Path::join`, which writes
