@@ -59,8 +59,9 @@ binary. Pages that restate what the code holds as data — the shortcut table,
 the settings reference, the MCP tool tables — are the ones that rot first.
 `AGENTS.md` carries the mapping from what you changed to what to update.
 
-Issues are written in English, title and body alike; commit messages are the
-one exception and stay as they are.
+Everything written for the project is in English — commits, issues, pull
+requests, comments, docs. The history is bilingual because the rule arrived
+late; new writing is English whatever language the work was discussed in.
 
 ## How work is tracked
 

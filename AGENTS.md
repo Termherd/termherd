@@ -471,14 +471,6 @@ exists). Do not relax them locally.
   English keywords — a French body carrying « Ferme #NN » merges with the issue
   left open, which has already happened here (#239 / #236). Write `Closes #NN`.
 - Commit messages: no "Claude" signature (per global user instruction).
-- **Issues are written in English** — title, body, and comments. The repo is
-  English-first everywhere a reader outside the project can land: the UI
-  strings (`crates/app/src/strings.rs`, the settled outcome of `F-i18n`), the
-  book under `docs/src/`, `README.md`, and this file. The issue tracker is
-  public and is the one of those surfaces that had drifted bilingual, which
-  makes a backlog only half of it can be searched. Commit messages are the
-  exception and stay as they are: they address contributors, not readers, and
-  a mixed history is not worth rewriting.
 - No issue numbers (`#NN`) in code comments, doc-comments, or test names —
   git history already links code to its issue, and an in-code `#NN` rots when
   issues are renumbered or migrated. Cite issues in commit/PR bodies and
