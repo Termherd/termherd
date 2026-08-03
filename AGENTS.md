@@ -444,6 +444,15 @@ exists). Do not relax them locally.
   precedence where they collide.
 - Markdown prose: 80-col wrap (tables / code blocks exempt, see
   `.markdownlint-cli2.jsonc`).
+- **Everything written for the project is in English** — commit messages, PR
+  and issue titles and bodies, review comments, documentation, code comments,
+  test names. The repository's history is bilingual because this rule arrived
+  late; new writing is English regardless of the language the work was
+  discussed in. Two reasons, and the second is the one that bites: an
+  English-speaking contributor should not need a translator to read a commit
+  that explains why a line exists, and GitHub only auto-closes an issue on its
+  English keywords — a French body carrying « Ferme #NN » merges with the issue
+  left open, which has already happened here (#239 / #236). Write `Closes #NN`.
 - Commit messages: no "Claude" signature (per global user instruction).
 - No issue numbers (`#NN`) in code comments, doc-comments, or test names —
   git history already links code to its issue, and an in-code `#NN` rots when
