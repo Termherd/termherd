@@ -231,9 +231,10 @@ app on one it cannot answer; a sidebar rename used to be the exception
 rename — those go through a widget callback no synthesised event reaches
 ([#246]).
 
-Three follow-ups remain: a composed prompt→wait→read in one round trip
-([#196]), `enter` on the renames ([#246]), and a doc editor that discards
-unsaved edits when it closes ([#248]).
+Four follow-ups remain: a composed prompt→wait→read in one round trip
+([#196]), `enter` on the renames ([#246]), a doc editor that discards unsaved
+edits when it closes ([#248]), and reaching the bridge from outside a session
+termherd spawned — the launcher cannot drive it today ([#267]).
 
 ### The stdio server (manual)
 
@@ -261,6 +262,7 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 [#237]: https://github.com/Termherd/termherd/issues/237
 [#246]: https://github.com/Termherd/termherd/issues/246
 [#248]: https://github.com/Termherd/termherd/issues/248
+[#267]: https://github.com/Termherd/termherd/issues/267
 
 ## Test
 

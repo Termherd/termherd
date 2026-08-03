@@ -1009,8 +1009,10 @@ the recorder) and the PNG encoder (from the capture dump) moved into one pure
 `app::image` module rather than being copied a third time. Depends on #212/#193.
 **#196 + #229 + #215 are one capability in three parts** — drive the UI, see
 the pixels, read the terminal — the loop that lets an agent *verify* a gesture
-fix instead of only proposing it. With #229 shipped, #196 is the one that
-remains
+fix instead of only proposing it. With #229 shipped, #196 is what remains of
+*that* trio — and the loop it completes is still out of reach for anything
+termherd did not spawn, which [F-mcp-attach](#f-mcp-attach) (#267) is about:
+the launcher that most wants to verify a fix is the one caller with no way in
 
 <a id="f-mcp-snapshot"></a>
 
