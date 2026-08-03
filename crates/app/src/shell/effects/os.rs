@@ -27,9 +27,26 @@ pub(super) fn open_path(path: &std::path::Path) -> Result<(), PtyError> {
 ///
 /// Fire-and-forget like every other handoff: the error this returns is the
 /// spawn's alone (no such program, no permission), never the editor's exit.
+///
+/// **The three streams are closed, not inherited.** A GUI editor ignores them,
+/// but a terminal one (`vim +{line} {path}`, which the settings template shows
+/// as a *grammar*, not as a suggestion) would otherwise attach to the app's own
+/// stdio: an invisible editor holding a window-less process's terminal, able to
+/// block on a full pipe, killable only from outside.
+///
+/// **The child is not reaped.** Like its `open_url` / `notify` siblings the
+/// handle is dropped, so on Unix each spawn leaves an entry until termherd
+/// exits. It matters more here than there: `open` and `xdg-open` return in
+/// milliseconds, where an editor this *launches* can outlive the click by
+/// hours. Waiting would cost a parked thread per open — worse than the entry it
+/// removes — so the entry stands, named rather than discovered later.
 pub(super) fn spawn_editor(program: &str, args: &[String]) -> Result<(), PtyError> {
+    use std::process::Stdio;
     std::process::Command::new(program)
         .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map(|_| ())
         .map_err(|e| PtyError::Io(e.to_string()))
@@ -122,6 +139,56 @@ pub(super) fn notify(title: &str, body: &str) -> Result<(), PtyError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A program every host has, told to copy `from` to `to` — so the test can
+    /// prove the *arguments* arrived, not merely that something started. The
+    /// one place a per-OS branch is allowed, and the reason this test lives
+    /// here rather than beside the pure argv building in `core`.
+    fn copy_command(from: &str, to: &str) -> (&'static str, Vec<String>) {
+        #[cfg(windows)]
+        {
+            (
+                "cmd",
+                vec![
+                    "/C".to_owned(),
+                    "copy".to_owned(),
+                    from.to_owned(),
+                    to.to_owned(),
+                ],
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            ("/bin/cp", vec![from.to_owned(), to.to_owned()])
+        }
+    }
+
+    #[test]
+    fn the_argv_reaches_the_program_that_was_named() {
+        // The failure test below cannot tell "spawned the wrong thing" from
+        // "spawned the right thing": only an observable side effect can, and a
+        // copy is the smallest one every host can perform.
+        let dir = std::env::temp_dir().join(format!("termherd-spawn-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let (from, to) = (dir.join("clicked.txt"), dir.join("opened.txt"));
+        std::fs::write(&from, b"opened").expect("write source");
+
+        let (program, args) = copy_command(&from.to_string_lossy(), &to.to_string_lossy());
+        spawn_editor(program, &args).expect("the copy must start");
+
+        // Fire-and-forget means the child is not waited on, so poll for its
+        // effect rather than assert it has already landed.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !to.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(
+            std::fs::read(&to).ok().as_deref(),
+            Some(b"opened".as_slice()),
+            "the arguments reached the program, in order"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_missing_editor_reports_the_failure_rather_than_swallowing_it() {

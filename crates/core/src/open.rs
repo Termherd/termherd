@@ -178,6 +178,13 @@ impl OpenCommand {
     {
         let mut words = words.into_iter();
         let program = words.next().ok_or(OpenCommandError::Empty)?;
+        // `split_whitespace` cannot produce a blank program, but the argv form
+        // can — and a blank one reaches the spawn and fails on every click,
+        // which is exactly the "validated once, renders forever" contract this
+        // type exists to keep.
+        if program.trim().is_empty() {
+            return Err(OpenCommandError::Empty);
+        }
         // The program is checked, never substituted: a placeholder here would
         // let whatever the terminal printed pick the executable.
         if !Word::parse(&program)?.0.iter().all(is_literal) {
@@ -292,6 +299,21 @@ mod tests {
                 word: "{path".to_owned()
             })
         );
+    }
+
+    #[test]
+    fn an_argv_with_a_blank_program_is_refused_like_an_empty_one() {
+        // Only the argv form can express this — `split_whitespace` never yields
+        // a blank word. Left through, it would parse and then fail at every
+        // single click, which is the failure mode parse-time validation exists
+        // to make impossible.
+        for blank in ["", " "] {
+            assert_eq!(
+                OpenCommand::from_words([blank, "{path}"].into_iter().map(str::to_owned)),
+                Err(OpenCommandError::Empty),
+                "a {blank:?} program is no program"
+            );
+        }
     }
 
     #[test]

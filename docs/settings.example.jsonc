@@ -54,8 +54,15 @@
   // `xdg-open`), which is the default.
   //
   // Templates: {path} (required), {line}, {col}. A file the terminal printed
-  // without a position opens at 1:1 — so `code -g {path}:{line}:{col}` and
-  // `vim +{line} {path}` both stay well-formed either way.
+  // without a position opens at 1:1, so a command stays well-formed whether or
+  // not the terminal printed a position — `code -g {path}:{line}:{col}` and
+  // the `+{line}` shape both.
+  //
+  // Give a GUI editor. The child's stdin/stdout/stderr are closed, not this
+  // app's: a terminal editor (vim, emacs -nw) would start with no window and
+  // no terminal, invisible and unkillable from here. To reach one, launch it
+  // through a terminal emulator — e.g.
+  //   "command": ["wezterm", "start", "--", "vim", "+{line}", "{path}"]
   //
   // The command is run as argv, never through a shell: the string below is
   // split on whitespace BEFORE {path} is filled in, so a filename containing
@@ -69,6 +76,10 @@
   // PATH that often lacks `code`, `subl` and friends: if the click does
   // nothing (and a notification says the command failed), give the absolute
   // path to the binary.
+  //
+  // On WINDOWS that same rule bites the example above: VS Code installs
+  // `code.cmd`, and a direct spawn only ever appends `.exe` — a bare "code"
+  // is not found. Write "code.cmd", or the absolute path to `Code.exe`.
   //
   // A placeholder in the program name is refused: what the terminal printed
   // chooses the file, never the executable. An empty command, one without

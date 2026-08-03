@@ -783,6 +783,8 @@ mod tests {
             r#""code -g""#,
             r#""{path} -g {path}""#,
             "[]",
+            // Only the argv form can name a blank program.
+            r#"["", "{path}"]"#,
         ] {
             let json = format!(r#"{{ "theme": "light", "open": {{ "command": {bad} }} }}"#);
             let s: Settings =
