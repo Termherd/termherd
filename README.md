@@ -10,11 +10,15 @@ the full reasoning archive.
 
 ## Documentation
 
-The user manual is an [mdBook](https://rust-lang.github.io/mdBook/) under
-[`docs/src/`](docs/src/) — philosophy, install, quick start, the workspace
-surfaces, the MCP control surface, shortcuts, and the settings file. Build it
-locally with `just docs` (or `just docs-serve` for live reload); `main`
-publishes it to GitHub Pages.
+**📖 [termherd.github.io/termherd](https://termherd.github.io/termherd/)** —
+the user manual: philosophy, install, quick start, the workspace surfaces
+(sidebar, tabs and splits, terminal, status, capture), the MCP control surface,
+the shortcut reference and the `settings.json` reference.
+
+It is an [mdBook](https://rust-lang.github.io/mdBook/) whose sources live in
+[`docs/src/`](docs/src/); `just docs` builds it, `just docs-serve` previews it
+with live reload, and every push to `main` republishes it. A user-visible
+change updates it in the same PR — see [`AGENTS.md`](AGENTS.md).
 
 This is an early scaffold. Status, scope, and design live in:
 
