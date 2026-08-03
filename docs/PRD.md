@@ -180,7 +180,16 @@ Abbreviated acceptance criteria.
 - FR9 — A **configurable keymap** drives the workspace: switch/close tab, split
   h/v, move focus, focus search, open new session — all reachable by keyboard;
   bindings persist.
-- FR10 — Thin settings: shell profile, theme, window prefs; persisted.
+- FR10 — Thin settings: shell profile and theme, persisted to
+  `~/.termherd/settings.json`. Grown since, one block per shipped need —
+  terminal font size and colours, sidebar truncation, close confirmation, the
+  screencast budget, the keymap overrides of FR9, and the editor command a
+  clicked path opens in. The annotated list is
+  [`docs/settings.example.jsonc`](settings.example.jsonc), which is the one
+  that has to stay exhaustive; this line names the axis, not the inventory.
+  Window bounds are **not** among them — they persist to their own
+  `window.json` (FR12) because the app writes them itself, where everything
+  here is the user's to edit.
 
 ### Shell
 
@@ -205,7 +214,17 @@ Mapped from the NFR scorecard; each prior gap becomes a requirement.
   only `~/.claude/CLAUDE.md` and `~/.claude/plans/*.md`, never the session tree
   (see [`docs/adr/0001`](adr/0001-plans-memory-write-scope.md)); **no
   `~/.claude/ide` writes in v1** (no IDE registration); external links via OS
-  opener.
+  opener — which, being "do whatever the association says", is why a clicked
+  path that *is* a program is refused rather than run. A configured
+  `open.command` (FR10) replaces that handoff and lifts the refusal: the
+  program is the user's own, named in their settings file, and the command is
+  split into arguments *before* the path is substituted — so what the terminal
+  printed is an argument by construction, never a second command. termherd
+  renders it into no shell grammar. One platform detail bounds that: a Windows
+  program that is a `.bat`/`.cmd` (the form the settings template recommends
+  there, since VS Code ships `code.cmd`) is launched by the standard library
+  through `cmd.exe`, which applies its own escaping — safe, but a shell after
+  all, so the guarantee above is ours and not the operating system's.
 - **Single-instance** — never races on the DB (Q8).
 - **Performance budget** — idle CPU < 1%, idle memory < 150 MB, cold start
   < 1 s, scan of 1k sessions < 2 s off-thread; many concurrent terminals stay

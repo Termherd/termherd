@@ -117,6 +117,9 @@ you want and strip the comments (the real file is strict JSON). In short:
 - `sidebar` — sessions listed per project before the tail folds behind an
   expander (`0` shows all).
 - `record` — the GIF screencast budget (fps, duration cap, frame scale).
+- `open` — the editor command a Ctrl/Cmd-clicked file path opens in, with
+  `{path}` / `{line}` / `{col}` templates (default: the OS default handler,
+  which cannot honour a line number).
 - `keys` — keyboard overrides, one chord or a list per action; the full
   action vocabulary and its default chords are listed in the template.
 
@@ -162,6 +165,18 @@ Dragging a selection with the mouse also copies it on release, and the wheel
 scrolls back through history. In the sidebar, click a project or session to
 open it; a tab's `×` also closes it. Hovering a tab shows the session's fuller
 description (the same card the sidebar shows).
+
+Holding `Ctrl` — or `Cmd`/`Super`, either one, on every platform — underlines
+the URL or **file path** under the pointer, and clicking it opens it. A path
+is underlined only once the filesystem confirms it exists — resolved against
+the session's live directory,
+then the repository holding it, then the launch directory, because `cargo`,
+`git` and `pytest` each print relative to a different root. A `:42` suffix is
+carried along, but the OS default handler cannot honour it: configure
+`open.command` (above) for a file to open *at its line*. Without that command a
+path the OS would **run** rather than show — `.app`, `.exe`, `.desktop` — is
+neither underlined nor opened, since opening by association means executing;
+an explicit editor command consults no association, so it lifts that refusal.
 
 ## MCP control surface (experimental)
 
