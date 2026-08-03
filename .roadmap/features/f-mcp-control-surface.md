@@ -51,3 +51,5 @@ shippable:
   PNG, for what text cannot answer.
 - [x] [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) — One model, two readers: the
   capture dump is now the MCP snapshot.
+- [ ] [F-mcp-attach](#f-mcp-attach) — The attach rung: reach the live bridge
+  from outside, not only from a session it spawned.
