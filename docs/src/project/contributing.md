@@ -59,6 +59,8 @@ binary. Pages that restate what the code holds as data — the shortcut table,
 the settings reference, the MCP tool tables — are the ones that rot first.
 `AGENTS.md` carries the mapping from what you changed to what to update.
 
+Issues are written in English, title and body alike; commit messages are the
+one exception and stay as they are.
 
 ## How work is tracked
 
