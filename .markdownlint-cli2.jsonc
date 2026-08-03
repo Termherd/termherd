@@ -14,6 +14,18 @@
   // clone), so linting them locally only reports errors no one can act on and
   // teaches you to skim past the summary line.
   //
+  // `.claude/worktrees/` holds checkouts of *other branches* — gitignored,
+  // absent from a fresh clone, so this entry matches nothing in CI. It exists
+  // because otherwise the scope of a run from the repo root is a function of
+  // local working state, not of the repo: measured within one hour of each
+  // other, the same command linted 169 files and then 263, while the repo's
+  // own tracked total stayed 75. The difference is other branches' committed
+  // content, which a failure here could not be fixed in anyway — the same
+  // reason `.personal/` is excluded. Nothing was failing when this was added;
+  // a gate whose file count moves with how many worktrees exist is one whose
+  // green line stops meaning anything. Lint a worktree from inside it, where
+  // its own config applies.
+  //
   // ROADMAP.md is generated, and is linted anyway: an artifact nobody may edit
   // is exactly the one whose lint failures are a generator bug worth seeing.
   // It was excluded only while roadmark emitted an 86-column banner no local
@@ -30,6 +42,7 @@
     "docs/src/SUMMARY.md",
     "CLAUDE.md",
     ".personal/**",
-    ".local/**"
+    ".local/**",
+    ".claude/worktrees/**"
   ]
 }
