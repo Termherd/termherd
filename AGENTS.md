@@ -363,6 +363,15 @@ exists). Do not relax them locally.
   diff touches a dependency's platform-conditional surface, add the target once
   (`rustup target add x86_64-pc-windows-msvc`) and check both ways: the change
   compiles, and reverting it fails.
+  **A test that needs an OS-only API belongs in `tests/`, not in the
+  containment allow-list.** `check-os-cfg-containment.sh` scans `*/src/**`
+  only, so an integration test may use `std::os::unix::fs` freely — whereas
+  adding the adapter's own source file to the allow-list to accommodate one
+  test would licence OS-conditional *production* code there unnoticed, which is
+  what the quarantine exists to prevent. Budget for one surprise on the way:
+  `clippy.toml`'s `allow-expect-in-tests` recognises `#[cfg(test)]` items, not
+  a `tests/` binary, so such a file needs its own `#![allow(clippy::…)]` with a
+  reason.
 - **Cross-compiling is not the whole hazard — code that *runs* differently per
   host is worse, because no `cargo check` catches it.** `#239`'s shell
   integration built the replayed startup path with `Path::join`, which writes
@@ -377,6 +386,23 @@ exists). Do not relax them locally.
   wire format, join by hand. And when `main` goes red on a Rust push, check
   whether the previous Rust push is the real author before reading the diff in
   front of you.
+- **Async work inside an `iced::Task` is not on tokio — `spawn_blocking` there
+  is fatal, and silently so.** `iced` is built here without its `tokio`
+  feature, so `Task::perform` polls on the `futures` thread pool, and `main`
+  hosts the MCP runtime with `block_on` rather than entering it. A
+  `tokio::task::spawn_blocking` in that future calls `Handle::current()` and
+  panics. The panic is invisible twice over: the effect it belonged to simply
+  never answers, *and* the unwind takes a pool worker with it — the pool does
+  not respawn one, so after roughly `num_cpus` occurrences **every** `Task` in
+  the app stops completing (scans, captures, the PNG encode, the bridge). The
+  clickable-path resolution (#252) was written this way and reached review with
+  839 tests green, none of which could have caught it: no test polls a returned
+  `Task`. Do blocking work directly in the `async` block, the way
+  `scanner.scan()`, `docs::discover` and `capture::write_png` already do; reach
+  for a `std::thread` + channel when it must outlive the task. The rule is
+  about *where the future runs*, not about which file it lives in: a `tokio::`
+  call is fine in code the runtime spawned (`shell::bridge`, `app::mcp`) and in
+  a `#[tokio::test]`, and wrong in anything handed to `Task::perform`.
 - **Function length is gated.** `clippy::too_many_lines` (threshold 150 in
   `clippy.toml`) fails CI on over-long functions — a proxy for local
   complexity. A function that exceeds it on purpose (a flat dispatcher / layout

@@ -93,7 +93,12 @@ structurally prevents a new god-object.
 ```
 
 - `core` defines port traits (`SessionStore`, `PtyHost`, `ProjectScanner`,
-  `Clock`, `FileSystem`) and never names a concrete adapter.
+  `PathResolver`, `Clock`, ~~`FileSystem`~~) and never names a concrete
+  adapter. `PathResolver` landed with clickable file paths (#252): telling
+  `src/main.rs` from prose like `and/or` needs the filesystem, which `core` may
+  not touch. **`FileSystem` never existed** — it was sketched here and never
+  written, so a reader looking for it is not missing something, and the file
+  read that would have used it goes through `ProjectScanner`.
 - ~~`mcp` exists in the workspace only if/when the Unsure bet is taken; nothing
   in the v1 path imports it.~~ **Superseded.** This still holds for the `mcp`
   *crate* below (§15, `IdeBridge` — termherd as a **client**). It does not hold
@@ -184,9 +189,13 @@ Each adapter implements a `core` port and fixes a specific v0.0.30 defect.
   **OSC status** (busy/idle/notification) as typed events — replacing fragile
   regex-on-stream. **One owning task per session**, so N terminals across panes
   never share mutable state.
-- **`scan`** (`ProjectScanner`) — `notify` watches `~/.claude/projects`
-  (debounced); `rayon` parses folders in parallel off the UI thread; uses the
-  `claude` codec.
+- **`scan`** (`ProjectScanner`, `PathResolver`) — `notify` watches
+  `~/.claude/projects` (debounced); `rayon` parses folders in parallel off the
+  UI thread; uses the `claude` codec. It also resolves the file paths a
+  terminal prints (#252): a candidate is tried against the session's live
+  `cwd`, the repository holding it, then its launch directory, and judged on
+  the symlink-followed form — the name says nothing about what an OS opener
+  would reach.
 - **`claude`** (pure) — ported domain knowledge: lossy folder encode/decode,
   `cwd`-based path derivation + worktree collapse, JSONL → digest parse, OSC
   decode, fork/plan-accept signals. No I/O ⇒ unit- and property-tested.
