@@ -432,6 +432,17 @@ exists). Do not relax them locally.
   `count > 0` — all that stands between a box with no readable pixel and a
   divide by zero — was reachable and earned a truncated-buffer test. Both
   survivors looked like missing assertions and were really design smells.
+- **A check that can pass without exercising anything is not a check.** The
+  cheap probe and the real call are rarely the same call, and the cheap one is
+  the one that gets written. Probing whether macOS would let an agent drive the
+  app, `osascript -e 'keystroke ""'` **succeeds without the Accessibility
+  permission** — an empty string never reaches the TCC check — so a poll built
+  on it reported the permission granted while every real keystroke was still
+  refused, and the pass was believed for a full turn. Same shape as a linter
+  that exits 0 having linted nothing, and as `mutants.out/outcomes.json` read
+  mid-run (see `.wrap.md`): success and vacuity are indistinguishable from the
+  outside. Probe with the operation you actually intend to perform, and if that
+  is destructive, assert on something the operation *must* have changed.
 - **A test that claims to be exhaustive is worse than no test when it is not.**
   A hand-written list asserting "this *set* is the contract" reads as a
   guarantee, so nobody re-derives it — where an absent test at least leaves the
