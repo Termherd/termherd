@@ -35,4 +35,10 @@ tightening. Ladder:
   configurable budget (fps/cap/scale) is a follow-up (#127).
 - **Seeded demo-data mode — design-first:** fixtures of fake sessions for
   clean, reproducible captures. Force-multiplier for G2/G3, not a capture
-  method; revisit when rung 2 comes forward.
+  method; revisit when rung 2 comes forward. **Now has a caller.** Writing the
+  user manual produced a book with no screenshots (#266) because capturing the
+  app at all needs three macOS permissions and no automatable way to drive it
+  (#264) — and any capture of a real workspace publishes the taker's own
+  project names, which this mode is exactly what would prevent. #265 (hiding
+  sessions) is the cheap workaround for the same problem; this is the durable
+  one, because it is the only version that regenerates in CI.

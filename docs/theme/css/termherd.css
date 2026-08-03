@@ -1,0 +1,69 @@
+/* TermHerd documentation — terminal chrome, applied to prose.
+ *
+ * The app is a dark, keyboard-driven workspace; the book borrows exactly two
+ * things from it: one accent, and keycaps that read as keys. Everything else
+ * stays mdBook's default chrome — the docs are glass. */
+
+:root {
+  --termherd-accent: #4f9dd9;
+  --termherd-rule: #d9dce3;
+}
+
+/* The one accent, used only where the reader is acting: links. */
+.content a:link,
+.content a:visited {
+  color: var(--termherd-accent);
+}
+
+.content a:hover {
+  text-decoration: underline;
+}
+
+/* Tables carry most of the reference material (keys, tools, options);
+ * keep them quiet and legible. */
+.content table {
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  width: 100%;
+}
+
+.content table th,
+.content table td {
+  border: 1px solid var(--termherd-rule);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.content table th {
+  font-weight: 600;
+}
+
+/* Keycaps appear on nearly every page — make them read as keys, not code. */
+.content kbd {
+  background: #f4f4f8;
+  border: 1px solid #cfcfda;
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: #222;
+  font-size: 0.85em;
+  padding: 0.1em 0.4em;
+  white-space: nowrap;
+}
+
+.navy .content kbd,
+.coal .content kbd,
+.ayu .content kbd {
+  background: #2b2b35;
+  border-color: #4a4a58;
+  color: #eee;
+}
+
+/* Screenshots of a dark app sit on the bench, not on the page background. */
+.content img {
+  border: 1px solid var(--termherd-rule);
+  border-radius: 6px;
+  display: block;
+  margin: 1.25rem auto;
+  max-width: 100%;
+}

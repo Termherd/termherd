@@ -34,6 +34,7 @@ just check-arch                    # intra-crate module boundaries + OS-cfg cont
 # roadmark bug, not something to fix by editing the artifact)
 markdownlint-cli2                  # uses .markdownlint-cli2.jsonc
 just roadmap                       # recompile ROADMAP.md from .roadmap/, then validate
+just docs                          # build the user manual (mdbook); just docs-serve to preview
 
 # Planning hygiene — not a CI gate (needs a `project`-scoped token)
 just board-check                   # board/issue drift (0 clean · 1 drift · 2 unchecked)
@@ -431,6 +432,17 @@ exists). Do not relax them locally.
   `count > 0` — all that stands between a box with no readable pixel and a
   divide by zero — was reachable and earned a truncated-buffer test. Both
   survivors looked like missing assertions and were really design smells.
+- **A check that can pass without exercising anything is not a check.** The
+  cheap probe and the real call are rarely the same call, and the cheap one is
+  the one that gets written. Probing whether macOS would let an agent drive the
+  app, `osascript -e 'keystroke ""'` **succeeds without the Accessibility
+  permission** — an empty string never reaches the TCC check — so a poll built
+  on it reported the permission granted while every real keystroke was still
+  refused, and the pass was believed for a full turn. Same shape as a linter
+  that exits 0 having linted nothing, and as `mutants.out/outcomes.json` read
+  mid-run (see `.wrap.md`): success and vacuity are indistinguishable from the
+  outside. Probe with the operation you actually intend to perform, and if that
+  is destructive, assert on something the operation *must* have changed.
 - **A test that claims to be exhaustive is worse than no test when it is not.**
   A hand-written list asserting "this *set* is the contract" reads as a
   guarantee, so nobody re-derives it — where an absent test at least leaves the
@@ -459,6 +471,14 @@ exists). Do not relax them locally.
   English keywords — a French body carrying « Ferme #NN » merges with the issue
   left open, which has already happened here (#239 / #236). Write `Closes #NN`.
 - Commit messages: no "Claude" signature (per global user instruction).
+- **Issues are written in English** — title, body, and comments. The repo is
+  English-first everywhere a reader outside the project can land: the UI
+  strings (`crates/app/src/strings.rs`, the settled outcome of `F-i18n`), the
+  book under `docs/src/`, `README.md`, and this file. The issue tracker is
+  public and is the one of those surfaces that had drifted bilingual, which
+  makes a backlog only half of it can be searched. Commit messages are the
+  exception and stay as they are: they address contributors, not readers, and
+  a mixed history is not worth rewriting.
 - No issue numbers (`#NN`) in code comments, doc-comments, or test names —
   git history already links code to its issue, and an in-code `#NN` rots when
   issues are renumbered or migrated. Cite issues in commit/PR bodies and
@@ -475,6 +495,39 @@ exists). Do not relax them locally.
   glyph in the generated catalog — before assuming something is built.
 - **`ROADMAP.md` is generated. Never edit it.** Edit the feature file, then
   run `just roadmap` and commit both. CI rebuilds and diffs.
+
+### Keeping the book current
+
+**A user-visible change updates the book in the same PR.** The manual is an
+mdBook under [`docs/src/`](docs/src/) — `just docs` builds it, `just docs-serve`
+previews it with live reload. If a change alters what a user sees, types or
+configures, the page describing it changes with it. Not in a follow-up: a
+follow-up is how a book starts describing an interface that has already moved,
+and a manual that is confidently wrong is worse than one that is missing,
+because nobody re-derives what it claims.
+
+Four pages restate in prose what the code holds as data, which makes them the
+ones that rot first:
+
+| You changed | Update |
+| --- | --- |
+| `ACTIONS` / `Keymap::defaults` in `core::keymap` | `docs/src/reference/keyboard.md` |
+| the `settings.json` schema (and `docs/settings.example.jsonc` with it) | `docs/src/reference/settings.md` |
+| an MCP `#[tool(…)]`, its arguments or its outcomes | `docs/src/mcp/live-bridge.md`, `docs/src/mcp/keyboard.md` |
+| `OPTIONS` in `crates/mcp/src/lib.rs` | `docs/src/mcp/stdio.md` (the id table) |
+| a label in `crates/app/src/strings.rs` the book quotes | the matching `docs/src/workspace/` page |
+
+**No gate catches this.** The `book` CI job proves the book still *builds* and
+that `SUMMARY.md` resolves against the files on disk; nothing proves it still
+describes the binary. That is the same standing as the `#NN`-in-code rule above
+— enforced by review and by habit, not by a script.
+
+Two things this rule does *not* ask for. An internal refactor with no
+user-visible surface needs no book edit: its home is `AGENTS.md`,
+`docs/ARCHITECTURE.md` or `docs/CI.md`. And a page must stay honest about what
+has *not* shipped — where a feature is partial, say so on the page rather than
+describing the finished version, which is what lets the book be written ahead
+of the last rung without lying.
 
 ## How we track work
 

@@ -60,6 +60,18 @@ roadmap:
 roadmap-check:
     roadmark validate
 
+# Build the documentation book into docs/book (mdbook required; not a Rust
+# crate, so it stays out of the dependency graph the `deny`/`machete` gates
+# scan). Mirrors the `book` CI job. `create-missing = false` in book.toml means
+# a link to a missing page fails the build instead of minting an empty page.
+[doc("Build the documentation book into docs/book")]
+docs:
+    mdbook build docs
+
+[doc("Serve the book locally with live reload")]
+docs-serve port="3000":
+    mdbook serve docs -p {{ port }} --open
+
 # Build the shipping binary (host target) — the input the packager bundles.
 build-release:
     cargo build --release -p termherd-app

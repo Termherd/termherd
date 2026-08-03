@@ -1,0 +1,33 @@
+[book]
+title = "TermHerd"
+authors = ["Bastien Gallay and contributors"]
+description = "A terminal workspace for Claude Code sessions — browse, launch, arrange, monitor, drive."
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+# A link to a page that does not exist must fail the build, not silently mint an
+# empty page. The chapter map in SUMMARY.md is a promise; this keeps it honest.
+create-missing = false
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/Termherd/termherd"
+edit-url-template = "https://github.com/Termherd/termherd/edit/main/docs/{path}"
+site-url = "/termherd/"
+additional-css = ["theme/css/termherd.css"]
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+
+[output.html.playground]
+editable = false
+copyable = true

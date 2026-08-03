@@ -41,10 +41,12 @@ themselves), `markdownlint` (the prose), and `roadmap` (the generated
 | Workflow lint | `ci` · `actionlint` | Valid, shellcheck-clean workflow YAML | PR, push→main | ubuntu | yes |
 | Docs lint | `ci` · `markdownlint` | 80-col Markdown prose | PR, push→main | ubuntu | yes |
 | Roadmap | `ci` · `roadmap` | `.roadmap/` schema and cross-references; `ROADMAP.md` still matches its source | PR, push→main | ubuntu | yes |
+| Book | `ci` · `mdbook` | The manual builds, and every `SUMMARY.md` link resolves to a file on disk | PR, push→main | ubuntu | yes |
 | Merge gate | `ci` · `ci-success` | Aggregates every PR job into one required check | PR, push→main | ubuntu | yes (the one required check) |
 | SAST | `codeql` · `Analyze (Rust)` | Taint / cross-function security & quality | push→main, weekly | ubuntu | baseline |
 | CLI release | `release` · `plan…announce` | Build archives + curl\|sh / PowerShell installers, cut the GitHub Release | tag push (validates on PR) | mac · win · ubuntu | release-time |
 | Desktop installers | `package` · `package` | `.app`/`.dmg`, NSIS `.exe`, `.deb`/`.AppImage`, attached to the Release | tag push | mac · win · ubuntu | release-time |
+| Docs publish | `docs-deploy` · `build`/`deploy` | The book on GitHub Pages, from what `main` already proved buildable | push→main | ubuntu | post-merge |
 
 "Blocking" = a red run blocks merge (PR/CI gates) or blocks the release
 (release-time). "signal" = it runs and reports red/green but does **not** block
@@ -71,10 +73,11 @@ This is the cheapest place to catch a failure — do it before opening a PR.
 
 Everything fans out in parallel (no inter-job ordering):
 
-- **`ci`** — a `changes` classifier plus eleven gate jobs (`fmt`, `clippy`,
+- **`ci`** — a `changes` classifier plus twelve gate jobs (`fmt`, `clippy`,
   `test`, `portable`, `cargo-deny`, `cargo-machete`, `dependency-rule`, `intra-crate-arch`,
-  `actionlint`, `markdownlint`, `roadmap`), each gated on its file category and
-  fanned into the `ci-success` aggregator. Jobs whose category didn't change
+  `actionlint`, `markdownlint`, `roadmap`, `mdbook`), each gated on its file
+  category and fanned into the `ci-success` aggregator. Jobs whose category
+  didn't change
   report `skipped` (a docs-only PR skips all the Rust jobs) and `ci-success`
   still passes.
   `cross-os` is **skipped** on PRs. Branch protection requires only
@@ -133,17 +136,18 @@ before you tag.
 
 Trigger: `push`→`main`, `push` release tag, `pull_request`→`main`,
 `workflow_dispatch`. A `changes` job classifies the diff (via
-`dorny/paths-filter`); the eleven gate jobs each run **only when their category
+`dorny/paths-filter`); the twelve gate jobs each run **only when their category
 changed**, then fan into one aggregator, plus a cross-OS signal:
 
 ```text
-changes  ── emits booleans: rust · cargo · markdown · workflows · roadmap
+changes  ── booleans: rust · cargo · markdown · workflows · roadmap · book
    │
    ├─ rust     → fmt  clippy  test  portable  intra-crate-arch  (skipped on docs)
    ├─ cargo    → cargo-deny   cargo-machete   dependency-rule
    ├─ markdown → markdownlint
    ├─ workflows→ actionlint
-   └─ roadmap  → roadmap
+   ├─ roadmap  → roadmap
+   └─ book     → mdbook
                       └──────────────┬──────────────┘
                                      ▼
                                 ci-success   ← the one required check for `main`
@@ -175,6 +179,15 @@ every PR, and it is in `ci-success`'s `needs:` — where `cross-os`, a signal
 nobody is paged for, deliberately is not. The GUI crate stays post-merge:
 building `iced` twice per PR is the cost that put cross-OS after the merge in
 the first place, and it is not where hosts diverge.
+
+**`mdbook` is not a second `markdownlint`.** The linter reads each file alone —
+line length, heading order — and cannot see that `docs/src/SUMMARY.md` points at
+a chapter nobody wrote. The build can: `create-missing = false` in `book.toml`
+turns a dead chapter link into a build failure instead of silently minting an
+empty page. That is the failure mode a growing book actually has, and no
+per-file rule reaches it. What neither reaches is a page that still *describes*
+an interface that has moved; `AGENTS.md` carries that rule, and nothing enforces
+it.
 
 **A filter watches its job's own inputs, including the workflow file.** The
 `cargo` filter covers the dep script it runs; the `roadmap` filter covers
@@ -242,6 +255,18 @@ four targets:
 Config lives in `[package.metadata.packager]` in `crates/app/Cargo.toml`.
 Bundles are unsigned for now (signing/notarization pending certs, OQ5).
 
+### `docs-deploy.yml` — the book on GitHub Pages
+
+Trigger: `push`→`main` under `docs/book.toml`, `docs/src/**`, `docs/theme/**`,
+`workflow_dispatch`. Two jobs: `build` runs `mdbook build docs` and uploads
+`docs/book` as a Pages artifact, `deploy` publishes it.
+
+It **proves nothing**. `ci`'s `mdbook` job already did, on the PR; this
+workflow only publishes what `main` was shown to build, which is why it is
+post-merge and not a gate. It carries no `contents: write` — `deploy` widens
+permissions for itself alone (`pages`, `id-token`), and a `concurrency: pages`
+group keeps two merges from racing to publish.
+
 ---
 
 ## 4. By goal (what each gate is really for)
@@ -290,6 +315,7 @@ The toolchain is pinned to **Rust 1.95.0 / edition 2024**
 | `intra-crate-arch` | `just check-arch` (module boundaries + OS-cfg + length report) |
 | `markdownlint` | `markdownlint-cli2` (uses `.markdownlint-cli2.jsonc`) |
 | `roadmap` | `just roadmap` (needs the pinned `roadmark`; the version is in the job) |
+| `mdbook` | `just docs` (needs `mdbook`; `just docs-serve` previews with live reload) |
 
 `actionlint` and `codeql` are not part of the routine local loop — they run
 in CI. To pre-empt `actionlint`, run the `actionlint` binary over
