@@ -936,11 +936,7 @@ impl Shell {
                 self.on_key(event).1
             }
             Message::ImeCommit(text) => self.on_ime_commit(text),
-            Message::FocusPane(session) => {
-                self.focus = Focus::Terminal;
-                let effects = self.core.apply(termherd_core::Event::FocusPane(session));
-                self.perform(effects)
-            }
+            Message::FocusPane(session) => self.focus_pane(session),
             Message::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -990,7 +986,19 @@ impl Shell {
                 self.paste_into(session, content)
             }
             Message::RequestPaste { session } => {
-                iced::clipboard::read().map(move |content| Message::PasteInto { session, content })
+                // A prompt that owns the keyboard owns the input. The pointer
+                // must not be a way past a confirmation the keyboard cannot
+                // pass — the paste chord is swallowed there, and so is this.
+                if self.keyboard_owner().is_some() {
+                    return Task::none();
+                }
+                // The pane you paste into is the pane you are now working in;
+                // every terminal focuses the pane its paste-click landed on,
+                // and the left button already focuses through `mouse_area`.
+                let focus = self.focus_pane(session);
+                let read = iced::clipboard::read()
+                    .map(move |content| Message::PasteInto { session, content });
+                Task::batch([focus, read])
             }
             Message::PasteInto { session, content } => self.paste_into(session, content),
             Message::RequestCloseTab(index) => self.request_close(index).unwrap_or_else(Task::none),
@@ -1261,15 +1269,42 @@ impl Shell {
         }
     }
 
-    /// Copy the last terminal selection to the clipboard, if any (FR4).
-    /// Put the last terminal selection on the clipboard. `None` when there is
+    /// Put the terminal selection on the clipboard (FR4). `None` when there is
     /// nothing selected: a caller told the copy ran would follow with a paste and
     /// paste whatever was on the clipboard before.
-    fn copy_selection(&self) -> Option<Task<Message>> {
+    ///
+    /// A **visible** selection outranks [`Self::selection`], which is a cache of
+    /// the last text copied, not of the last text selected. With copy-on-select
+    /// off, nothing but a copy fills that cache — so trusting it first would put
+    /// the previously copied text on the clipboard while a fresh highlight sits
+    /// on screen, silently copying the wrong thing. The terminal reads its own
+    /// live selection and answers out of band, which refills the cache on the
+    /// way. The cache still serves the case the screen cannot: a selection
+    /// scrolled out of the viewport carries no spans to see.
+    fn copy_selection(&mut self) -> Option<Task<Message>> {
+        if let Some(session) = self.core.workspace.focused_session()
+            && self
+                .screens
+                .get(&session)
+                .is_some_and(|screen| !screen.selection.is_empty())
+        {
+            let effects = self
+                .core
+                .apply(termherd_core::Event::CopyTerminalSelection { session });
+            return Some(self.perform(effects));
+        }
         match &self.selection {
             Some(sel) if !sel.is_empty() => Some(iced::clipboard::write(sel.clone())),
             _ => None,
         }
+    }
+
+    /// Move pane focus to `session` and give the keyboard to its terminal —
+    /// what a click on a pane means, whichever button made it.
+    fn focus_pane(&mut self, session: SessionId) -> Task<Message> {
+        self.focus = Focus::Terminal;
+        let effects = self.core.apply(termherd_core::Event::FocusPane(session));
+        self.perform(effects)
     }
 
     /// Write clipboard `content` into `session` as terminal input, bracketed
@@ -2464,6 +2499,99 @@ mod key_routing {
             pty.writes_seen(),
             vec![(pointed, b"hello".to_vec())],
             "the clipboard reached the pointed pane, and only it"
+        );
+    }
+
+    /// A shell whose focused terminal shows a highlighted selection — what the
+    /// copy chord must read when copy-on-select is off and nothing has filled
+    /// the cache.
+    fn shell_with_a_visible_selection() -> (Shell, Arc<RecordingPty>, SessionId) {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let mut screen = screen_of("cargo test");
+        screen.selection = vec![(0, 0, 4)];
+        shell.screens.insert(session, screen);
+        (shell, pty, session)
+    }
+
+    #[test]
+    fn the_copy_chord_reads_a_mouse_selection_when_copy_on_select_is_off() {
+        // With the gesture off nothing fills the selection cache, so a cache-only
+        // copy would leave a dragged selection uncopyable by any means — worse
+        // than before the setting existed.
+        let (mut shell, pty, _session) = shell_with_a_visible_selection();
+        let (verdict, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            verdict.steps,
+            vec![PressStep::Ran("copy".to_owned())],
+            "a highlighted selection is something to copy"
+        );
+        assert_eq!(
+            pty.copy_count(),
+            1,
+            "the chord asks the terminal for its live selection"
+        );
+    }
+
+    #[test]
+    fn the_copy_chord_prefers_the_live_selection_to_the_last_copied_text() {
+        // The cache holds what was last *copied*, not what is selected now.
+        // Reading it first would put stale text on the clipboard while a fresh
+        // highlight sits on screen — a silent wrong answer, the worst kind.
+        let (mut shell, pty, _session) = shell_with_a_visible_selection();
+        shell.selection = Some("an earlier copy".to_owned());
+        let _ = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            pty.copy_count(),
+            1,
+            "the live selection wins over the cache"
+        );
+    }
+
+    #[test]
+    fn a_right_click_paste_focuses_the_pane_it_pastes_into() {
+        // Every terminal focuses the pane its paste-click landed on; the left
+        // button already does through `mouse_area`.
+        let (mut shell, _pty) = shell_with_terminal();
+        let pointed = shell.core.workspace.focused_session().expect("focused");
+        let (split, _task) = shell.perform_action(BridgeAction::Split {
+            pane: None,
+            dir: SplitDir::Vertical,
+        });
+        assert_eq!(split.error, None);
+        assert_ne!(
+            shell.core.workspace.focused_session(),
+            Some(pointed),
+            "the split moved focus off the target"
+        );
+
+        let _ = shell.update(Message::RequestPaste { session: pointed });
+        assert_eq!(
+            shell.core.workspace.focused_session(),
+            Some(pointed),
+            "the pane you paste into is the pane you are working in"
+        );
+    }
+
+    #[test]
+    fn a_right_click_paste_is_swallowed_by_an_open_prompt() {
+        // The prompt that owns the keyboard owns the input: the paste chord is
+        // swallowed there, and the pointer must not be a way around it.
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        let pointed = shell.core.workspace.focused_session().expect("focused");
+        let (split, _task) = shell.perform_action(BridgeAction::Split {
+            pane: None,
+            dir: SplitDir::Vertical,
+        });
+        assert_eq!(split.error, None);
+        let elsewhere = shell.core.workspace.focused_session().expect("focused");
+        shell.closing = Some(0);
+
+        let _ = shell.update(Message::RequestPaste { session: pointed });
+        assert_eq!(
+            shell.core.workspace.focused_session(),
+            Some(elsewhere),
+            "the gesture did not even move focus past the prompt"
         );
     }
 
