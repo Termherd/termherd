@@ -487,6 +487,28 @@ mod tests {
         mouse::Cursor::Available(Point::new(x, y))
     }
 
+    /// A plain view over `screen`: session 1, no modifier held, no hover, the
+    /// default font. Each test names only the field it exercises, with
+    /// `..view(&screen)` — so a new field costs one line here, not one per test.
+    fn view(screen: &Screen) -> TerminalView<'_> {
+        TerminalView {
+            screen,
+            session: sid(1),
+            link_modifier: false,
+            hover: None,
+            shift: false,
+            font_size: 14.0,
+            dimmed: false,
+        }
+    }
+
+    #[allow(dead_code, reason = "asserted on by the gesture tests")]
+    /// The message an update published, or `None` — what a test asserts on when
+    /// "something was published" is not the same as "the right thing was".
+    fn published(action: Option<canvas::Action<Message>>) -> Option<Message> {
+        action.and_then(|a| a.into_inner().0)
+    }
+
     fn press() -> canvas::Event {
         canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
     }
@@ -508,15 +530,7 @@ mod tests {
     fn wheel_scroll_only_acts_when_the_pointer_is_over_the_terminal() {
         use canvas::Program;
         let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         // Pointer over the canvas → the scroll is published.
         let mut state = TermState::default();
         assert!(
@@ -536,15 +550,7 @@ mod tests {
         // press and release on the same cell, no drag.
         use canvas::Program;
         let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         let action = view.update(&mut state, &release(), test_bounds(), at(10.0, 10.0));
@@ -561,15 +567,7 @@ mod tests {
     fn a_drag_makes_a_selection_and_copies() {
         use canvas::Program;
         let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0)); // (0,0)
         let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0)); // (2,1)
@@ -592,15 +590,7 @@ mod tests {
         use canvas::Program;
         let screen = test_screen();
         let mut state = TermState::default();
-        let s1 = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let s1 = view(&screen);
         let _ = s1.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         let _ = s1.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(1)));
@@ -611,13 +601,8 @@ mod tests {
         // The canvas now shows session 2; its first event resets the stale drag
         // state so a session-1 drag can't keep extending under session 2.
         let s2 = TerminalView {
-            screen: &screen,
             session: sid(2),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let _ = s2.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(2)));
@@ -667,13 +652,8 @@ mod tests {
         let screen = screen_from("https://ex.io");
         let len = "https://ex.io".len();
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let action = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
@@ -692,13 +672,8 @@ mod tests {
         let screen = screen_from("https://ex.io");
         let len = "https://ex.io".len();
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
@@ -724,13 +699,8 @@ mod tests {
         let screen = screen_from("crates/pty/src/grid.rs:184");
         let len = "crates/pty/src/grid.rs:184".len();
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
@@ -770,13 +740,9 @@ mod tests {
         let state = TermState::default();
         let bounds = test_bounds();
         let mine = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
             hover: Some(&hover),
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         assert_eq!(
             mine.mouse_interaction(&state, bounds, at(10.0, 10.0)),
@@ -811,13 +777,9 @@ mod tests {
 
         let unchanged = screen_from("https://ex.io");
         let still_there = TerminalView {
-            screen: &unchanged,
-            session: sid(1),
             link_modifier: true,
             hover: Some(&hover),
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&unchanged)
         };
         assert_eq!(
             still_there.mouse_interaction(&state, bounds, at(10.0, 10.0)),
@@ -856,13 +818,8 @@ mod tests {
         let screen = screen_from("plain text only");
         let len = "plain text only".len();
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
@@ -880,13 +837,8 @@ mod tests {
         // Modifier held → moving over the link publishes it, tagged with the
         // session whose grid it was found in.
         let held = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let action = held.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
@@ -924,13 +876,8 @@ mod tests {
         let mut screen = test_screen();
         screen.selection = vec![(0, 0, 1)];
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
             shift: true,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let action = view.update(&mut state, &press(), test_bounds(), at(60.0, 60.0));
@@ -952,13 +899,8 @@ mod tests {
         use canvas::Program;
         let screen = test_screen();
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
             shift: true,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
@@ -975,15 +917,7 @@ mod tests {
         use canvas::Program;
         let line = "see src/main.rs now";
         let screen = screen_from(line);
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         let mut state = TermState::default();
         let cursor = at_col(line.len(), 8); // inside `src/main.rs` (cols 4..=14)
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
@@ -1005,15 +939,7 @@ mod tests {
         use canvas::Program;
         let line = "ab   cd"; // cols 2,3,4 are blanks
         let screen = screen_from(line);
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         let mut state = TermState::default();
         let cursor = at_col(line.len(), 3);
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
@@ -1028,15 +954,7 @@ mod tests {
         // it (e.g. the cursor sits over the sidebar) the default pointer returns.
         use canvas::Program;
         let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         let state = TermState::default();
         assert_eq!(
             view.mouse_interaction(&state, test_bounds(), at(50.0, 50.0)),

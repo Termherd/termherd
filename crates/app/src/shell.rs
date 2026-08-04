@@ -1323,7 +1323,7 @@ mod key_routing {
     /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]
     struct RecordingPty {
-        writes: StdMutex<Vec<Vec<u8>>>,
+        writes: StdMutex<Vec<(SessionId, Vec<u8>)>>,
         kills: StdMutex<usize>,
         spawns: StdMutex<usize>,
         launches: StdMutex<Vec<Launch>>,
@@ -1335,6 +1335,12 @@ mod key_routing {
 
     impl RecordingPty {
         fn writes(&self) -> Vec<Vec<u8>> {
+            self.writes_seen().into_iter().map(|(_, b)| b).collect()
+        }
+        /// Every write with the session it landed in — what a test asserting
+        /// *which pane* received the bytes needs.
+        #[allow(dead_code, reason = "asserted on by the right-click paste test")]
+        fn writes_seen(&self) -> Vec<(SessionId, Vec<u8>)> {
             self.writes.lock().expect("writes lock").clone()
         }
         fn kill_count(&self) -> usize {
@@ -1371,11 +1377,11 @@ mod key_routing {
                 .push(spec.launch);
             Ok(())
         }
-        fn write(&self, _session: SessionId, bytes: &[u8]) -> Result<(), PtyError> {
+        fn write(&self, session: SessionId, bytes: &[u8]) -> Result<(), PtyError> {
             self.writes
                 .lock()
                 .expect("writes lock")
-                .push(bytes.to_vec());
+                .push((session, bytes.to_vec()));
             Ok(())
         }
         fn resize(&self, _: SessionId, cols: u16, rows: u16) -> Result<(), PtyError> {
@@ -3615,18 +3621,7 @@ mod key_routing {
             WindowConfig::default(),
             test_ports(pty.clone(), rx),
             test_live_bridge(),
-            Startup {
-                theme: ThemeChoice::default(),
-                keymap: Keymap::defaults(),
-                metadata: Overlay::default(),
-                collapsed: HashSet::new(),
-                record: RecordConfig::default(),
-                session_limit: 0,
-                font_size: 14.0,
-                close: CloseSettings::default(),
-                open: None,
-                config: test_config_input(),
-            },
+            test_startup(),
         );
         assert!(shell.core.workspace.focused_session().is_none());
         (shell, pty)
