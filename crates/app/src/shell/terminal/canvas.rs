@@ -270,7 +270,8 @@ impl canvas::Program<Message> for TerminalView<'_> {
                     }));
                 }
                 // Begin a drag-selection at the press cell; the terminal owns the
-                // selection from here, extended on each move and copied on release.
+                // selection from here, extended on each move. Whether the
+                // release also copies is the gesture setting's business.
                 state.selecting = true;
                 state.dragged = false;
                 let (line, col, side) = self.grid_point(cursor, bounds, col, row);

@@ -34,7 +34,9 @@ so nothing reaches the clipboard unless you asked for it:
   text you copy is the text you just selected, never what you copied last.
 - **`paste_on_right_click`** — a right-click pastes into **the pane under the
   pointer**, which need not be the focused one, and is bracketed when that pane
-  asked for bracketed paste.
+  asked for bracketed paste. The click also focuses that pane, so the keys you
+  type next go where you just pasted. A confirmation prompt refuses it, exactly
+  as it refuses the paste chord — the pointer is not a way past a prompt.
 
 See [`settings.json`](../reference/settings.md).
 

@@ -214,7 +214,15 @@ the setting *added the off position* — the automatic copy is now opt-in and th
 copy chord is the default path. The paste is addressed to the pane under the
 pointer rather than the focused one, which is why it needed a session-carrying
 message rather than a second call into the existing paste; both paths now meet
-at one `paste_into` seam that decides bracketing once. Cmd/Ctrl-clickable
+at one `paste_into` seam that decides bracketing once. Gating the automatic
+copy also disabled the copy *chord*, which read only a cache the automatic copy
+filled — so the chord now reads the terminal's live selection and prefers it,
+which fixes the older bug of a stale cache outranking a fresh highlight too.
+**Two earlier records read as contradictions and are not**: the M2 line above
+says "drag-to-select + copy", and `CHANGELOG.md` says "copied on release" under
+a released `0.1.0-prerelease` heading. Both are accurate as dated records of
+what shipped then; the default changed afterwards, and the `[Unreleased]`
+section carries the correction. Cmd/Ctrl-clickable
 **file paths** shipped on that same seam
 (#252): `core::paths` finds a candidate syntactically, and a `PathResolver`
 port checks it against the filesystem — the check, not the regex, is what keeps
