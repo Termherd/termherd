@@ -7,6 +7,29 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (clipboard mouse gestures)
+
+- The two classic terminal clipboard conventions are settings now, both off by
+  default: `terminal.copy_on_select` and `terminal.paste_on_right_click` (#36).
+  **Copy-on-select changes behaviour.** It was already there and
+  unconditional — a drag release and a double-click both copied — so what this
+  adds is the *off* position, and off is the default. Set
+  `"terminal": { "copy_on_select": true }` to keep what you had. A value that
+  is neither `true` nor `false` leaves its own gesture off with a warning
+  rather than failing the whole file, like a malformed colour.
+- The right-click paste is addressed to the pane **under the pointer**, not the
+  focused one, and focuses it; a confirmation prompt refuses it exactly as it
+  refuses the paste chord.
+
+### Fixed (copy chord)
+
+- The copy chord reads the terminal's live on-screen selection, and prefers it
+  to the cache of the last copied text (#36). The cache was previously the only
+  thing it read, and only an automatic copy filled it — so with copy-on-select
+  off, a mouse selection could not be copied by any means. Preferring the live
+  highlight also fixes the older half of the bug: with a stale cache and a
+  fresh selection, the chord used to copy what had been copied before.
+
 ### Fixed (nested launches)
 
 - A shell opened by a termherd that was itself launched from a termherd shell

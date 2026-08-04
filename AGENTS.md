@@ -426,6 +426,21 @@ exists). Do not relax them locally.
   `settles()` predicate. A doc-comment asserting the rule is *not* enforcement
   — the comment describing the correct behaviour sat directly above the code
   that broke it.
+- **Putting a shipped behaviour behind a flag breaks whoever depended on its
+  side effects, not on its call site.** Grep for what it *wrote*, not for who
+  called it. Making copy-on-select configurable gated the two places that copy
+  a selection — and both were the only writers of the shell's last-copied
+  cache, which is all the copy chord ever read. Off by default, a mouse
+  selection could then be copied by no gesture at all: the flag disabled a
+  feature nobody had flagged. Every test passed, because each covered its own
+  side of a seam that no longer met. The fix was a *reordering* rather than
+  only a fallback — the chord reads the live selection first and keeps the
+  cache behind it, for the one case the screen cannot answer: a selection
+  scrolled out of the viewport carries no visible spans. Putting the live read
+  first also killed an older bug, where a stale cache outranked a fresh
+  highlight. A cache named after what filled it (`selection`) that actually
+  holds what was last *copied* is how the gap stayed invisible; name a cache
+  for its contents.
 - **A guard is unreachable and goes, or reachable and gets a test — there is
   no third state.** Defensive arithmetic nobody can trigger is not free: it
   reads as a live case to the next reader, and no test can pin it. Mutation
@@ -507,10 +522,23 @@ ones that rot first:
 | You changed | Update |
 | --- | --- |
 | `ACTIONS` / `Keymap::defaults` in `core::keymap` | `docs/src/reference/keyboard.md` |
-| the `settings.json` schema (and `docs/settings.example.jsonc` with it) | `docs/src/reference/settings.md` |
+| the `settings.json` schema (and `docs/settings.example.jsonc` with it) | `docs/src/reference/settings.md` — **and its four neighbours**, below |
 | an MCP `#[tool(…)]`, its arguments or its outcomes | `docs/src/mcp/live-bridge.md`, `docs/src/mcp/keyboard.md` |
 | `OPTIONS` in `crates/mcp/src/lib.rs` | `docs/src/mcp/stdio.md` (the id table) |
 | a label in `crates/app/src/strings.rs` the book quotes | the matching `docs/src/workspace/` page |
+
+**A new `settings.json` key is not one edit, it is seven**, and the schema row
+above names only the first. A key added to the schema also owes: the annotated
+`docs/settings.example.jsonc`; the block list under **Configuration** in
+`README.md`; the *file-only* sentence in `docs/src/reference/settings.md`
+**and** its copy in `docs/src/mcp/stdio.md`, which enumerate what MCP cannot
+write and must stay in lockstep; the `A complete example` block, which is
+headed "complete"; and the `docs/src/workspace/` page describing the behaviour.
+Three of those are exhaustive-sounding enumerations, and that is what makes
+them expensive: a list saying "these blocks are file-only" is read as the whole
+truth, so a key missing from it reads as a key MCP *can* write. The two
+clipboard gestures shipped having touched three of the seven; a wrap pass found
+the other four.
 
 **No gate catches this.** The `book` CI job proves the book still *builds* and
 that `SUMMARY.md` resolves against the files on disk; nothing proves it still

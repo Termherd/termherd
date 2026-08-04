@@ -77,7 +77,8 @@ across layouts.
 | <kbd>Ctrl</kbd>+<kbd>C</kbd> | interrupt (`SIGINT`) — passed through to the program |
 | <kbd>Escape</kbd> | cancel an open prompt, rename or doc pane |
 | <kbd>Enter</kbd> | confirm an open prompt |
-| Drag a selection | copies on release |
+| Drag a selection | select; copies too with `terminal.copy_on_select` (off by default) |
+| Right-click | paste, with `terminal.paste_on_right_click` (off by default) |
 | Wheel | scroll back through history |
 | <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click | open a URL or file path under the pointer |
 | Drag a tab | reorder it |

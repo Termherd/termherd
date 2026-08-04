@@ -123,9 +123,10 @@ you want and strip the comments (the real file is strict JSON). In short:
   keeps its own colours.
 - `close` — per-action close confirmation (`tab`, `app`): always, only while
   a foreground process runs (default), or never.
-- `terminal` — base `font_size` (the zoom shortcuts step from it) and grid
+- `terminal` — base `font_size` (the zoom shortcuts step from it), grid
   `colors` (a named scheme — Solarized / Gruvbox, dark or light — plus
-  per-slot overrides).
+  per-slot overrides), and the two clipboard mouse gestures
+  (`copy_on_select`, `paste_on_right_click`), both off by default.
 - `sidebar` — sessions listed per project before the tail folds behind an
   expander (`0` shows all).
 - `record` — the GIF screencast budget (fps, duration cap, frame scale).
@@ -135,8 +136,9 @@ you want and strip the comments (the real file is strict JSON). In short:
 - `keys` — keyboard overrides, one chord or a list per action; the full
   action vocabulary and its default chords are listed in the template.
 
-The same options are also readable and writable from inside a Claude session
-via the MCP control surface (below).
+Some of these are also readable and writable from inside a Claude session via
+the MCP control surface (below) — the catalogue there is narrower than this
+list, and widening it is tracked separately.
 
 Window size and position persist separately to `~/.termherd/window.json` (a
 position left off every connected monitor — e.g. on a screen since unplugged —
@@ -173,8 +175,12 @@ Jump-to-tab (`Ctrl`/`Cmd`+`1`–`9`) is matched by physical key position, so it
 lands on the same number-row keys on every layout — including AZERTY and QWERTZ,
 where those keys produce `&`, `é`, … without Shift.
 
-Dragging a selection with the mouse also copies it on release, and the wheel
-scrolls back through history. In the sidebar, click a project or session to
+Dragging with the mouse selects, and the wheel scrolls back through history.
+The two classic terminal clipboard gestures are off until you ask for them:
+`terminal.copy_on_select` makes a drag release (or a double-click) copy
+outright, and `terminal.paste_on_right_click` makes a right-click paste into
+the pane under the pointer. Left off, the copy chord reads whatever is
+highlighted on screen. In the sidebar, click a project or session to
 open it; a tab's `×` also closes it. Hovering a tab shows the session's fuller
 description (the same card the sidebar shows).
 

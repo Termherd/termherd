@@ -163,9 +163,10 @@ or "switch me to a light theme" from any Claude session.
 The eight ids it covers today: `theme`, `shell.program`, `shell.args`,
 `terminal.colors.scheme`, `terminal.colors.foreground`,
 `terminal.colors.background`, `terminal.colors.cursor`,
-`terminal.colors.palette`. The `close`, `sidebar`, `record`, `open`, `keys`
-and `terminal.font_size` blocks are file-only for now; `keys` is published as a
-read-only resource.
+`terminal.colors.palette`. The `close`, `sidebar`, `record`, `open`, `keys`,
+`terminal.font_size`, `terminal.copy_on_select` and
+`terminal.paste_on_right_click` blocks are file-only for now; `keys` is
+published as a read-only resource.
 
 A `set_option` write lands in `settings.json` and **applies on restart**, like
 any other edit to the file.
@@ -179,6 +180,8 @@ any other edit to the file.
   "close": { "tab": "confirmWhenActive", "app": "alwaysConfirm" },
   "terminal": {
     "font_size": 15,
+    "copy_on_select": true,
+    "paste_on_right_click": true,
     "colors": { "scheme": "gruvbox-dark" }
   },
   "sidebar": { "session_limit": 0 },
