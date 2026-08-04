@@ -12,6 +12,7 @@ use termherd_core::workspace::SessionId;
 use termherd_core::{HoverTarget, ProbeKind, SelectOp, SelectSide, TargetProbe, TermHover};
 use termherd_pty::Screen;
 
+use crate::settings::ClipboardGestures;
 use crate::shell::Message;
 
 use super::cell_size;
@@ -45,6 +46,8 @@ pub(in crate::shell) struct TerminalView<'a> {
     /// Whether the window has lost OS focus, so the grid renders dimmed and
     /// the active window stands out among several.
     pub(in crate::shell) dimmed: bool,
+    /// Which mouse gestures reach the clipboard, from `settings.json`.
+    pub(in crate::shell) gestures: ClipboardGestures,
 }
 
 /// Per-canvas pointer state for the drag in progress and link hover. The
@@ -249,15 +252,21 @@ impl canvas::Program<Message> for TerminalView<'_> {
                     && let Some((anchor, head)) = word_at(self.screen, col, row)
                 {
                     state.selecting = false;
-                    return Some(canvas::Action::publish(Message::SelectAndCopy {
-                        session: self.session,
-                        op: SelectOp::Range {
-                            line0: i32::from(anchor.1) - off,
-                            col0: usize::from(anchor.0),
-                            line1: i32::from(head.1) - off,
-                            col1: usize::from(head.0),
-                        },
-                        text: word_text(self.screen, anchor, head),
+                    let op = SelectOp::Range {
+                        line0: i32::from(anchor.1) - off,
+                        col0: usize::from(anchor.0),
+                        line1: i32::from(head.1) - off,
+                        col1: usize::from(head.0),
+                    };
+                    let session = self.session;
+                    return Some(canvas::Action::publish(if self.gestures.copy_on_select {
+                        Message::SelectAndCopy {
+                            session,
+                            op,
+                            text: word_text(self.screen, anchor, head),
+                        }
+                    } else {
+                        Message::Select { session, op }
                     }));
                 }
                 // Begin a drag-selection at the press cell; the terminal owns the
@@ -268,6 +277,18 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 Some(canvas::Action::publish(Message::Select {
                     session: self.session,
                     op: SelectOp::Start { line, col, side },
+                }))
+            }
+            // The classic terminal right-click paste, off unless configured.
+            // Addressed to *this* canvas's session rather than the focused one:
+            // the pane you point at is the pane you meant. Guarded on the
+            // pointer being over the grid, since the canvas also sees presses
+            // aimed at the sidebar.
+            mouse::Event::ButtonPressed(mouse::Button::Right)
+                if self.gestures.paste_on_right_click && cursor.position_in(bounds).is_some() =>
+            {
+                Some(canvas::Action::publish(Message::RequestPaste {
+                    session: self.session,
                 }))
             }
             mouse::Event::CursorMoved { .. } if state.selecting => {
@@ -301,13 +322,17 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 state.selecting = false;
                 state.dragged = false;
                 if dragged {
-                    // A real drag: ask the terminal to copy its selection. The
-                    // text is read from the live grid selection (not this
-                    // possibly-lagged snapshot), so a fast flick copies exactly
-                    // what was dragged; an empty selection simply copies nothing.
-                    Some(canvas::Action::publish(Message::RequestCopySelection {
-                        session: self.session,
-                    }))
+                    // A real drag: with copy-on-select, ask the terminal to copy
+                    // its selection. The text is read from the live grid
+                    // selection (not this possibly-lagged snapshot), so a fast
+                    // flick copies exactly what was dragged; an empty selection
+                    // simply copies nothing. Without the gesture the selection
+                    // stands and waits for the copy chord.
+                    self.gestures.copy_on_select.then(|| {
+                        canvas::Action::publish(Message::RequestCopySelection {
+                            session: self.session,
+                        })
+                    })
                 } else {
                     // A bare click clears any selection, so a single click can't
                     // leave an undismissable highlight.
@@ -487,6 +512,28 @@ mod tests {
         mouse::Cursor::Available(Point::new(x, y))
     }
 
+    /// A plain view over `screen`: session 1, no modifier held, no hover, the
+    /// default font. Each test names only the field it exercises, with
+    /// `..view(&screen)` — so a new field costs one line here, not one per test.
+    fn view(screen: &Screen) -> TerminalView<'_> {
+        TerminalView {
+            screen,
+            session: sid(1),
+            link_modifier: false,
+            hover: None,
+            shift: false,
+            font_size: 14.0,
+            dimmed: false,
+            gestures: ClipboardGestures::default(),
+        }
+    }
+
+    /// The message an update published, or `None` — what a test asserts on when
+    /// "something was published" is not the same as "the right thing was".
+    fn published(action: Option<canvas::Action<Message>>) -> Option<Message> {
+        action.and_then(|a| a.into_inner().0)
+    }
+
     fn press() -> canvas::Event {
         canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
     }
@@ -508,15 +555,7 @@ mod tests {
     fn wheel_scroll_only_acts_when_the_pointer_is_over_the_terminal() {
         use canvas::Program;
         let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         // Pointer over the canvas → the scroll is published.
         let mut state = TermState::default();
         assert!(
@@ -536,15 +575,7 @@ mod tests {
         // press and release on the same cell, no drag.
         use canvas::Program;
         let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         let action = view.update(&mut state, &release(), test_bounds(), at(10.0, 10.0));
@@ -558,18 +589,10 @@ mod tests {
     }
 
     #[test]
-    fn a_drag_makes_a_selection_and_copies() {
+    fn a_drag_makes_a_live_selection() {
         use canvas::Program;
         let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0)); // (0,0)
         let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0)); // (2,1)
@@ -577,12 +600,153 @@ mod tests {
             state.selecting && state.dragged,
             "a moved drag is a live selection"
         );
-        // Releasing a drag requests a copy from the terminal (which reads its own
-        // live selection), independent of what this snapshot happens to hold.
+        // What the release does with the clipboard is the gesture setting's
+        // business — see `a_drag_release_copies_only_when_copy_on_select_is_on`.
+        let _ = view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0));
         assert!(
-            view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0))
-                .is_some(),
-            "releasing a drag requests a copy"
+            !state.selecting && !state.dragged,
+            "the release ends the drag"
+        );
+    }
+
+    /// A view whose clipboard gestures are both on.
+    fn gesturing(screen: &Screen) -> TerminalView<'_> {
+        TerminalView {
+            gestures: ClipboardGestures {
+                copy_on_select: true,
+                paste_on_right_click: true,
+            },
+            ..view(screen)
+        }
+    }
+
+    fn right_press() -> canvas::Event {
+        canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+    }
+
+    /// Press at (0,0), drag to (2,1), release — the gesture under test.
+    fn drag_and_release(view: &TerminalView<'_>) -> Option<Message> {
+        use canvas::Program;
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
+        let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
+        published(view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0)))
+    }
+
+    #[test]
+    fn a_drag_release_copies_only_when_copy_on_select_is_on() {
+        let screen = test_screen();
+        // Off (the default): the drag still selects — every Update already
+        // reached the terminal — but the release copies nothing.
+        assert!(
+            drag_and_release(&view(&screen)).is_none(),
+            "without copy-on-select a release must not touch the clipboard"
+        );
+        assert!(
+            matches!(
+                drag_and_release(&gesturing(&screen)),
+                Some(Message::RequestCopySelection { .. })
+            ),
+            "with copy-on-select the release asks the terminal to copy"
+        );
+    }
+
+    #[test]
+    fn a_double_click_copies_the_word_only_when_copy_on_select_is_on() {
+        use canvas::Program;
+        let line = "see src/main.rs now";
+        let screen = screen_from(line);
+        let cursor = at_col(line.len(), 8); // inside `src/main.rs`
+        let double = |view: &TerminalView<'_>| {
+            let mut state = TermState::default();
+            let _ = view.update(&mut state, &press(), test_bounds(), cursor);
+            published(view.update(&mut state, &press(), test_bounds(), cursor))
+        };
+        // Off: the word is still selected — the highlight is the gesture's
+        // point — but it does not land on the clipboard.
+        assert!(
+            matches!(
+                double(&view(&screen)),
+                Some(Message::Select {
+                    op: SelectOp::Range { .. },
+                    ..
+                })
+            ),
+            "a double-click always selects the word"
+        );
+        assert!(
+            matches!(
+                double(&gesturing(&screen)),
+                Some(Message::SelectAndCopy { .. })
+            ),
+            "with copy-on-select the word is copied as it is selected"
+        );
+    }
+
+    #[test]
+    fn a_double_click_in_scrollback_anchors_the_word_to_its_grid_line() {
+        // The word is found in viewport rows but selected in grid lines, which
+        // is what makes the highlight ride the scroll. With the viewport scrolled
+        // back, row 0 is grid line -2 — a screen sitting at the bottom (the other
+        // tests) cannot tell the subtraction from an addition.
+        use canvas::Program;
+        let line = "see src/main.rs now";
+        let mut screen = screen_from(line);
+        screen.display_offset = 2;
+        let view = view(&screen);
+        let mut state = TermState::default();
+        let cursor = at_col(line.len(), 8); // inside `src/main.rs`
+        let _ = view.update(&mut state, &press(), test_bounds(), cursor);
+        let published = published(view.update(&mut state, &press(), test_bounds(), cursor));
+        assert!(
+            matches!(
+                published,
+                Some(Message::Select {
+                    op: SelectOp::Range {
+                        line0: -2,
+                        col0: 4,
+                        line1: -2,
+                        col1: 14,
+                    },
+                    ..
+                })
+            ),
+            "expected the word at grid line -2, got {published:?}"
+        );
+    }
+
+    #[test]
+    fn a_right_press_pastes_only_when_the_gesture_is_on() {
+        use canvas::Program;
+        let screen = test_screen();
+        let mut state = TermState::default();
+        assert!(
+            view(&screen)
+                .update(&mut state, &right_press(), test_bounds(), at(50.0, 50.0))
+                .is_none(),
+            "by default a right press is not a paste"
+        );
+        let on = gesturing(&screen);
+        assert!(
+            matches!(
+                published(on.update(&mut state, &right_press(), test_bounds(), at(50.0, 50.0))),
+                Some(Message::RequestPaste { session }) if session == sid(1)
+            ),
+            "the paste is addressed to the pane the pointer is over"
+        );
+    }
+
+    #[test]
+    fn a_right_press_off_the_grid_pastes_nothing() {
+        // The canvas sees presses aimed at the sidebar too; pasting on one
+        // would put the clipboard into a pane the user never pointed at.
+        use canvas::Program;
+        let screen = test_screen();
+        let mut state = TermState::default();
+        assert!(
+            gesturing(&screen)
+                .update(&mut state, &right_press(), test_bounds(), at(250.0, 50.0))
+                .is_none()
         );
     }
 
@@ -592,15 +756,7 @@ mod tests {
         use canvas::Program;
         let screen = test_screen();
         let mut state = TermState::default();
-        let s1 = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let s1 = view(&screen);
         let _ = s1.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         let _ = s1.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(1)));
@@ -611,13 +767,8 @@ mod tests {
         // The canvas now shows session 2; its first event resets the stale drag
         // state so a session-1 drag can't keep extending under session 2.
         let s2 = TerminalView {
-            screen: &screen,
             session: sid(2),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let _ = s2.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(2)));
@@ -667,13 +818,8 @@ mod tests {
         let screen = screen_from("https://ex.io");
         let len = "https://ex.io".len();
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let action = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
@@ -692,13 +838,8 @@ mod tests {
         let screen = screen_from("https://ex.io");
         let len = "https://ex.io".len();
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
@@ -724,13 +865,8 @@ mod tests {
         let screen = screen_from("crates/pty/src/grid.rs:184");
         let len = "crates/pty/src/grid.rs:184".len();
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
@@ -770,13 +906,9 @@ mod tests {
         let state = TermState::default();
         let bounds = test_bounds();
         let mine = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
             hover: Some(&hover),
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         assert_eq!(
             mine.mouse_interaction(&state, bounds, at(10.0, 10.0)),
@@ -811,13 +943,9 @@ mod tests {
 
         let unchanged = screen_from("https://ex.io");
         let still_there = TerminalView {
-            screen: &unchanged,
-            session: sid(1),
             link_modifier: true,
             hover: Some(&hover),
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&unchanged)
         };
         assert_eq!(
             still_there.mouse_interaction(&state, bounds, at(10.0, 10.0)),
@@ -856,13 +984,8 @@ mod tests {
         let screen = screen_from("plain text only");
         let len = "plain text only".len();
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
@@ -880,13 +1003,8 @@ mod tests {
         // Modifier held → moving over the link publishes it, tagged with the
         // session whose grid it was found in.
         let held = TerminalView {
-            screen: &screen,
-            session: sid(1),
             link_modifier: true,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let action = held.update(&mut state, &moved(), test_bounds(), at_col(len, 2));
@@ -923,14 +1041,11 @@ mod tests {
         use canvas::Program;
         let mut screen = test_screen();
         screen.selection = vec![(0, 0, 1)];
+        // Copy-on-select is on so the whole chain is visible: an extend must
+        // reach the same release-copies path a plain drag does.
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
             shift: true,
-            font_size: 14.0,
-            dimmed: false,
+            ..gesturing(&screen)
         };
         let mut state = TermState::default();
         let action = view.update(&mut state, &press(), test_bounds(), at(60.0, 60.0));
@@ -940,8 +1055,10 @@ mod tests {
             "an extend behaves like a drag so the release copies it"
         );
         assert!(
-            view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0))
-                .is_some(),
+            matches!(
+                published(view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0))),
+                Some(Message::RequestCopySelection { .. })
+            ),
             "releasing the extend requests a copy"
         );
     }
@@ -952,13 +1069,8 @@ mod tests {
         use canvas::Program;
         let screen = test_screen();
         let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
             shift: true,
-            font_size: 14.0,
-            dimmed: false,
+            ..view(&screen)
         };
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
@@ -969,21 +1081,15 @@ mod tests {
     }
 
     #[test]
-    fn double_click_selects_and_copies_the_word_under_the_pointer() {
+    fn double_click_selects_the_word_under_the_pointer() {
         // two consecutive presses on the same cell select the whole
-        // word/filename run and publish a copy — without leaving an active drag.
+        // word/filename run — without leaving an active drag. Whether the word
+        // is also copied is
+        // `a_double_click_copies_the_word_only_when_copy_on_select_is_on`.
         use canvas::Program;
         let line = "see src/main.rs now";
         let screen = screen_from(line);
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         let mut state = TermState::default();
         let cursor = at_col(line.len(), 8); // inside `src/main.rs` (cols 4..=14)
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
@@ -994,7 +1100,7 @@ mod tests {
         );
         assert!(
             action.is_some(),
-            "double-click publishes the word selection and its copy"
+            "double-click publishes the word selection"
         );
     }
 
@@ -1005,15 +1111,7 @@ mod tests {
         use canvas::Program;
         let line = "ab   cd"; // cols 2,3,4 are blanks
         let screen = screen_from(line);
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         let mut state = TermState::default();
         let cursor = at_col(line.len(), 3);
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
@@ -1028,15 +1126,7 @@ mod tests {
         // it (e.g. the cursor sits over the sidebar) the default pointer returns.
         use canvas::Program;
         let screen = test_screen();
-        let view = TerminalView {
-            screen: &screen,
-            session: sid(1),
-            link_modifier: false,
-            hover: None,
-            shift: false,
-            font_size: 14.0,
-            dimmed: false,
-        };
+        let view = view(&screen);
         let state = TermState::default();
         assert_eq!(
             view.mouse_interaction(&state, test_bounds(), at(50.0, 50.0)),

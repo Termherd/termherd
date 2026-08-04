@@ -201,6 +201,41 @@ pub struct TerminalSettings {
     pub font_size: f64,
     /// Terminal grid colours; absent → the built-in scheme.
     pub colors: ColorSettings,
+    /// Selecting text with the mouse also copies it, no chord needed.
+    #[serde(deserialize_with = "flag")]
+    pub copy_on_select: bool,
+    /// A right-click pastes the clipboard into the pane under the pointer.
+    #[serde(deserialize_with = "flag")]
+    pub paste_on_right_click: bool,
+}
+
+/// Parse a JSON boolean, treating anything else as "not asked for" (with a
+/// warning) rather than failing serde for the whole file — the same contract a
+/// malformed colour or open command gets. A `"yes"` or a `1` costs its own
+/// setting and nothing else.
+///
+/// Both flags default to off, so one fallback value serves both.
+fn flag<'de, D>(de: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(de)?;
+    Ok(value.as_bool().unwrap_or_else(|| {
+        warn!(%value, "terminal flag is not true/false; leaving it off");
+        false
+    }))
+}
+
+/// Which mouse gestures reach the clipboard — the classic terminal
+/// conventions, both off unless asked for. Named once and carried whole, so
+/// the settings file, the shell and the canvas cannot disagree about which
+/// gesture is which.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClipboardGestures {
+    /// A drag release (or a double-click) copies the selection outright.
+    pub copy_on_select: bool,
+    /// A right press pastes into the pane under the pointer.
+    pub paste_on_right_click: bool,
 }
 
 /// The on-disk terminal colour overrides. Every field is optional and parsed
@@ -293,6 +328,8 @@ impl Default for TerminalSettings {
         Self {
             font_size: f64::from(termherd_core::DEFAULT_FONT_SIZE),
             colors: ColorSettings::default(),
+            copy_on_select: false,
+            paste_on_right_click: false,
         }
     }
 }
@@ -408,6 +445,15 @@ impl Settings {
     #[must_use]
     pub fn font_size(&self) -> f32 {
         self.terminal.font_size()
+    }
+
+    /// Which mouse gestures reach the clipboard.
+    #[must_use]
+    pub fn clipboard_gestures(&self) -> ClipboardGestures {
+        ClipboardGestures {
+            copy_on_select: self.terminal.copy_on_select,
+            paste_on_right_click: self.terminal.paste_on_right_click,
+        }
     }
 
     /// The sanitised terminal colour scheme: the built-in defaults with the
@@ -589,6 +635,70 @@ mod tests {
         let s: Settings =
             serde_json::from_str(r#"{ "terminal": { "font_size": -3 } }"#).expect("valid json");
         assert!((s.font_size() - 6.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn clipboard_gestures_are_off_unless_asked_for() {
+        // The explicit chords stay the only way to the clipboard by default.
+        assert_eq!(
+            Settings::default().clipboard_gestures(),
+            ClipboardGestures {
+                copy_on_select: false,
+                paste_on_right_click: false,
+            }
+        );
+        // A `terminal` block that says nothing about them changes nothing.
+        let s: Settings =
+            serde_json::from_str(r#"{ "terminal": { "font_size": 18 } }"#).expect("valid json");
+        assert_eq!(s.clipboard_gestures(), ClipboardGestures::default());
+    }
+
+    #[test]
+    fn the_terminal_block_turns_each_clipboard_gesture_on() {
+        let s: Settings = serde_json::from_str(
+            r#"{ "terminal": { "copy_on_select": true, "paste_on_right_click": true } }"#,
+        )
+        .expect("valid json");
+        assert_eq!(
+            s.clipboard_gestures(),
+            ClipboardGestures {
+                copy_on_select: true,
+                paste_on_right_click: true,
+            }
+        );
+        // Each is independent: one on leaves the other alone.
+        let s: Settings = serde_json::from_str(r#"{ "terminal": { "copy_on_select": true } }"#)
+            .expect("valid json");
+        assert_eq!(
+            s.clipboard_gestures(),
+            ClipboardGestures {
+                copy_on_select: true,
+                paste_on_right_click: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_non_boolean_clipboard_gesture_degrades_alone() {
+        // Same contract as a bad colour or a bad open command: the setting falls
+        // back to its default, and the rest of the file survives — a `"yes"`
+        // must not silently reset the keymap and theme.
+        for bad in [r#""yes""#, "1", "null", "[]"] {
+            let json = format!(
+                r#"{{ "theme": "light", "terminal": {{ "copy_on_select": {bad}, "paste_on_right_click": true }} }}"#
+            );
+            let s: Settings =
+                serde_json::from_str(&json).expect("a bad flag must not fail the whole parse");
+            assert_eq!(
+                s.clipboard_gestures(),
+                ClipboardGestures {
+                    copy_on_select: false,
+                    paste_on_right_click: true,
+                },
+                "{bad} must degrade alone"
+            );
+            assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
+        }
     }
 
     #[test]

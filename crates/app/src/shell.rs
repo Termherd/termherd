@@ -30,7 +30,7 @@ use termherd_pty::{PtyEvent, Screen};
 
 use crate::docs::DocEntry;
 use crate::record_config::RecordConfig;
-use crate::settings::{CloseSettings, ThemeChoice};
+use crate::settings::{ClipboardGestures, CloseSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
 pub(crate) mod bridge;
@@ -106,6 +106,8 @@ pub struct Startup {
     pub font_size: f32,
     /// Close-confirmation policy for tab close and app quit.
     pub close: CloseSettings,
+    /// Which mouse gestures reach the clipboard.
+    pub gestures: ClipboardGestures,
     /// The editor command from settings, or `None` for the OS default handler.
     pub open: Option<termherd_core::OpenCommand>,
     /// Adapter-owned config bits for the MCP `snapshot` tool's config section
@@ -131,6 +133,7 @@ impl Startup {
             session_limit: settings.session_limit(),
             font_size: settings.font_size(),
             close: settings.close,
+            gestures: settings.clipboard_gestures(),
             open: settings.open_command(),
             config: ConfigInput {
                 terminal_scheme: settings.terminal.colors.scheme.clone(),
@@ -183,6 +186,7 @@ pub fn run(
                     session_limit: startup.session_limit,
                     font_size: startup.font_size,
                     close: startup.close,
+                    gestures: startup.gestures,
                     open: startup.open.clone(),
                     config: startup.config.clone(),
                 },
@@ -304,6 +308,10 @@ struct Shell {
     closing: Option<usize>,
     /// Whether tab close and app quit prompt first (from `settings.json`).
     close_confirm: CloseSettings,
+    /// Which mouse gestures reach the clipboard (from `settings.json`), handed
+    /// to each terminal canvas so a drag release or a right-click knows whether
+    /// it is a clipboard gesture at all.
+    gestures: ClipboardGestures,
     /// An archive awaiting confirmation: the session id to archive, or `None`.
     /// Archiving is easy to trigger by accident, so the archive button
     /// arms this and a confirmation bar must be accepted first. Un-archiving is
@@ -439,6 +447,17 @@ enum Message {
     CopySelection(String),
     /// Clipboard contents read back for a paste into the focused terminal (FR4).
     Paste(Option<String>),
+    /// A right-click asked to paste into the pane under the pointer, which is
+    /// not necessarily the focused one. Reads the clipboard, then
+    /// [`Message::PasteInto`] lands it.
+    RequestPaste {
+        session: SessionId,
+    },
+    /// Clipboard contents read back for a paste into a named session.
+    PasteInto {
+        session: SessionId,
+        content: Option<String>,
+    },
     /// Ask to close the tab at this index — arms the confirmation bar.
     RequestCloseTab(usize),
     /// Confirm the pending close, killing the tab's session(s) (FR5).
@@ -589,6 +608,7 @@ impl Message {
                 | Self::FocusPane(_)
                 | Self::TermScroll { .. }
                 | Self::Paste(_)
+                | Self::RequestPaste { .. }
                 | Self::TabDragStart(_)
                 | Self::TabDragEnd
                 | Self::RequestCloseTab(_)
@@ -690,6 +710,7 @@ impl Shell {
             open_doc: None,
             closing: None,
             close_confirm: startup.close,
+            gestures: startup.gestures,
             archiving: None,
             closing_window: None,
             link_modifier: false,
@@ -915,11 +936,7 @@ impl Shell {
                 self.on_key(event).1
             }
             Message::ImeCommit(text) => self.on_ime_commit(text),
-            Message::FocusPane(session) => {
-                self.focus = Focus::Terminal;
-                let effects = self.core.apply(termherd_core::Event::FocusPane(session));
-                self.perform(effects)
-            }
+            Message::FocusPane(session) => self.focus_pane(session),
             Message::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -963,22 +980,27 @@ impl Shell {
                 }
             }
             Message::Paste(content) => {
-                let Some(text) = content.filter(|t| !t.is_empty()) else {
-                    return Task::none();
-                };
                 let Some(session) = self.core.workspace.focused_session() else {
                     return Task::none();
                 };
-                let bracketed = self
-                    .screens
-                    .get(&session)
-                    .is_some_and(|screen| screen.bracketed_paste);
-                let effects = self.core.apply(termherd_core::Event::TerminalInput {
-                    session,
-                    bytes: termherd_pty::paste_bytes(&text, bracketed),
-                });
-                self.perform(effects)
+                self.paste_into(session, content)
             }
+            Message::RequestPaste { session } => {
+                // A prompt that owns the keyboard owns the input. The pointer
+                // must not be a way past a confirmation the keyboard cannot
+                // pass — the paste chord is swallowed there, and so is this.
+                if self.keyboard_owner().is_some() {
+                    return Task::none();
+                }
+                // The pane you paste into is the pane you are now working in;
+                // every terminal focuses the pane its paste-click landed on,
+                // and the left button already focuses through `mouse_area`.
+                let focus = self.focus_pane(session);
+                let read = iced::clipboard::read()
+                    .map(move |content| Message::PasteInto { session, content });
+                Task::batch([focus, read])
+            }
+            Message::PasteInto { session, content } => self.paste_into(session, content),
             Message::RequestCloseTab(index) => self.request_close(index).unwrap_or_else(Task::none),
             Message::CloseTab(index) => self.close_tab(index),
             Message::CancelClose => {
@@ -1247,15 +1269,63 @@ impl Shell {
         }
     }
 
-    /// Copy the last terminal selection to the clipboard, if any (FR4).
-    /// Put the last terminal selection on the clipboard. `None` when there is
+    /// Put the terminal selection on the clipboard (FR4). `None` when there is
     /// nothing selected: a caller told the copy ran would follow with a paste and
     /// paste whatever was on the clipboard before.
-    fn copy_selection(&self) -> Option<Task<Message>> {
+    ///
+    /// A **visible** selection outranks [`Self::selection`], which is a cache of
+    /// the last text copied, not of the last text selected. With copy-on-select
+    /// off, nothing but a copy fills that cache — so trusting it first would put
+    /// the previously copied text on the clipboard while a fresh highlight sits
+    /// on screen, silently copying the wrong thing. The terminal reads its own
+    /// live selection and answers out of band, which refills the cache on the
+    /// way. The cache still serves the case the screen cannot: a selection
+    /// scrolled out of the viewport carries no spans to see.
+    fn copy_selection(&mut self) -> Option<Task<Message>> {
+        if let Some(session) = self.core.workspace.focused_session()
+            && self
+                .screens
+                .get(&session)
+                .is_some_and(|screen| !screen.selection.is_empty())
+        {
+            let effects = self
+                .core
+                .apply(termherd_core::Event::CopyTerminalSelection { session });
+            return Some(self.perform(effects));
+        }
         match &self.selection {
             Some(sel) if !sel.is_empty() => Some(iced::clipboard::write(sel.clone())),
             _ => None,
         }
+    }
+
+    /// Move pane focus to `session` and give the keyboard to its terminal —
+    /// what a click on a pane means, whichever button made it.
+    fn focus_pane(&mut self, session: SessionId) -> Task<Message> {
+        self.focus = Focus::Terminal;
+        let effects = self.core.apply(termherd_core::Event::FocusPane(session));
+        self.perform(effects)
+    }
+
+    /// Write clipboard `content` into `session` as terminal input, bracketed
+    /// when that session asked for it. The one paste seam: the keyboard chord
+    /// arrives here with the focused session, a right-click with the one under
+    /// the pointer, so neither can grow its own idea of how a paste is framed.
+    /// Empty (or absent) content writes nothing — a paste of nothing must not
+    /// send the bracket markers on their own.
+    fn paste_into(&mut self, session: SessionId, content: Option<String>) -> Task<Message> {
+        let Some(text) = content.filter(|t| !t.is_empty()) else {
+            return Task::none();
+        };
+        let bracketed = self
+            .screens
+            .get(&session)
+            .is_some_and(|screen| screen.bracketed_paste);
+        let effects = self.core.apply(termherd_core::Event::TerminalInput {
+            session,
+            bytes: termherd_pty::paste_bytes(&text, bracketed),
+        });
+        self.perform(effects)
     }
 
     /// Apply the pending tab rename to the core and clear the edit. The core's
@@ -1323,7 +1393,7 @@ mod key_routing {
     /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]
     struct RecordingPty {
-        writes: StdMutex<Vec<Vec<u8>>>,
+        writes: StdMutex<Vec<(SessionId, Vec<u8>)>>,
         kills: StdMutex<usize>,
         spawns: StdMutex<usize>,
         launches: StdMutex<Vec<Launch>>,
@@ -1335,6 +1405,11 @@ mod key_routing {
 
     impl RecordingPty {
         fn writes(&self) -> Vec<Vec<u8>> {
+            self.writes_seen().into_iter().map(|(_, b)| b).collect()
+        }
+        /// Every write with the session it landed in — what a test asserting
+        /// *which pane* received the bytes needs.
+        fn writes_seen(&self) -> Vec<(SessionId, Vec<u8>)> {
             self.writes.lock().expect("writes lock").clone()
         }
         fn kill_count(&self) -> usize {
@@ -1371,11 +1446,11 @@ mod key_routing {
                 .push(spec.launch);
             Ok(())
         }
-        fn write(&self, _session: SessionId, bytes: &[u8]) -> Result<(), PtyError> {
+        fn write(&self, session: SessionId, bytes: &[u8]) -> Result<(), PtyError> {
             self.writes
                 .lock()
                 .expect("writes lock")
-                .push(bytes.to_vec());
+                .push((session, bytes.to_vec()));
             Ok(())
         }
         fn resize(&self, _: SessionId, cols: u16, rows: u16) -> Result<(), PtyError> {
@@ -1421,6 +1496,7 @@ mod key_routing {
             session_limit: 0,
             font_size: 14.0,
             close: CloseSettings::default(),
+            gestures: ClipboardGestures::default(),
             open: None,
             config: test_config_input(),
         }
@@ -2398,6 +2474,173 @@ mod key_routing {
             1,
             "a drag release asks the terminal to copy its selection"
         );
+    }
+
+    #[test]
+    fn a_right_click_paste_lands_in_the_pane_under_the_pointer() {
+        // The right-click carries its own session because the pane you point at
+        // need not be the focused one — a paste into the wrong split is worse
+        // than no paste at all.
+        let (mut shell, pty) = shell_with_terminal();
+        let pointed = shell.core.workspace.focused_session().expect("focused");
+        let (split, _task) = shell.perform_action(BridgeAction::Split {
+            pane: None,
+            dir: SplitDir::Vertical,
+        });
+        assert_eq!(split.error, None);
+        let elsewhere = shell.core.workspace.focused_session().expect("focused");
+        assert_ne!(elsewhere, pointed, "the split moved focus off the target");
+
+        let _ = shell.update(Message::PasteInto {
+            session: pointed,
+            content: Some("hello".to_string()),
+        });
+        assert_eq!(
+            pty.writes_seen(),
+            vec![(pointed, b"hello".to_vec())],
+            "the clipboard reached the pointed pane, and only it"
+        );
+    }
+
+    /// A shell whose focused terminal shows a highlighted selection — what the
+    /// copy chord must read when copy-on-select is off and nothing has filled
+    /// the cache.
+    fn shell_with_a_visible_selection() -> (Shell, Arc<RecordingPty>, SessionId) {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let mut screen = screen_of("cargo test");
+        screen.selection = vec![(0, 0, 4)];
+        shell.screens.insert(session, screen);
+        (shell, pty, session)
+    }
+
+    #[test]
+    fn the_copy_chord_reads_a_mouse_selection_when_copy_on_select_is_off() {
+        // With the gesture off nothing fills the selection cache, so a cache-only
+        // copy would leave a dragged selection uncopyable by any means — worse
+        // than before the setting existed.
+        let (mut shell, pty, _session) = shell_with_a_visible_selection();
+        let (verdict, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            verdict.steps,
+            vec![PressStep::Ran("copy".to_owned())],
+            "a highlighted selection is something to copy"
+        );
+        assert_eq!(
+            pty.copy_count(),
+            1,
+            "the chord asks the terminal for its live selection"
+        );
+    }
+
+    #[test]
+    fn the_copy_chord_prefers_the_live_selection_to_the_last_copied_text() {
+        // The cache holds what was last *copied*, not what is selected now.
+        // Reading it first would put stale text on the clipboard while a fresh
+        // highlight sits on screen — a silent wrong answer, the worst kind.
+        let (mut shell, pty, _session) = shell_with_a_visible_selection();
+        shell.selection = Some("an earlier copy".to_owned());
+        let _ = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            pty.copy_count(),
+            1,
+            "the live selection wins over the cache"
+        );
+    }
+
+    #[test]
+    fn a_right_click_paste_focuses_the_pane_it_pastes_into() {
+        // Every terminal focuses the pane its paste-click landed on; the left
+        // button already does through `mouse_area`.
+        let (mut shell, _pty) = shell_with_terminal();
+        let pointed = shell.core.workspace.focused_session().expect("focused");
+        let (split, _task) = shell.perform_action(BridgeAction::Split {
+            pane: None,
+            dir: SplitDir::Vertical,
+        });
+        assert_eq!(split.error, None);
+        assert_ne!(
+            shell.core.workspace.focused_session(),
+            Some(pointed),
+            "the split moved focus off the target"
+        );
+
+        let _ = shell.update(Message::RequestPaste { session: pointed });
+        assert_eq!(
+            shell.core.workspace.focused_session(),
+            Some(pointed),
+            "the pane you paste into is the pane you are working in"
+        );
+    }
+
+    #[test]
+    fn a_right_click_paste_is_swallowed_by_an_open_prompt() {
+        // The prompt that owns the keyboard owns the input: the paste chord is
+        // swallowed there, and the pointer must not be a way around it.
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        let pointed = shell.core.workspace.focused_session().expect("focused");
+        let (split, _task) = shell.perform_action(BridgeAction::Split {
+            pane: None,
+            dir: SplitDir::Vertical,
+        });
+        assert_eq!(split.error, None);
+        let elsewhere = shell.core.workspace.focused_session().expect("focused");
+        shell.closing = Some(0);
+
+        let _ = shell.update(Message::RequestPaste { session: pointed });
+        assert_eq!(
+            shell.core.workspace.focused_session(),
+            Some(elsewhere),
+            "the gesture did not even move focus past the prompt"
+        );
+    }
+
+    #[test]
+    fn a_right_click_paste_abandons_an_open_session_rename() {
+        // Pointing at a terminal and pasting into it is a deliberate move away
+        // from the sidebar edit — the same reading the scroll and the keyboard
+        // paste already get.
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.renaming = Some(("sid".to_string(), "half-typed".to_string()));
+        let _ = shell.update(Message::RequestPaste { session });
+        assert!(shell.renaming.is_none(), "the gesture blurs the edit");
+    }
+
+    #[test]
+    fn a_paste_is_bracketed_exactly_when_its_own_terminal_asked_for_it() {
+        // Bracketing is per session, so a paste addressed to a pane must read
+        // *that* pane's mode — not the focused pane's.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let mut screen = screen_of("$ ");
+        screen.bracketed_paste = true;
+        shell.screens.insert(session, screen);
+        let _ = shell.update(Message::PasteInto {
+            session,
+            content: Some("hi".to_string()),
+        });
+        assert_eq!(
+            pty.writes(),
+            vec![termherd_pty::paste_bytes("hi", true)],
+            "the terminal asked for bracketed paste and got it"
+        );
+    }
+
+    #[test]
+    fn a_paste_of_nothing_writes_nothing() {
+        // An empty clipboard must not send the bracket markers on their own.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PasteInto {
+            session,
+            content: None,
+        });
+        let _ = shell.update(Message::PasteInto {
+            session,
+            content: Some(String::new()),
+        });
+        assert!(pty.writes().is_empty());
     }
 
     #[test]
@@ -3615,18 +3858,7 @@ mod key_routing {
             WindowConfig::default(),
             test_ports(pty.clone(), rx),
             test_live_bridge(),
-            Startup {
-                theme: ThemeChoice::default(),
-                keymap: Keymap::defaults(),
-                metadata: Overlay::default(),
-                collapsed: HashSet::new(),
-                record: RecordConfig::default(),
-                session_limit: 0,
-                font_size: 14.0,
-                close: CloseSettings::default(),
-                open: None,
-                config: test_config_input(),
-            },
+            test_startup(),
         );
         assert!(shell.core.workspace.focused_session().is_none());
         (shell, pty)

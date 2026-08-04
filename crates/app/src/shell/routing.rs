@@ -216,8 +216,8 @@ impl Shell {
             // Split the focused pane / move pane focus (FR6).
             Action::SplitHorizontal => self.split_pane(SplitDir::Horizontal),
             Action::SplitVertical => self.split_pane(SplitDir::Vertical),
-            Action::FocusNext => self.focus_pane(true),
-            Action::FocusPrev => self.focus_pane(false),
+            Action::FocusNext => self.focus_neighbour_pane(true),
+            Action::FocusPrev => self.focus_neighbour_pane(false),
             Action::FocusLeft => self.focus_dir(Direction::Left),
             Action::FocusRight => self.focus_dir(Direction::Right),
             Action::FocusUp => self.focus_dir(Direction::Up),
@@ -269,7 +269,7 @@ impl Shell {
 
     /// Move pane focus forward (`next`) or back through the active tab's leaves,
     /// wrapping. Focus alone changes no geometry, so no resize follows.
-    fn focus_pane(&mut self, next: bool) -> Task<Message> {
+    fn focus_neighbour_pane(&mut self, next: bool) -> Task<Message> {
         let event = if next {
             termherd_core::Event::FocusNextPane
         } else {

@@ -103,6 +103,17 @@
     // touching this setting. Default: 14.
     "font_size": 14,
 
+    // The classic terminal mouse conventions, both off by default so nothing
+    // reaches the clipboard unless asked for. A value that is not true/false
+    // leaves its own gesture off and does not fail the file.
+    //
+    // Releasing a drag — or double-clicking a word — copies the selection
+    // outright. Off: the selection highlights and waits for the copy chord.
+    "copy_on_select": false,
+    // A right-click pastes into THE PANE UNDER THE POINTER (not necessarily
+    // the focused one), bracketed when that pane asked for bracketed paste.
+    "paste_on_right_click": false,
+
     // Terminal grid colours. Start from a named scheme, then override
     // individual slots; every field is optional and a malformed colour
     // degrades to its default alone.
