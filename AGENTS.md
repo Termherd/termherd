@@ -507,10 +507,23 @@ ones that rot first:
 | You changed | Update |
 | --- | --- |
 | `ACTIONS` / `Keymap::defaults` in `core::keymap` | `docs/src/reference/keyboard.md` |
-| the `settings.json` schema (and `docs/settings.example.jsonc` with it) | `docs/src/reference/settings.md` |
+| the `settings.json` schema (and `docs/settings.example.jsonc` with it) | `docs/src/reference/settings.md` — **and its four neighbours**, below |
 | an MCP `#[tool(…)]`, its arguments or its outcomes | `docs/src/mcp/live-bridge.md`, `docs/src/mcp/keyboard.md` |
 | `OPTIONS` in `crates/mcp/src/lib.rs` | `docs/src/mcp/stdio.md` (the id table) |
 | a label in `crates/app/src/strings.rs` the book quotes | the matching `docs/src/workspace/` page |
+
+**A new `settings.json` key is not one edit, it is seven**, and the schema row
+above names only the first. A key added to the schema also owes: the annotated
+`docs/settings.example.jsonc`; the block list under **Configuration** in
+`README.md`; the *file-only* sentence in `docs/src/reference/settings.md`
+**and** its copy in `docs/src/mcp/stdio.md`, which enumerate what MCP cannot
+write and must stay in lockstep; the `A complete example` block, which is
+headed "complete"; and the `docs/src/workspace/` page describing the behaviour.
+Three of those are exhaustive-sounding enumerations, and that is what makes
+them expensive: a list saying "these blocks are file-only" is read as the whole
+truth, so a key missing from it reads as a key MCP *can* write. The two
+clipboard gestures shipped having touched three of the seven; a wrap pass found
+the other four.
 
 **No gate catches this.** The `book` CI job proves the book still *builds* and
 that `SUMMARY.md` resolves against the files on disk; nothing proves it still
