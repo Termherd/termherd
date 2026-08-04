@@ -19,9 +19,10 @@ every change, not by reviewer memory. They cluster on three axes:
 - **Supply-chain hygiene** — `cargo-deny`, `cargo-machete`, SHA-pinned
   actions.
 
-Three more gates keep the meta-layer honest: `actionlint` (the workflows
-themselves), `markdownlint` (the prose), and `roadmap` (the generated
-`ROADMAP.md` against the `.roadmap/` sources it is compiled from).
+Four more gates keep the meta-layer honest: `actionlint` (the workflows
+themselves), `markdownlint` (the prose), `roadmap` (the generated
+`ROADMAP.md` against the `.roadmap/` sources it is compiled from), and
+`mdbook` (the user manual builds, and its chapter map resolves).
 
 ---
 

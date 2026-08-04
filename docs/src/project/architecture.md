@@ -75,9 +75,12 @@ Non-negotiable, and CI-enforced:
 - **One logging stack**: `tracing`. No `println!` outside tests.
 - **Function length is gated** (`clippy::too_many_lines`, threshold 150). A
   function that exceeds it on purpose carries a local allow with a rationale.
-- Every gate runs on every PR — formatting, clippy with warnings denied, the
-  test suite, dependency licensing, unused dependencies, the crate dependency
-  rule, intra-crate module boundaries, and markdown lint. Portable crates are
+- **Twelve gates guard a pull request** — formatting, clippy with warnings
+  denied, the test suite, dependency licensing, unused dependencies, the crate
+  dependency rule, intra-crate module boundaries, workflow lint, markdown lint,
+  the roadmap, and this book. Each runs **only when its own file category
+  changed**, so a docs-only change skips every Rust job; they fan into one
+  required check, which treats a skipped gate as a pass. Portable crates are
   additionally **built and tested on Windows on every PR**.
 
 The full CI reference is
