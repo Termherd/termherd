@@ -6,8 +6,9 @@ escape-sequence handling, scrollback, selection, colours.
 
 ## Selection and clipboard
 
-Drag with the mouse to select; the selection is **copied on release**. The
-explicit chords:
+Drag with the mouse to select; a double-click selects the word or filename
+under the pointer; <kbd>Shift</kbd>+click extends the current selection. The
+chords that reach the clipboard:
 
 | | macOS | Windows / Linux |
 | --- | --- | --- |
@@ -17,6 +18,24 @@ explicit chords:
 Copy/paste is the one binding that is deliberately irregular per platform:
 on Windows and Linux <kbd>Ctrl</kbd>+<kbd>C</kbd> must stay the interrupt.
 <kbd>Ctrl</kbd>+<kbd>C</kbd> sends `SIGINT` on every platform.
+
+### Mouse gestures
+
+The two classic terminal conventions are available, both **off by default** —
+so nothing reaches the clipboard unless you asked for it:
+
+```json
+"terminal": { "copy_on_select": true, "paste_on_right_click": true }
+```
+
+- **`copy_on_select`** — releasing a drag, or double-clicking a word, copies
+  the selection outright. With it off the selection still highlights and waits
+  for the copy chord.
+- **`paste_on_right_click`** — a right-click pastes into **the pane under the
+  pointer**, which need not be the focused one, and is bracketed when that pane
+  asked for bracketed paste.
+
+See [`settings.json`](../reference/settings.md).
 
 ## Scrollback
 

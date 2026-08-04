@@ -66,6 +66,8 @@ Per-action close confirmation. Both keys default to `"confirmWhenActive"`.
 ```json
 "terminal": {
   "font_size": 14,
+  "copy_on_select": false,
+  "paste_on_right_click": false,
   "colors": {
     "scheme": "solarized-dark",
     "foreground": "#839496",
@@ -79,6 +81,8 @@ Per-action close confirmation. Both keys default to `"confirmWhenActive"`.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `font_size` | `14` | pixels, clamped to 6–40. The zoom chords step from here at runtime without rewriting it. |
+| `copy_on_select` | `false` | a drag release or a double-click copies the selection outright, no chord needed |
+| `paste_on_right_click` | `false` | a right-click pastes into the pane under the pointer, not necessarily the focused one |
 | `colors.scheme` | built-in | `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |
 | `colors.foreground` / `.background` / `.cursor` | from the scheme | `"#rrggbb"`; the `#` is optional |
 | `colors.palette` | from the scheme | the 16 ANSI colours — normal 0–7, then bright 8–15 |

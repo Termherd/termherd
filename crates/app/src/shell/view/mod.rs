@@ -170,6 +170,7 @@ impl Shell {
                     shift: self.shift_modifier,
                     font_size: self.core.font_size(),
                     dimmed: !self.core.window_focused(),
+                    gestures: self.gestures,
                 })
                 .width(Fill)
                 .height(Fill);
