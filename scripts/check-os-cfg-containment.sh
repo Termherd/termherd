@@ -32,6 +32,7 @@ set -euo pipefail
 declare -A allowed=(
     [crates/app/src/main.rs]="gates the macos module (mod macos) — the composition root wiring the AppKit glue in"
     [crates/app/src/instance.rs]="single-instance lock naming differs per OS (path vs mutex-name vs abstract socket)"
+    [crates/app/src/attach.rs]="the published bridge file carries a bearer token, so it is written with Unix-only permissions (0600) via a cfg fork — and its mode is asserted in the same file, the binary crate having no lib target a tests/ binary could reach"
     [crates/app/src/window_geometry.rs]="Linux window placement needs a fallback the other platforms don't"
     [crates/app/src/shell/effects/os.rs]="the OS effect handoffs — the shell's one sanctioned per-OS dispatch site"
     [crates/app/src/shell/session_ops.rs]="macOS-only quit reroute on window Opened (repoints Cmd+Q through the shell)"

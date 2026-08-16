@@ -140,6 +140,32 @@ would *run* rather than show (`.app`, `.exe`, `.desktop`) is neither underlined
 nor opened, because the handoff obeys the file association. An explicit editor
 consults no association, so those files open like any other.
 
+### `mcp`
+
+Whether a running TermHerd publishes its [live bridge](../mcp/live-bridge.md)
+for a client it did **not** launch — a script, an editor, or the very terminal
+you started TermHerd from.
+
+```json
+"mcp": { "attach": true }
+```
+
+| Value | Means |
+| --- | --- |
+| `false` | the default: nothing is published, and only sessions TermHerd spawned can reach the bridge |
+| `true` | `~/.termherd/bridge.json` carries `{ url, token }` for the running instance, readable only by you |
+| `"never"` | as `false`, **and** the `TERMHERD_MCP_ATTACH` override below cannot turn it on |
+
+`TERMHERD_MCP_ATTACH=1` (or `0`) in TermHerd's own environment flips `true` and
+`false` for one launch — useful for a one-off automation run without editing
+the file. Against `"never"` it does nothing, and says so in the log at `info`.
+
+Publishing is off by default because of what it exposes: any process running as
+you can then read the token and drive the workspace, including `run_in_session`,
+which types into a terminal. See [Attaching from
+outside](../mcp/attach.md) for the whole picture and the `termherd mcp-config`
+subcommand that consumes the file.
+
 ### `keys`
 
 Keyboard overrides — one chord or a list per action, **replacing** that
@@ -164,9 +190,12 @@ The eight ids it covers today: `theme`, `shell.program`, `shell.args`,
 `terminal.colors.scheme`, `terminal.colors.foreground`,
 `terminal.colors.background`, `terminal.colors.cursor`,
 `terminal.colors.palette`. The `close`, `sidebar`, `record`, `open`, `keys`,
-`terminal.font_size`, `terminal.copy_on_select` and
+`mcp`, `terminal.font_size`, `terminal.copy_on_select` and
 `terminal.paste_on_right_click` blocks are file-only for now; `keys` is
 published as a read-only resource.
+
+`mcp` is file-only by design rather than by backlog: a surface that could grant
+itself wider reach is not a setting, it is an escalation.
 
 A `set_option` write lands in `settings.json` and **applies on restart**, like
 any other edit to the file.
@@ -187,6 +216,7 @@ any other edit to the file.
   "sidebar": { "session_limit": 0 },
   "record": { "fps": 10, "max_seconds": 20, "scale": 0.5 },
   "open": { "command": "code -g {path}:{line}:{col}" },
+  "mcp": { "attach": false },
   "keys": {
     "toggle-sidebar": "ctrl+alt+b",
     "focus-next": "ctrl+alt+right"

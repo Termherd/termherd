@@ -35,22 +35,24 @@ depends on how the session started.
 | --- | --- | --- |
 | Reaches | the **running** workspace | the **settings file** |
 | Setup | none — wired in at spawn | you register `termherd-mcp` yourself |
-| Available to | sessions launched from TermHerd | any Claude session |
+| Available to | sessions launched from TermHerd, plus any client that [attaches](./attach.md) | any Claude session |
 | Transport | in-process, loopback, per-session bearer token | JSON-RPC over stdio |
 | Surface | 13 tools | 2 tools + 2 resources |
 | Needs the app running | ✅ yes | ❌ no |
 
-## The gap between them
+## The gap between them, and the bridge across it
 
-Neither surface lets an agent running **outside** termherd drive the **running**
-workspace. The live bridge holds the sessions, but only a session it spawned
-holds the endpoint and token to reach it; the stdio server is reachable from
-anywhere and sees only the settings file.
+Two servers, but three ways in. The live bridge holds the running workspace and
+hands its endpoint only to sessions it spawned; the stdio server is reachable
+from anywhere and sees only the settings file. Between those sat a hole: the
+terminal that launched TermHerd could not ask it for a screenshot the app
+already knows how to take.
 
-So the terminal that launched termherd cannot ask it for a screenshot the app
-already knows how to take. Closing that is
-[#267](https://github.com/Termherd/termherd/issues/267) — discovery, not new
-tools.
+[Attaching from outside](./attach.md) closes it — the **same** live bridge and
+the same thirteen tools, reached by a client TermHerd did not spawn. What was
+missing was discovery, not capability, so nothing new was added to the surface.
+It is opt-in (`mcp.attach`), because publishing an endpoint that can type into
+a terminal is a decision, not a default.
 
 ## Which one you want
 

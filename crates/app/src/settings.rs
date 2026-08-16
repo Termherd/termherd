@@ -10,6 +10,7 @@ use termherd_core::{Action, KeyChord, Keymap};
 use termherd_pty::Palette;
 use tracing::warn;
 
+use crate::attach::AttachMode;
 use crate::record_config::RecordConfig;
 
 /// The persisted user settings. Every field defaults, so a missing or partial
@@ -41,6 +42,21 @@ pub struct Settings {
     pub close: CloseSettings,
     /// How a clicked file leaves termherd. Absent → the OS default handler.
     pub open: OpenSettings,
+    /// Whether a running instance publishes its live bridge for a client it did
+    /// not spawn. Absent → it does not.
+    pub mcp: McpSettings,
+}
+
+/// The live-bridge exposure settings. One key today, and a block rather than a
+/// bare `attach` at the top level because the exposure is the *server's*
+/// posture, not a workspace preference.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpSettings {
+    /// Whether this instance publishes `{ url, token }` for an outside client:
+    /// `false` (the default), `true`, or `"never"` — which also refuses the
+    /// `TERMHERD_MCP_ATTACH` override. See [`crate::attach`].
+    pub attach: AttachMode,
 }
 
 /// The on-disk editor command. Absent (or unparsable) → the OS default
@@ -555,6 +571,56 @@ mod tests {
         let c = partial.record_config();
         assert_eq!((c.fps, c.max_seconds), (5, 30));
         assert!((c.scale - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn attach_reads_its_three_states_and_defaults_to_off() {
+        let cases = [
+            (r#"{ "mcp": { "attach": true } }"#, AttachMode::On),
+            (r#"{ "mcp": { "attach": false } }"#, AttachMode::Off),
+            (r#"{ "mcp": { "attach": "never" } }"#, AttachMode::Never),
+            (r#"{ "mcp": {} }"#, AttachMode::Off),
+            (r#"{}"#, AttachMode::Off),
+        ];
+        for (json, expected) in cases {
+            let s: Settings = serde_json::from_str(json).expect("valid json");
+            assert_eq!(s.mcp.attach, expected, "{json}");
+        }
+    }
+
+    /// The exposure is opt-in, so an unreadable value must resolve to the *safe*
+    /// state, not to the last one that parsed — and must not take the rest of
+    /// the file down with it.
+    #[test]
+    fn an_unreadable_attach_value_falls_back_to_off_without_failing_the_file() {
+        let s: Settings = serde_json::from_str(
+            r#"{ "mcp": { "attach": "maybe" }, "shell": { "program": "pwsh" } }"#,
+        )
+        .expect("a bad attach value must not fail the whole file");
+        assert_eq!(
+            s.mcp.attach,
+            AttachMode::Off,
+            "a typo cannot open the bridge"
+        );
+        assert_eq!(
+            s.shell.expect("a shell").program,
+            "pwsh",
+            "the rest of the file survives"
+        );
+    }
+
+    /// Round-tripping matters here because `termherd-mcp` rewrites
+    /// `settings.json` wholesale: a mode that serialised back differently would
+    /// silently change the user's exposure on the next settings write.
+    #[test]
+    fn every_attach_state_survives_a_write_and_read_back() {
+        for mode in [AttachMode::Off, AttachMode::On, AttachMode::Never] {
+            let mut s = Settings::default();
+            s.mcp.attach = mode;
+            let json = serde_json::to_string(&s).expect("serialise");
+            let back: Settings = serde_json::from_str(&json).expect("deserialise");
+            assert_eq!(back.mcp.attach, mode, "{mode:?} round-trips through {json}");
+        }
     }
 
     #[test]

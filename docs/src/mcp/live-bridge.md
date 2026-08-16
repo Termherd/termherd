@@ -9,6 +9,10 @@ Its private files — the mcp config carrying that bearer token, the
 shell-integration directory, the settings overlay — are deleted when the
 session is torn down.
 
+A client TermHerd did **not** launch can reach the same server, and the same
+tools, once the instance is told to publish its address — see [Attaching from
+outside](./attach.md). Everything below applies unchanged there.
+
 ## The tools
 
 ### Perception

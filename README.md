@@ -133,6 +133,9 @@ you want and strip the comments (the real file is strict JSON). In short:
 - `open` — the editor command a Ctrl/Cmd-clicked file path opens in, with
   `{path}` / `{line}` / `{col}` templates (default: the OS default handler,
   which cannot honour a line number).
+- `mcp` — whether a running instance publishes its live bridge for a client it
+  did not spawn: `false` (default), `true`, or `"never"`, which also refuses
+  the `TERMHERD_MCP_ATTACH` override.
 - `keys` — keyboard overrides, one chord or a list per action; the full
   action vocabulary and its default chords are listed in the template.
 

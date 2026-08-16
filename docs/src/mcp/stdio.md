@@ -45,10 +45,13 @@ Both speak the option **id** — a stable, dotted name:
 | `terminal.colors.palette` | array | the 16 ANSI colours — normal 0–7, bright 8–15 |
 
 That is the whole write surface today. The `close`, `sidebar`, `record`,
-`open`, `keys`, `terminal.font_size`, `terminal.copy_on_select` and
+`open`, `keys`, `mcp`, `terminal.font_size`, `terminal.copy_on_select` and
 `terminal.paste_on_right_click` blocks of
 [`settings.json`](../reference/settings.md) are file-only — `keys` is
 readable as a resource, below.
+
+`mcp.attach` is the one that will stay file-only: it governs who may reach the
+live bridge, and a surface able to widen its own reach is not a setting.
 
 ## Resources
 

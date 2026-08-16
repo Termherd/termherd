@@ -154,6 +154,22 @@
     "scale": 0.5
   },
 
+  // ── Live-bridge exposure ─────────────────────────────────────────────────
+  // Whether a running instance publishes { url, token } to
+  // ~/.termherd/bridge.json (0600) so a client it did NOT spawn — a script,
+  // an editor, the terminal you launched it from — can attach with
+  // `termherd mcp-config`. Default: false.
+  //
+  //   false     nothing is published (the default)
+  //   true      publish; TERMHERD_MCP_ATTACH=0 turns it off for one launch
+  //   "never"   publish nothing, and refuse the environment override entirely
+  //
+  // Off by default because the bridge can type into a terminal: publishing it
+  // makes that reachable by anything running as you.
+  "mcp": {
+    "attach": false
+  },
+
   // ── Keyboard overrides ───────────────────────────────────────────────────
   // Each entry binds an action to one chord or a list of chords and REPLACES
   // that action's default; unlisted actions keep their per-platform default.

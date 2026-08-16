@@ -5,7 +5,9 @@
 //! scanner, then the iced shell. Pure wiring — the pieces live in their own
 //! modules ([`instance`], [`tracing_init`], the stores).
 
+mod attach;
 mod capture;
+mod cli;
 mod collapsed_store;
 mod docs;
 mod image;
@@ -35,6 +37,13 @@ use tracing::{info, warn};
 
 fn main() -> iced::Result {
     tracing_init::init_tracing();
+
+    // Answer a question about the *running* instance before touching anything
+    // that would disturb it: the single-instance lock below exits(2) on a second
+    // process, which is the wrong answer to `termherd mcp-config`.
+    if cli::parse(std::env::args()) == cli::Command::McpConfig {
+        return report_mcp_config();
+    }
 
     // Hold the single-instance guard for the whole GUI lifetime.
     let instance = instance::acquire_single_instance();
@@ -104,6 +113,13 @@ fn main() -> iced::Result {
         }
     });
 
+    // Publish the endpoint for a client termherd did not spawn, if the user
+    // asked for it. After the single-instance lock, so the file always describes
+    // the instance that is actually running.
+    let published = mcp_endpoint
+        .as_ref()
+        .and_then(|endpoint| publish_bridge(&settings, endpoint, &mcp_tokens));
+
     let live_bridge = shell::LiveBridge {
         requests: bridge_requests,
         mcp_endpoint,
@@ -123,6 +139,13 @@ fn main() -> iced::Result {
         live_bridge,
         startup,
     );
+    // Stop offering an endpoint that no longer exists. A crash skips this, which
+    // is why `termherd mcp-config` probes rather than trusting the file.
+    if let Some(path) = published
+        && let Err(error) = attach::withdraw(&path)
+    {
+        warn!(%error, "could not withdraw the published mcp bridge");
+    }
     // Keep the single-instance guard and the async substrate alive until the GUI
     // exits: dropping the bridge handle would close the request channel, and
     // dropping the runtime would tear down any transport task hosted on it.
@@ -130,6 +153,67 @@ fn main() -> iced::Result {
     drop(bridge_runtime);
     drop(instance);
     result
+}
+
+/// Publish `{ url, token }` for an outside client, if the setting (and any
+/// environment override) asks for it. Returns the path to withdraw at teardown.
+///
+/// The token is minted here and never revoked while the app runs: it is the
+/// instance's own, not a session's, so it outlives every session.
+fn publish_bridge(
+    settings: &settings::Settings,
+    endpoint: &mcp::Endpoint,
+    tokens: &mcp::Tokens,
+) -> Option<std::path::PathBuf> {
+    let env = std::env::var(attach::ATTACH_ENV).ok();
+    let verdict = attach::decide(settings.mcp.attach, env.as_deref());
+    if verdict.override_refused {
+        info!(
+            variable = attach::ATTACH_ENV,
+            "mcp.attach is \"never\"; the environment override is ignored"
+        );
+    }
+    if !verdict.publish {
+        return None;
+    }
+    let path = attach::bridge_path()?;
+    let published = attach::Published {
+        url: endpoint.url.clone(),
+        token: tokens.issue(),
+    };
+    match attach::publish(&path, &published) {
+        Ok(()) => {
+            info!(path = %path.display(), "mcp live bridge published for outside clients");
+            Some(path)
+        }
+        Err(error) => {
+            warn!(%error, "could not publish the mcp bridge; outside clients can't attach");
+            None
+        }
+    }
+}
+
+/// Print the running instance's `mcpServers` snippet, or say why there is none
+/// and exit non-zero so a script can tell the two apart.
+///
+/// Written straight to the streams rather than through `tracing`: this is a
+/// subcommand whose *product* is its stdout, and a log line is neither
+/// pipeable nor guaranteed to be enabled. Nothing else in the binary prints.
+fn report_mcp_config() -> iced::Result {
+    use std::io::Write;
+
+    match cli::mcp_config() {
+        Ok(snippet) => {
+            let mut out = std::io::stdout();
+            let _ = writeln!(out, "{snippet}");
+            let _ = out.flush();
+            Ok(())
+        }
+        Err(error) => {
+            let _ = writeln!(std::io::stderr(), "termherd: {}", cli::explain(&error));
+            std::process::exit(1)
+        }
+    }
 }
 
 /// Build the tokio runtime that hosts the in-process MCP server and the async

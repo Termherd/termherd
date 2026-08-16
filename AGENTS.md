@@ -238,16 +238,39 @@ mutation goes through an existing `Event`. The keyboard rung adds
 (the inverse of `chord_of`), and `routing::KeyboardOwner` / `KeyVerdict` — the
 overlay ladder and its outcome named once, since three readers consult them.
 
-**Still open.** Two features and two defects: `F-mcp-agent-loop` (#196 —
-below), `F-mcp-attach` (#267 — the bridge is reachable only from a session
-termherd spawned, so the launcher itself cannot drive it), `enter` on the two
-renames (#246), and a doc editor that discards unsaved edits when it closes
-(#248). The defects are described where they arose, further down; none of the
-four blocks another.
+**A client termherd did not spawn can now attach** (#267). The bridge used to
+be reachable only from a session termherd launched — which is how it holds an
+endpoint and a token at all — so the launcher itself could not drive the app it
+had started. Nothing was missing from the *capability*: the server accepts any
+token it minted, whoever presents it. What was missing was the address.
+
+A running instance now publishes `{ url, token }` to a `0o600`
+`~/.termherd/bridge.json`, and `termherd mcp-config` renders the `mcpServers`
+snippet from it — the same thirteen tools, no new one. Three things to know
+before touching it:
+
+- **The setting is tri-state on purpose.** `mcp.attach` takes `false` (default),
+  `true`, or `"never"`; `TERMHERD_MCP_ATTACH` flips the first two for one
+  launch and is inert against the third, logging that it was ignored. A
+  boolean would have made a machine-level refusal undoable by an ambient
+  variable. It stays file-only: a surface that can widen its own reach is not
+  a setting.
+- **The subcommand is parsed before the single-instance lock.** It asks *about*
+  the running instance; taking the lock would exit(2) instead of answering, and
+  opening a window would answer a different question.
+- **Staleness is decided by an `initialize` handshake, not a pid.** A crash
+  skips the teardown that removes the file, so the reader must assume the file
+  lies. A refused token (401) is reported apart from a dead port — the two send
+  the caller to opposite places.
+
+**Still open.** One feature and two defects: `F-mcp-agent-loop` (#196 —
+below), `enter` on the two renames (#246), and a doc editor that discards
+unsaved edits when it closes (#248). The defects are described where they
+arose, further down; neither blocks the other.
 
 `F-mcp-agent-loop` (#196 — the composed prompt→wait→read in one
-round trip) is a child of the #90 epic — no longer the last one, since #267
-joined it. With `screenshot` and the keyboard
+round trip) is the last child of the #90 epic still open. With `screenshot`
+and the keyboard
 tools the capability is otherwise whole in three parts: drive the UI, see the
 pixels, read the terminal — what lets an agent verify a gesture fix instead of
 only proposing it. #196 *composes* the wait, which #236 had to fix first —

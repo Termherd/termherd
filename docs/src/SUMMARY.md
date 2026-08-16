@@ -25,6 +25,7 @@
 - [Two surfaces](./mcp/index.md)
 - [The live bridge](./mcp/live-bridge.md)
 - [Driving the keyboard](./mcp/keyboard.md)
+- [Attaching from outside](./mcp/attach.md)
 - [The stdio server](./mcp/stdio.md)
 
 # Project
