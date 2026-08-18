@@ -70,6 +70,7 @@ those by running the app and reading its `tracing` output:
 ```bash
 # `tracing` is the only observation channel — there is no `println!`. Raise the
 # level with RUST_LOG (default is `info,…`, see `DEFAULT_FILTER` in main.rs).
+# It writes to STDERR, so redirect it when you pipe: `… 2>&1 | grep …`.
 RUST_LOG=info cargo run -p termherd-app
 
 # Add log lines at the seam you're verifying (info!/warn!, never println!), run,
@@ -464,6 +465,23 @@ exists). Do not relax them locally.
   highlight. A cache named after what filled it (`selection`) that actually
   holds what was last *copied* is how the gap stayed invisible; name a cache
   for its contents.
+- **Cleanup that only runs at teardown does not run.** A crash skips it, and so
+  does every OS-initiated exit — on macOS that is the whole AppKit `terminate:`
+  family: Dock → Quit, logout, restart. Worse, the case nobody pictures is the
+  run that *opts out*: it has no teardown of its own, so it silently inherits
+  whatever the last run left on disk. The attach rung's published
+  `bridge.json` had all three holes, and the third one was permanent — an
+  endpoint advertised forever, with a token a foreign process on the recycled
+  port could be handed. Put the reconciliation at **startup**, unconditionally
+  and before the decision to publish: that is the one moment that always
+  happens and the one moment you know what the file should say. Keep the
+  teardown as well, for the clean exit; just never let it be the only one.
+- **stdout belongs to the product, stderr to the diagnostics.** `tracing`
+  initialises to *stdout* by default, which is invisible in a GUI and fatal the
+  day the binary grows a subcommand whose output is meant to be piped —
+  `termherd mcp-config > .mcp.json` would capture a warn line in the middle of
+  the user's JSON. The app now installs a stderr writer; `2>&1` recovers the
+  old behaviour when reading logs.
 - **A guard is unreachable and goes, or reachable and gets a test — there is
   no third state.** Defensive arithmetic nobody can trigger is not free: it
   reads as a live case to the next reader, and no test can pin it. Mutation

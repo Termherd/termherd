@@ -189,15 +189,13 @@ fn private_dir(path: &Path) -> std::io::Result<()> {
 
 /// Write the `mcpServers` config for a Claude launch and return its path, so
 /// `launch_command` can point `--mcp-config` at it. The file — not argv — holds
-/// the bearer token. Both fields are known-safe for a bare JSON string (a
-/// loopback url and a hex token), so no escaping is needed. `None` (logged, not
-/// fatal) if the write fails: the session then launches without the live bridge.
+/// the bearer token. The text itself comes from
+/// [`termherd_claude::mcp::servers_config`], shared with the attach path so one
+/// config format stays one config format. `None` (logged, not fatal) if the
+/// write fails: the session then launches without the live bridge.
 pub(crate) fn write_mcp_config(session: SessionId, config: &McpConfig) -> Option<PathBuf> {
     let path = std::env::temp_dir().join(format!("termherd-mcp-{}.json", session.0.get()));
-    let json = format!(
-        r#"{{"mcpServers":{{"termherd":{{"type":"http","url":"{}","headers":{{"Authorization":"Bearer {}"}}}}}}}}"#,
-        config.url, config.token
-    );
+    let json = termherd_claude::mcp::servers_config(&config.url, &config.token);
     match write_private(&path, &json) {
         Ok(()) => Some(path),
         Err(error) => {
@@ -214,8 +212,12 @@ pub(crate) fn write_mcp_config(session: SessionId, config: &McpConfig) -> Option
 /// Unix) — the file carries a bearer token, so a world-readable temp file would
 /// leak it to any other local user. On non-Unix the platform's per-user temp
 /// ACLs are relied on.
+///
+/// Public because the app writes the same kind of file for the attach rung: the
+/// permission fork is OS-conditional, and a second copy of it would be a second
+/// quarantined home for `cfg(unix)` to hide in.
 #[cfg(unix)]
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+pub fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -230,7 +232,7 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+pub fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
     std::fs::write(path, contents)
 }
 

@@ -68,10 +68,16 @@ pub(crate) fn explain(error: &AttachError) -> String {
              Set mcp.attach to true in settings.json (or launch with {}=1) and restart it.",
             attach::ATTACH_ENV
         ),
-        AttachError::Unreadable => {
-            "the published bridge file could not be read. Restart termherd to rewrite it."
-                .to_owned()
-        }
+        // Naming the file matters here and nowhere else: this is the one failure
+        // a restart alone may not clear, since a file the current user cannot
+        // read is one the next launch may not be able to replace either.
+        AttachError::Unreadable => format!(
+            "the published bridge file could not be read — wrong permissions, or not the \
+             expected JSON. Delete {} and restart termherd.",
+            attach::bridge_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "~/.termherd/bridge.json".to_owned())
+        ),
         AttachError::Stale => {
             "the published bridge is no longer answering: the instance that wrote it has exited. \
              Restart termherd."
@@ -187,6 +193,11 @@ mod tests {
             messages[0].contains("mcp.attach"),
             "an unpublished bridge points at the setting that publishes it, got: {}",
             messages[0]
+        );
+        assert!(
+            messages[1].contains("Delete"),
+            "an unreadable file may survive a restart, so the advice must be to remove it, got: {}",
+            messages[1]
         );
         assert!(
             messages[2].contains("restart") || messages[2].contains("no longer"),

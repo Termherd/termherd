@@ -12,10 +12,18 @@ const DEFAULT_FILTER: &str = "info,\
     iced_winit=warn,iced_wgpu=warn,wgpu_core=warn,wgpu_hal=warn,\
     naga=warn,cosmic_text=warn,winit=warn";
 
+/// Diagnostics go to **stderr**, never stdout. `termherd mcp-config` writes its
+/// `mcpServers` snippet to stdout and the book tells you to redirect it into a
+/// config file; a warn line landing in that pipe would corrupt the JSON the
+/// user is capturing. Nothing this binary prints is protocol traffic, so the
+/// split costs nothing and `2>&1` recovers the old behaviour.
 pub fn init_tracing() {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
-    let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .try_init();
 }
 
 #[cfg(test)]

@@ -25,8 +25,15 @@ Restart TermHerd. It then writes, and keeps current for its lifetime:
 { "url": "http://127.0.0.1:52431/mcp", "token": "9f1c…" }
 ```
 
-One instance runs at a time, so the file needs no "which instance" field. It is
-removed when the app exits.
+One instance runs at a time, so the file needs no "which instance" field.
+
+It is removed on a clean quit — and, more importantly, **cleared unconditionally
+at every startup**, whether or not that launch publishes anything. Teardown
+alone would not be enough: a crash skips it, so does an exit routed through
+macOS's `terminate:` (Dock → Quit, logout), and a launch that opts *out* has no
+teardown of its own to run. Startup is the one moment that always happens. In
+the window between a hard exit and the next launch the file is stale, which is
+what the probe below exists for.
 
 For a one-off run — an automation script, a CI-ish sweep — the environment
 variable flips the setting without editing it:
@@ -61,8 +68,9 @@ $ termherd mcp-config
 {"mcpServers":{"termherd":{"type":"http","url":"http://127.0.0.1:52431/mcp","headers":{"Authorization":"Bearer 9f1c…"}}}}
 ```
 
-That is the `mcpServers` snippet, byte-for-byte the shape a spawned session
-receives — one contract, two producers. Pipe it where your client wants it:
+That is the `mcpServers` snippet, byte-for-byte what a spawned session
+receives — literally the same code renders both. Pipe it where your client
+wants it:
 
 ```bash
 termherd mcp-config > .mcp.json          # a project-local MCP config
@@ -71,7 +79,8 @@ claude --mcp-config <(termherd mcp-config)
 
 The subcommand prints to stdout and exits `0`; it answers *about* the running
 instance without disturbing it — no window opens and the single-instance lock is
-never touched.
+never touched. Every diagnostic TermHerd emits goes to stderr, so the redirect
+above captures the config and nothing else.
 
 ### When there is nothing to print
 
@@ -83,7 +92,7 @@ failures, four different things to do:
 | stderr says | What happened | Do |
 | --- | --- | --- |
 | no running termherd is publishing… | no file: not running, or not opted in | set `mcp.attach` and restart |
-| …could not be read | the file exists and does not parse | restart to rewrite it |
+| …could not be read | the file exists but is unreadable, or is not the expected JSON | delete it (the message names the path) and restart |
 | …no longer answering | the instance that wrote it has exited | restart |
 | …refused its own token | the endpoint is live but rejects the token | restart to publish a fresh one |
 

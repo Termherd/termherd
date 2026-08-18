@@ -115,10 +115,9 @@ fn main() -> iced::Result {
 
     // Publish the endpoint for a client termherd did not spawn, if the user
     // asked for it. After the single-instance lock, so the file always describes
-    // the instance that is actually running.
-    let published = mcp_endpoint
-        .as_ref()
-        .and_then(|endpoint| publish_bridge(&settings, endpoint, &mcp_tokens));
+    // the instance that is actually running — and unconditionally, so a launch
+    // that publishes nothing still clears the last one's file.
+    let published = publish_bridge(&settings, mcp_endpoint.as_ref(), &mcp_tokens);
 
     let live_bridge = shell::LiveBridge {
         requests: bridge_requests,
@@ -139,8 +138,11 @@ fn main() -> iced::Result {
         live_bridge,
         startup,
     );
-    // Stop offering an endpoint that no longer exists. A crash skips this, which
-    // is why `termherd mcp-config` probes rather than trusting the file.
+    // Stop offering an endpoint that no longer exists. Best-effort only: a crash
+    // skips this, and so does every macOS exit routed through AppKit
+    // `terminate:`. The next launch clears the file unconditionally, and
+    // `termherd mcp-config` probes rather than trusting it, so a skipped
+    // withdraw costs a clear diagnostic rather than a wrong config.
     if let Some(path) = published
         && let Err(error) = attach::withdraw(&path)
     {
@@ -155,16 +157,31 @@ fn main() -> iced::Result {
     result
 }
 
-/// Publish `{ url, token }` for an outside client, if the setting (and any
-/// environment override) asks for it. Returns the path to withdraw at teardown.
+/// Reconcile the published bridge file with what this launch was asked for:
+/// clear whatever the last one left behind, then publish `{ url, token }` if the
+/// setting (and any environment override) says so. Returns the path to withdraw
+/// at teardown, or `None` when nothing was published.
+///
+/// **The clear is unconditional, and that is the point.** Teardown is not a
+/// reliable place to remove the file: a crash skips it, so does every macOS exit
+/// through AppKit `terminate:` (Dock → Quit, logout), and a launch that opts
+/// *out* has no teardown of its own to run — so an opt-out would otherwise leave
+/// the previous run's endpoint on disk forever, advertising a port this process
+/// does not own. Startup is the one moment that always happens, and the one
+/// moment we know what the file should say.
 ///
 /// The token is minted here and never revoked while the app runs: it is the
 /// instance's own, not a session's, so it outlives every session.
 fn publish_bridge(
     settings: &settings::Settings,
-    endpoint: &mcp::Endpoint,
+    endpoint: Option<&mcp::Endpoint>,
     tokens: &mcp::Tokens,
 ) -> Option<std::path::PathBuf> {
+    let path = attach::bridge_path()?;
+    if let Err(error) = attach::withdraw(&path) {
+        warn!(%error, path = %path.display(), "could not clear a leftover mcp bridge file");
+    }
+
     let env = std::env::var(attach::ATTACH_ENV).ok();
     let verdict = attach::decide(settings.mcp.attach, env.as_deref());
     if verdict.override_refused {
@@ -176,7 +193,9 @@ fn publish_bridge(
     if !verdict.publish {
         return None;
     }
-    let path = attach::bridge_path()?;
+    // Nothing bound, nothing to advertise — but the clear above still ran, which
+    // is the whole reason this is not gated on the endpoint.
+    let endpoint = endpoint?;
     let published = attach::Published {
         url: endpoint.url.clone(),
         token: tokens.issue(),

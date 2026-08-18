@@ -3919,6 +3919,7 @@ dependencies = [
  "alacritty_terminal",
  "portable-pty",
  "proptest",
+ "tempfile",
  "termherd-claude",
  "termherd-core",
  "tracing",

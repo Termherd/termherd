@@ -28,8 +28,12 @@ thirteen, reached by a client that was not spawned as a child.
 
 - **Where a running instance publishes itself.** A `0o600`
   `~/.termherd/bridge.json` carrying `{ url, token }`, written after the
-  single-instance lock and removed at teardown — so "which instance?" needs no
-  field. A crash skips the teardown, which is why the reader probes.
+  single-instance lock — so "which instance?" needs no field. Removed on a clean
+  quit, and *cleared unconditionally at the next startup*, which is the removal
+  that counts: a crash skips teardown, so does a macOS `terminate:` exit, and a
+  launch that opts out has no teardown of its own — that last one would
+  otherwise leave the previous run's endpoint advertised forever. Between a hard
+  exit and the next launch the file is stale, which is why the reader probes.
 - **How a client registers it.** `termherd mcp-config` prints the `mcpServers`
   snippet on stdout, keeping the token out of argv and out of shell history
   where an `--print-token` flag would have put it in both. It is recognised

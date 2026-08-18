@@ -241,9 +241,9 @@ rename — those go through a widget callback no synthesised event reaches
 ([#246]).
 
 Four follow-ups remain: a composed prompt→wait→read in one round trip
-([#196]), `enter` on the renames ([#246]), a doc editor that discards unsaved
-edits when it closes ([#248]), and reaching the bridge from outside a session
-termherd spawned — the launcher cannot drive it today ([#267]).
+([#196]), `enter` on the renames ([#246]), and a doc editor that discards
+unsaved edits when it closes ([#248]). A client TermHerd did *not* spawn can
+now reach the bridge too, once `mcp.attach` is turned on ([#267]).
 
 ### The stdio server (manual)
 

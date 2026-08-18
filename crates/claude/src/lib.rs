@@ -7,5 +7,6 @@
 pub mod derive;
 pub mod digest;
 pub mod jsonl;
+pub mod mcp;
 pub mod osc;
 pub mod path;

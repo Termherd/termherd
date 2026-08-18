@@ -33,6 +33,7 @@ the recorder) and the PNG encoder (from the capture dump) moved into one pure
 **#196 + #229 + #215 are one capability in three parts** — drive the UI, see
 the pixels, read the terminal — the loop that lets an agent *verify* a gesture
 fix instead of only proposing it. With #229 shipped, #196 is what remains of
-*that* trio — and the loop it completes is still out of reach for anything
-termherd did not spawn, which [F-mcp-attach](#f-mcp-attach) (#267) is about:
-the launcher that most wants to verify a fix is the one caller with no way in
+*that* trio. The loop it completes used to be out of reach for anything
+termherd did not spawn — the launcher that most wants to verify a fix was the
+one caller with no way in — which [F-mcp-attach](#f-mcp-attach) (#267) has
+since closed, opt-in, by publishing the endpoint rather than by adding a tool

@@ -160,31 +160,7 @@ pub(crate) fn publish(path: &Path, published: &Published) -> std::io::Result<()>
     // behind would keep that file's wider permissions.
     withdraw(path)?;
     let json = serde_json::to_string(published)?;
-    write_private(path, &json)
-}
-
-/// Write `contents` to `path` readable only by the current user (`0o600` on
-/// Unix). The file carries a bearer token for a surface that types into a
-/// terminal, so a world-readable one would hand arbitrary command execution to
-/// every other local account. On non-Unix the platform's per-user ACLs on the
-/// home directory are what stands in for the mode bits.
-#[cfg(unix)]
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    file.write_all(contents.as_bytes())
-}
-
-#[cfg(not(unix))]
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
-    std::fs::write(path, contents)
+    termherd_pty::write_private(path, &json)
 }
 
 /// Remove the published file at teardown. A missing file is success: teardown
@@ -199,21 +175,25 @@ pub(crate) fn withdraw(path: &Path) -> std::io::Result<()> {
 /// Read back a published endpoint. `Err` when the file is absent or does not
 /// parse — both mean "no instance is offering the bridge here".
 pub(crate) fn read(path: &Path) -> Result<Published, AttachError> {
-    let raw = std::fs::read_to_string(path).map_err(|_| AttachError::NotPublished)?;
+    let raw = std::fs::read_to_string(path).map_err(|error| {
+        // Absent and unreadable are different diagnoses: "no instance is
+        // publishing" tells you to switch the setting on, which a file you lack
+        // permission to read would never resolve.
+        if error.kind() == std::io::ErrorKind::NotFound {
+            AttachError::NotPublished
+        } else {
+            AttachError::Unreadable
+        }
+    })?;
     serde_json::from_str(&raw).map_err(|_| AttachError::Unreadable)
 }
 
 /// The `mcpServers` snippet a client registers, as one line of JSON.
 ///
-/// Deliberately the same shape the spawned-session path writes
-/// (`pty::launch::write_mcp_config`): one contract, two producers. Both fields
-/// are known-safe inside a bare JSON string — a loopback url and a hex token —
-/// so neither needs escaping.
+/// The *same* text the spawned-session path writes, because it is the same
+/// call: one contract, one producer, two callers.
 pub(crate) fn mcp_servers(published: &Published) -> String {
-    format!(
-        r#"{{"mcpServers":{{"termherd":{{"type":"http","url":"{}","headers":{{"Authorization":"Bearer {}"}}}}}}}}"#,
-        published.url, published.token
-    )
+    termherd_claude::mcp::servers_config(&published.url, &published.token)
 }
 
 /// Why `termherd mcp-config` could not answer with a config.
@@ -221,7 +201,8 @@ pub(crate) fn mcp_servers(published: &Published) -> String {
 pub(crate) enum AttachError {
     /// No published file: no instance is running, or it did not opt in.
     NotPublished,
-    /// A published file that does not parse — treat it as absent.
+    /// A published file that exists and cannot be used: unreadable (a mode or an
+    /// ownership the current user does not have) or not the JSON expected.
     Unreadable,
     /// The published url refused the connection: the instance that wrote this
     /// file is gone, and the file is stale.
@@ -276,7 +257,7 @@ fn handshake(
     path: &str,
     token: &str,
 ) -> Result<String, AttachError> {
-    use std::io::{Read, Write};
+    use std::io::Write;
 
     let body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"termherd-mcp-config","version":"0"}}}"#;
     let request = format!(
@@ -289,15 +270,45 @@ fn handshake(
     stream
         .write_all(request.as_bytes())
         .map_err(|_| AttachError::Stale)?;
+    read_status_line(stream)
+}
+
+/// Read only as far as the response's first line.
+///
+/// Reading to end of stream would work exactly as long as the peer honours the
+/// `Connection: close` we asked for. A peer that keeps the socket open —
+/// another server on a recycled port, a proxy, an SSE stream — would answer
+/// perfectly well and still be reported as gone once the read timeout fired.
+/// The status line is all this probe reads, so it stops there.
+fn read_status_line(stream: &mut std::net::TcpStream) -> Result<String, AttachError> {
+    use std::io::Read;
+
+    /// Bound on a status line, so a peer that answers without ever sending a
+    /// newline cannot make this read grow without limit.
+    const MAX_STATUS_LINE: usize = 8 * 1024;
+
     let mut raw = Vec::new();
-    stream
-        .read_to_end(&mut raw)
-        .map_err(|_| AttachError::Stale)?;
-    String::from_utf8_lossy(&raw)
-        .lines()
-        .next()
-        .map(str::to_owned)
-        .ok_or(AttachError::Stale)
+    let mut chunk = [0u8; 256];
+    loop {
+        if let Some(line) = first_line(&raw) {
+            return Ok(line);
+        }
+        if raw.len() >= MAX_STATUS_LINE {
+            return Err(AttachError::Stale);
+        }
+        match stream.read(&mut chunk) {
+            // End of stream with no complete line: nothing usable was said.
+            Ok(0) => return first_line(&raw).ok_or(AttachError::Stale),
+            Ok(read) => raw.extend_from_slice(&chunk[..read]),
+            Err(_) => return Err(AttachError::Stale),
+        }
+    }
+}
+
+/// The first CRLF/LF-terminated line in `raw`, or `None` while none is complete.
+fn first_line(raw: &[u8]) -> Option<String> {
+    let end = raw.iter().position(|byte| *byte == b'\n')?;
+    Some(String::from_utf8_lossy(&raw[..end]).trim_end().to_owned())
 }
 
 /// Read the verdict out of an HTTP status line. A refused token is not a dead
@@ -420,23 +431,6 @@ mod tests {
         );
     }
 
-    /// The file carries a bearer token for arbitrary command execution as the
-    /// user. World-readable, it would hand that to every other local account.
-    #[cfg(unix)]
-    #[test]
-    fn the_published_file_is_readable_only_by_its_owner() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().expect("temp dir");
-        let path = dir.path().join(BRIDGE_FILE);
-        publish(&path, &sample()).expect("publish");
-        let mode = std::fs::metadata(&path)
-            .expect("metadata")
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o600, "got {:o}", mode & 0o777);
-    }
-
     /// Tolerating a *missing* file is not tolerating every failure: a teardown
     /// that swallowed a real removal error would leave a live-looking endpoint
     /// on disk and report success. A directory stands in for the unremovable
@@ -494,6 +488,96 @@ mod tests {
         assert_eq!(
             mcp_servers(&sample()),
             r#"{"mcpServers":{"termherd":{"type":"http","url":"http://127.0.0.1:52431/mcp","headers":{"Authorization":"Bearer 0123456789abcdef"}}}}"#
+        );
+    }
+
+    /// "No instance is publishing" tells you to switch the setting on. A file
+    /// that exists and cannot be read would never be fixed by that advice, so
+    /// the two must not collapse into one diagnosis. A directory stands in for
+    /// the unreadable file, being the one such case a test can create portably.
+    #[test]
+    fn a_file_that_exists_and_cannot_be_read_is_not_reported_as_absent() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let occupied = dir.path().join("occupied");
+        std::fs::create_dir(&occupied).expect("create a directory in the way");
+        assert_eq!(read(&occupied), Err(AttachError::Unreadable));
+    }
+
+    /// A peer that answers and keeps the socket open — another server on a
+    /// recycled port, a proxy, an SSE stream — is live. Reading to end of stream
+    /// would sit on it until the timeout and then report it gone.
+    #[test]
+    fn a_peer_that_never_closes_is_still_read() {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n")
+                .expect("write a status line");
+            socket.flush().expect("flush");
+            // Hold the connection open, as a keep-alive peer would.
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        });
+
+        let mut stream = std::net::TcpStream::connect(address).expect("connect");
+        stream
+            .set_read_timeout(Some(PROBE_TIMEOUT))
+            .expect("read timeout");
+        let started = std::time::Instant::now();
+        let line = read_status_line(&mut stream);
+
+        assert_eq!(line.as_deref(), Ok("HTTP/1.1 200 OK"));
+        assert!(
+            started.elapsed() < PROBE_TIMEOUT,
+            "the status line is answered without waiting out the timeout, took {:?}",
+            started.elapsed()
+        );
+        drop(stream);
+        let _ = server.join();
+    }
+
+    /// The other half of "never closes": a peer that also never sends a
+    /// newline. Without the bound, the read grows for as long as that peer
+    /// keeps talking — so the bound is reachable, and reachable guards get a
+    /// test rather than a comment.
+    #[test]
+    fn a_peer_that_answers_without_a_newline_is_bounded() {
+        use std::io::Write;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("addr");
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            // Twice the bound, and not one newline in it.
+            let babble = vec![b'x'; 16 * 1024];
+            let _ = socket.write_all(&babble);
+            let _ = socket.flush();
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        });
+
+        let mut stream = std::net::TcpStream::connect(address).expect("connect");
+        stream
+            .set_read_timeout(Some(PROBE_TIMEOUT))
+            .expect("read timeout");
+        assert_eq!(
+            read_status_line(&mut stream),
+            Err(AttachError::Stale),
+            "an answer with no line in it is not an answer"
+        );
+        drop(stream);
+        let _ = server.join();
+    }
+
+    #[test]
+    fn first_line_waits_for_a_complete_line() {
+        assert_eq!(first_line(b"HTTP/1.1 200 OK"), None, "no newline yet");
+        assert_eq!(
+            first_line(b"HTTP/1.1 200 OK\r\nContent-Type: x\r\n").as_deref(),
+            Some("HTTP/1.1 200 OK"),
+            "the line's own terminator is not part of it"
         );
     }
 
