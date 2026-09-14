@@ -510,6 +510,19 @@ exists). Do not relax them locally.
   `count > 0` — all that stands between a box with no readable pixel and a
   divide by zero — was reachable and earned a truncated-buffer test. Both
   survivors looked like missing assertions and were really design smells.
+- **A value that reaches a command line is not a setting like the others — and
+  a charset allowlist does not make it one.** Two lessons from the same seam.
+  The resume-id fix validated the stem to `[A-Za-z0-9_-]+` and still admitted
+  `--help.jsonl`: a *flag-shaped* token passes the charset, and
+  `claude --resume --help` parses it as a flag, not a value. Validate at the
+  seam where the string becomes an `argv`, reject a leading `-` (or pass `--`)
+  on top of any allowlist. The wider form bit the stdio MCP server, which
+  listed `shell.program` / `shell.args` as writable beside `theme`: the value
+  is what the next launch *executes*, so an unattended agent could pick it.
+  Now `OptionSpec` carries `writable`, the exec-carrying options are read-only
+  over MCP, and a shape mismatch is refused rather than warned-and-written.
+  When an option is added to a catalogue, ask what its value *reaches*, not
+  only what type it is.
 - **A check that can pass without exercising anything is not a check.** The
   cheap probe and the real call are rarely the same call, and the cheap one is
   the one that gets written. Probing whether macOS would let an agent drive the

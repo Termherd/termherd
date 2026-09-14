@@ -262,7 +262,9 @@ gutters.
 **configuration** — so you can ask "what can I configure here?", or "switch me
 to a light theme", from any Claude session. Two tools, `list_options` (read)
 and `set_option` (write), plus the option **schema** as a resource, all
-reflecting `~/.termherd/settings.json`.
+reflecting `~/.termherd/settings.json`. The two options that name what
+termherd executes — `shell.program`, `shell.args` — are readable but never
+writable over MCP.
 
 It speaks JSON-RPC over stdio. Register it with Claude Code by adding it to your
 `mcpServers` config (point `command` at the built binary):
