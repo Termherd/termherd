@@ -44,7 +44,8 @@ pub use hover::{
     TermHover,
 };
 pub use pointer::{
-    LocalGesture, PointerButton, PointerEvent, PointerKind, grid_line, pointer_select,
+    LocalGesture, MouseReporting, PointerButton, PointerEvent, PointerKind, PointerRoute,
+    grid_line, pointer_select,
 };
 pub use session::{Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};

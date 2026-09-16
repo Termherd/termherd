@@ -10,7 +10,9 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Flags, Hyperlink};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
-use termherd_core::{PointerEvent, SelectOp, SelectSide, pointer_select};
+use termherd_core::{MouseReporting, PointerEvent, SelectOp, SelectSide, pointer_select};
+
+use crate::mode::mouse_reporting;
 
 /// A snapshot of the visible terminal grid handed to the GUI for rendering.
 /// Colours are resolved to RGB here so the shell needs no terminal knowledge.
@@ -33,6 +35,10 @@ pub struct Screen {
     /// the shell wraps a paste in `ESC[200~`…`ESC[201~` and a multi-line paste
     /// lands as one block instead of submitting line by line (FR4).
     pub bracketed_paste: bool,
+    /// The mouse reporting the application has switched on, if any — when set
+    /// the mouse is the child's, so a pointer event over the grid is forwarded
+    /// rather than driving the terminal's own selection.
+    pub mouse_reporting: Option<MouseReporting>,
     /// The highlighted selection as inclusive per-row column spans `(row, c0, c1)`
     /// in visible coordinates, one per on-screen row the selection covers, empty
     /// when nothing is selected. Derived from the terminal's own selection, which
@@ -359,6 +365,8 @@ fn resolve(color: Color, palette: &Palette) -> [u8; 3] {
 
 /// Apply a cell-addressed pointer event to the terminal's own selection,
 /// placed with the *live* scroll offset — a caller's snapshot may lag it.
+/// Whether the event is the terminal's to apply at all — or the child's, when
+/// it reads the mouse — is decided by the terminal thread before it gets here.
 pub(crate) fn apply_pointer<T: EventListener>(term: &mut Term<T>, pointer: PointerEvent) {
     if let Some(op) = pointer_select(&pointer, term.grid().display_offset()) {
         apply_select(term, op);
@@ -506,6 +514,7 @@ pub(crate) fn snapshot<T: EventListener>(term: &Term<T>, palette: &Palette) -> S
         scrolled: content.display_offset > 0,
         display_offset: content.display_offset,
         bracketed_paste: term.mode().contains(TermMode::BRACKETED_PASTE),
+        mouse_reporting: mouse_reporting(*term.mode()),
         selection: selected_spans(term, first_line, cols, rows),
         hyperlinks: hyperlinks.finish(),
         default_bg: palette.background,
@@ -927,5 +936,30 @@ mod tests {
             Some("l2"),
             "visible row 1 is l2 while scrolled, not l4"
         );
+    }
+
+    // --- the child reads the mouse ------------------------------------------
+
+    #[test]
+    fn snapshot_tracks_the_mouse_reporting_ladder() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 5), VoidListener);
+        let mut parser: Processor = Processor::new();
+        let palette = Palette::default();
+        assert_eq!(snapshot(&term, &palette).mouse_reporting, None);
+        for (set, reset, expected) in [
+            (b"\x1b[?1000h", b"\x1b[?1000l", MouseReporting::Click),
+            (b"\x1b[?1002h", b"\x1b[?1002l", MouseReporting::Drag),
+            (b"\x1b[?1003h", b"\x1b[?1003l", MouseReporting::Motion),
+        ] {
+            parser.advance(&mut term, set);
+            assert_eq!(snapshot(&term, &palette).mouse_reporting, Some(expected));
+            parser.advance(&mut term, reset);
+            assert_eq!(
+                snapshot(&term, &palette).mouse_reporting,
+                None,
+                "{expected:?} reset"
+            );
+        }
     }
 }

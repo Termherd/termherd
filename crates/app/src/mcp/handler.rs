@@ -910,6 +910,7 @@ fn pointer_button_from_str(word: &str) -> Option<PointerButton> {
 /// The external word for what the terminal did with a pointer event.
 fn pointer_str(outcome: PointerOutcome) -> &'static str {
     match outcome {
+        PointerOutcome::Forwarded => "forwarded",
         PointerOutcome::Selection => "selection",
         PointerOutcome::Ignored => "ignored",
     }
@@ -1692,26 +1693,32 @@ mod tests {
 
     #[tokio::test]
     async fn mouse_in_session_tool_reports_what_the_terminal_did() {
-        let (handle, requests) = channel();
-        let shell = spawn_test_shell(
-            requests,
-            Reply::Acted(
-                ActionOutcome::applied(Some("1".into()))
-                    .with_detail(ActionDetail::Pointer(PointerOutcome::Ignored)),
-            ),
-        );
-        let result = TermherdMcp::new(handle)
-            .mouse_in_session(Parameters(MouseArgs {
-                session: "1".into(),
-                kind: "move".into(),
-                ..MouseArgs::default()
-            }))
-            .await
-            .expect("the tool returns a result");
-        let _ = shell.await.expect("shell task");
-        let value = result.structured_content.expect("structured json content");
-        assert_eq!(value["pointer"], "ignored");
-        assert_eq!(value["focused_handle"], "1");
+        for (outcome, word) in [
+            (PointerOutcome::Forwarded, "forwarded"),
+            (PointerOutcome::Selection, "selection"),
+            (PointerOutcome::Ignored, "ignored"),
+        ] {
+            let (handle, requests) = channel();
+            let shell = spawn_test_shell(
+                requests,
+                Reply::Acted(
+                    ActionOutcome::applied(Some("1".into()))
+                        .with_detail(ActionDetail::Pointer(outcome)),
+                ),
+            );
+            let result = TermherdMcp::new(handle)
+                .mouse_in_session(Parameters(MouseArgs {
+                    session: "1".into(),
+                    kind: "press".into(),
+                    ..MouseArgs::default()
+                }))
+                .await
+                .expect("the tool returns a result");
+            let _ = shell.await.expect("shell task");
+            let value = result.structured_content.expect("structured json content");
+            assert_eq!(value["pointer"], word, "{outcome:?}");
+            assert_eq!(value["focused_handle"], "1");
+        }
     }
 
     #[tokio::test]

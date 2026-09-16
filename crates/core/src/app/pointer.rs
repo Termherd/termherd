@@ -47,6 +47,32 @@ pub struct PointerEvent {
     pub button: PointerButton,
 }
 
+/// The mouse reporting a child has switched on — which events it asked the
+/// terminal to send it, in the xterm ladder of DECSET 1000 / 1002 / 1003.
+/// Each rung includes the ones below it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseReporting {
+    /// Presses and releases only.
+    Click,
+    /// Presses, releases and motion with a button held.
+    Drag,
+    /// Every pointer event, motion with no button included.
+    Motion,
+}
+
+/// Where a pointer event goes. Under any mouse reporting the mouse belongs
+/// to the child: what its mode covers is forwarded and the rest is dropped,
+/// so a bare drag never draws a selection over a TUI that is not reading it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerRoute {
+    /// Encoded and written to the child.
+    Forward,
+    /// Applied to the terminal's own selection.
+    Select(LocalGesture),
+    /// Dropped.
+    Nothing,
+}
+
 /// What a pointer event does to the terminal's own selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalGesture {
@@ -85,6 +111,26 @@ impl PointerEvent {
             PointerKind::Drag => Some(LocalGesture::Extend),
             PointerKind::Click => Some(LocalGesture::Clear),
             PointerKind::Release | PointerKind::Move => None,
+        }
+    }
+
+    /// Where this event goes, given what the child asked to be told.
+    #[must_use]
+    pub fn route(&self, reporting: Option<MouseReporting>) -> PointerRoute {
+        let Some(reporting) = reporting else {
+            return self
+                .local_gesture()
+                .map_or(PointerRoute::Nothing, PointerRoute::Select);
+        };
+        let covered = match self.kind {
+            PointerKind::Press | PointerKind::Release | PointerKind::Click => true,
+            PointerKind::Drag => reporting != MouseReporting::Click,
+            PointerKind::Move => reporting == MouseReporting::Motion,
+        };
+        if covered {
+            PointerRoute::Forward
+        } else {
+            PointerRoute::Nothing
         }
     }
 }
@@ -198,7 +244,106 @@ mod tests {
         }
     }
 
+    const KINDS: [PointerKind; 5] = [
+        PointerKind::Press,
+        PointerKind::Release,
+        PointerKind::Click,
+        PointerKind::Drag,
+        PointerKind::Move,
+    ];
+
+    #[test]
+    fn without_mouse_reporting_the_route_is_the_local_gesture() {
+        for kind in KINDS {
+            let event = PointerEvent::left(kind, 1, 1);
+            let expected = event
+                .local_gesture()
+                .map_or(PointerRoute::Nothing, PointerRoute::Select);
+            assert_eq!(event.route(None), expected, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn click_reporting_forwards_the_buttons_and_drops_motion() {
+        let mode = Some(MouseReporting::Click);
+        for kind in [PointerKind::Press, PointerKind::Release, PointerKind::Click] {
+            assert_eq!(
+                PointerEvent::left(kind, 1, 1).route(mode),
+                PointerRoute::Forward,
+                "{kind:?}"
+            );
+        }
+        for kind in [PointerKind::Drag, PointerKind::Move] {
+            assert_eq!(
+                PointerEvent::left(kind, 1, 1).route(mode),
+                PointerRoute::Nothing,
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn drag_reporting_forwards_a_drag_but_not_a_bare_move() {
+        let mode = Some(MouseReporting::Drag);
+        assert_eq!(
+            PointerEvent::left(PointerKind::Drag, 1, 1).route(mode),
+            PointerRoute::Forward
+        );
+        assert_eq!(
+            PointerEvent::left(PointerKind::Move, 1, 1).route(mode),
+            PointerRoute::Nothing
+        );
+    }
+
+    #[test]
+    fn motion_reporting_forwards_everything() {
+        for kind in KINDS {
+            assert_eq!(
+                PointerEvent::left(kind, 1, 1).route(Some(MouseReporting::Motion)),
+                PointerRoute::Forward,
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_button_is_forwarded_alike() {
+        // The child gets the button in the report; only the local selection
+        // cares that it is the left one.
+        for button in [PointerButton::Middle, PointerButton::Right] {
+            assert_eq!(
+                at(PointerKind::Press, button, 1, 1).route(Some(MouseReporting::Click)),
+                PointerRoute::Forward,
+                "{button:?}"
+            );
+        }
+    }
+
     proptest! {
+        /// Under any mouse reporting the terminal never selects on its own:
+        /// the mouse is the child's, whatever the event.
+        #[test]
+        fn mouse_reporting_never_yields_a_local_selection(
+            kind in prop::sample::select(KINDS.to_vec()),
+            button in prop::sample::select(vec![
+                PointerButton::Left,
+                PointerButton::Middle,
+                PointerButton::Right,
+            ]),
+            reporting in prop::sample::select(vec![
+                MouseReporting::Click,
+                MouseReporting::Drag,
+                MouseReporting::Motion,
+            ]),
+        ) {
+            let route = at(kind, button, 0, 0).route(Some(reporting));
+            prop_assert!(
+                !matches!(route, PointerRoute::Select(_)),
+                "{:?} {:?} under {:?} selected locally",
+                kind, button, reporting
+            );
+        }
+
         /// The grid line is the visible row minus the scroll offset and the
         /// column passes through, for any offset a scrollback can reach.
         #[test]

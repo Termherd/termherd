@@ -46,6 +46,7 @@ mod integration;
 mod kill;
 mod launch;
 mod manager;
+mod mode;
 mod prompt;
 mod session;
 mod status;
@@ -53,5 +54,5 @@ mod workdir;
 
 pub use events::{EventSink, PtyEvent};
 pub use grid::{HyperlinkSpan, Palette, Screen, ScreenCell};
-pub use input::{KeyMods, TermKey, key_bytes, paste_bytes, wheel_bytes};
+pub use input::{KeyMods, TermKey, key_bytes, mouse_bytes, paste_bytes, wheel_bytes};
 pub use manager::{PtyManager, Shell};

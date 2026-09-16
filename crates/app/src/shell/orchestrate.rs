@@ -13,7 +13,7 @@ use std::num::NonZeroU64;
 
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
-use termherd_core::{Event, Launch, PointerEvent};
+use termherd_core::{Event, Launch, PointerEvent, PointerRoute};
 
 use super::bridge::{
     Action, ActionDetail, ActionOutcome, PointerOutcome, Press, PressOutcome, PressStep,
@@ -213,11 +213,12 @@ impl Shell {
                 Task::none(),
             );
         }
-        // Read off the event itself, which is all the local gesture depends on;
-        // the terminal places it with its own live offset.
-        let outcome = match pointer.local_gesture() {
-            Some(_) => PointerOutcome::Selection,
-            None => PointerOutcome::Ignored,
+        // Answered off the last screen's mouse mode, as the bounds are off its
+        // geometry; the terminal decides again on its live mode and offset.
+        let outcome = match pointer.route(screen.mouse_reporting) {
+            PointerRoute::Forward => PointerOutcome::Forwarded,
+            PointerRoute::Select(_) => PointerOutcome::Selection,
+            PointerRoute::Nothing => PointerOutcome::Ignored,
         };
         let effects = self.core.apply(Event::TerminalPointer {
             session: id,
