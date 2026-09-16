@@ -80,7 +80,7 @@ across layouts.
 | Drag a selection | select; copies too with `terminal.copy_on_select` (off by default) |
 | Right-click | paste, with `terminal.paste_on_right_click` (off by default) |
 | Wheel | scroll back through history |
-| <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click | open a URL or file path under the pointer |
+| <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click | open a URL, hidden (OSC 8) hyperlink or file path under the pointer |
 | Drag a tab | reorder it |
 
 <kbd>Escape</kbd> and <kbd>Enter</kbd> are bound to no *action* on purpose:

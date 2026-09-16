@@ -16,7 +16,8 @@ A set of affordances exists only under the mouse, so no agent can reach or
 regression-test any of them: drag a split gutter (#55), drag a tab to another
 window (#153) or out to detach it (#154), auto-scroll a drag-selection at the
 edge (#157), alt+drag for column selection (#159), Cmd/Ctrl-click a hyperlink
-(#84). The argument that produced [F-mcp-keys](#f-mcp-keys) — a surface an
+(#84, shipped — the gesture exists and an agent still cannot make it). The
+argument that produced [F-mcp-keys](#f-mcp-keys) — a surface an
 agent cannot reach is a surface an agent cannot regression-test — applies
 unchanged to the pointer, with a larger uncovered surface behind it.
 
