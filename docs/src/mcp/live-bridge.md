@@ -197,7 +197,7 @@ A worked example, from inside a session TermHerd launched:
 
 ## What is still open
 
-Four follow-ups, and they are independent of each other:
+Five follow-ups, and they are independent of each other:
 
 | Gap | Issue |
 | --- | --- |

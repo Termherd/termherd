@@ -181,8 +181,12 @@ The two classic terminal clipboard gestures are off until you ask for them:
 `terminal.copy_on_select` makes a drag release (or a double-click) copy
 outright, and `terminal.paste_on_right_click` makes a right-click paste into
 the pane under the pointer. Left off, the copy chord reads whatever is
-highlighted on screen. In the sidebar, click a project or session to
-open it; a tab's `×` also closes it. Hovering a tab shows the session's fuller
+highlighted on screen. A full-screen program that reads the mouse — Claude
+Code's `/diff` and `/resume`, vim, lazygit, less — owns it while it runs:
+clicks, drags and the wheel go to the program, nothing is selected or pasted
+locally, and <kbd>Shift</kbd>+drag takes the mouse back for a selection. In
+the sidebar, click a project or session to open it; a tab's `×` also closes
+it. Hovering a tab shows the session's fuller
 description (the same card the sidebar shows). **+ Add a repo** puts a
 repository in the sidebar before it has any session — or drop its folder on the
 window, which does the same thing (a dropped *file* is ignored).
@@ -224,6 +228,7 @@ nothing to configure. It exposes the running workspace:
 | `read_terminal` | one pane's visible text |
 | `screenshot` | the window as a PNG — for what only pixels show |
 | `press_keys` · `run_action` | drive termherd's own interface — chords through the live keymap, or actions by name |
+| `mouse_in_session` | a mouse event at a cell of a terminal — forwarded to a program reading the mouse, else the terminal's own selection |
 | `add_repo` · `forget_repo` | put a repository in the sidebar before it has any session, and drop that addition |
 
 The loop that makes it useful is **act → wait → observe**: `run_in_session`,
@@ -243,12 +248,13 @@ app on one it cannot answer; a sidebar rename used to be the exception
 rename — those go through a widget callback no synthesised event reaches
 ([#246]).
 
-Six follow-ups remain: a composed prompt→wait→read in one round trip
+Five follow-ups remain: a composed prompt→wait→read in one round trip
 ([#196]), `enter` on the renames ([#246]), a doc editor that discards unsaved
 edits when it closes ([#248]), reaching the bridge from outside a session
-termherd spawned — the launcher cannot drive it today ([#267]) — and the two
-pointer rungs, since the surface can press keys but not click: into a session's
-terminal ([#300]) and at TermHerd's own interface ([#301]).
+termherd spawned — the launcher cannot drive it today ([#267]) — and the
+pointer at TermHerd's own interface ([#301]): it reaches a session's terminal,
+and through it a program reading the mouse, but not yet the sidebar, tabs or
+gutters.
 
 ### The stdio server (manual)
 
@@ -277,7 +283,6 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 [#246]: https://github.com/Termherd/termherd/issues/246
 [#248]: https://github.com/Termherd/termherd/issues/248
 [#267]: https://github.com/Termherd/termherd/issues/267
-[#300]: https://github.com/Termherd/termherd/issues/300
 [#301]: https://github.com/Termherd/termherd/issues/301
 
 ## Test

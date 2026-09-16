@@ -24,7 +24,7 @@ lazygit, fzf, vim — was unreachable to an agent whose keyboard already worked.
 And #155 (mouse clicks are never encoded to the child) could not be verified
 end to end by the agent that fixes it: its encoder half unit-tests the way the
 wheel's already does in `pty::input`, but the gesture itself against a real
-child is what decides whether a TUI actually responds. **Blocks #155**, which
+child is what decides whether a TUI actually responds. **Blocked #155**, which
 is why it landed first.
 
 It shares one seam with that bug, and the rung built the seam without the

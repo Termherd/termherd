@@ -79,7 +79,9 @@ across layouts.
 | <kbd>Enter</kbd> | confirm an open prompt |
 | Drag a selection | select; copies too with `terminal.copy_on_select` (off by default) |
 | Right-click | paste, with `terminal.paste_on_right_click` (off by default) |
-| Wheel | scroll back through history |
+| Wheel | scroll back through history, or the wheel event to a program reading the mouse |
+| Click, drag, right-click in a program reading the mouse | the event goes to the program — vim, lazygit, Claude Code's `/resume`; nothing is selected or pasted locally |
+| <kbd>Shift</kbd>+drag in such a program | the terminal's own selection, as a plain drag is at a shell |
 | <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click | open a URL, hidden (OSC 8) hyperlink or file path under the pointer |
 | Drag a tab | reorder it |
 
