@@ -10,7 +10,7 @@ use crate::metadata::Overlay;
 use crate::snapshot::WorkspaceSnapshot;
 use crate::workspace::SessionId;
 
-use super::{PathRequest, PathRoots, ScrollTarget, SelectOp, SpawnSpec};
+use super::{PathRequest, PathRoots, PointerEvent, ScrollTarget, SelectOp, SpawnSpec};
 
 /// Side effects the runtime must perform. The iced shell turns these into
 /// `pty`-adapter calls (`docs/ARCHITECTURE.md` §8).
@@ -34,6 +34,12 @@ pub enum Effect {
     },
     /// Apply a selection change to a session's terminal grid.
     Select { session: SessionId, op: SelectOp },
+    /// Hand a cell-addressed pointer event to a session's terminal, which
+    /// decides between its local selection and the child.
+    TerminalPointer {
+        session: SessionId,
+        pointer: PointerEvent,
+    },
     /// Ask a session's terminal to copy its current selection — the text comes
     /// back out-of-band (a PTY event), so it is read from the live selection.
     CopyTerminalSelection { session: SessionId },

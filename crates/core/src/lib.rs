@@ -18,8 +18,9 @@ pub mod workspace;
 
 pub use app::{
     App, DEFAULT_FONT_SIZE, Effect, Event, HoverTarget, Launch, LaunchSpec, LiveSession, McpConfig,
-    PathPurpose, PathRequest, PathRoots, ProbeKind, ResolvedPath, ScrollTarget, SelectOp,
-    SelectSide, SessionStatus, SidebarFold, SpawnSpec, TargetProbe, TermHover, Zoom,
+    PathPurpose, PathRequest, PathRoots, PointerButton, PointerEvent, PointerKind,
+    PointerModifiers, ProbeKind, ResolvedPath, ScrollTarget, SelectOp, SelectSide, SessionStatus,
+    SidebarFold, SpawnSpec, TargetProbe, TermHover, Zoom, pointer_select,
 };
 pub use browser::{ProjectGroup, SessionRecord};
 pub use keymap::{Action, ActionBinding, ChordError, KeyChord, Keymap, action_catalog};

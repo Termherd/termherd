@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use termherd_core::ports::{PtyError, PtyHost};
 use termherd_core::workspace::SessionId;
-use termherd_core::{ScrollTarget, SelectOp, SpawnSpec};
+use termherd_core::{PointerEvent, ScrollTarget, SelectOp, SpawnSpec};
 
 use crate::events::EventSink;
 use crate::grid::Palette;
@@ -250,6 +250,19 @@ impl PtyHost for PtyManager {
             .ok_or(PtyError::NoSuchSession(session.0.get()))?;
         s.ctrl
             .send(TermCmd::Select(op))
+            .map_err(|_| PtyError::Io("terminal thread gone".into()))
+    }
+
+    fn pointer(&self, session: SessionId, pointer: PointerEvent) -> Result<(), PtyError> {
+        let map = self
+            .sessions
+            .lock()
+            .map_err(|_| PtyError::Io("session lock poisoned".into()))?;
+        let s = map
+            .get(&session)
+            .ok_or(PtyError::NoSuchSession(session.0.get()))?;
+        s.ctrl
+            .send(TermCmd::Pointer(pointer))
             .map_err(|_| PtyError::Io("terminal thread gone".into()))
     }
 

@@ -19,10 +19,10 @@ use portable_pty::{Child, ChildKiller, MasterPty};
 use termherd_claude::osc::{OscSignal, decode_chunk};
 
 use termherd_core::workspace::SessionId;
-use termherd_core::{ScrollTarget, SelectOp, SessionStatus};
+use termherd_core::{PointerEvent, ScrollTarget, SelectOp, SessionStatus};
 
 use crate::events::{EventSink, PtyEvent};
-use crate::grid::{Palette, apply_select, indexed_rgb, snapshot};
+use crate::grid::{Palette, apply_pointer, apply_select, indexed_rgb, snapshot};
 use crate::input::wheel_bytes;
 use crate::prompt::decode_marks;
 use crate::status::{Activity, foreground_leader, foreground_status};
@@ -103,6 +103,8 @@ pub(crate) enum TermCmd {
     Scroll(ScrollTarget),
     /// Change the grid-anchored text selection (press / drag / clear).
     Select(SelectOp),
+    /// A cell-addressed pointer event; the terminal decides what it means.
+    Pointer(PointerEvent),
     /// Copy the current selection to the clipboard via a `SelectionCopied` event.
     CopySelection,
     /// What the PTY's foreground process group implies about the session's
@@ -386,6 +388,7 @@ pub(crate) fn spawn_term(
                         }
                     }
                     TermCmd::Select(op) => apply_select(&mut term, op),
+                    TermCmd::Pointer(pointer) => apply_pointer(&mut term, pointer),
                     TermCmd::CopySelection => {
                         // Read the text from the live selection, not a snapshot,
                         // so a fast drag's copy is exact. Commands are FIFO, so

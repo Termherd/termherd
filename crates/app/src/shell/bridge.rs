@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
 use termherd_core::{
-    Action as KeymapAction, App, KeyChord, Launch, LiveSession, SessionStatus, SnapshotFilter,
-    SnapshotInputs, WorkspaceSnapshot, workspace::SplitDir,
+    Action as KeymapAction, App, KeyChord, Launch, LiveSession, PointerEvent, SessionStatus,
+    SnapshotFilter, SnapshotInputs, WorkspaceSnapshot, workspace::SplitDir,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -262,6 +262,11 @@ pub enum Action {
     /// to synchronise follows with [`Request::WaitForStatus`].
     /// → `Event::TerminalInput`.
     Run { session: u64, bytes: Vec<u8> },
+    /// Place a pointer event at a cell of a session's terminal — the pointer
+    /// half of what [`Self::Run`] does for text. Bounded by the session's last
+    /// rendered geometry; out of range rejects before anything applies.
+    /// → `Event::TerminalPointer`.
+    Pointer { session: u64, pointer: PointerEvent },
     /// Add a repo to the sidebar by hand (`F-repo-add`). The path is normalised
     /// adapter-side first, so the caller may pass a subdirectory or a worktree.
     /// → `Event::DeclareRepo`.
@@ -285,6 +290,22 @@ pub struct ActionOutcome {
     pub error: Option<String>,
     /// Set by the two repo actions only: what the sidebar row looks like now.
     pub repo: Option<RepoOutcome>,
+    /// Set by the pointer action only: what the terminal did with the event.
+    pub pointer: Option<PointerOutcome>,
+}
+
+/// What a session's terminal did with a pointer event, for a caller that
+/// cannot see the pane. The two are kept apart because they call for opposite
+/// responses: after `Selection` the text is there for `copy` to read; after
+/// `Ignored` the gesture drove nothing and retrying it changes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerOutcome {
+    /// The child is not reading the mouse, so the event drove the terminal's
+    /// own text selection.
+    Selection,
+    /// The event maps to no local gesture (a release, a move, a button other
+    /// than the left one) and the child is not reading the mouse.
+    Ignored,
 }
 
 /// What a repo action did, for a caller that cannot see the sidebar. `path` is
@@ -307,6 +328,7 @@ impl ActionOutcome {
             focused: None,
             error: Some(reason.into()),
             repo: None,
+            pointer: None,
         }
     }
 
@@ -316,6 +338,7 @@ impl ActionOutcome {
             focused,
             error: None,
             repo: None,
+            pointer: None,
         }
     }
 
@@ -323,6 +346,13 @@ impl ActionOutcome {
     #[must_use]
     pub fn with_repo(mut self, repo: RepoOutcome) -> Self {
         self.repo = Some(repo);
+        self
+    }
+
+    /// An applied pointer action, which also reports what the terminal did.
+    #[must_use]
+    pub fn with_pointer(mut self, pointer: PointerOutcome) -> Self {
+        self.pointer = Some(pointer);
         self
     }
 }

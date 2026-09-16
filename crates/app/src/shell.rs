@@ -1410,7 +1410,7 @@ mod key_routing {
     use iced::keyboard::{Key, Location, Modifiers};
     use std::sync::Mutex as StdMutex;
     use termherd_core::ports::{PtyError, ScanError};
-    use termherd_core::{Action, SelectSide, SnapshotFilter, SpawnSpec};
+    use termherd_core::{Action, PointerEvent, SelectSide, SnapshotFilter, SpawnSpec};
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]
@@ -1422,6 +1422,7 @@ mod key_routing {
         resizes: StdMutex<Vec<(u16, u16)>>,
         scrolls: StdMutex<Vec<ScrollTarget>>,
         selects: StdMutex<Vec<SelectOp>>,
+        pointers: StdMutex<Vec<(SessionId, PointerEvent)>>,
         copies: StdMutex<usize>,
     }
 
@@ -1457,6 +1458,9 @@ mod key_routing {
         fn copy_count(&self) -> usize {
             *self.copies.lock().expect("copies lock")
         }
+        fn pointers(&self) -> Vec<(SessionId, PointerEvent)> {
+            self.pointers.lock().expect("pointers lock").clone()
+        }
     }
 
     impl PtyHost for RecordingPty {
@@ -1488,6 +1492,13 @@ mod key_routing {
         }
         fn select(&self, _: SessionId, op: SelectOp) -> Result<(), PtyError> {
             self.selects.lock().expect("selects lock").push(op);
+            Ok(())
+        }
+        fn pointer(&self, session: SessionId, pointer: PointerEvent) -> Result<(), PtyError> {
+            self.pointers
+                .lock()
+                .expect("pointers lock")
+                .push((session, pointer));
             Ok(())
         }
         fn copy_selection(&self, _: SessionId) -> Result<(), PtyError> {
@@ -1770,6 +1781,121 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Focus { session: 999 });
         assert!(outcome.error.is_some(), "an unknown handle is rejected");
         assert_eq!(focused(&shell), before, "focus is untouched");
+    }
+
+    fn pointer_at(kind: termherd_core::PointerKind, col: u16, row: u16) -> PointerEvent {
+        PointerEvent {
+            kind,
+            col,
+            row,
+            button: termherd_core::PointerButton::Left,
+            modifiers: termherd_core::PointerModifiers::default(),
+        }
+    }
+
+    /// A shell with one focused terminal whose last render is `text` on one
+    /// row — the geometry a pointer is bounded by.
+    fn shell_showing(text: &str) -> (Shell, Arc<RecordingPty>, u64) {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of(text));
+        (shell, pty, session.0.get())
+    }
+
+    #[test]
+    fn pointer_action_rejects_an_unknown_handle_without_forwarding() {
+        use termherd_core::PointerKind;
+        let (mut shell, pty, _) = shell_showing("$ cargo test");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: 999,
+            pointer: pointer_at(PointerKind::Press, 0, 0),
+        });
+        assert!(
+            outcome.error.as_deref().is_some_and(|e| e.contains("999")),
+            "an unknown handle is rejected, naming it: {outcome:?}"
+        );
+        assert!(pty.pointers().is_empty(), "nothing reached any PTY");
+    }
+
+    #[test]
+    fn pointer_action_rejects_a_cell_outside_the_pane_naming_the_geometry() {
+        use termherd_core::PointerKind;
+        // "$ cargo test" is 12 columns on 1 row: col 12 and row 1 are both out.
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        for (col, row) in [(12, 0), (0, 1), (40, 40)] {
+            let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+                session: handle,
+                pointer: pointer_at(PointerKind::Press, col, row),
+            });
+            let error = outcome
+                .error
+                .unwrap_or_else(|| panic!("({col},{row}) must be rejected"));
+            assert!(
+                error.contains("12") && error.contains('1'),
+                "the rejection names the pane's geometry so the caller can retry \
+                 inside it: {error}"
+            );
+        }
+        assert!(
+            pty.pointers().is_empty(),
+            "an out-of-range event never applies"
+        );
+    }
+
+    #[test]
+    fn pointer_action_rejects_a_session_that_has_not_rendered_yet() {
+        use termherd_core::PointerKind;
+        // No screen inserted: the session is live but nothing has been drawn,
+        // so there is no geometry to bound the cell by.
+        let (mut shell, pty) = shell_with_terminal();
+        let handle = focused(&shell).expect("focused").parse().expect("numeric");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: pointer_at(PointerKind::Press, 0, 0),
+        });
+        assert!(
+            outcome.error.is_some(),
+            "no geometry, no pointer: {outcome:?}"
+        );
+        assert!(pty.pointers().is_empty());
+    }
+
+    #[test]
+    fn pointer_action_forwards_an_in_bounds_press_and_reports_a_selection() {
+        use super::bridge::PointerOutcome;
+        use termherd_core::PointerKind;
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        let pointer = pointer_at(PointerKind::Press, 11, 0);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer,
+        });
+        assert_eq!(outcome.error, None, "the last cell is inside the pane");
+        assert_eq!(outcome.pointer, Some(PointerOutcome::Selection));
+        assert_eq!(outcome.focused, focused(&shell));
+        let session = shell.core.workspace.focused_session().expect("focused");
+        assert_eq!(
+            pty.pointers(),
+            vec![(session, pointer)],
+            "exactly the one event reached the terminal, as sent"
+        );
+    }
+
+    #[test]
+    fn pointer_action_reports_a_move_as_ignored_but_still_hands_it_over() {
+        use super::bridge::PointerOutcome;
+        use termherd_core::PointerKind;
+        // A move drives no local selection, so the caller learns nothing
+        // happened — yet the terminal still receives it, since a child reading
+        // the mouse will want its motion once forwarding lands.
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: pointer_at(PointerKind::Move, 3, 0),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.pointer, Some(PointerOutcome::Ignored));
+        assert_eq!(pty.pointers().len(), 1);
     }
 
     #[test]

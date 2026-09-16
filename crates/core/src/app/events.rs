@@ -12,7 +12,8 @@ use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
 
 use super::{
-    LaunchSpec, PathRequest, ResolvedPath, ScrollTarget, SelectOp, SessionStatus, TargetProbe, Zoom,
+    LaunchSpec, PathRequest, PointerEvent, ResolvedPath, ScrollTarget, SelectOp, SessionStatus,
+    TargetProbe, Zoom,
 };
 
 #[derive(Debug, Clone)]
@@ -41,6 +42,14 @@ pub enum Event {
     Select {
         session: SessionId,
         op: SelectOp,
+    },
+    /// A pointer event landed on a terminal's cell — from a caller that has no
+    /// pixels (MCP), addressed the way a mouse report is. What it does is the
+    /// terminal's decision (FR4): drive the local selection, or, once the child
+    /// reads the mouse, be forwarded to it.
+    TerminalPointer {
+        session: SessionId,
+        pointer: PointerEvent,
     },
     /// Copy a terminal's current selection to the clipboard. The text is read
     /// from the terminal's own selection (not a snapshot), so it is exact even

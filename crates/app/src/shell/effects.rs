@@ -71,6 +71,7 @@ impl Shell {
             } => self.pty.resize(session, cols, rows),
             Effect::Scroll { session, target } => self.pty.scroll(session, target),
             Effect::Select { session, op } => self.pty.select(session, op),
+            Effect::TerminalPointer { session, pointer } => self.pty.pointer(session, pointer),
             Effect::CopyTerminalSelection { session } => self.pty.copy_selection(session),
             Effect::Kill(session) => {
                 self.revoke_mcp(session);

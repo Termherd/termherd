@@ -25,6 +25,7 @@ mod hover;
 mod metadata;
 mod notify;
 mod open;
+mod pointer;
 mod record;
 mod session;
 mod settings;
@@ -42,6 +43,7 @@ pub use hover::{
     HoverTarget, PathPurpose, PathRequest, PathRoots, ProbeKind, ResolvedPath, TargetProbe,
     TermHover,
 };
+pub use pointer::{PointerButton, PointerEvent, PointerKind, PointerModifiers, pointer_select};
 pub use session::{Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
@@ -188,6 +190,9 @@ impl App {
                 self.if_live(session, Effect::Scroll { session, target })
             }
             Event::Select { session, op } => self.if_live(session, Effect::Select { session, op }),
+            Event::TerminalPointer { session, pointer } => {
+                self.if_live(session, Effect::TerminalPointer { session, pointer })
+            }
             Event::CopyTerminalSelection { session } => {
                 self.if_live(session, Effect::CopyTerminalSelection { session })
             }

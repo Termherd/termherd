@@ -6,7 +6,7 @@
 
 use std::time::SystemTime;
 
-use crate::app::{PathRoots, ResolvedPath, ScrollTarget, SelectOp, SpawnSpec};
+use crate::app::{PathRoots, PointerEvent, ResolvedPath, ScrollTarget, SelectOp, SpawnSpec};
 use crate::browser::SessionRecord;
 use crate::workspace::SessionId;
 
@@ -74,6 +74,11 @@ pub trait PtyHost: Send + Sync {
     /// Apply a selection change to a session's terminal grid — anchored in the
     /// grid so the highlight follows the text through scroll.
     fn select(&self, session: SessionId, op: SelectOp) -> Result<(), PtyError>;
+    /// Hand a cell-addressed pointer event to a session's terminal. The terminal
+    /// decides what it means — a local selection change, or (once the child
+    /// reads the mouse) a report forwarded to it — since only it holds the live
+    /// mode and scroll offset.
+    fn pointer(&self, session: SessionId, pointer: PointerEvent) -> Result<(), PtyError>;
     /// Ask a session's terminal to copy its current selection; the text is
     /// delivered out-of-band via the event sink, read from the live selection.
     fn copy_selection(&self, session: SessionId) -> Result<(), PtyError>;

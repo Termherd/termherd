@@ -13,10 +13,10 @@ use std::num::NonZeroU64;
 
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
-use termherd_core::{Event, Launch};
+use termherd_core::{Event, Launch, PointerEvent, pointer_select};
 
 use super::bridge::{
-    Action, ActionOutcome, Press, PressOutcome, PressStep, RepoOutcome, SessionKind,
+    Action, ActionOutcome, PointerOutcome, Press, PressOutcome, PressStep, RepoOutcome, SessionKind,
 };
 use super::input::event_of;
 use super::repos::RepoGesture;
@@ -36,6 +36,7 @@ impl Shell {
             Action::Rename { tab, title } => self.act_rename(tab, title),
             Action::Close { pane } => self.act_close(pane),
             Action::Run { session, bytes } => self.act_run(session, bytes),
+            Action::Pointer { session, pointer } => self.act_pointer(session, pointer),
             Action::DeclareRepo { path } => self.act_declare_repo(&path),
             Action::ForgetRepo { path } => self.act_forget_repo(&path),
         }
@@ -171,6 +172,53 @@ impl Shell {
         };
         let effects = self.core.apply(Event::TerminalInput { session: id, bytes });
         (self.applied(), self.perform(effects))
+    }
+
+    /// Place a pointer event at a cell of a session's terminal. Bounded by the
+    /// session's last rendered geometry — a cell outside it, or a session that
+    /// has not drawn yet, is rejected before anything applies, so a caller
+    /// never learns of a bad coordinate from a selection landing elsewhere.
+    ///
+    /// The outcome is read off the same predicate the terminal applies
+    /// (`pointer_select`), so what the caller is told cannot drift from what
+    /// the grid did. The snapshot's offset serves here only to ask *whether*
+    /// the event drives a selection, never *where*: that is the terminal's,
+    /// with its live offset.
+    fn act_pointer(
+        &mut self,
+        session: u64,
+        pointer: PointerEvent,
+    ) -> (ActionOutcome, Task<Message>) {
+        let Some(id) = self.resolve(session) else {
+            return (unknown_handle(session), Task::none());
+        };
+        let Some(screen) = self.screens.get(&id) else {
+            return (
+                ActionOutcome::rejected(format!(
+                    "session {session} has not rendered yet, so it has no geometry to \
+                     place a pointer in"
+                )),
+                Task::none(),
+            );
+        };
+        if pointer.col >= screen.cols || pointer.row >= screen.rows {
+            return (
+                ActionOutcome::rejected(format!(
+                    "cell ({}, {}) is outside the {}x{} pane",
+                    pointer.col, pointer.row, screen.cols, screen.rows
+                )),
+                Task::none(),
+            );
+        }
+        let outcome = match pointer_select(&pointer, screen.display_offset) {
+            Some(_) => PointerOutcome::Selection,
+            None => PointerOutcome::Ignored,
+        };
+        let effects = self.core.apply(Event::TerminalPointer {
+            session: id,
+            pointer,
+        });
+        (self.applied().with_pointer(outcome), self.perform(effects))
     }
 
     /// The shared prelude of the focus-relative actions (split, close): reveal
