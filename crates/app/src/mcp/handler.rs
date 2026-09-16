@@ -320,11 +320,14 @@ impl TermherdMcp {
                        `row` (0-based cells of the visible screen; out of the \
                        pane's geometry rejects the call), `button` (\"left\" \
                        default, \"middle\", \"right\"). Returns `focused_handle` \
-                       and `pointer`: \"selection\" when the event drove the \
+                       and `pointer`: \"forwarded\" when the program in the \
+                       session reads the mouse and was sent the event (follow \
+                       with `wait_for_status` / `read_terminal`), \"selection\" \
+                       when no program reads it and the event drove the \
                        terminal's own text selection (read it back with the \
-                       `copy` action), \"ignored\" when it drove nothing. A \
-                       drag is press at one cell, drag at another; a bare click \
-                       clears the selection."
+                       `copy` action), \"ignored\" when it drove nothing. At a \
+                       shell, a drag is press at one cell, drag at another; a \
+                       bare click clears the selection."
     )]
     async fn mouse_in_session(
         &self,

@@ -108,22 +108,32 @@ The answer adds a `pointer` field saying what the terminal did:
 
 | `pointer` | Means |
 | --- | --- |
-| `selection` | the event drove the terminal's own text selection |
-| `ignored` | it maps to no local gesture — a release, a move, a middle or right button |
+| `forwarded` | the program in the session reads the mouse and was sent the event |
+| `selection` | no program reads the mouse; the event drove the terminal's own text selection |
+| `ignored` | it drove nothing — a release, a move or a non-left button with no program reading the mouse, or a motion the program's mouse mode does not cover |
 
-A drag is two calls — `press` at one cell, then `drag` at another — and the
-text between them is selected, both cells included. Read it back with the
-`copy` action (`run_action`), which puts the selection on the clipboard. A bare
-`click` clears the selection. A cell outside the pane's geometry, or a session
-that has not rendered yet, **rejects the whole call** before anything applies,
-naming the geometry so you can retry inside it.
+Which of the first two you get is the **program's** choice, not yours. A
+full-screen program that turns mouse reporting on — Claude Code's `/diff` and
+`/resume`, vim, lazygit, fzf, less — owns the mouse while it runs: every event
+goes to it in the encoding it negotiated, and the terminal selects nothing of
+its own. Follow a `forwarded` with `wait_for_status` / `read_terminal` to see
+what the program made of it, as after `run_in_session`. Mouse reporting comes
+in three widths, and a motion the program did not ask for is dropped rather
+than selected: click-only reporting takes presses and releases, drag reporting
+adds motion with a button held, and motion reporting takes every move.
 
-What this rung does **not** do yet is forward the event to the child. A
-program that has turned mouse reporting on — Claude Code's `/diff`, lazygit,
-vim — still sees nothing; the event drives the local selection as it would for
-a human today, which is [#155](https://github.com/Termherd/termherd/issues/155).
-When that lands, the same tool answers `forwarded` for it, and the selection
-path stays for a child that is not reading the mouse.
+At a plain shell, or any program not reading the mouse, the same calls drive
+the terminal's selection. A drag is two calls — `press` at one cell, then
+`drag` at another — and the text between them is selected, both cells
+included. Read it back with the `copy` action (`run_action`), which puts the
+selection on the clipboard. A bare `click` clears the selection. A cell outside
+the pane's geometry, or a session that has not rendered yet, **rejects the
+whole call** before anything applies, naming the geometry so you can retry
+inside it.
+
+The report carries no modifier keys: a `press` is a plain press whatever the
+human's keyboard is doing. The same split governs a human's mouse over the
+pane — see [When the program reads the mouse](../workspace/terminal.md#when-the-program-reads-the-mouse).
 
 ### Synchronisation
 
@@ -187,7 +197,7 @@ A worked example, from inside a session TermHerd launched:
 
 ## What is still open
 
-Five follow-ups, and they are independent of each other:
+Four follow-ups, and they are independent of each other:
 
 | Gap | Issue |
 | --- | --- |
@@ -195,5 +205,4 @@ Five follow-ups, and they are independent of each other:
 | `enter` commits neither rename over MCP — see [Driving the keyboard](./keyboard.md). | [#246](https://github.com/Termherd/termherd/issues/246) |
 | The doc editor discards unsaved edits when it closes, by button or by `escape`. | [#248](https://github.com/Termherd/termherd/issues/248) |
 | The bridge is reachable only from a session termherd spawned, so the launcher itself cannot drive it — see [Two surfaces](./index.md). | [#267](https://github.com/Termherd/termherd/issues/267) |
-| `mouse_in_session` drives the local selection only; a mouse-mode app — Claude Code's `/diff`, lazygit, vim — does not receive the event yet. | [#155](https://github.com/Termherd/termherd/issues/155) |
 | No pointer at TermHerd's own interface: the sidebar, the tab strip, a split gutter. | [#301](https://github.com/Termherd/termherd/issues/301) |

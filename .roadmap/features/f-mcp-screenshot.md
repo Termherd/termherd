@@ -32,9 +32,9 @@ the recorder) and the PNG encoder (from the capture dump) moved into one pure
 `app::image` module rather than being copied a third time. Depends on #212/#193.
 **#196 + #229 + #215 are one capability in three parts** — drive the UI, see
 the pixels, read the terminal — and with #229 shipped, #196 is what remains of
-*that* trio. What the three parts do *not* yet close is a **gesture** fix: the
-surface presses keys and cannot click, so #155 stays proposable and
-unverifiable until [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) (#300)
-lands. And the loop is out of reach entirely for anything termherd did not
+*that* trio. The **gesture** gap the three parts left — the surface pressed
+keys and could not click, so #155 was proposable and unverifiable — closed
+when [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) (#300) landed and #155
+followed. The loop is still out of reach entirely for anything termherd did not
 spawn, which [F-mcp-attach](#f-mcp-attach) (#267) is about: the launcher that
 most wants to verify a fix is the one caller with no way in

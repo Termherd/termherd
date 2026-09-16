@@ -53,7 +53,7 @@ shippable:
   capture dump is now the MCP snapshot.
 - [ ] [F-mcp-attach](#f-mcp-attach) — The attach rung: reach the live bridge
   from outside, not only from a session it spawned.
-- [ ] [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) — The pointer rung,
-  terminal half: a mouse event inside a session. Blocks #155.
+- [x] [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) — The pointer rung,
+  terminal half: a mouse event inside a session. Unblocked #155, now fixed.
 - [ ] [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) — The pointer rung, chrome
   half: click and drag termherd's own interface.

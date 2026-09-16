@@ -7,6 +7,21 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (the mouse reaches a program that reads it)
+
+- A full-screen program with mouse reporting on — Claude Code's `/diff` and
+  `/resume`, vim, lazygit, fzf, less, tmux — now receives clicks, drags and
+  (when it asked for them) bare moves, in the SGR or X10 encoding it
+  negotiated. Only wheel notches were ever forwarded before; a press over such
+  a program was consumed as a local text selection and the program never heard
+  of it (#155). While a program reads the mouse the terminal draws no selection
+  of its own and a right-click reaches the program instead of pasting; hold
+  **Shift** to select text out of it, and the link modifier still opens a path
+  or URL.
+- `mouse_in_session` answers `forwarded` for such a program, beside
+  `selection` and `ignored`, and an agent can now drive a mouse-mode TUI
+  through the act → wait → observe loop.
+
 ### Added (a pointer inside a terminal, over MCP)
 
 - `mouse_in_session` places one mouse event at a **cell** of a session's
@@ -20,9 +35,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The event travels the wheel's path end to end (`Event::TerminalPointer` →
   `PtyHost::pointer` → the terminal thread); the gesture rule lives once in
   `core`, read by the shell to answer and by the terminal to place the
-  selection with its live offset. A child with mouse reporting on does not
-  receive the event yet — that encoder and gate are #155, which this rung
-  exists to make verifiable.
+  selection with its live offset. It landed before #155 (above) so that fix
+  could be verified by the agent that wrote it.
 
 ### Added (hidden terminal hyperlinks)
 

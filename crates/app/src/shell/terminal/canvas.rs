@@ -165,10 +165,10 @@ impl TerminalView<'_> {
     /// The child's claim on a mouse event, when it reads the mouse: `Some` when
     /// the event is its — forwarded as a pointer at its cell, or dropped when
     /// its mode does not cover it — and `None` when the terminal's own gestures
-    /// get it. A held modifier keeps the pointer for the terminal (Shift is the
-    /// xterm override for selecting text in a mouse-mode TUI; the link modifier
-    /// opens links), and a bare move the child does not read stays free for the
-    /// link hover. The wheel keeps its own path.
+    /// get it. A held modifier keeps the pointer for the terminal — Shift is the
+    /// xterm override for selecting text in a mouse-mode TUI, and the link
+    /// modifier is how a link is hovered and opened — so the link hover never
+    /// competes with the child for a bare move. The wheel keeps its own path.
     fn hand_to_child(
         &self,
         state: &mut TermState,
@@ -205,16 +205,16 @@ impl TerminalView<'_> {
             row,
             button,
         };
-        if pointer.route(Some(reporting)) == PointerRoute::Forward {
-            return Some(Some(canvas::Action::publish(Message::TermPointer {
-                session: self.session,
-                pointer,
-            })));
-        }
-        // Not covered by the child's mode: a press, release or drag is still
-        // its (dropped, never a selection); a bare move nobody reads is not the
-        // child's to swallow.
-        (kind != PointerKind::Move).then_some(None)
+        // Covered by the child's mode or not, the event is its: forwarded, or
+        // dropped — never a selection.
+        Some(
+            (pointer.route(Some(reporting)) == PointerRoute::Forward).then(|| {
+                canvas::Action::publish(Message::TermPointer {
+                    session: self.session,
+                    pointer,
+                })
+            }),
+        )
     }
 }
 

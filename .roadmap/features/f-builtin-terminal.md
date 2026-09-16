@@ -59,7 +59,9 @@ configured string is split on whitespace *before* `{path}` is substituted, so a
 filename cannot become a second argument, and a placeholder in the program name
 is refused outright — what the terminal printed picks the file, never the
 executable. Unconfigured, the OS handoff and its refusal both stand.
-Two contract bugs sit on the same surface: mouse buttons are never
-encoded to the child, so no mouse-mode app gets a click (#155), and the
-`emitted_lines_never_drift` property has a known failing scroll sequence whose
-seed was never committed (#102)
+Mouse buttons reach the child since #155: a program with mouse reporting on
+gets presses, releases, drags and motion in the SGR or X10 encoding it
+negotiated, the terminal selects nothing of its own over it, and Shift takes
+the mouse back for a local selection. One contract bug remains on the surface:
+the `emitted_lines_never_drift` property has a known failing scroll sequence
+whose seed was never committed (#102)

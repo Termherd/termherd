@@ -39,5 +39,5 @@ its sweep in `shell.rs`, "Mouse-only, which is no one, over MCP" in
 [F-mcp-keys](#f-mcp-keys), and "Two tools reach TermHerd's own interface" in
 the manual's keyboard page.
 
-Sibling of [F-mcp-pointer-terminal](#f-mcp-pointer-terminal), which is the half
-that blocks #155.
+Sibling of [F-mcp-pointer-terminal](#f-mcp-pointer-terminal), the half that
+unblocked #155.

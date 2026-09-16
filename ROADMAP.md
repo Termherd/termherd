@@ -252,10 +252,12 @@ configured string is split on whitespace *before* `{path}` is substituted, so a
 filename cannot become a second argument, and a placeholder in the program name
 is refused outright — what the terminal printed picks the file, never the
 executable. Unconfigured, the OS handoff and its refusal both stand.
-Two contract bugs sit on the same surface: mouse buttons are never
-encoded to the child, so no mouse-mode app gets a click (#155), and the
-`emitted_lines_never_drift` property has a known failing scroll sequence whose
-seed was never committed (#102)
+Mouse buttons reach the child since #155: a program with mouse reporting on
+gets presses, releases, drags and motion in the SGR or X10 encoding it
+negotiated, the terminal selects nothing of its own over it, and Shift takes
+the mouse back for a local selection. One contract bug remains on the surface:
+the `emitted_lines_never_drift` property has a known failing scroll sequence
+whose seed was never committed (#102)
 
 <a id="f-close-confirm-policy"></a>
 
@@ -910,8 +912,8 @@ shippable:
   capture dump is now the MCP snapshot.
 - [ ] [F-mcp-attach](#f-mcp-attach) — The attach rung: reach the live bridge
   from outside, not only from a session it spawned.
-- [ ] [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) — The pointer rung,
-  terminal half: a mouse event inside a session. Blocks #155.
+- [x] [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) — The pointer rung,
+  terminal half: a mouse event inside a session. Unblocked #155, now fixed.
 - [ ] [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) — The pointer rung, chrome
   half: click and drag termherd's own interface.
 
@@ -961,8 +963,8 @@ its sweep in `shell.rs`, "Mouse-only, which is no one, over MCP" in
 [F-mcp-keys](#f-mcp-keys), and "Two tools reach TermHerd's own interface" in
 the manual's keyboard page.
 
-Sibling of [F-mcp-pointer-terminal](#f-mcp-pointer-terminal), which is the half
-that blocks #155.
+Sibling of [F-mcp-pointer-terminal](#f-mcp-pointer-terminal), the half that
+unblocked #155.
 
 <a id="f-multi-window"></a>
 
@@ -1268,12 +1270,12 @@ second copy the design feared. The path mirrors the wheel's end to end —
 per-session terminal thread, which holds the live scroll offset — and the
 gesture rule lives once in `core::app::pointer`: *whether* an event drives the
 selection is read off the event (that is what the shell answers), *where* it
-lands is placed by the terminal with its live offset. #155 *extends* that arm
-with the SGR/X10
-press encoder and the mode gate beside `wheel_bytes`, adds `forwarded` as the
-third answer, and routes the canvas's own bare press/drag/release through the
-same path. Until then the tool drives the local selection only, and the book
-says so.
+lands is placed by the terminal with its live offset. #155 then *extended*
+that arm as planned: `PointerEvent::route` reads the child's mouse reporting
+and answers forward / select / nothing, the SGR/X10 encoder grew from
+`wheel_bytes` into `mouse_bytes`, `forwarded` is the third answer, and the
+canvas hands its own bare press / drag / release / move down the same path
+while Shift keeps a local selection possible.
 
 Sibling of [F-mcp-pointer-chrome](#f-mcp-pointer-chrome), which drives
 termherd's own interface rather than a terminal and blocks nothing.
@@ -1308,10 +1310,10 @@ the recorder) and the PNG encoder (from the capture dump) moved into one pure
 `app::image` module rather than being copied a third time. Depends on #212/#193.
 **#196 + #229 + #215 are one capability in three parts** — drive the UI, see
 the pixels, read the terminal — and with #229 shipped, #196 is what remains of
-*that* trio. What the three parts do *not* yet close is a **gesture** fix: the
-surface presses keys and cannot click, so #155 stays proposable and
-unverifiable until [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) (#300)
-lands. And the loop is out of reach entirely for anything termherd did not
+*that* trio. The **gesture** gap the three parts left — the surface pressed
+keys and could not click, so #155 was proposable and unverifiable — closed
+when [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) (#300) landed and #155
+followed. The loop is still out of reach entirely for anything termherd did not
 spawn, which [F-mcp-attach](#f-mcp-attach) (#267) is about: the launcher that
 most wants to verify a fix is the one caller with no way in
 
