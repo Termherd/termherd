@@ -7,6 +7,23 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (a pointer inside a terminal, over MCP)
+
+- `mouse_in_session` places one mouse event at a **cell** of a session's
+  terminal — the pointer counterpart of `run_in_session` (#300). `kind` is
+  `press` / `release` / `click` / `drag` / `move`, `col` / `row` are 0-based
+  cells of the visible screen, `button` and `modifiers` are optional. A cell
+  outside the pane's geometry, or an unknown word, rejects the whole call
+  before anything applies. The answer's `pointer` field says what the terminal
+  did: `selection` (a press then a drag selects the text between them, both
+  cells included; a bare click clears it) or `ignored`.
+- The event travels the wheel's path end to end (`Event::TerminalPointer` →
+  `PtyHost::pointer` → the terminal thread), with one `core::pointer_select`
+  predicate deciding the local gesture for both the terminal that applies it
+  and the shell that reports it. A child with mouse reporting on does not
+  receive the event yet — that encoder and gate are #155, which this rung
+  exists to make verifiable.
+
 ### Added (hidden terminal hyperlinks)
 
 - A link whose label hides its URL — an OSC 8 hyperlink, the way `gh`,
