@@ -216,20 +216,29 @@ fn news(seen: &mut Option<String>, reported: Option<String>) -> Option<String> {
     Some(reported)
 }
 
-/// What the terminal does with a cell-addressed pointer event, decided on its
-/// *live* mode — a caller's snapshot may lag it. The child's when it reads the
-/// mouse, handed back as the bytes to write; the terminal's own selection
-/// otherwise; and nothing for a motion the child's mode does not cover, since
-/// under any mouse reporting the mouse is the child's.
-fn pointer_input<T: EventListener>(term: &mut Term<T>, pointer: PointerEvent) -> Option<Vec<u8>> {
+/// What the terminal did with a cell-addressed pointer event.
+#[derive(Debug, PartialEq, Eq)]
+enum PointerInput {
+    /// The child reads the mouse: the bytes to write it.
+    Forward(Vec<u8>),
+    /// The terminal's own selection moved, so the screen must be re-emitted.
+    Selected,
+    /// A motion the child's mode does not cover, dropped — under any mouse
+    /// reporting the mouse is the child's.
+    Dropped,
+}
+
+/// Decide a pointer event on the terminal's *live* mode — a caller's snapshot
+/// may lag it — and apply the local half.
+fn pointer_input<T: EventListener>(term: &mut Term<T>, pointer: PointerEvent) -> PointerInput {
     let mode = *term.mode();
     match pointer.route(mouse_reporting(mode)) {
-        PointerRoute::Forward => Some(mouse_bytes(mode, pointer)),
-        PointerRoute::Select(_) => {
+        PointerRoute::Forward => PointerInput::Forward(mouse_bytes(mode, pointer)),
+        PointerRoute::Select => {
             apply_pointer(term, pointer);
-            None
+            PointerInput::Selected
         }
-        PointerRoute::Nothing => None,
+        PointerRoute::Nothing => PointerInput::Dropped,
     }
 }
 
@@ -238,7 +247,7 @@ fn pointer_input<T: EventListener>(term: &mut Term<T>, pointer: PointerEvent) ->
 /// is reported by the reader thread, not by its last missed click.
 fn forward_mouse(session: SessionId, input: &SharedWriter, bytes: &[u8]) {
     if let Ok(mut w) = input.lock()
-        && let Err(error) = w.write_all(bytes)
+        && let Err(error) = w.write_all(bytes).and_then(|()| w.flush())
     {
         tracing::debug!(session = session.0.get(), %error, "mouse forward to PTY failed");
     }
@@ -407,11 +416,17 @@ pub(crate) fn spawn_term(
                         }
                     }
                     TermCmd::Select(op) => apply_select(&mut term, op),
-                    TermCmd::Pointer(pointer) => {
-                        if let Some(bytes) = pointer_input(&mut term, pointer) {
+                    // Only a local selection changes a pixel; a forwarded or
+                    // dropped event must not re-emit the screen, since under
+                    // motion reporting one arrives per pixel the pointer moves.
+                    TermCmd::Pointer(pointer) => match pointer_input(&mut term, pointer) {
+                        PointerInput::Forward(bytes) => {
                             forward_mouse(session, &input, &bytes);
+                            continue;
                         }
-                    }
+                        PointerInput::Selected => {}
+                        PointerInput::Dropped => continue,
+                    },
                     TermCmd::CopySelection => {
                         // Read the text from the live selection, not a snapshot,
                         // so a fast drag's copy is exact. Commands are FIFO, so
@@ -685,11 +700,15 @@ mod tests {
         let press = pointer_input(&mut term, PointerEvent::left(PointerKind::Press, 6, 0));
         assert_eq!(
             press,
-            Some(b"\x1b[<0;7;1M".to_vec()),
+            PointerInput::Forward(b"\x1b[<0;7;1M".to_vec()),
             "the press is the child's"
         );
         let drag = pointer_input(&mut term, PointerEvent::left(PointerKind::Drag, 4, 1));
-        assert_eq!(drag, None, "click reporting does not cover a drag");
+        assert_eq!(
+            drag,
+            PointerInput::Dropped,
+            "click reporting does not cover a drag"
+        );
         assert!(
             snapshot(&term, &Palette::default()).selection.is_empty(),
             "neither event touched the terminal's own selection"
@@ -702,7 +721,11 @@ mod tests {
         let mut term = term_showing(b"hello\x1b[?1002h\x1b[?1002l");
         let press = pointer_input(&mut term, PointerEvent::left(PointerKind::Press, 0, 0));
         let drag = pointer_input(&mut term, PointerEvent::left(PointerKind::Drag, 4, 0));
-        assert_eq!((press, drag), (None, None), "nothing goes to the child");
+        assert_eq!(
+            (press, drag),
+            (PointerInput::Selected, PointerInput::Selected),
+            "nothing goes to the child"
+        );
         assert_eq!(term.selection_to_string().as_deref(), Some("hello"));
     }
 

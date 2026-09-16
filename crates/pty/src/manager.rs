@@ -357,8 +357,9 @@ mod tests {
 
     /// The claim behind the mouse rung, made against a **real child**: a
     /// program that turns mouse reporting on receives a click as the bytes it
-    /// negotiated. `cat -v` stands in for the TUI — it prints what it reads,
-    /// so the report lands on the grid where the test can see it — and the
+    /// negotiated. `cat -v` in a raw, echo-less tty stands in for the TUI —
+    /// raw so it reads the bytes as they come and echo off so what lands on
+    /// the grid is what the child printed, not the line discipline — and the
     /// mode reading rides back on the `Screen` first, which is what the GUI and
     /// the MCP shell route on.
     ///
@@ -377,8 +378,11 @@ mod tests {
         let mgr = PtyManager::new(sink, None, Palette::default());
         let id = sid(1);
         mgr.spawn(spec(id)).expect("spawn");
-        mgr.write(id, b"printf '\\033[?1000h\\033[?1006h'; cat -v\r\n")
-            .expect("write");
+        mgr.write(
+            id,
+            b"stty raw -echo; printf '\\033[?1000h\\033[?1006h'; cat -v\r\n",
+        )
+        .expect("write");
 
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut screen = String::new();

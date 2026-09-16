@@ -250,6 +250,29 @@ const GRUVBOX_LIGHT_ANSI: [[u8; 3]; 16] = [
 ];
 
 impl Screen {
+    /// An empty `cols`×`rows` screen in the default palette at the live tail:
+    /// nothing scrolled, selected, linked or negotiated. The base a fixture
+    /// overrides one field of, so a new `Screen` field costs one edit here
+    /// rather than one per hand-rolled literal.
+    #[must_use]
+    pub fn blank(cols: u16, rows: u16) -> Self {
+        let palette = Palette::default();
+        Self {
+            cols,
+            rows,
+            lines: vec![vec![palette.blank_cell(); usize::from(cols)]; usize::from(rows)],
+            cursor: None,
+            scrolled: false,
+            display_offset: 0,
+            bracketed_paste: false,
+            mouse_reporting: None,
+            selection: Vec::new(),
+            hyperlinks: Vec::new(),
+            default_bg: palette.background,
+            cursor_color: palette.cursor,
+        }
+    }
+
     /// Flatten the visible grid to plain text (trailing blanks trimmed) — for
     /// logging and tests.
     #[must_use]
