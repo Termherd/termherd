@@ -19,11 +19,12 @@ use portable_pty::{Child, ChildKiller, MasterPty};
 use termherd_claude::osc::{OscSignal, decode_chunk};
 
 use termherd_core::workspace::SessionId;
-use termherd_core::{PointerEvent, ScrollTarget, SelectOp, SessionStatus};
+use termherd_core::{PointerEvent, PointerRoute, ScrollTarget, SelectOp, SessionStatus};
 
 use crate::events::{EventSink, PtyEvent};
 use crate::grid::{Palette, apply_pointer, apply_select, indexed_rgb, snapshot};
-use crate::input::wheel_bytes;
+use crate::input::{mouse_bytes, wheel_bytes};
+use crate::mode::mouse_reporting;
 use crate::prompt::decode_marks;
 use crate::status::{Activity, foreground_leader, foreground_status};
 use crate::workdir::decode_cwd;
@@ -215,6 +216,34 @@ fn news(seen: &mut Option<String>, reported: Option<String>) -> Option<String> {
     Some(reported)
 }
 
+/// What the terminal does with a cell-addressed pointer event, decided on its
+/// *live* mode — a caller's snapshot may lag it. The child's when it reads the
+/// mouse, handed back as the bytes to write; the terminal's own selection
+/// otherwise; and nothing for a motion the child's mode does not cover, since
+/// under any mouse reporting the mouse is the child's.
+fn pointer_input<T: EventListener>(term: &mut Term<T>, pointer: PointerEvent) -> Option<Vec<u8>> {
+    let mode = *term.mode();
+    match pointer.route(mouse_reporting(mode)) {
+        PointerRoute::Forward => Some(mouse_bytes(mode, pointer)),
+        PointerRoute::Select(_) => {
+            apply_pointer(term, pointer);
+            None
+        }
+        PointerRoute::Nothing => None,
+    }
+}
+
+/// Write an encoded mouse report to the child. A failed write is logged, not
+/// surfaced: the pointer has no reply channel, and a child that has gone away
+/// is reported by the reader thread, not by its last missed click.
+fn forward_mouse(session: SessionId, input: &SharedWriter, bytes: &[u8]) {
+    if let Ok(mut w) = input.lock()
+        && let Err(error) = w.write_all(bytes)
+    {
+        tracing::debug!(session = session.0.get(), %error, "mouse forward to PTY failed");
+    }
+}
+
 /// Emit a [`PtyEvent::Status`] when `activity` has moved off `before`. Both
 /// sources — the OSC fold and the foreground poll — report through here, so a
 /// status change is logged and published in exactly one place.
@@ -369,17 +398,7 @@ pub(crate) fn spawn_term(
                         match target {
                             ScrollTarget::Wheel { col, row, lines } => {
                                 match wheel_bytes(*term.mode(), col, row, lines) {
-                                    Some(bytes) => {
-                                        if let Ok(mut w) = input.lock()
-                                            && let Err(error) = w.write_all(&bytes)
-                                        {
-                                            tracing::debug!(
-                                                session = session.0.get(),
-                                                %error,
-                                                "wheel forward to PTY failed"
-                                            );
-                                        }
-                                    }
+                                    Some(bytes) => forward_mouse(session, &input, &bytes),
                                     None => term.scroll_display(Scroll::Delta(lines)),
                                 }
                             }
@@ -388,7 +407,11 @@ pub(crate) fn spawn_term(
                         }
                     }
                     TermCmd::Select(op) => apply_select(&mut term, op),
-                    TermCmd::Pointer(pointer) => apply_pointer(&mut term, pointer),
+                    TermCmd::Pointer(pointer) => {
+                        if let Some(bytes) = pointer_input(&mut term, pointer) {
+                            forward_mouse(session, &input, &bytes);
+                        }
+                    }
                     TermCmd::CopySelection => {
                         // Read the text from the live selection, not a snapshot,
                         // so a fast drag's copy is exact. Commands are FIFO, so
@@ -638,6 +661,75 @@ mod tests {
         assert!(
             reply.contains("rgb:6565/7b7b/8383"),
             "OSC 10 must report the palette foreground, got {reply:?}"
+        );
+    }
+
+    // --- the pointer, routed on the live mode -----------------------------
+
+    use alacritty_terminal::event::VoidListener;
+    use termherd_core::PointerKind;
+
+    fn term_showing(bytes: &[u8]) -> Term<VoidListener> {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, bytes);
+        term
+    }
+
+    /// With the child reading the mouse the press is its, as bytes, and the
+    /// terminal's own selection is left alone — including by a drag the child's
+    /// mode does not cover, which is dropped rather than selected.
+    #[test]
+    fn under_mouse_reporting_a_press_is_forwarded_and_selects_nothing() {
+        let mut term = term_showing(b"hello wide\r\nworld\x1b[?1000h\x1b[?1006h");
+        let press = pointer_input(&mut term, PointerEvent::left(PointerKind::Press, 6, 0));
+        assert_eq!(
+            press,
+            Some(b"\x1b[<0;7;1M".to_vec()),
+            "the press is the child's"
+        );
+        let drag = pointer_input(&mut term, PointerEvent::left(PointerKind::Drag, 4, 1));
+        assert_eq!(drag, None, "click reporting does not cover a drag");
+        assert!(
+            snapshot(&term, &Palette::default()).selection.is_empty(),
+            "neither event touched the terminal's own selection"
+        );
+    }
+
+    /// Reset the mode and the same gestures are the terminal's again.
+    #[test]
+    fn once_reporting_is_reset_the_pointer_selects_locally_again() {
+        let mut term = term_showing(b"hello\x1b[?1002h\x1b[?1002l");
+        let press = pointer_input(&mut term, PointerEvent::left(PointerKind::Press, 0, 0));
+        let drag = pointer_input(&mut term, PointerEvent::left(PointerKind::Drag, 4, 0));
+        assert_eq!((press, drag), (None, None), "nothing goes to the child");
+        assert_eq!(term.selection_to_string().as_deref(), Some("hello"));
+    }
+
+    /// End to end through the terminal thread: the bytes a mouse-mode child
+    /// receives for a click are written to the PTY's input, in the encoding
+    /// it negotiated.
+    #[test]
+    fn a_click_over_a_mouse_mode_child_is_written_to_the_pty() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(captured.clone()))));
+        let sink: EventSink = Arc::new(|_| {});
+        let session = SessionId(std::num::NonZeroU64::new(1).expect("nonzero"));
+        let (ctrl, ctrl_rx) = mpsc::channel();
+        let term = spawn_term(session, ctrl_rx, (80, 24), writer, sink, Palette::default());
+        ctrl.send(TermCmd::Bytes(b"\x1b[?1000h\x1b[?1006h".to_vec()))
+            .expect("terminal thread alive");
+        ctrl.send(TermCmd::Pointer(PointerEvent::left(
+            PointerKind::Click,
+            4,
+            2,
+        )))
+        .expect("terminal thread alive");
+        drop(ctrl);
+        term.join().expect("terminal thread ends");
+        assert_eq!(
+            captured.lock().expect("capture lock").as_slice(),
+            b"\x1b[<0;5;3M\x1b[<0;5;3m"
         );
     }
 }

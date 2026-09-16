@@ -33,12 +33,12 @@ second copy the design feared. The path mirrors the wheel's end to end —
 per-session terminal thread, which holds the live scroll offset — and the
 gesture rule lives once in `core::app::pointer`: *whether* an event drives the
 selection is read off the event (that is what the shell answers), *where* it
-lands is placed by the terminal with its live offset. #155 *extends* that arm
-with the SGR/X10
-press encoder and the mode gate beside `wheel_bytes`, adds `forwarded` as the
-third answer, and routes the canvas's own bare press/drag/release through the
-same path. Until then the tool drives the local selection only, and the book
-says so.
+lands is placed by the terminal with its live offset. #155 then *extended*
+that arm as planned: `PointerEvent::route` reads the child's mouse reporting
+and answers forward / select / nothing, the SGR/X10 encoder grew from
+`wheel_bytes` into `mouse_bytes`, `forwarded` is the third answer, and the
+canvas hands its own bare press / drag / release / move down the same path
+while Shift keeps a local selection possible.
 
 Sibling of [F-mcp-pointer-chrome](#f-mcp-pointer-chrome), which drives
 termherd's own interface rather than a terminal and blocks nothing.

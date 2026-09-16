@@ -182,6 +182,7 @@ mod tests {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            mouse_reporting: None,
             selection: Vec::new(),
             hyperlinks: Vec::new(),
             default_bg: [0x11, 0x13, 0x18],

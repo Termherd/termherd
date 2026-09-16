@@ -1,10 +1,13 @@
-//! Terminal input byte protocol (FR4): keys, wheel and paste encoded to the
-//! bytes a terminal expects. A pure, GUI-free leaf — the GUI translates its own
+//! Terminal input byte protocol (FR4): keys, mouse (wheel and buttons) and
+//! paste encoded to the bytes a terminal expects. A pure, GUI-free leaf — the GUI translates its own
 //! key/mouse events into these neutral types so the codec never depends on any
 //! GUI crate. Depends only on `alacritty_terminal`'s [`TermMode`] to read what
 //! mouse/scroll protocol the focused application negotiated.
 
 use alacritty_terminal::term::TermMode;
+use termherd_core::{PointerButton, PointerEvent, PointerKind};
+
+use crate::mode::mouse_reporting;
 
 /// The bytes a paste sends to the PTY (FR4). Newlines are normalised to the
 /// carriage return the terminal expects for Enter; when the application has
@@ -151,20 +154,12 @@ pub fn wheel_bytes(mode: TermMode, col: u16, row: u16, lines: i32) -> Option<Vec
     let up = lines > 0;
 
     // Mouse reporting: each wheel notch is a button-press event — button 64 up,
-    // 65 down — at the pointer cell. SGR when negotiated (1006), else legacy X10.
-    let mouse = TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_MOTION | TermMode::MOUSE_DRAG;
-    if mode.intersects(mouse) {
+    // 65 down — at the pointer cell, in whichever encoding is negotiated.
+    if mouse_reporting(mode).is_some() {
         let button: u8 = if up { 64 } else { 65 };
-        // Mouse coordinates are 1-based.
-        let (c, r) = (col + 1, row + 1);
         let mut out = Vec::new();
         for _ in 0..count {
-            if mode.contains(TermMode::SGR_MOUSE) {
-                out.extend_from_slice(format!("\x1b[<{button};{c};{r}M").as_bytes());
-            } else {
-                // ESC[M Cb Cx Cy, every value biased by 32 and capped at a byte.
-                out.extend_from_slice(&[0x1b, b'[', b'M', x10(u16::from(button)), x10(c), x10(r)]);
-            }
+            mouse_report(&mut out, mode, button, col, row, false);
         }
         return Some(out);
     }
@@ -188,6 +183,49 @@ pub fn wheel_bytes(mode: TermMode, col: u16, row: u16, lines: i32) -> Option<Vec
 
     // Normal screen, no mouse mode: the caller scrolls its own scrollback.
     None
+}
+
+/// The bytes that report a pointer event to an application reading the mouse:
+/// SGR (1006) when negotiated, else legacy X10; a `Click` is a press followed
+/// by its release. Whether the application's mode covers the event is
+/// `PointerEvent::route`'s question, asked by the caller — this only encodes.
+#[must_use]
+pub fn mouse_bytes(mode: TermMode, pointer: PointerEvent) -> Vec<u8> {
+    // xterm button codes: left 0, middle 1, right 2; motion adds 32, and a
+    // motion with no button held reports as button 3.
+    let button: u8 = match pointer.button {
+        PointerButton::Left => 0,
+        PointerButton::Middle => 1,
+        PointerButton::Right => 2,
+    };
+    let (col, row) = (pointer.col, pointer.row);
+    let mut out = Vec::new();
+    match pointer.kind {
+        PointerKind::Press => mouse_report(&mut out, mode, button, col, row, false),
+        PointerKind::Release => mouse_report(&mut out, mode, button, col, row, true),
+        PointerKind::Click => {
+            mouse_report(&mut out, mode, button, col, row, false);
+            mouse_report(&mut out, mode, button, col, row, true);
+        }
+        PointerKind::Drag => mouse_report(&mut out, mode, 32 + button, col, row, false),
+        PointerKind::Move => mouse_report(&mut out, mode, 32 + 3, col, row, false),
+    }
+    out
+}
+
+/// One mouse report appended to `out`: SGR `ESC[<Cb;Cx;CyM` (`m` for a
+/// release, which keeps the button) when negotiated, else the legacy
+/// `ESC[M Cb Cx Cy` with every value biased by 32 and a release as button 3.
+/// `col`/`row` are 0-based; the wire is 1-based.
+fn mouse_report(out: &mut Vec<u8>, mode: TermMode, button: u8, col: u16, row: u16, release: bool) {
+    let (c, r) = (col + 1, row + 1);
+    if mode.contains(TermMode::SGR_MOUSE) {
+        let final_byte = if release { 'm' } else { 'M' };
+        out.extend_from_slice(format!("\x1b[<{button};{c};{r}{final_byte}").as_bytes());
+    } else {
+        let cb = if release { 3 } else { button };
+        out.extend_from_slice(&[0x1b, b'[', b'M', x10(u16::from(cb)), x10(c), x10(r)]);
+    }
 }
 
 /// The legacy X10 mouse-coordinate byte: value biased by 32, saturating at the
@@ -460,5 +498,102 @@ mod tests {
         // A TUI with both negotiated gets real wheel events, not arrows.
         let mode = MOUSE | TermMode::SGR_MOUSE | TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
         assert_eq!(wheel_bytes(mode, 0, 0, 1), Some(b"\x1b[<64;1;1M".to_vec()));
+    }
+
+    // --- button / motion reports -----------------------------------------
+
+    const SGR: TermMode = TermMode::SGR_MOUSE;
+
+    fn with(kind: PointerKind, button: PointerButton, col: u16, row: u16) -> PointerEvent {
+        PointerEvent {
+            button,
+            ..PointerEvent::left(kind, col, row)
+        }
+    }
+
+    #[test]
+    fn sgr_press_and_release_carry_the_button_and_the_one_based_cell() {
+        assert_eq!(
+            mouse_bytes(SGR, PointerEvent::left(PointerKind::Press, 4, 2)),
+            b"\x1b[<0;5;3M"
+        );
+        assert_eq!(
+            mouse_bytes(SGR, PointerEvent::left(PointerKind::Release, 4, 2)),
+            b"\x1b[<0;5;3m"
+        );
+    }
+
+    #[test]
+    fn sgr_buttons_are_numbered_left_middle_right() {
+        assert_eq!(
+            mouse_bytes(SGR, with(PointerKind::Press, PointerButton::Middle, 0, 0)),
+            b"\x1b[<1;1;1M"
+        );
+        assert_eq!(
+            mouse_bytes(SGR, with(PointerKind::Press, PointerButton::Right, 0, 0)),
+            b"\x1b[<2;1;1M"
+        );
+        assert_eq!(
+            mouse_bytes(SGR, with(PointerKind::Release, PointerButton::Right, 0, 0)),
+            b"\x1b[<2;1;1m",
+            "SGR keeps the button on release"
+        );
+    }
+
+    #[test]
+    fn a_click_is_a_press_followed_by_its_release() {
+        assert_eq!(
+            mouse_bytes(SGR, PointerEvent::left(PointerKind::Click, 4, 2)),
+            b"\x1b[<0;5;3M\x1b[<0;5;3m"
+        );
+    }
+
+    #[test]
+    fn sgr_drag_adds_the_motion_flag_to_the_button() {
+        assert_eq!(
+            mouse_bytes(SGR, PointerEvent::left(PointerKind::Drag, 4, 2)),
+            b"\x1b[<32;5;3M"
+        );
+        assert_eq!(
+            mouse_bytes(SGR, with(PointerKind::Drag, PointerButton::Right, 4, 2)),
+            b"\x1b[<34;5;3M"
+        );
+    }
+
+    #[test]
+    fn sgr_move_with_no_button_is_motion_over_button_three() {
+        assert_eq!(
+            mouse_bytes(SGR, PointerEvent::left(PointerKind::Move, 4, 2)),
+            b"\x1b[<35;5;3M"
+        );
+    }
+
+    #[test]
+    fn legacy_x10_biases_every_byte_and_releases_as_button_three() {
+        let x10 = TermMode::empty();
+        assert_eq!(
+            mouse_bytes(x10, PointerEvent::left(PointerKind::Press, 4, 2)),
+            vec![0x1b, b'[', b'M', 32, 37, 35]
+        );
+        assert_eq!(
+            mouse_bytes(x10, with(PointerKind::Release, PointerButton::Right, 4, 2)),
+            vec![0x1b, b'[', b'M', 35, 37, 35],
+            "X10 has no per-button release"
+        );
+        assert_eq!(
+            mouse_bytes(x10, PointerEvent::left(PointerKind::Drag, 4, 2)),
+            vec![0x1b, b'[', b'M', 64, 37, 35]
+        );
+    }
+
+    #[test]
+    fn legacy_x10_saturates_a_cell_the_protocol_cannot_address() {
+        // Column 300 has no byte in X10; it pins at 255 rather than wrapping
+        // onto a cell in the first row.
+        let bytes = mouse_bytes(
+            TermMode::empty(),
+            PointerEvent::left(PointerKind::Press, 300, 0),
+        );
+        assert_eq!(bytes[4], 255);
     }
 }

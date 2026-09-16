@@ -302,15 +302,19 @@ pub enum ActionDetail {
 }
 
 /// What a session's terminal did with a pointer event, for a caller that
-/// cannot see the pane. The two call for opposite responses: after `Selection`
-/// the text is there for `copy` to read; after `Ignored` the gesture drove
-/// nothing and retrying it changes nothing.
+/// cannot see the pane. The three call for different next steps: after
+/// `Forwarded` the child has the event and `wait_for_status` / `read_terminal`
+/// show its response; after `Selection` the text is there for `copy` to read;
+/// after `Ignored` the gesture drove nothing and retrying it changes nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerOutcome {
+    /// The child reads the mouse and was sent the event.
+    Forwarded,
     /// The event drove the terminal's own text selection.
     Selection,
-    /// The event maps to no local gesture — a release, a move, a button other
-    /// than the left one.
+    /// The event maps to nothing — a release, a move or a non-left button
+    /// with no child reading the mouse, or a motion the child's mode does not
+    /// cover.
     Ignored,
 }
 

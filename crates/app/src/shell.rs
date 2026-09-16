@@ -24,7 +24,8 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    ConfigInput, Keymap, Launch, Overlay, ScrollTarget, SelectOp, SessionRecord, SessionStatus,
+    ConfigInput, Keymap, Launch, Overlay, PointerEvent, ScrollTarget, SelectOp, SessionRecord,
+    SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
@@ -432,6 +433,13 @@ enum Message {
         col: u16,
         row: u16,
         lines: i32,
+    },
+    /// A bare pointer event over a terminal whose child reads the mouse: the
+    /// session under the pointer and the cell, for the terminal thread to
+    /// forward as mouse input (FR4). Selection gestures take [`Self::Select`].
+    TermPointer {
+        session: SessionId,
+        pointer: PointerEvent,
     },
     /// Change a terminal's grid-anchored selection — press, drag, or clear — so
     /// the highlight follows the text through scroll (FR4).
@@ -958,6 +966,12 @@ impl Shell {
                 row,
                 lines,
             } => self.scroll_session(session, ScrollTarget::Wheel { col, row, lines }),
+            Message::TermPointer { session, pointer } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::TerminalPointer { session, pointer });
+                self.perform(effects)
+            }
             Message::Select { session, op } => {
                 let effects = self
                     .core
@@ -1886,6 +1900,39 @@ mod key_routing {
         assert_eq!(outcome.error, None);
         assert_eq!(outcome.pointer(), Some(PointerOutcome::Ignored));
         assert_eq!(pty.pointers().len(), 1);
+    }
+
+    /// The screen's `mouse_reporting` is what the shell reads to answer: under
+    /// it a press is the child's, a motion its mode does not cover is nothing,
+    /// and neither drives the local selection.
+    #[test]
+    fn pointer_action_reports_forwarded_when_the_child_reads_the_mouse() {
+        use super::bridge::PointerOutcome;
+        use termherd_core::MouseReporting;
+        let (mut shell, pty, handle) = shell_showing("$ vim");
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell
+            .screens
+            .get_mut(&session)
+            .expect("the fixture rendered a screen")
+            .mouse_reporting = Some(MouseReporting::Click);
+        for (kind, expected) in [
+            (PointerKind::Press, PointerOutcome::Forwarded),
+            (PointerKind::Release, PointerOutcome::Forwarded),
+            (PointerKind::Drag, PointerOutcome::Ignored),
+        ] {
+            let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+                session: handle,
+                pointer: PointerEvent::left(kind, 2, 0),
+            });
+            assert_eq!(outcome.error, None, "{kind:?}");
+            assert_eq!(outcome.pointer(), Some(expected), "{kind:?}");
+        }
+        assert_eq!(
+            pty.pointers().len(),
+            3,
+            "every event still reaches the terminal, which decides on its live mode"
+        );
     }
 
     #[test]
@@ -3283,6 +3330,7 @@ mod key_routing {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            mouse_reporting: None,
             selection: Vec::new(),
             hyperlinks: Vec::new(),
             default_bg: [0x11, 0x13, 0x18],

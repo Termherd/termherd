@@ -245,23 +245,44 @@ one mouse event at a `(col, row)` of a session's visible screen — the pointer
 half of what `run_in_session` does for text. The path mirrors the wheel's end
 to end: `Event::TerminalPointer` → `Effect::TerminalPointer` →
 `PtyHost::pointer` → the per-session terminal thread, which holds the live
-scroll offset and applies the gesture to its own selection. The rule is split
-in two in `core::app::pointer`: `PointerEvent::local_gesture` says *whether*
-an event drives the selection (left press → start, left drag → extend
-*through* the cell, left click → clear, anything else → nothing) from the
-button and kind alone, so the shell answers `selection` / `ignored` off the
-event itself; `pointer_select` says *where*, and only the terminal, which
-holds the live offset, is handed that half. Bounds are checked in the shell
-against the session's last `Screen`, and a cell outside them rejects the whole
-call, as a malformed chord does.
+scroll offset and the live mode. Bounds are checked in the shell against the
+session's last `Screen`, and a cell outside them rejects the whole call, as a
+malformed chord does.
 
-What it does **not** do is reach the child: a program with mouse reporting on
-still gets nothing, because the SGR/X10 press encoder and the mode gate belong
-to #155 — the rung exists so that fix can be *verified* by the agent that
-writes it, which is why it lands first. #155 adds `forwarded` beside the two
-outcomes and routes the canvas's own bare press/drag/release through the same
-path; the iced canvas keeps its content-dependent gestures (double-click word,
-shift-extend, link click) where they are.
+**And the child gets it when it asked for it** (#155). Until then only wheel
+notches were ever encoded to the PTY; a press over vim or Claude Code's
+`/resume` was consumed as a local selection and the child never heard of it.
+The rule is **one predicate, three readers**, all in `core::app::pointer`.
+`MouseReporting` is the DECSET 1000 / 1002 / 1003 ladder the child negotiated;
+`PointerEvent::route(Option<MouseReporting>)` answers `Forward` / `Select` /
+`Nothing`, and under *any* reporting it never answers `Select` — the mouse is
+the child's, so what its mode covers is forwarded and a motion it did not ask
+for is dropped rather than drawn as a selection (a proptest pins that). The
+three readers: the terminal thread routes on its **live** mode
+(`pty::session::pointer_input`) and is the only one whose answer has effect;
+the MCP shell routes on the last `Screen.mouse_reporting` to answer
+`forwarded` / `selection` / `ignored`, the same lag class as its bounds
+check; the canvas routes on the same field to hand the bare press / drag /
+release / move to the child through `Message::TermPointer`, and keeps the
+event for the terminal when a modifier is held — Shift is the xterm override
+that lets a human select text out of a mouse-mode TUI, and the link modifier
+opens links. The content-dependent gestures (double-click word, shift-extend,
+link click) never left the canvas. *Where* a local gesture lands is still
+`pointer_select` with the live offset; *whether* it is local at all is now
+`route`'s, and `local_gesture` is the leg it stands on when nothing reads the
+mouse.
+
+Two structural points. The mode bits are read in **one** place, `pty::mode`
+— a new leaf, because `input` (the encoder's gate) and `grid` (the `Screen`
+snapshot) both need the reading and the module-boundary script forbids either
+importing the other; that is the general move when two leaves need one fact.
+And `wheel_bytes`' SGR/X10 body became the shared `mouse_report`, which
+`mouse_bytes` extends to press, release, drag and motion — the encoder only
+encodes; whether the mode covers the event is `route`'s question, asked by the
+caller, so the gate is not restated inside it. What the report does **not**
+carry is modifiers: the event lost its `modifiers` field in #311 as dead
+weight, and it comes back as one type shared with `KeyMods` when a caller
+needs it, not before.
 
 **Still open.** Three features and two defects: `F-mcp-agent-loop` (#196 —
 below), `F-mcp-attach` (#267 — the bridge is reachable only from a session
@@ -272,13 +293,12 @@ unsaved edits when it closes (#248). None of the five blocks another.
 
 `F-mcp-agent-loop` (#196 — the composed prompt→wait→read in one
 round trip) is a child of the #90 epic — no longer the last one, since three
-siblings joined it. With `screenshot`, the keyboard tools and now the terminal
-pointer, the capability reads as whole in three parts: drive the UI, see the
-pixels, read the terminal. The gap left is that the pointer stops at the
-terminal's own selection until #155 forwards it, so a mouse-mode TUI is still
-driven by the keyboard alone. #196 *composes* the wait, which #236 had to fix
-first — building it on a synchronisation that never fired would have been
-building on sand, and that ordering constraint is now discharged.
+siblings joined it. With `screenshot`, the keyboard tools and the terminal
+pointer reaching the child, the capability reads as whole in three parts:
+drive the UI, see the pixels, read the terminal. #196 *composes* the wait,
+which #236 had to fix first — building it on a synchronisation that never
+fired would have been building on sand, and that ordering constraint is now
+discharged.
 
 **Every overlay can now be left from the keyboard** (#237). An open sidebar
 session-rename used to swallow every key including `escape`, parking the whole

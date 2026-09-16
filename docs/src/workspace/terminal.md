@@ -38,6 +38,23 @@ so nothing reaches the clipboard unless you asked for it:
   type next go where you just pasted. A confirmation prompt refuses it, exactly
   as it refuses the paste chord — the pointer is not a way past a prompt.
 
+### When the program reads the mouse
+
+A full-screen program that turns mouse reporting on — Claude Code's `/diff`
+and `/resume`, vim, lazygit, fzf, less, tmux with `mouse on` — owns the mouse
+while it runs. Clicks, drags and (when it asked for them) bare moves go to the
+program, so clicking an entry in `/resume` selects it and clicking in vim
+places the cursor; the terminal draws no selection of its own over it, and a
+right-click reaches the program instead of pasting. The wheel already worked
+this way.
+
+Hold <kbd>Shift</kbd> to take the mouse back: <kbd>Shift</kbd>+drag selects
+text from a mouse-mode program exactly as a plain drag does at a shell, and the
+copy gestures above apply to it. The link modifier does the same for a
+<kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+click on a path or URL, which opens it rather
+than reaching the program. Neither modifier is reported to the program, so it
+never sees the click it lost.
+
 See [`settings.json`](../reference/settings.md).
 
 ## Scrollback
