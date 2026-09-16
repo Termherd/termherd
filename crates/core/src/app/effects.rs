@@ -34,8 +34,7 @@ pub enum Effect {
     },
     /// Apply a selection change to a session's terminal grid.
     Select { session: SessionId, op: SelectOp },
-    /// Hand a cell-addressed pointer event to a session's terminal, which
-    /// decides between its local selection and the child.
+    /// Hand a cell-addressed pointer event to a session's terminal.
     TerminalPointer {
         session: SessionId,
         pointer: PointerEvent,

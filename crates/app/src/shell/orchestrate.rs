@@ -13,10 +13,11 @@ use std::num::NonZeroU64;
 
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
-use termherd_core::{Event, Launch, PointerEvent, pointer_select};
+use termherd_core::{Event, Launch, PointerEvent};
 
 use super::bridge::{
-    Action, ActionOutcome, PointerOutcome, Press, PressOutcome, PressStep, RepoOutcome, SessionKind,
+    Action, ActionDetail, ActionOutcome, PointerOutcome, Press, PressOutcome, PressStep,
+    RepoOutcome, SessionKind,
 };
 use super::input::event_of;
 use super::repos::RepoGesture;
@@ -55,7 +56,11 @@ impl Shell {
         };
         let key = key.display().to_string();
         let task = self.declare_repo_key(&key, RepoGesture::Mcp);
-        (self.applied().with_repo(self.repo_outcome(&key)), task)
+        (
+            self.applied()
+                .with_detail(ActionDetail::Repo(self.repo_outcome(&key))),
+            task,
+        )
     }
 
     /// Drop a repo's declaration. Unlike declaring, an unknown path is not an
@@ -72,7 +77,11 @@ impl Shell {
             |p| p.display().to_string(),
         );
         let task = self.forget_repo_key(&key, RepoGesture::Mcp);
-        (self.applied().with_repo(self.repo_outcome(&key)), task)
+        (
+            self.applied()
+                .with_detail(ActionDetail::Repo(self.repo_outcome(&key))),
+            task,
+        )
     }
 
     /// The sidebar row for `key` as it stands now — **membership**, not what
@@ -178,12 +187,6 @@ impl Shell {
     /// session's last rendered geometry — a cell outside it, or a session that
     /// has not drawn yet, is rejected before anything applies, so a caller
     /// never learns of a bad coordinate from a selection landing elsewhere.
-    ///
-    /// The outcome is read off the same predicate the terminal applies
-    /// (`pointer_select`), so what the caller is told cannot drift from what
-    /// the grid did. The snapshot's offset serves here only to ask *whether*
-    /// the event drives a selection, never *where*: that is the terminal's,
-    /// with its live offset.
     fn act_pointer(
         &mut self,
         session: u64,
@@ -210,7 +213,9 @@ impl Shell {
                 Task::none(),
             );
         }
-        let outcome = match pointer_select(&pointer, screen.display_offset) {
+        // Read off the event itself, which is all the local gesture depends on;
+        // the terminal places it with its own live offset.
+        let outcome = match pointer.local_gesture() {
             Some(_) => PointerOutcome::Selection,
             None => PointerOutcome::Ignored,
         };
@@ -218,7 +223,10 @@ impl Shell {
             session: id,
             pointer,
         });
-        (self.applied().with_pointer(outcome), self.perform(effects))
+        (
+            self.applied().with_detail(ActionDetail::Pointer(outcome)),
+            self.perform(effects),
+        )
     }
 
     /// The shared prelude of the focus-relative actions (split, close): reveal

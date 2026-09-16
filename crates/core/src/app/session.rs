@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn a_pointer_reaches_a_live_terminal_and_is_absorbed_for_a_dead_one() {
-        use crate::app::{PointerButton, PointerEvent, PointerKind, PointerModifiers};
+        use crate::app::{PointerEvent, PointerKind};
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
@@ -467,13 +467,7 @@ mod tests {
             title: "proj".into(),
         }));
         let id = app.workspace.focused_session().expect("a focused session");
-        let pointer = PointerEvent {
-            kind: PointerKind::Press,
-            col: 3,
-            row: 1,
-            button: PointerButton::Left,
-            modifiers: PointerModifiers::default(),
-        };
+        let pointer = PointerEvent::left(PointerKind::Press, 3, 1);
         match app
             .apply(Event::TerminalPointer {
                 session: id,

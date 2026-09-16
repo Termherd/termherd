@@ -245,13 +245,15 @@ one mouse event at a `(col, row)` of a session's visible screen — the pointer
 half of what `run_in_session` does for text. The path mirrors the wheel's end
 to end: `Event::TerminalPointer` → `Effect::TerminalPointer` →
 `PtyHost::pointer` → the per-session terminal thread, which holds the live
-scroll offset and applies the gesture to its own selection. One pure predicate,
-`core::pointer_select`, says what a pointer does locally (left press → start,
-left drag → extend *through* the cell, left click → clear, anything else →
-nothing); the terminal applies it and the shell reads the same function to
-answer `selection` / `ignored`, so the answer cannot drift from the grid. Bounds
-are checked in the shell against the session's last `Screen`, and a cell
-outside them rejects the whole call, as a malformed chord does.
+scroll offset and applies the gesture to its own selection. The rule is split
+in two in `core::app::pointer`: `PointerEvent::local_gesture` says *whether*
+an event drives the selection (left press → start, left drag → extend
+*through* the cell, left click → clear, anything else → nothing) from the
+button and kind alone, so the shell answers `selection` / `ignored` off the
+event itself; `pointer_select` says *where*, and only the terminal, which
+holds the live offset, is handed that half. Bounds are checked in the shell
+against the session's last `Screen`, and a cell outside them rejects the whole
+call, as a malformed chord does.
 
 What it does **not** do is reach the child: a program with mouse reporting on
 still gets nothing, because the SGR/X10 press encoder and the mode gate belong

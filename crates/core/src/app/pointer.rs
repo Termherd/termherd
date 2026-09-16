@@ -3,9 +3,14 @@
 //!
 //! Cell-addressed because a terminal is a grid and a grid is what a mouse
 //! report carries — so the same event serves a caller that has no pixels (an
-//! agent over MCP) and, later, the encoder that forwards it to the child. The
-//! grid-line conversion (`row − display_offset`) is done by whoever holds the
-//! *live* offset, which is why [`pointer_select`] takes it as an argument.
+//! agent over MCP) and, later, the encoder that forwards it to the child.
+//!
+//! The rule is split in two on purpose. *Whether* an event drives the local
+//! selection ([`PointerEvent::local_gesture`]) depends on the button and the
+//! kind alone, so the shell can answer a caller from the event itself. *Where*
+//! it lands ([`pointer_select`]) needs the scroll offset, which only the
+//! terminal thread holds live — a snapshot's may lag — so only it is handed
+//! that half.
 
 use super::{SelectOp, SelectSide};
 
@@ -25,20 +30,11 @@ pub enum PointerKind {
 }
 
 /// Which button the gesture is about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerButton {
-    #[default]
     Left,
     Middle,
     Right,
-}
-
-/// Modifier keys held during the gesture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct PointerModifiers {
-    pub shift: bool,
-    pub alt: bool,
-    pub ctrl: bool,
 }
 
 /// One pointer event at a visible cell of a session's terminal. `col`/`row`
@@ -49,40 +45,81 @@ pub struct PointerEvent {
     pub col: u16,
     pub row: u16,
     pub button: PointerButton,
-    pub modifiers: PointerModifiers,
 }
 
-/// The selection change a pointer event drives when the child is **not**
-/// reading the mouse, or `None` when it drives nothing locally. The one place
-/// that rule lives: the terminal applies it and the shell reports it, so the
-/// answer a caller gets cannot drift from what the grid did.
+/// What a pointer event does to the terminal's own selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalGesture {
+    /// Begin a selection at the cell.
+    Start,
+    /// Extend the selection through the cell.
+    Extend,
+    /// Drop the selection.
+    Clear,
+}
+
+impl PointerEvent {
+    /// A left-button event at a cell — the common case, and the default a
+    /// caller gets when it names no button.
+    #[must_use]
+    pub fn left(kind: PointerKind, col: u16, row: u16) -> Self {
+        Self {
+            kind,
+            col,
+            row,
+            button: PointerButton::Left,
+        }
+    }
+
+    /// The gesture this event drives on the terminal's own selection, or
+    /// `None` when it drives nothing there: the selection stands on a release
+    /// (copying it is the caller's `copy`), a hover is nothing to a terminal
+    /// not reading the mouse, and only the left button selects.
+    #[must_use]
+    pub fn local_gesture(&self) -> Option<LocalGesture> {
+        if self.button != PointerButton::Left {
+            return None;
+        }
+        match self.kind {
+            PointerKind::Press => Some(LocalGesture::Start),
+            PointerKind::Drag => Some(LocalGesture::Extend),
+            PointerKind::Click => Some(LocalGesture::Clear),
+            PointerKind::Release | PointerKind::Move => None,
+        }
+    }
+}
+
+/// The grid line a visible row names, given how far the viewport is scrolled
+/// up into history — the coordinate the emulator anchors a selection to, so
+/// the highlight follows the text through scroll.
+#[must_use]
+pub fn grid_line(row: u16, display_offset: usize) -> i32 {
+    i32::from(row) - display_offset as i32
+}
+
+/// The selection change a pointer event drives, placed on the grid with the
+/// given scroll offset, or `None` when it drives nothing locally.
 #[must_use]
 pub fn pointer_select(pointer: &PointerEvent, display_offset: usize) -> Option<SelectOp> {
-    if pointer.button != PointerButton::Left {
-        return None;
-    }
-    // The offset can exceed `i32` only past two billion lines of scrollback,
-    // where saturating is the honest answer.
-    let line = i32::from(pointer.row) - i32::try_from(display_offset).unwrap_or(i32::MAX);
+    let line = grid_line(pointer.row, display_offset);
     let col = usize::from(pointer.col);
     // A cell has no halves for a caller addressing it by index, so the sides
     // are chosen to make a forward drag **inclusive** of both cells: the
     // terminal reads a `Left` endpoint as "before this cell" and a `Right`
     // one as "after it".
-    match pointer.kind {
-        PointerKind::Press => Some(SelectOp::Start {
+    pointer.local_gesture().map(|gesture| match gesture {
+        LocalGesture::Start => SelectOp::Start {
             line,
             col,
             side: SelectSide::Left,
-        }),
-        PointerKind::Drag => Some(SelectOp::Update {
+        },
+        LocalGesture::Extend => SelectOp::Update {
             line,
             col,
             side: SelectSide::Right,
-        }),
-        PointerKind::Click => Some(SelectOp::Clear),
-        PointerKind::Release | PointerKind::Move => None,
-    }
+        },
+        LocalGesture::Clear => SelectOp::Clear,
+    })
 }
 
 #[cfg(test)]
@@ -92,18 +129,15 @@ mod tests {
 
     fn at(kind: PointerKind, button: PointerButton, col: u16, row: u16) -> PointerEvent {
         PointerEvent {
-            kind,
-            col,
-            row,
             button,
-            modifiers: PointerModifiers::default(),
+            ..PointerEvent::left(kind, col, row)
         }
     }
 
     #[test]
     fn a_left_press_starts_a_selection_at_the_cell() {
         assert_eq!(
-            pointer_select(&at(PointerKind::Press, PointerButton::Left, 4, 2), 0),
+            pointer_select(&PointerEvent::left(PointerKind::Press, 4, 2), 0),
             Some(SelectOp::Start {
                 line: 2,
                 col: 4,
@@ -117,7 +151,7 @@ mod tests {
         // `Right`, so the cell dragged to is part of the selection — a caller
         // naming a cell means that cell, not the gap before it.
         assert_eq!(
-            pointer_select(&at(PointerKind::Drag, PointerButton::Left, 9, 3), 0),
+            pointer_select(&PointerEvent::left(PointerKind::Drag, 9, 3), 0),
             Some(SelectOp::Update {
                 line: 3,
                 col: 9,
@@ -129,18 +163,16 @@ mod tests {
     #[test]
     fn a_bare_left_click_clears_the_selection() {
         assert_eq!(
-            pointer_select(&at(PointerKind::Click, PointerButton::Left, 1, 1), 0),
+            pointer_select(&PointerEvent::left(PointerKind::Click, 1, 1), 0),
             Some(SelectOp::Clear)
         );
     }
 
     #[test]
     fn a_release_and_a_move_drive_nothing() {
-        // The selection stands on release — copying it is the caller's `copy`
-        // — and a hover is nothing to a terminal not reading the mouse.
         for kind in [PointerKind::Release, PointerKind::Move] {
             assert_eq!(
-                pointer_select(&at(kind, PointerButton::Left, 1, 1), 0),
+                PointerEvent::left(kind, 1, 1).local_gesture(),
                 None,
                 "{kind:?}"
             );
@@ -158,7 +190,7 @@ mod tests {
                 PointerKind::Move,
             ] {
                 assert_eq!(
-                    pointer_select(&at(kind, button, 2, 2), 0),
+                    at(kind, button, 2, 2).local_gesture(),
                     None,
                     "{button:?} {kind:?}"
                 );
@@ -167,9 +199,8 @@ mod tests {
     }
 
     proptest! {
-        /// The grid line is the visible row minus the scroll offset — the same
-        /// mapping the canvas applies — and the column passes through, for any
-        /// offset a scrollback can reach.
+        /// The grid line is the visible row minus the scroll offset and the
+        /// column passes through, for any offset a scrollback can reach.
         #[test]
         fn the_grid_line_is_the_row_minus_the_scroll_offset(
             col in 0u16..500,
@@ -179,7 +210,7 @@ mod tests {
         ) {
             let kind = if starts { PointerKind::Press } else { PointerKind::Drag };
             let expected_line = i32::from(row) - i32::try_from(offset).expect("fits");
-            match pointer_select(&at(kind, PointerButton::Left, col, row), offset) {
+            match pointer_select(&PointerEvent::left(kind, col, row), offset) {
                 Some(SelectOp::Start { line, col: c, .. })
                 | Some(SelectOp::Update { line, col: c, .. }) => {
                     prop_assert_eq!(line, expected_line);

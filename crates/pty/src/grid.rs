@@ -357,11 +357,8 @@ fn resolve(color: Color, palette: &Palette) -> [u8; 3] {
     }
 }
 
-/// Apply a cell-addressed pointer event to the terminal. The child is not
-/// reading the mouse yet (the forwarding gate is the button encoder's), so the
-/// event drives the terminal's own selection, through the one rule `core`
-/// holds for that — converted to a grid line with the *live* scroll offset,
-/// which a caller's snapshot may lag.
+/// Apply a cell-addressed pointer event to the terminal's own selection,
+/// placed with the *live* scroll offset — a caller's snapshot may lag it.
 pub(crate) fn apply_pointer<T: EventListener>(term: &mut Term<T>, pointer: PointerEvent) {
     if let Some(op) = pointer_select(&pointer, term.grid().display_offset()) {
         apply_select(term, op);
@@ -866,16 +863,6 @@ mod tests {
 
     // --- cell-addressed pointer over a real grid --------------------------
 
-    fn pointer(kind: termherd_core::PointerKind, col: u16, row: u16) -> PointerEvent {
-        PointerEvent {
-            kind,
-            col,
-            row,
-            button: termherd_core::PointerButton::Left,
-            modifiers: termherd_core::PointerModifiers::default(),
-        }
-    }
-
     /// A press then a drag over the text leaves the terminal's own selection
     /// holding exactly the dragged text — the observable this rung has before
     /// the child can be handed the mouse.
@@ -886,8 +873,8 @@ mod tests {
         let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, b"hello wide\r\nworld");
-        apply_pointer(&mut term, pointer(PointerKind::Press, 6, 0));
-        apply_pointer(&mut term, pointer(PointerKind::Drag, 4, 1));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Press, 6, 0));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Drag, 4, 1));
         assert_eq!(
             snapshot(&term, &Palette::default()).selection,
             vec![(0, 6, 9), (1, 0, 4)],
@@ -909,10 +896,10 @@ mod tests {
         let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
         let mut parser: Processor = Processor::new();
         parser.advance(&mut term, b"hello");
-        apply_pointer(&mut term, pointer(PointerKind::Press, 0, 0));
-        apply_pointer(&mut term, pointer(PointerKind::Drag, 4, 0));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Press, 0, 0));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Drag, 4, 0));
         assert!(!snapshot(&term, &Palette::default()).selection.is_empty());
-        apply_pointer(&mut term, pointer(PointerKind::Click, 2, 0));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Click, 2, 0));
         assert!(
             snapshot(&term, &Palette::default()).selection.is_empty(),
             "the click cleared it"
@@ -933,8 +920,8 @@ mod tests {
         parser.advance(&mut term, b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5");
         // Scrolled up two lines, the visible rows show l1 / l2 / l3.
         term.scroll_display(Scroll::Delta(2));
-        apply_pointer(&mut term, pointer(PointerKind::Press, 0, 1));
-        apply_pointer(&mut term, pointer(PointerKind::Drag, 1, 1));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Press, 0, 1));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Drag, 1, 1));
         assert_eq!(
             term.selection_to_string().as_deref(),
             Some("l2"),

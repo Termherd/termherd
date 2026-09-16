@@ -75,9 +75,9 @@ pub trait PtyHost: Send + Sync {
     /// grid so the highlight follows the text through scroll.
     fn select(&self, session: SessionId, op: SelectOp) -> Result<(), PtyError>;
     /// Hand a cell-addressed pointer event to a session's terminal. The terminal
-    /// decides what it means — a local selection change, or (once the child
-    /// reads the mouse) a report forwarded to it — since only it holds the live
-    /// mode and scroll offset.
+    /// places it, not the caller: only it holds the live scroll offset — and,
+    /// once the child can be handed the mouse, the live mode that decides
+    /// between its own selection and a forwarded report.
     fn pointer(&self, session: SessionId, pointer: PointerEvent) -> Result<(), PtyError>;
     /// Ask a session's terminal to copy its current selection; the text is
     /// delivered out-of-band via the event sink, read from the live selection.

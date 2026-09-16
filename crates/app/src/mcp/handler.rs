@@ -24,13 +24,13 @@ use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
 use termherd_core::{
-    Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, PointerModifiers,
-    Section, SessionStatus, SnapshotFilter, TerminalScope,
+    Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, Section,
+    SessionStatus, SnapshotFilter, TerminalScope,
 };
 
 use crate::shell::bridge::{
-    Action, BridgeHandle, CallError, PointerOutcome, Press, PressStep, Reply, Request, SessionInfo,
-    SessionKind,
+    Action, ActionDetail, BridgeHandle, CallError, PointerOutcome, Press, PressStep, Reply,
+    Request, SessionInfo, SessionKind,
 };
 use crate::snapshot_dto::{SnapshotDto, status_str};
 
@@ -319,8 +319,7 @@ impl TermherdMcp {
                        \"release\", \"click\", \"drag\", \"move\"), `col` and \
                        `row` (0-based cells of the visible screen; out of the \
                        pane's geometry rejects the call), `button` (\"left\" \
-                       default, \"middle\", \"right\"), `modifiers` (any of \
-                       \"shift\", \"alt\", \"ctrl\"). Returns `focused_handle` \
+                       default, \"middle\", \"right\"). Returns `focused_handle` \
                        and `pointer`: \"selection\" when the event drove the \
                        terminal's own text selection (read it back with the \
                        `copy` action), \"ignored\" when it drove nothing. A \
@@ -644,20 +643,22 @@ impl TermherdMcp {
             return Err(ErrorData::invalid_params(reason, None));
         }
         let mut value = serde_json::json!({ "focused_handle": outcome.focused });
-        // The repo actions answer about a sidebar row, not about focus; the
-        // fields ride alongside rather than in a second reply kind.
-        if let Some(repo) = outcome.repo
+        // An action's detail rides alongside focus rather than in a second
+        // reply kind.
+        if let Some(detail) = outcome.detail
             && let Some(object) = value.as_object_mut()
         {
-            object.insert("repo_path".into(), repo.path.into());
-            object.insert("declared".into(), repo.declared.into());
-            object.insert("session_count".into(), repo.session_count.into());
-            object.insert("in_sidebar".into(), repo.visible.into());
-        }
-        if let Some(pointer) = outcome.pointer
-            && let Some(object) = value.as_object_mut()
-        {
-            object.insert("pointer".into(), pointer_str(pointer).into());
+            match detail {
+                ActionDetail::Repo(repo) => {
+                    object.insert("repo_path".into(), repo.path.into());
+                    object.insert("declared".into(), repo.declared.into());
+                    object.insert("session_count".into(), repo.session_count.into());
+                    object.insert("in_sidebar".into(), repo.visible.into());
+                }
+                ActionDetail::Pointer(pointer) => {
+                    object.insert("pointer".into(), pointer_str(pointer).into());
+                }
+            }
         }
         structured(value)
     }
@@ -867,9 +868,6 @@ struct MouseArgs {
     /// `left` (default), `middle` or `right`.
     #[serde(default)]
     button: Option<String>,
-    /// Any of `shift`, `alt`, `ctrl`.
-    #[serde(default)]
-    modifiers: Option<Vec<String>>,
 }
 
 /// The pointer event a `mouse_in_session` call describes, or the first word it
@@ -880,26 +878,11 @@ fn parse_pointer(args: &MouseArgs) -> Result<PointerEvent, ErrorData> {
         ErrorData::invalid_params(format!("unknown pointer {what} {word:?}"), None)
     };
     let kind = pointer_kind_from_str(&args.kind).ok_or_else(|| unknown("kind", &args.kind))?;
-    let button = match args.button.as_deref() {
-        None => PointerButton::Left,
-        Some(word) => pointer_button_from_str(word).ok_or_else(|| unknown("button", word))?,
-    };
-    let mut modifiers = PointerModifiers::default();
-    for word in args.modifiers.iter().flatten() {
-        match word.as_str() {
-            "shift" => modifiers.shift = true,
-            "alt" => modifiers.alt = true,
-            "ctrl" => modifiers.ctrl = true,
-            _ => return Err(unknown("modifier", word)),
-        }
+    let mut pointer = PointerEvent::left(kind, args.col, args.row);
+    if let Some(word) = args.button.as_deref() {
+        pointer.button = pointer_button_from_str(word).ok_or_else(|| unknown("button", word))?;
     }
-    Ok(PointerEvent {
-        kind,
-        col: args.col,
-        row: args.row,
-        button,
-        modifiers,
-    })
+    Ok(pointer)
 }
 
 /// The external word for a pointer gesture, back to the type.
@@ -1224,14 +1207,7 @@ mod tests {
     fn sweep_case<'a>(mcp: &'a TermherdMcp, tool: &str) -> (Reply, SweepCall<'a>) {
         use crate::shell::bridge::{ActionOutcome, ShotResult, TerminalRead, WaitOutcome};
 
-        let acted = || {
-            Reply::Acted(ActionOutcome {
-                focused: Some("1".into()),
-                error: None,
-                repo: None,
-                pointer: None,
-            })
-        };
+        let acted = || Reply::Acted(ActionOutcome::applied(Some("1".into())));
         match tool {
             "list_sessions" => (
                 Reply::Sessions(Vec::new()),
@@ -1286,7 +1262,7 @@ mod tests {
             "mouse_in_session" => (
                 Reply::Acted(
                     ActionOutcome::applied(Some("1".into()))
-                        .with_pointer(PointerOutcome::Selection),
+                        .with_detail(ActionDetail::Pointer(PointerOutcome::Selection)),
                 ),
                 Box::pin(mcp.mouse_in_session(Parameters(MouseArgs {
                     session: "1".into(),
@@ -1641,7 +1617,6 @@ mod tests {
                 col: 7,
                 row: 2,
                 button: Some("right".into()),
-                modifiers: Some(vec!["shift".into(), "ctrl".into()]),
             }))
             .await
         })
@@ -1651,22 +1626,15 @@ mod tests {
             Action::Pointer {
                 session: 3,
                 pointer: PointerEvent {
-                    kind: PointerKind::Drag,
-                    col: 7,
-                    row: 2,
                     button: PointerButton::Right,
-                    modifiers: PointerModifiers {
-                        shift: true,
-                        alt: false,
-                        ctrl: true,
-                    },
+                    ..PointerEvent::left(PointerKind::Drag, 7, 2)
                 },
             }
         );
     }
 
     #[tokio::test]
-    async fn mouse_in_session_tool_defaults_to_the_left_button_and_no_modifiers() {
+    async fn mouse_in_session_tool_defaults_to_the_left_button() {
         let action = action_of(|mcp| async move {
             mcp.mouse_in_session(Parameters(MouseArgs {
                 session: "3".into(),
@@ -1681,18 +1649,16 @@ mod tests {
         let Action::Pointer { pointer, .. } = action else {
             panic!("expected a pointer action, got {action:?}");
         };
-        assert_eq!(pointer.kind, PointerKind::Click);
-        assert_eq!(pointer.button, PointerButton::Left);
-        assert_eq!(pointer.modifiers, PointerModifiers::default());
+        assert_eq!(pointer, PointerEvent::left(PointerKind::Click, 0, 0));
     }
 
     #[tokio::test]
     async fn mouse_in_session_tool_rejects_an_unknown_word_before_the_bridge() {
-        // Three vocabularies, one rejection each — before the bridge, so the
+        // Two vocabularies, one rejection each — before the bridge, so the
         // whole call fails and nothing applies, as a malformed chord does.
         let bad = [
             (
-                "kind",
+                "tap",
                 MouseArgs {
                     session: "1".into(),
                     kind: "tap".into(),
@@ -1700,7 +1666,7 @@ mod tests {
                 },
             ),
             (
-                "button",
+                "wheel",
                 MouseArgs {
                     session: "1".into(),
                     kind: "press".into(),
@@ -1708,31 +1674,17 @@ mod tests {
                     ..MouseArgs::default()
                 },
             ),
-            (
-                "modifier",
-                MouseArgs {
-                    session: "1".into(),
-                    kind: "press".into(),
-                    modifiers: Some(vec!["shift".into(), "hyper".into()]),
-                    ..MouseArgs::default()
-                },
-            ),
         ];
-        for (what, args) in bad {
+        for (word, args) in bad {
             let (handle, requests) = channel();
             drop(requests);
             let error = TermherdMcp::new(handle)
                 .mouse_in_session(Parameters(args))
                 .await
                 .expect_err("an unknown word is rejected before the bridge");
-            let offending = match what {
-                "kind" => "tap",
-                "button" => "wheel",
-                _ => "hyper",
-            };
             assert!(
-                error.message.contains(offending),
-                "the {what} rejection names the word: {}",
+                error.message.contains(word),
+                "the rejection names the word: {}",
                 error.message
             );
         }
@@ -1744,7 +1696,8 @@ mod tests {
         let shell = spawn_test_shell(
             requests,
             Reply::Acted(
-                ActionOutcome::applied(Some("1".into())).with_pointer(PointerOutcome::Ignored),
+                ActionOutcome::applied(Some("1".into()))
+                    .with_detail(ActionDetail::Pointer(PointerOutcome::Ignored)),
             ),
         );
         let result = TermherdMcp::new(handle)

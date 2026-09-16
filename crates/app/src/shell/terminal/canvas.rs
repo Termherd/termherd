@@ -9,7 +9,9 @@ use iced::advanced::text::Shaping;
 use iced::widget::canvas::{self, Frame, Geometry, Text};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme, mouse};
 use termherd_core::workspace::SessionId;
-use termherd_core::{HoverTarget, ProbeKind, SelectOp, SelectSide, TargetProbe, TermHover};
+use termherd_core::{
+    HoverTarget, ProbeKind, SelectOp, SelectSide, TargetProbe, TermHover, grid_line,
+};
 use termherd_pty::Screen;
 
 use crate::settings::ClipboardGestures;
@@ -141,8 +143,7 @@ impl TerminalView<'_> {
     }
 
     /// The grid line and selection side for the pointer's cell — the coordinate
-    /// the terminal anchors a selection to. `line = row - display_offset` matches
-    /// the snapshot's cell mapping, so it survives scroll.
+    /// the terminal anchors a selection to, so it survives scroll.
     fn grid_point(
         &self,
         cursor: mouse::Cursor,
@@ -150,9 +151,8 @@ impl TerminalView<'_> {
         col: u16,
         row: u16,
     ) -> (i32, usize, SelectSide) {
-        let line = i32::from(row) - self.screen.display_offset as i32;
         (
-            line,
+            grid_line(row, self.screen.display_offset),
             usize::from(col),
             cell_side(cursor, bounds, self.screen.cols),
         )
@@ -247,15 +247,15 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 // the current screen, since the selection lands on a later frame.
                 let clicked = Click::new(position, mouse::Button::Left, state.last_click);
                 state.last_click = Some(clicked);
-                let off = self.screen.display_offset as i32;
+                let off = self.screen.display_offset;
                 if clicked.kind() == click::Kind::Double
                     && let Some((anchor, head)) = word_at(self.screen, col, row)
                 {
                     state.selecting = false;
                     let op = SelectOp::Range {
-                        line0: i32::from(anchor.1) - off,
+                        line0: grid_line(anchor.1, off),
                         col0: usize::from(anchor.0),
-                        line1: i32::from(head.1) - off,
+                        line1: grid_line(head.1, off),
                         col1: usize::from(head.0),
                     };
                     let session = self.session;

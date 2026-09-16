@@ -10,7 +10,7 @@ The pointer rung, terminal half: place a mouse event inside a session.
 
 **The pointer rung, terminal half.** Place a mouse event **inside a session's
 terminal**, the way `run_in_session` places text there. Shipped as
-`mouse_in_session(session, kind, col, row, button?, modifiers?)` (#300). Cell
+`mouse_in_session(session, kind, col, row, button?)` (#300). Cell
 addressed — a terminal is a grid, and a grid is what an SGR report carries — and
 bounded by the pane's last rendered geometry: a cell outside it rejects the
 whole call before anything applies, as a malformed chord does for `press_keys`.
@@ -30,10 +30,11 @@ is why it landed first.
 It shares one seam with that bug, and the rung built the seam without the
 second copy the design feared. The path mirrors the wheel's end to end —
 `Event::TerminalPointer` → `Effect::TerminalPointer` → `PtyHost::pointer` → the
-per-session terminal thread, which holds the live scroll offset — and one pure
-predicate, `core::pointer_select`, says what a pointer does locally; the
-terminal applies it and the shell reads the same function to answer, so the
-outcome cannot drift from the grid. #155 *extends* that arm with the SGR/X10
+per-session terminal thread, which holds the live scroll offset — and the
+gesture rule lives once in `core::app::pointer`: *whether* an event drives the
+selection is read off the event (that is what the shell answers), *where* it
+lands is placed by the terminal with its live offset. #155 *extends* that arm
+with the SGR/X10
 press encoder and the mode gate beside `wheel_bytes`, adds `forwarded` as the
 third answer, and routes the canvas's own bare press/drag/release through the
 same path. Until then the tool drives the local selection only, and the book

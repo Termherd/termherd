@@ -43,10 +43,8 @@ pub enum Event {
         session: SessionId,
         op: SelectOp,
     },
-    /// A pointer event landed on a terminal's cell — from a caller that has no
-    /// pixels (MCP), addressed the way a mouse report is. What it does is the
-    /// terminal's decision (FR4): drive the local selection, or, once the child
-    /// reads the mouse, be forwarded to it.
+    /// A cell-addressed pointer event for a terminal (FR4); see
+    /// [`pointer_select`](super::pointer_select) for what it does there.
     TerminalPointer {
         session: SessionId,
         pointer: PointerEvent,

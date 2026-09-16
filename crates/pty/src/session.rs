@@ -103,7 +103,7 @@ pub(crate) enum TermCmd {
     Scroll(ScrollTarget),
     /// Change the grid-anchored text selection (press / drag / clear).
     Select(SelectOp),
-    /// A cell-addressed pointer event; the terminal decides what it means.
+    /// A cell-addressed pointer event, placed with the live scroll offset.
     Pointer(PointerEvent),
     /// Copy the current selection to the clipboard via a `SelectionCopied` event.
     CopySelection,

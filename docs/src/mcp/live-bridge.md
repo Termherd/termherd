@@ -54,7 +54,7 @@ tool-level error; the text reads keep working.
 | `rename_tab` | `tab`, `title` | `tab` is the 0-based index `snapshot` reports; a blank title reverts to the derived one |
 | `close_pane` | `pane` | a lone pane is its whole tab, which closes |
 | `run_in_session` | `session`, `text` | include a trailing newline to submit |
-| `mouse_in_session` | `session`, `kind`, `col`, `row`, `button`, `modifiers` | a mouse event at a **cell** of the terminal; see below |
+| `mouse_in_session` | `session`, `kind`, `col`, `row`, `button` | a mouse event at a **cell** of the terminal; see below |
 | `add_repo` | `path` | put a repository in the sidebar before it has any session |
 | `forget_repo` | `path` | drop an addition; the row survives on its sessions |
 
@@ -103,7 +103,6 @@ so an agent with no screen coordinates can still point.
 | `kind` | `press`, `release`, `click`, `drag`, `move` |
 | `col`, `row` | 0-based cells of the **visible** screen |
 | `button` | `left` (default), `middle`, `right` |
-| `modifiers` | any of `shift`, `alt`, `ctrl` |
 
 The answer adds a `pointer` field saying what the terminal did:
 
