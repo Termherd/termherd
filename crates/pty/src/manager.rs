@@ -355,6 +355,62 @@ mod tests {
         mgr.kill(id).expect("kill");
     }
 
+    /// The claim behind the mouse rung, made against a **real child**: a
+    /// program that turns mouse reporting on receives a click as the bytes it
+    /// negotiated. `cat -v` stands in for the TUI — it prints what it reads,
+    /// so the report lands on the grid where the test can see it — and the
+    /// mode reading rides back on the `Screen` first, which is what the GUI and
+    /// the MCP shell route on.
+    ///
+    /// Skipped on Windows: the recipe is a POSIX shell line.
+    #[test]
+    fn a_click_reaches_a_real_child_that_reads_the_mouse() {
+        if cfg!(windows) {
+            return;
+        }
+        use termherd_core::ports::PtyHost;
+        use termherd_core::{MouseReporting, PointerEvent, PointerKind};
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let mgr = PtyManager::new(sink, None, Palette::default());
+        let id = sid(1);
+        mgr.spawn(spec(id)).expect("spawn");
+        mgr.write(id, b"printf '\\033[?1000h\\033[?1006h'; cat -v\r\n")
+            .expect("write");
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut screen = String::new();
+        let mut clicked = false;
+        let mut saw_report = false;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(PtyEvent::Output { screen: s, .. }) => {
+                    screen = s.text();
+                    if !clicked && s.mouse_reporting == Some(MouseReporting::Click) {
+                        // The screen says the child reads the mouse; click it.
+                        mgr.pointer(id, PointerEvent::left(PointerKind::Click, 4, 2))
+                            .expect("pointer");
+                        clicked = true;
+                    }
+                    if screen.contains("^[[<0;5;3M^[[<0;5;3m") {
+                        saw_report = true;
+                        break;
+                    }
+                }
+                Ok(PtyEvent::Exited { .. }) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            }
+        }
+        assert!(clicked, "the screen never reported mouse mode:\n{screen}");
+        assert!(
+            saw_report,
+            "the child never printed the SGR click it was sent:\n{screen}"
+        );
+        mgr.kill(id).expect("kill");
+    }
+
     /// A **real spawned shell** must leave `Starting` and then report the work
     /// it is doing — the end-to-end claim behind this whole seam, and the one
     /// no unit test can make: whether the integration snippet actually takes on
