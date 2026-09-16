@@ -188,7 +188,9 @@ repository in the sidebar before it has any session — or drop its folder on th
 window, which does the same thing (a dropped *file* is ignored).
 
 Holding `Ctrl` — or `Cmd`/`Super`, either one, on every platform — underlines
-the URL or **file path** under the pointer, and clicking it opens it. A path
+the URL, hidden link or **file path** under the pointer, and clicking it
+opens it. A hidden link is a label printed over a URL it never shows (`#76`
+over an issue URL, the OSC 8 form `gh` and rendered markdown emit). A path
 is underlined only once the filesystem confirms it exists — resolved against
 the session's live directory,
 then the repository holding it, then the launch directory, because `cargo`,
