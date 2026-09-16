@@ -1,16 +1,19 @@
-//! A pointer event addressed to a terminal by **cell**, and what it does to the
-//! terminal's own text selection when the child is not reading the mouse.
+//! A pointer event addressed to a terminal by **cell**, and where it goes:
+//! to the child when it reads the mouse, to the terminal's own text selection
+//! when nothing does.
 //!
 //! Cell-addressed because a terminal is a grid and a grid is what a mouse
 //! report carries — so the same event serves a caller that has no pixels (an
-//! agent over MCP) and, later, the encoder that forwards it to the child.
+//! agent over MCP), the canvas a human points at, and the encoder that
+//! forwards it to the child.
 //!
-//! The rule is split in two on purpose. *Whether* an event drives the local
-//! selection ([`PointerEvent::local_gesture`]) depends on the button and the
-//! kind alone, so the shell can answer a caller from the event itself. *Where*
-//! it lands ([`pointer_select`]) needs the scroll offset, which only the
-//! terminal thread holds live — a snapshot's may lag — so only it is handed
-//! that half.
+//! The rule is split in two on purpose. *Where the event goes*
+//! ([`PointerEvent::route`]) depends on the button, the kind and the mouse
+//! reporting the child negotiated — three readers ask it: the terminal thread
+//! on its live mode, and the shell and the canvas on the last rendered
+//! `Screen`'s. *Where a local gesture lands* ([`pointer_select`]) needs the
+//! scroll offset, which only the terminal thread holds live — a snapshot's may
+//! lag — so only it is handed that half.
 
 use super::{SelectOp, SelectSide};
 
@@ -68,14 +71,14 @@ pub enum PointerRoute {
     /// Encoded and written to the child.
     Forward,
     /// Applied to the terminal's own selection.
-    Select(LocalGesture),
+    Select,
     /// Dropped.
     Nothing,
 }
 
 /// What a pointer event does to the terminal's own selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalGesture {
+enum LocalGesture {
     /// Begin a selection at the cell.
     Start,
     /// Extend the selection through the cell.
@@ -85,42 +88,32 @@ pub enum LocalGesture {
 }
 
 impl PointerEvent {
-    /// A left-button event at a cell — the common case, and the default a
-    /// caller gets when it names no button.
+    /// An event of `button` at a cell.
     #[must_use]
-    pub fn left(kind: PointerKind, col: u16, row: u16) -> Self {
+    pub fn at(kind: PointerKind, button: PointerButton, col: u16, row: u16) -> Self {
         Self {
             kind,
             col,
             row,
-            button: PointerButton::Left,
+            button,
         }
     }
 
-    /// The gesture this event drives on the terminal's own selection, or
-    /// `None` when it drives nothing there: the selection stands on a release
-    /// (copying it is the caller's `copy`), a hover is nothing to a terminal
-    /// not reading the mouse, and only the left button selects.
+    /// A left-button event at a cell — the common case, and the default a
+    /// caller gets when it names no button.
     #[must_use]
-    pub fn local_gesture(&self) -> Option<LocalGesture> {
-        if self.button != PointerButton::Left {
-            return None;
-        }
-        match self.kind {
-            PointerKind::Press => Some(LocalGesture::Start),
-            PointerKind::Drag => Some(LocalGesture::Extend),
-            PointerKind::Click => Some(LocalGesture::Clear),
-            PointerKind::Release | PointerKind::Move => None,
-        }
+    pub fn left(kind: PointerKind, col: u16, row: u16) -> Self {
+        Self::at(kind, PointerButton::Left, col, row)
     }
 
     /// Where this event goes, given what the child asked to be told.
     #[must_use]
     pub fn route(&self, reporting: Option<MouseReporting>) -> PointerRoute {
         let Some(reporting) = reporting else {
-            return self
-                .local_gesture()
-                .map_or(PointerRoute::Nothing, PointerRoute::Select);
+            return match self.local_gesture() {
+                Some(_) => PointerRoute::Select,
+                None => PointerRoute::Nothing,
+            };
         };
         let covered = match self.kind {
             PointerKind::Press | PointerKind::Release | PointerKind::Click => true,
@@ -131,6 +124,22 @@ impl PointerEvent {
             PointerRoute::Forward
         } else {
             PointerRoute::Nothing
+        }
+    }
+
+    /// The gesture this event drives on the terminal's own selection, or
+    /// `None` when it drives nothing there: the selection stands on a release
+    /// (copying it is the caller's `copy`), a hover is nothing to a terminal
+    /// not reading the mouse, and only the left button selects.
+    fn local_gesture(&self) -> Option<LocalGesture> {
+        if self.button != PointerButton::Left {
+            return None;
+        }
+        match self.kind {
+            PointerKind::Press => Some(LocalGesture::Start),
+            PointerKind::Drag => Some(LocalGesture::Extend),
+            PointerKind::Click => Some(LocalGesture::Clear),
+            PointerKind::Release | PointerKind::Move => None,
         }
     }
 }
@@ -173,12 +182,13 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    fn at(kind: PointerKind, button: PointerButton, col: u16, row: u16) -> PointerEvent {
-        PointerEvent {
-            button,
-            ..PointerEvent::left(kind, col, row)
-        }
-    }
+    const KINDS: [PointerKind; 5] = [
+        PointerKind::Press,
+        PointerKind::Release,
+        PointerKind::Click,
+        PointerKind::Drag,
+        PointerKind::Move,
+    ];
 
     #[test]
     fn a_left_press_starts_a_selection_at_the_cell() {
@@ -217,49 +227,39 @@ mod tests {
     #[test]
     fn a_release_and_a_move_drive_nothing() {
         for kind in [PointerKind::Release, PointerKind::Move] {
-            assert_eq!(
-                PointerEvent::left(kind, 1, 1).local_gesture(),
-                None,
-                "{kind:?}"
-            );
+            let event = PointerEvent::left(kind, 1, 1);
+            assert_eq!(event.route(None), PointerRoute::Nothing, "{kind:?}");
+            assert_eq!(pointer_select(&event, 0), None, "{kind:?}");
         }
     }
 
     #[test]
     fn only_the_left_button_drives_the_selection() {
         for button in [PointerButton::Middle, PointerButton::Right] {
-            for kind in [
-                PointerKind::Press,
-                PointerKind::Release,
-                PointerKind::Click,
-                PointerKind::Drag,
-                PointerKind::Move,
-            ] {
+            for kind in KINDS {
+                let event = PointerEvent::at(kind, button, 2, 2);
                 assert_eq!(
-                    at(kind, button, 2, 2).local_gesture(),
-                    None,
+                    event.route(None),
+                    PointerRoute::Nothing,
                     "{button:?} {kind:?}"
                 );
+                assert_eq!(pointer_select(&event, 0), None, "{button:?} {kind:?}");
             }
         }
     }
 
-    const KINDS: [PointerKind; 5] = [
-        PointerKind::Press,
-        PointerKind::Release,
-        PointerKind::Click,
-        PointerKind::Drag,
-        PointerKind::Move,
-    ];
-
     #[test]
-    fn without_mouse_reporting_the_route_is_the_local_gesture() {
+    fn without_mouse_reporting_the_route_selects_exactly_when_a_placement_exists() {
+        // The two halves of the rule agree: `route` says Select iff
+        // `pointer_select` has an op to place.
         for kind in KINDS {
             let event = PointerEvent::left(kind, 1, 1);
-            let expected = event
-                .local_gesture()
-                .map_or(PointerRoute::Nothing, PointerRoute::Select);
-            assert_eq!(event.route(None), expected, "{kind:?}");
+            let placed = pointer_select(&event, 0).is_some();
+            assert_eq!(
+                event.route(None) == PointerRoute::Select,
+                placed,
+                "{kind:?}"
+            );
         }
     }
 
@@ -312,7 +312,8 @@ mod tests {
         // cares that it is the left one.
         for button in [PointerButton::Middle, PointerButton::Right] {
             assert_eq!(
-                at(PointerKind::Press, button, 1, 1).route(Some(MouseReporting::Click)),
+                PointerEvent::at(PointerKind::Press, button, 1, 1)
+                    .route(Some(MouseReporting::Click)),
                 PointerRoute::Forward,
                 "{button:?}"
             );
@@ -336,9 +337,9 @@ mod tests {
                 MouseReporting::Motion,
             ]),
         ) {
-            let route = at(kind, button, 0, 0).route(Some(reporting));
+            let route = PointerEvent::at(kind, button, 0, 0).route(Some(reporting));
             prop_assert!(
-                !matches!(route, PointerRoute::Select(_)),
+                route != PointerRoute::Select,
                 "{:?} {:?} under {:?} selected locally",
                 kind, button, reporting
             );

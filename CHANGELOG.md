@@ -20,7 +20,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   or URL.
 - `mouse_in_session` answers `forwarded` for such a program, beside
   `selection` and `ignored`, and an agent can now drive a mouse-mode TUI
-  through the act → wait → observe loop.
+  through the act → wait → observe loop. It rejects a session that has
+  exited rather than claiming its terminal did something.
+- A drag that leaves the pane still ends with its release, on the border
+  cell; a modifier pressed or released mid-drag no longer hands half the
+  gesture to the other owner; and motion is reported to the program once
+  per cell rather than once per pixel.
 
 ### Added (a pointer inside a terminal, over MCP)
 

@@ -1424,7 +1424,9 @@ mod key_routing {
     use iced::keyboard::{Key, Location, Modifiers};
     use std::sync::Mutex as StdMutex;
     use termherd_core::ports::{PtyError, ScanError};
-    use termherd_core::{Action, PointerEvent, PointerKind, SelectSide, SnapshotFilter, SpawnSpec};
+    use termherd_core::{
+        Action, PointerEvent, PointerKind, PointerRoute, SelectSide, SnapshotFilter, SpawnSpec,
+    };
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]
@@ -1869,7 +1871,6 @@ mod key_routing {
 
     #[test]
     fn pointer_action_forwards_an_in_bounds_press_and_reports_a_selection() {
-        use super::bridge::PointerOutcome;
         let (mut shell, pty, handle) = shell_showing("$ cargo test");
         let pointer = PointerEvent::left(PointerKind::Press, 11, 0);
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
@@ -1877,7 +1878,7 @@ mod key_routing {
             pointer,
         });
         assert_eq!(outcome.error, None, "the last cell is inside the pane");
-        assert_eq!(outcome.pointer(), Some(PointerOutcome::Selection));
+        assert_eq!(outcome.pointer(), Some(PointerRoute::Select));
         assert_eq!(outcome.focused, focused(&shell));
         let session = shell.core.workspace.focused_session().expect("focused");
         assert_eq!(
@@ -1889,7 +1890,6 @@ mod key_routing {
 
     #[test]
     fn pointer_action_reports_a_move_as_ignored_but_still_hands_it_over() {
-        use super::bridge::PointerOutcome;
         // A move drives no local selection, so the caller learns nothing
         // happened — yet the terminal still receives every event.
         let (mut shell, pty, handle) = shell_showing("$ cargo test");
@@ -1898,8 +1898,34 @@ mod key_routing {
             pointer: PointerEvent::left(PointerKind::Move, 3, 0),
         });
         assert_eq!(outcome.error, None);
-        assert_eq!(outcome.pointer(), Some(PointerOutcome::Ignored));
+        assert_eq!(outcome.pointer(), Some(PointerRoute::Nothing));
         assert_eq!(pty.pointers().len(), 1);
+    }
+
+    /// An exited session keeps its last screen — a crash message is what it
+    /// shows — so the bounds check passes; the answer must still not claim a
+    /// terminal selected or forwarded anything.
+    #[test]
+    fn pointer_action_rejects_a_session_that_has_exited() {
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+        });
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("exited")),
+            "an exited session is rejected, saying why: {outcome:?}"
+        );
+        assert_eq!(outcome.pointer(), None, "no outcome is claimed");
+        assert!(pty.pointers().is_empty(), "nothing reached a PTY");
     }
 
     /// The screen's `mouse_reporting` is what the shell reads to answer: under
@@ -1907,7 +1933,6 @@ mod key_routing {
     /// and neither drives the local selection.
     #[test]
     fn pointer_action_reports_forwarded_when_the_child_reads_the_mouse() {
-        use super::bridge::PointerOutcome;
         use termherd_core::MouseReporting;
         let (mut shell, pty, handle) = shell_showing("$ vim");
         let session = shell.core.workspace.focused_session().expect("focused");
@@ -1917,9 +1942,9 @@ mod key_routing {
             .expect("the fixture rendered a screen")
             .mouse_reporting = Some(MouseReporting::Click);
         for (kind, expected) in [
-            (PointerKind::Press, PointerOutcome::Forwarded),
-            (PointerKind::Release, PointerOutcome::Forwarded),
-            (PointerKind::Drag, PointerOutcome::Ignored),
+            (PointerKind::Press, PointerRoute::Forward),
+            (PointerKind::Release, PointerRoute::Forward),
+            (PointerKind::Drag, PointerRoute::Nothing),
         ] {
             let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
                 session: handle,
@@ -3323,18 +3348,8 @@ mod key_routing {
             })
             .collect();
         Screen {
-            cols: line.len() as u16,
-            rows: 1,
             lines: vec![line],
-            cursor: None,
-            scrolled: false,
-            display_offset: 0,
-            bracketed_paste: false,
-            mouse_reporting: None,
-            selection: Vec::new(),
-            hyperlinks: Vec::new(),
-            default_bg: [0x11, 0x13, 0x18],
-            cursor_color: [0xd0, 0xd0, 0xd0],
+            ..Screen::blank(text.chars().count() as u16, 1)
         }
     }
 

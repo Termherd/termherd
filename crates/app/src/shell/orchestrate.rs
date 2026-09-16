@@ -13,11 +13,10 @@ use std::num::NonZeroU64;
 
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
-use termherd_core::{Event, Launch, PointerEvent, PointerRoute};
+use termherd_core::{Event, Launch, PointerEvent};
 
 use super::bridge::{
-    Action, ActionDetail, ActionOutcome, PointerOutcome, Press, PressOutcome, PressStep,
-    RepoOutcome, SessionKind,
+    Action, ActionDetail, ActionOutcome, Press, PressOutcome, PressStep, RepoOutcome, SessionKind,
 };
 use super::input::event_of;
 use super::repos::RepoGesture;
@@ -215,17 +214,25 @@ impl Shell {
         }
         // Answered off the last screen's mouse mode, as the bounds are off its
         // geometry; the terminal decides again on its live mode and offset.
-        let outcome = match pointer.route(screen.mouse_reporting) {
-            PointerRoute::Forward => PointerOutcome::Forwarded,
-            PointerRoute::Select(_) => PointerOutcome::Selection,
-            PointerRoute::Nothing => PointerOutcome::Ignored,
-        };
+        let route = pointer.route(screen.mouse_reporting);
         let effects = self.core.apply(Event::TerminalPointer {
             session: id,
             pointer,
         });
+        // `core` absorbs an event for a session that has exited; a screen is
+        // still there to bound against, but no terminal is behind it, and the
+        // answer must not claim one did something.
+        if effects.is_empty() {
+            return (
+                ActionOutcome::rejected(format!(
+                    "session {session} has exited, so there is no terminal to \
+                     place a pointer in"
+                )),
+                Task::none(),
+            );
+        }
         (
-            self.applied().with_detail(ActionDetail::Pointer(outcome)),
+            self.applied().with_detail(ActionDetail::Pointer(route)),
             self.perform(effects),
         )
     }

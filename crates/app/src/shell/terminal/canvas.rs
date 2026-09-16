@@ -19,7 +19,7 @@ use crate::settings::ClipboardGestures;
 use crate::shell::Message;
 
 use super::cell_size;
-use super::selection::{cell_at, cell_side, target_at, word_at, word_text};
+use super::selection::{cell_at, cell_nearest, cell_side, target_at, word_at, word_text};
 
 /// A canvas program that draws the visible terminal grid with per-cell colour
 /// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
@@ -62,14 +62,14 @@ pub(in crate::shell) struct TerminalView<'a> {
 /// `canvas::Program::State`, so it is as reachable as the widget itself.
 #[derive(Default)]
 pub(in crate::shell) struct TermState {
-    /// A left-drag is in progress; each pointer move extends the selection.
-    selecting: bool,
-    /// The pointer moved off its press cell during the drag, so a release copies
-    /// the selection; a bare click (press and release on one cell) clears it.
-    dragged: bool,
-    /// The button held since a press the child was handed, so the moves until
-    /// its release are the child's drag rather than a hover.
-    pressed: Option<PointerButton>,
+    /// The button gesture in progress, and who owns it. Decided at the press
+    /// and kept until the release, so a modifier pressed or released mid-drag
+    /// cannot hand half a gesture to the other owner.
+    held: Option<Held>,
+    /// The last cell the child was told the pointer is at, so a move within
+    /// one cell is not reported again — xterm reports per cell, and a TUI that
+    /// redraws on every report would otherwise be hammered per pixel.
+    child_cell: Option<(u16, u16)>,
     owner: Option<SessionId>,
     /// The last probe this canvas published, kept **only** to avoid re-sending
     /// the same one on every pointer move. `core` holds the hover that is
@@ -81,6 +81,19 @@ pub(in crate::shell) struct TermState {
     /// Banks fractional wheel deltas so fine-grained trackpad scrolls add up
     /// instead of rounding to zero.
     scroll: ScrollAccumulator,
+}
+
+/// Who owns the button gesture in progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Held {
+    /// The terminal: a left-drag extends its own selection on each move.
+    /// `dragged` records that the pointer left the press cell, so the release
+    /// copies the selection; a bare click (press and release on one cell)
+    /// clears it instead.
+    Selecting { dragged: bool },
+    /// The child: it was handed the press of this button, so the moves until
+    /// its release are its drag rather than a hover.
+    Child(PointerButton),
 }
 
 /// Converts a wheel delta into a number of terminal lines. Mice send discrete
@@ -162,59 +175,86 @@ impl TerminalView<'_> {
         )
     }
 
-    /// The child's claim on a mouse event, when it reads the mouse: `Some` when
-    /// the event is its — forwarded as a pointer at its cell, or dropped when
-    /// its mode does not cover it — and `None` when the terminal's own gestures
-    /// get it. A held modifier keeps the pointer for the terminal — Shift is the
-    /// xterm override for selecting text in a mouse-mode TUI, and the link
-    /// modifier is how a link is hovered and opened — so the link hover never
-    /// competes with the child for a bare move. The wheel keeps its own path.
-    fn hand_to_child(
+    /// The pointer event that is the child's, or `None` when the terminal's
+    /// own gestures get the mouse event. A gesture stays with the owner that
+    /// took its press until the release, whatever the modifiers do meanwhile,
+    /// and a held gesture follows the pointer off the grid — clamped to the
+    /// border cell, as xterm reports it — so its release always arrives. A
+    /// fresh event is the child's when it reads the mouse and no modifier
+    /// reserves the pointer: Shift is the xterm override for selecting text in
+    /// a mouse-mode TUI, and the link modifier is how a link is hovered and
+    /// opened. The wheel keeps its own path.
+    fn child_claim(
         &self,
         state: &mut TermState,
         event: &mouse::Event,
         cursor: mouse::Cursor,
         bounds: Rectangle,
-    ) -> Option<Option<canvas::Action<Message>>> {
-        // A release ends the child's drag whatever mode it now runs in.
-        if let mouse::Event::ButtonReleased(_) = event {
-            state.pressed = None;
-        }
-        let reporting = self.screen.mouse_reporting?;
-        if self.shift || self.link_modifier {
-            return None;
-        }
-        let (kind, button) = match event {
-            mouse::Event::ButtonPressed(button) => (PointerKind::Press, pointer_button(*button)?),
-            mouse::Event::ButtonReleased(button) => {
-                (PointerKind::Release, pointer_button(*button)?)
+    ) -> Option<PointerEvent> {
+        let fresh = self.screen.mouse_reporting.is_some() && !self.shift && !self.link_modifier;
+        let (kind, button, cell) = match (event, state.held) {
+            (mouse::Event::ButtonReleased(button), Some(Held::Child(held))) => {
+                let button = pointer_button(*button)?;
+                if button == held {
+                    state.held = None;
+                }
+                (
+                    PointerKind::Release,
+                    button,
+                    cell_nearest(cursor, bounds, self.screen)?,
+                )
             }
-            mouse::Event::CursorMoved { .. } => match state.pressed {
-                Some(button) => (PointerKind::Drag, button),
-                None => (PointerKind::Move, PointerButton::Left),
-            },
+            (mouse::Event::CursorMoved { .. }, Some(Held::Child(held))) => (
+                PointerKind::Drag,
+                held,
+                cell_nearest(cursor, bounds, self.screen)?,
+            ),
+            // A second button during the child's gesture is its too; the
+            // first one held keeps the gesture.
+            (mouse::Event::ButtonPressed(button), Some(Held::Child(_))) => (
+                PointerKind::Press,
+                pointer_button(*button)?,
+                cell_nearest(cursor, bounds, self.screen)?,
+            ),
+            // A fresh gesture over the grid, with nothing held by either owner.
+            // A release with no press behind it belongs to nobody.
+            (mouse::Event::ButtonPressed(button), None) if fresh => {
+                let button = pointer_button(*button)?;
+                let cell = cell_at(cursor, bounds, self.screen)?;
+                state.held = Some(Held::Child(button));
+                (PointerKind::Press, button, cell)
+            }
+            (mouse::Event::CursorMoved { .. }, None) if fresh => (
+                PointerKind::Move,
+                PointerButton::Left,
+                cell_at(cursor, bounds, self.screen)?,
+            ),
+            // The terminal's own gesture, or an event nobody is reading.
             _ => return None,
         };
-        let (col, row) = cell_at(cursor, bounds, self.screen)?;
-        if kind == PointerKind::Press {
-            state.pressed = Some(button);
+        Some(PointerEvent::at(kind, button, cell.0, cell.1))
+    }
+
+    /// Hand the child its pointer event: forwarded when its mode covers it,
+    /// dropped otherwise — never a selection. Motion is reported once per
+    /// cell, as xterm does; a press or release always goes through.
+    fn forward(
+        &self,
+        state: &mut TermState,
+        pointer: PointerEvent,
+    ) -> Option<canvas::Action<Message>> {
+        let cell = (pointer.col, pointer.row);
+        let motion = matches!(pointer.kind, PointerKind::Drag | PointerKind::Move);
+        if motion && state.child_cell == Some(cell) {
+            return None;
         }
-        let pointer = PointerEvent {
-            kind,
-            col,
-            row,
-            button,
-        };
-        // Covered by the child's mode or not, the event is its: forwarded, or
-        // dropped — never a selection.
-        Some(
-            (pointer.route(Some(reporting)) == PointerRoute::Forward).then(|| {
-                canvas::Action::publish(Message::TermPointer {
-                    session: self.session,
-                    pointer,
-                })
-            }),
-        )
+        state.child_cell = Some(cell);
+        (pointer.route(self.screen.mouse_reporting) == PointerRoute::Forward).then(|| {
+            canvas::Action::publish(Message::TermPointer {
+                session: self.session,
+                pointer,
+            })
+        })
     }
 }
 
@@ -250,8 +290,8 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 ..TermState::default()
             };
         }
-        if let Some(handed) = self.hand_to_child(state, event, cursor, bounds) {
-            return handed;
+        if let Some(pointer) = self.child_claim(state, event, cursor, bounds) {
+            return self.forward(state, pointer);
         }
         match event {
             // Wheel scrolls the viewport into scrollback history (FR4) — but
@@ -304,8 +344,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 // selection is visible — otherwise (nothing to extend, or it
                 // scrolled out of view) fall through to a normal press.
                 if self.shift && !self.screen.selection.is_empty() {
-                    state.selecting = true;
-                    state.dragged = true;
+                    state.held = Some(Held::Selecting { dragged: true });
                     let (line, col, side) = self.grid_point(cursor, bounds, col, row);
                     return Some(canvas::Action::publish(Message::Select {
                         session: self.session,
@@ -324,7 +363,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 if clicked.kind() == click::Kind::Double
                     && let Some((anchor, head)) = word_at(self.screen, col, row)
                 {
-                    state.selecting = false;
+                    state.held = None;
                     let op = SelectOp::Range {
                         line0: grid_line(anchor.1, off),
                         col0: usize::from(anchor.0),
@@ -345,8 +384,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 // Begin a drag-selection at the press cell; the terminal owns the
                 // selection from here, extended on each move. Whether the
                 // release also copies is the gesture setting's business.
-                state.selecting = true;
-                state.dragged = false;
+                state.held = Some(Held::Selecting { dragged: false });
                 let (line, col, side) = self.grid_point(cursor, bounds, col, row);
                 Some(canvas::Action::publish(Message::Select {
                     session: self.session,
@@ -365,9 +403,11 @@ impl canvas::Program<Message> for TerminalView<'_> {
                     session: self.session,
                 }))
             }
-            mouse::Event::CursorMoved { .. } if state.selecting => {
+            mouse::Event::CursorMoved { .. }
+                if matches!(state.held, Some(Held::Selecting { .. })) =>
+            {
                 cell_at(cursor, bounds, self.screen).map(|(col, row)| {
-                    state.dragged = true;
+                    state.held = Some(Held::Selecting { dragged: true });
                     let (line, col, side) = self.grid_point(cursor, bounds, col, row);
                     canvas::Action::publish(Message::Select {
                         session: self.session,
@@ -391,10 +431,10 @@ impl canvas::Program<Message> for TerminalView<'_> {
                     })
                 })
             }
-            mouse::Event::ButtonReleased(mouse::Button::Left) if state.selecting => {
-                let dragged = state.dragged;
-                state.selecting = false;
-                state.dragged = false;
+            mouse::Event::ButtonReleased(mouse::Button::Left)
+                if matches!(state.held, Some(Held::Selecting { .. })) =>
+            {
+                let dragged = matches!(state.held.take(), Some(Held::Selecting { dragged: true }));
                 if dragged {
                     // A real drag: with copy-on-select, ask the terminal to copy
                     // its selection. The text is read from the live grid
@@ -552,27 +592,7 @@ mod tests {
     /// A blank 4×2 screen; with 100×100 bounds each cell is 25×50 px, so
     /// (10,10) lands in cell (0,0) and (60,60) in cell (2,1).
     fn test_screen() -> Screen {
-        use termherd_pty::ScreenCell;
-        let cell = ScreenCell {
-            c: ' ',
-            fg: [0, 0, 0],
-            bg: [0, 0, 0],
-            bold: false,
-        };
-        Screen {
-            cols: 4,
-            rows: 2,
-            lines: vec![vec![cell; 4]; 2],
-            cursor: None,
-            scrolled: false,
-            display_offset: 0,
-            bracketed_paste: false,
-            mouse_reporting: None,
-            selection: Vec::new(),
-            hyperlinks: Vec::new(),
-            default_bg: [0x11, 0x13, 0x18],
-            cursor_color: [0xd0, 0xd0, 0xd0],
-        }
+        Screen::blank(4, 2)
     }
 
     fn test_bounds() -> Rectangle {
@@ -655,10 +675,7 @@ mod tests {
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         let action = view.update(&mut state, &release(), test_bounds(), at(10.0, 10.0));
-        assert!(
-            !state.selecting && !state.dragged,
-            "a click leaves no live drag"
-        );
+        assert!(state.held.is_none(), "a click leaves no live drag");
         // The release still fires — it publishes a clear so no stale highlight
         // lingers from an earlier selection.
         assert!(action.is_some(), "a bare click publishes a selection clear");
@@ -673,16 +690,13 @@ mod tests {
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0)); // (0,0)
         let _ = view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0)); // (2,1)
         assert!(
-            state.selecting && state.dragged,
+            state.held == Some(Held::Selecting { dragged: true }),
             "a moved drag is a live selection"
         );
         // What the release does with the clipboard is the gesture setting's
         // business — see `a_drag_release_copies_only_when_copy_on_select_is_on`.
         let _ = view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0));
-        assert!(
-            !state.selecting && !state.dragged,
-            "the release ends the drag"
-        );
+        assert!(state.held.is_none(), "the release ends the drag");
     }
 
     /// A view whose clipboard gestures are both on.
@@ -741,7 +755,11 @@ mod tests {
             Some(PointerEvent::left(PointerKind::Press, 2, 1)),
             "the press goes to the child at its cell"
         );
-        assert!(!state.selecting, "no local drag was armed");
+        assert_eq!(
+            state.held,
+            Some(Held::Child(PointerButton::Left)),
+            "the child holds the press"
+        );
         let released =
             published(view.update(&mut state, &release(), test_bounds(), at(60.0, 60.0)));
         assert_eq!(
@@ -762,10 +780,12 @@ mod tests {
             published(view.update(&mut state, &right_press(), test_bounds(), at(10.0, 10.0)));
         assert_eq!(
             forwarded(right),
-            Some(PointerEvent {
-                button: PointerButton::Right,
-                ..PointerEvent::left(PointerKind::Press, 0, 0)
-            }),
+            Some(PointerEvent::at(
+                PointerKind::Press,
+                PointerButton::Right,
+                0,
+                0
+            )),
             "a right press reaches the child instead of pasting"
         );
         let middle = canvas::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Middle));
@@ -796,7 +816,11 @@ mod tests {
             let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
             let moved = published(view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0)));
             assert_eq!(forwarded(moved), expected, "{rung:?}");
-            assert!(!state.selecting, "{rung:?}: the drag never selects locally");
+            assert_ne!(
+                state.held,
+                Some(Held::Selecting { dragged: true }),
+                "{rung:?}: the drag never selects locally"
+            );
         }
     }
 
@@ -841,7 +865,7 @@ mod tests {
             ),
             "shift+press starts a local selection: {pressed:?}"
         );
-        assert!(state.selecting);
+        assert!(matches!(state.held, Some(Held::Selecting { .. })));
         let moved = published(view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0)));
         assert!(
             matches!(
@@ -870,6 +894,94 @@ mod tests {
         assert_eq!(
             forwarded(released),
             Some(PointerEvent::left(PointerKind::Release, 2, 1))
+        );
+    }
+
+    /// A drag that crosses the pane's edge still ends with its release, on
+    /// the border cell — otherwise the child is left holding the button.
+    #[test]
+    fn a_childs_gesture_follows_the_pointer_off_the_grid_clamped_to_its_edge() {
+        use canvas::Program;
+        let screen = reporting(MouseReporting::Drag);
+        let view = view(&screen);
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
+        // Off the right edge and below: the border cell is (3, 1).
+        let dragged = published(view.update(&mut state, &moved(), test_bounds(), at(250.0, 140.0)));
+        assert_eq!(
+            forwarded(dragged),
+            Some(PointerEvent::left(PointerKind::Drag, 3, 1)),
+            "the drag is clamped, not dropped"
+        );
+        let released =
+            published(view.update(&mut state, &release(), test_bounds(), at(250.0, 140.0)));
+        assert_eq!(
+            forwarded(released),
+            Some(PointerEvent::left(PointerKind::Release, 3, 1)),
+            "the release arrives"
+        );
+        assert_eq!(state.held, None, "and ends the gesture");
+    }
+
+    /// Motion is reported once per cell, as xterm does: a second move within
+    /// the cell already reported publishes nothing.
+    #[test]
+    fn motion_within_one_cell_is_reported_once() {
+        use canvas::Program;
+        let screen = reporting(MouseReporting::Motion);
+        let view = view(&screen);
+        let mut state = TermState::default();
+        let first = published(view.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0)));
+        assert!(
+            forwarded(first).is_some(),
+            "the first move into a cell reports"
+        );
+        let again = published(view.update(&mut state, &moved(), test_bounds(), at(70.0, 65.0)));
+        assert!(again.is_none(), "a move within the same cell does not");
+        let next = published(view.update(&mut state, &moved(), test_bounds(), at(10.0, 60.0)));
+        assert_eq!(
+            forwarded(next),
+            Some(PointerEvent::left(PointerKind::Move, 0, 1)),
+            "the next cell reports again"
+        );
+    }
+
+    /// The owner of a gesture is decided at its press and kept to the release,
+    /// whatever the modifiers do in between: a Shift released mid-drag does not
+    /// hand the terminal's selection to the child, and a Shift pressed mid-drag
+    /// does not steal the child's release.
+    #[test]
+    fn a_modifier_change_mid_gesture_does_not_change_its_owner() {
+        use canvas::Program;
+        let screen = reporting(MouseReporting::Motion);
+        let shifted = TerminalView {
+            shift: true,
+            ..view(&screen)
+        };
+        let bare = view(&screen);
+
+        // Shift+press selects locally; Shift goes up; the release is still the
+        // terminal's — it ends the drag rather than reaching the child.
+        let mut state = TermState::default();
+        let _ = shifted.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
+        let _ = shifted.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
+        let released =
+            published(bare.update(&mut state, &release(), test_bounds(), at(60.0, 60.0)));
+        assert!(
+            forwarded(released).is_none(),
+            "the child never saw this gesture"
+        );
+        assert_eq!(state.held, None, "the terminal's drag ended");
+
+        // A bare press is the child's; Shift comes down; the release still
+        // reaches the child.
+        let mut state = TermState::default();
+        let _ = bare.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
+        let released =
+            published(shifted.update(&mut state, &release(), test_bounds(), at(10.0, 10.0)));
+        assert_eq!(
+            forwarded(released),
+            Some(PointerEvent::left(PointerKind::Release, 0, 0))
         );
     }
 
@@ -1001,7 +1113,7 @@ mod tests {
         let _ = s1.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(1)));
         assert!(
-            state.selecting && state.dragged,
+            state.held == Some(Held::Selecting { dragged: true }),
             "session 1 has a live drag"
         );
         // The canvas now shows session 2; its first event resets the stale drag
@@ -1013,7 +1125,7 @@ mod tests {
         let _ = s2.update(&mut state, &moved(), test_bounds(), at(60.0, 60.0));
         assert_eq!(state.owner, Some(sid(2)));
         assert!(
-            !state.selecting && !state.dragged,
+            state.held.is_none(),
             "the drag must not carry to another session"
         );
     }
@@ -1031,18 +1143,8 @@ mod tests {
             })
             .collect();
         Screen {
-            cols: cells.len() as u16,
-            rows: 1,
             lines: vec![cells],
-            cursor: None,
-            scrolled: false,
-            display_offset: 0,
-            bracketed_paste: false,
-            mouse_reporting: None,
-            selection: Vec::new(),
-            hyperlinks: Vec::new(),
-            default_bg: [0x11, 0x13, 0x18],
-            cursor_color: [0xd0, 0xd0, 0xd0],
+            ..Screen::blank(line.chars().count() as u16, 1)
         }
     }
 
@@ -1066,7 +1168,10 @@ mod tests {
         let mut state = TermState::default();
         let action = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
         assert!(action.is_some(), "a link click yields an action");
-        assert!(!state.selecting, "opening a link starts no drag-selection");
+        assert!(
+            state.held.is_none(),
+            "opening a link starts no drag-selection"
+        );
     }
 
     #[test]
@@ -1090,7 +1195,10 @@ mod tests {
         let mut state = TermState::default();
         let action = view.update(&mut state, &press(), test_bounds(), at_col(len, 5));
         assert!(action.is_some(), "a hidden-link click yields an action");
-        assert!(!state.selecting, "opening a link starts no drag-selection");
+        assert!(
+            state.held.is_none(),
+            "opening a link starts no drag-selection"
+        );
     }
 
     #[test]
@@ -1256,7 +1364,7 @@ mod tests {
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
         assert!(
-            state.selecting,
+            matches!(state.held, Some(Held::Selecting { .. })),
             "a press off any link starts a drag-selection"
         );
     }
@@ -1317,7 +1425,7 @@ mod tests {
         let action = view.update(&mut state, &press(), test_bounds(), at(60.0, 60.0));
         assert!(action.is_some(), "the extend publishes a selection update");
         assert!(
-            state.selecting && state.dragged,
+            state.held == Some(Held::Selecting { dragged: true }),
             "an extend behaves like a drag so the release copies it"
         );
         assert!(
@@ -1341,7 +1449,7 @@ mod tests {
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), at(10.0, 10.0));
         assert!(
-            state.selecting && !state.dragged,
+            state.held == Some(Held::Selecting { dragged: false }),
             "with no prior selection a Shift+click starts a fresh drag"
         );
     }
@@ -1361,7 +1469,7 @@ mod tests {
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
         let action = view.update(&mut state, &press(), test_bounds(), cursor);
         assert!(
-            !state.selecting,
+            state.held.is_none(),
             "a word selection is settled, not a live drag"
         );
         assert!(
@@ -1382,8 +1490,11 @@ mod tests {
         let cursor = at_col(line.len(), 3);
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
-        assert!(state.selecting, "a blank double-click is a normal press");
-        assert!(!state.dragged, "a fresh press has not dragged yet");
+        assert_eq!(
+            state.held,
+            Some(Held::Selecting { dragged: false }),
+            "a blank double-click is a normal press that has not dragged yet"
+        );
     }
 
     #[test]

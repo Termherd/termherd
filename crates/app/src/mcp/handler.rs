@@ -24,13 +24,13 @@ use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
 use termherd_core::{
-    Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, Section,
-    SessionStatus, SnapshotFilter, TerminalScope,
+    Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, PointerRoute,
+    Section, SessionStatus, SnapshotFilter, TerminalScope,
 };
 
 use crate::shell::bridge::{
-    Action, ActionDetail, BridgeHandle, CallError, PointerOutcome, Press, PressStep, Reply,
-    Request, SessionInfo, SessionKind,
+    Action, ActionDetail, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo,
+    SessionKind,
 };
 use crate::snapshot_dto::{SnapshotDto, status_str};
 
@@ -321,8 +321,9 @@ impl TermherdMcp {
                        pane's geometry rejects the call), `button` (\"left\" \
                        default, \"middle\", \"right\"). Returns `focused_handle` \
                        and `pointer`: \"forwarded\" when the program in the \
-                       session reads the mouse and was sent the event (follow \
-                       with `wait_for_status` / `read_terminal`), \"selection\" \
+                       session reads the mouse, as of its last rendered frame, \
+                       and was sent the event (follow with `wait_for_status` / \
+                       `read_terminal`), \"selection\" \
                        when no program reads it and the event drove the \
                        terminal's own text selection (read it back with the \
                        `copy` action), \"ignored\" when it drove nothing. At a \
@@ -911,11 +912,11 @@ fn pointer_button_from_str(word: &str) -> Option<PointerButton> {
 }
 
 /// The external word for what the terminal did with a pointer event.
-fn pointer_str(outcome: PointerOutcome) -> &'static str {
-    match outcome {
-        PointerOutcome::Forwarded => "forwarded",
-        PointerOutcome::Selection => "selection",
-        PointerOutcome::Ignored => "ignored",
+fn pointer_str(route: PointerRoute) -> &'static str {
+    match route {
+        PointerRoute::Forward => "forwarded",
+        PointerRoute::Select => "selection",
+        PointerRoute::Nothing => "ignored",
     }
 }
 
@@ -1266,7 +1267,7 @@ mod tests {
             "mouse_in_session" => (
                 Reply::Acted(
                     ActionOutcome::applied(Some("1".into()))
-                        .with_detail(ActionDetail::Pointer(PointerOutcome::Selection)),
+                        .with_detail(ActionDetail::Pointer(PointerRoute::Select)),
                 ),
                 Box::pin(mcp.mouse_in_session(Parameters(MouseArgs {
                     session: "1".into(),
@@ -1697,9 +1698,9 @@ mod tests {
     #[tokio::test]
     async fn mouse_in_session_tool_reports_what_the_terminal_did() {
         for (outcome, word) in [
-            (PointerOutcome::Forwarded, "forwarded"),
-            (PointerOutcome::Selection, "selection"),
-            (PointerOutcome::Ignored, "ignored"),
+            (PointerRoute::Forward, "forwarded"),
+            (PointerRoute::Select, "selection"),
+            (PointerRoute::Nothing, "ignored"),
         ] {
             let (handle, requests) = channel();
             let shell = spawn_test_shell(

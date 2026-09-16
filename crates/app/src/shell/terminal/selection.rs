@@ -5,17 +5,37 @@
 //! [`Screen`]; the functions here only translate pointer positions and read the
 //! resulting spans, so every one is exhaustively unit-testable.
 
-use iced::{Rectangle, mouse};
+use iced::{Point, Rectangle, mouse};
 use termherd_core::{ProbeKind, SelectSide, TargetProbe};
 use termherd_pty::Screen;
 
-/// The grid cell under the cursor, if any.
+/// The grid cell under the cursor, if any — `None` when the pointer is off the
+/// grid.
 pub(super) fn cell_at(
     cursor: mouse::Cursor,
     bounds: Rectangle,
     screen: &Screen,
 ) -> Option<(u16, u16)> {
     let p = cursor.position_in(bounds)?;
+    cell_of(p, bounds, screen)
+}
+
+/// The grid cell nearest the cursor, clamped to the edge when the pointer has
+/// left the grid — what a gesture in progress needs, since a drag that crosses
+/// the pane's edge must still end with its release on the border cell, as
+/// xterm reports it, or the child is left holding a button forever.
+pub(super) fn cell_nearest(
+    cursor: mouse::Cursor,
+    bounds: Rectangle,
+    screen: &Screen,
+) -> Option<(u16, u16)> {
+    let p = cursor.position()?;
+    cell_of(Point::new(p.x - bounds.x, p.y - bounds.y), bounds, screen)
+}
+
+/// The cell a point relative to the grid's origin falls in, clamped to the
+/// grid on both axes.
+fn cell_of(p: Point, bounds: Rectangle, screen: &Screen) -> Option<(u16, u16)> {
     let cols = screen.cols.max(1);
     let rows = screen.rows.max(1);
     let cw = bounds.width / cols as f32;
@@ -175,18 +195,8 @@ mod tests {
             })
             .collect();
         Screen {
-            cols: cells.len() as u16,
-            rows: 1,
             lines: vec![cells],
-            cursor: None,
-            scrolled: false,
-            display_offset: 0,
-            bracketed_paste: false,
-            mouse_reporting: None,
-            selection: Vec::new(),
-            hyperlinks: Vec::new(),
-            default_bg: [0x11, 0x13, 0x18],
-            cursor_color: [0xd0, 0xd0, 0xd0],
+            ..Screen::blank(line.chars().count() as u16, 1)
         }
     }
 
@@ -210,6 +220,66 @@ mod tests {
         let right = mouse::Cursor::Available(iced::Point::new(8.0, 5.0));
         assert!(matches!(cell_side(left, bounds, 4), SelectSide::Left));
         assert!(matches!(cell_side(right, bounds, 4), SelectSide::Right));
+    }
+
+    /// The grid sits at an offset inside the window (a split, the sidebar),
+    /// so a pointer off the grid is clamped relative to the grid's own origin
+    /// on both axes, not the window's.
+    #[test]
+    fn cell_nearest_clamps_to_the_grid_from_its_own_origin() {
+        let screen = Screen::blank(4, 2);
+        let bounds = Rectangle {
+            x: 100.0,
+            y: 50.0,
+            width: 40.0,
+            height: 20.0,
+        };
+        let at = |x, y| mouse::Cursor::Available(Point::new(x, y));
+        assert_eq!(
+            cell_at(at(20.0, 10.0), bounds, &screen),
+            None,
+            "left of the grid"
+        );
+        assert_eq!(
+            cell_nearest(at(20.0, 10.0), bounds, &screen),
+            Some((0, 0)),
+            "clamps to the top-left cell, not to the window's"
+        );
+        assert_eq!(
+            cell_nearest(at(500.0, 500.0), bounds, &screen),
+            Some((3, 1)),
+            "and to the bottom-right cell past the far edges"
+        );
+        assert_eq!(
+            cell_nearest(at(115.0, 65.0), bounds, &screen),
+            Some((1, 1)),
+            "inside, it is the cell under the pointer"
+        );
+        assert_eq!(
+            cell_nearest(mouse::Cursor::Unavailable, bounds, &screen),
+            None
+        );
+    }
+
+    /// A grid with no extent on one axis has no cells, whichever axis it is.
+    #[test]
+    fn a_degenerate_grid_on_either_axis_has_no_cell() {
+        let screen = Screen::blank(4, 2);
+        let flat = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 40.0,
+            height: 0.0,
+        };
+        let thin = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 20.0,
+        };
+        let inside = mouse::Cursor::Available(Point::new(0.0, 0.0));
+        assert_eq!(cell_nearest(inside, flat, &screen), None);
+        assert_eq!(cell_nearest(inside, thin, &screen), None);
     }
 
     /// `screen` with one OSC 8 span laid over `start..end` of its only row.

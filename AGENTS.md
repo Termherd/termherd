@@ -268,9 +268,23 @@ event for the terminal when a modifier is held — Shift is the xterm override
 that lets a human select text out of a mouse-mode TUI, and the link modifier
 opens links. The content-dependent gestures (double-click word, shift-extend,
 link click) never left the canvas. *Where* a local gesture lands is still
-`pointer_select` with the live offset; *whether* it is local at all is now
-`route`'s, and `local_gesture` is the leg it stands on when nothing reads the
-mouse.
+`pointer_select` with the live offset; *whether* it is local at all is
+`route`'s alone, and the bridge carries `route`'s own answer rather than a
+renamed copy of it.
+
+Three things the review pass after the merge added, each a rule worth
+keeping. **A gesture's owner is decided at its press and kept to its
+release** (`canvas::Held`): re-reading the modifiers on every event let a
+Shift released mid-drag hand the terminal's selection to the child, and a
+Shift pressed mid-drag steal the child's release. **A gesture the child holds
+follows the pointer off the grid**, clamped to the border cell as xterm
+reports it — otherwise a fast drag past a split ends with no release and the
+TUI is left holding the button. And **motion is reported once per cell**, as
+xterm does: iced hands the canvas one move per pixel, and under DECSET 1003
+each one was a channel send, a PTY write, a redraw in the child *and* a full
+`Screen` snapshot on the terminal thread, which the `Pointer` arm now skips
+for anything that did not touch the grid (`session::PointerInput`), as the
+`Foreground` poll already did.
 
 Two structural points. The mode bits are read in **one** place, `pty::mode`
 — a new leaf, because `input` (the encoder's gate) and `grid` (the `Screen`
