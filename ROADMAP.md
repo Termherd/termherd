@@ -827,7 +827,8 @@ the launcher — was the one process with no way to speak to it. `press_keys`,
 `screenshot` and `wait_for_status` were all there, all unreachable.
 
 So the missing piece is **discovery, not capability**. No new tool: the same
-fifteen, reached by a client that was not spawned as a child.
+tool set the spawned session gets, reached by a client that was not spawned
+as a child.
 
 **The shape, to settle.** The pieces are small and their arrangement is not:
 
@@ -839,7 +840,7 @@ fifteen, reached by a client that was not spawned as a child.
 - **How a client registers it.** A subcommand emitting the `mcpServers` snippet
   (`termherd mcp-config`) keeps the token out of shell history and out of argv,
   where an `--print-token` flag would put it in both.
-- **Whether the surface is the same fifteen.** Probably yes: a narrower
+- **Whether the surface is the same set of tools.** Probably yes: a narrower
   read-only surface would be a second contract to keep true, and the
   interesting uses (drive, wait, screenshot) are the mutating ones.
 
@@ -1261,7 +1262,7 @@ lazygit, fzf, vim — was unreachable to an agent whose keyboard already worked.
 And #155 (mouse clicks are never encoded to the child) could not be verified
 end to end by the agent that fixes it: its encoder half unit-tests the way the
 wheel's already does in `pty::input`, but the gesture itself against a real
-child is what decides whether a TUI actually responds. **Blocks #155**, which
+child is what decides whether a TUI actually responds. **Blocked #155**, which
 is why it landed first.
 
 It shares one seam with that bug, and the rung built the seam without the

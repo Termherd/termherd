@@ -614,7 +614,7 @@ ones that rot first:
 | --- | --- |
 | `ACTIONS` / `Keymap::defaults` in `core::keymap` | `docs/src/reference/keyboard.md` |
 | the `settings.json` schema (and `docs/settings.example.jsonc` with it) | `docs/src/reference/settings.md` — **and its four neighbours**, below |
-| an MCP `#[tool(…)]`, its arguments or its outcomes | `docs/src/mcp/live-bridge.md`, `docs/src/mcp/keyboard.md` |
+| an MCP `#[tool(…)]`, its arguments or its outcomes | `docs/src/mcp/live-bridge.md`, `docs/src/mcp/keyboard.md` — **and** the tool table and the follow-up sentence in `README.md`, and the tool *count* in `docs/src/mcp/index.md` (a diagram and a table); every rung since the README table was written (#215, #229, #281, #300) merged without touching it |
 | `OPTIONS` in `crates/mcp/src/lib.rs` | `docs/src/mcp/stdio.md` (the id table) |
 | a label in `crates/app/src/strings.rs` the book quotes | the matching `docs/src/workspace/` page |
 
