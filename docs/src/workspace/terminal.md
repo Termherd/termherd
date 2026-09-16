@@ -64,6 +64,14 @@ the cursor becomes a hand; <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click opens it in
 your OS default handler. Trailing prose punctuation and unbalanced brackets are
 trimmed from the match.
 
+**Hidden hyperlinks** work the same way. A program can print a label over a
+URL it never shows — the OSC 8 escape, which `gh`, `ls --hyperlink`, `cargo`
+and Claude Code's rendered markdown all emit — so a table cell reading `#76`
+may point at the full issue URL. termherd carries that target with the grid:
+hover the label and it underlines, click it and the hidden URL opens. Where a
+label sits over a hyperlink *and* looks like a URL itself, the hyperlink wins —
+it is what the program meant, the text is only its face.
+
 ## Clickable file paths
 
 The same gesture opens **file paths** — the payoff being that `cargo test`

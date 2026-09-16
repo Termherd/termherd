@@ -44,15 +44,30 @@ pub(super) fn cell_side(cursor: mouse::Cursor, bounds: Rectangle, cols: u16) -> 
     }
 }
 
-/// The clickable target under grid cell `(col, row)`, if any. Builds the row's
-/// text from its cells — one char per cell, so a `core::links` char-index span
-/// maps straight onto columns — and returns the span containing `col`.
+/// The clickable target under grid cell `(col, row)`, if any. An OSC 8
+/// hyperlink over the cell answers first — its target is explicit, and the
+/// text under it is only a label (`#76`), so there may be nothing to detect.
+/// Otherwise the row's text is built from its cells — one char per cell, so a
+/// `core::links` char-index span maps straight onto columns — and the span
+/// containing `col` is returned.
 ///
 /// A URL wins over a path: `https://ex.io/a/b` is path-shaped after its scheme,
 /// and opening it in an editor is never what was meant. What comes back is a
 /// *probe*, not an answer — only `core`, through the resolver port, can say
 /// whether a path-shaped run is a file.
 pub(super) fn target_at(screen: &Screen, col: u16, row: u16) -> Option<TargetProbe> {
+    if let Some(link) = screen
+        .hyperlinks
+        .iter()
+        .find(|link| link.row == row && (link.start..link.end).contains(&col))
+    {
+        return Some(TargetProbe {
+            row,
+            start: link.start,
+            end: link.end,
+            kind: ProbeKind::Url(link.uri.clone()),
+        });
+    }
     let line = screen.lines.get(row as usize)?;
     let text: String = line.iter().map(|cell| cell.c).collect();
     let here = col as usize;
@@ -146,7 +161,7 @@ fn spans_text(screen: &Screen, spans: &[(u16, u16, u16)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use termherd_pty::ScreenCell;
+    use termherd_pty::{HyperlinkSpan, ScreenCell};
 
     /// A single-row screen holding `line`, one char per cell.
     fn screen_from(line: &str) -> Screen {
@@ -168,6 +183,7 @@ mod tests {
             display_offset: 0,
             bracketed_paste: false,
             selection: Vec::new(),
+            hyperlinks: Vec::new(),
             default_bg: [0x11, 0x13, 0x18],
             cursor_color: [0xd0, 0xd0, 0xd0],
         }
@@ -193,6 +209,49 @@ mod tests {
         let right = mouse::Cursor::Available(iced::Point::new(8.0, 5.0));
         assert!(matches!(cell_side(left, bounds, 4), SelectSide::Left));
         assert!(matches!(cell_side(right, bounds, 4), SelectSide::Right));
+    }
+
+    /// `screen` with one OSC 8 span laid over `start..end` of its only row.
+    fn with_hyperlink(mut screen: Screen, start: u16, end: u16, uri: &str) -> Screen {
+        screen.hyperlinks.push(HyperlinkSpan {
+            row: 0,
+            start,
+            end,
+            uri: uri.into(),
+        });
+        screen
+    }
+
+    #[test]
+    fn target_at_resolves_a_hidden_hyperlink_from_its_span() {
+        // `#76` shows nothing URL-shaped; the OSC 8 span carries the target.
+        let screen = with_hyperlink(screen_from("see #76 now"), 4, 7, "https://ex.io/issues/76");
+        let probe = target_at(&screen, 5, 0).expect("column 5 is inside the label");
+        assert_eq!(probe.kind, ProbeKind::Url("https://ex.io/issues/76".into()));
+        assert_eq!((probe.row, probe.start, probe.end), (0, 4, 7));
+        // The cell just past the span is not part of the link.
+        assert!(target_at(&screen, 7, 0).is_none());
+    }
+
+    #[test]
+    fn a_hyperlink_span_outranks_the_text_it_covers() {
+        // A printed URL wrapped in OSC 8 pointing elsewhere opens *elsewhere*:
+        // the explicit target is what the program meant, the text is its label.
+        let screen = with_hyperlink(
+            screen_from("see https://ex.io now"),
+            4,
+            17,
+            "https://other.io",
+        );
+        let probe = target_at(&screen, 6, 0).expect("column 6 is inside the URL");
+        assert_eq!(probe.kind, ProbeKind::Url("https://other.io".into()));
+    }
+
+    #[test]
+    fn a_hyperlink_span_on_another_row_does_not_claim_this_one() {
+        let mut screen = with_hyperlink(screen_from("see #76 now"), 4, 7, "https://ex.io");
+        screen.hyperlinks[0].row = 1;
+        assert!(target_at(&screen, 5, 0).is_none());
     }
 
     #[test]

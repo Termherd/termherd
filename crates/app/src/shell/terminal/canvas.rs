@@ -495,6 +495,7 @@ mod tests {
             display_offset: 0,
             bracketed_paste: false,
             selection: Vec::new(),
+            hyperlinks: Vec::new(),
             default_bg: [0x11, 0x13, 0x18],
             cursor_color: [0xd0, 0xd0, 0xd0],
         }
@@ -800,6 +801,7 @@ mod tests {
             display_offset: 0,
             bracketed_paste: false,
             selection: Vec::new(),
+            hyperlinks: Vec::new(),
             default_bg: [0x11, 0x13, 0x18],
             cursor_color: [0xd0, 0xd0, 0xd0],
         }
@@ -825,6 +827,30 @@ mod tests {
         let mut state = TermState::default();
         let action = view.update(&mut state, &press(), test_bounds(), at_col(len, 2));
         assert!(action.is_some(), "a link click yields an action");
+        assert!(!state.selecting, "opening a link starts no drag-selection");
+    }
+
+    #[test]
+    fn modifier_click_on_a_hidden_hyperlink_opens_instead_of_selecting() {
+        // `#76` is not URL-shaped; only the OSC 8 span makes it a link. Without
+        // the span the same click would start a drag-selection.
+        use canvas::Program;
+        use termherd_pty::HyperlinkSpan;
+        let mut screen = screen_from("see #76 now");
+        screen.hyperlinks.push(HyperlinkSpan {
+            row: 0,
+            start: 4,
+            end: 7,
+            uri: "https://ex.io/issues/76".into(),
+        });
+        let len = "see #76 now".len();
+        let view = TerminalView {
+            link_modifier: true,
+            ..view(&screen)
+        };
+        let mut state = TermState::default();
+        let action = view.update(&mut state, &press(), test_bounds(), at_col(len, 5));
+        assert!(action.is_some(), "a hidden-link click yields an action");
         assert!(!state.selecting, "opening a link starts no drag-selection");
     }
 

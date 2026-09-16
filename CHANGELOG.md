@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (hidden terminal hyperlinks)
+
+- A link whose label hides its URL — an OSC 8 hyperlink, the way `gh`,
+  `ls --hyperlink` and rendered markdown print `#76` over an issue URL — now
+  underlines on hover and opens on Cmd/Ctrl+click like a printed URL (#84).
+  The `Screen` snapshot carries every hyperlink as a span over its cells, and
+  the pointer answers that span before it scans the visible text; a
+  hyperlink laid over text that is itself URL-shaped opens the hyperlink.
+
 ### Fixed (list_sessions over MCP)
 
 - `list_sessions` answered a bare JSON array, which MCP clients reject on their

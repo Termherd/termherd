@@ -8,7 +8,7 @@ use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::TermMode;
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Flags, Hyperlink};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use termherd_core::{SelectOp, SelectSide};
 
@@ -39,6 +39,11 @@ pub struct Screen {
     /// the emulator rotates on every grid scroll — so the highlight follows the
     /// text through both scrollback and application-driven (alt-screen) scroll.
     pub selection: Vec<(u16, u16, u16)>,
+    /// Every OSC 8 hyperlink on screen, as the runs of cells it covers. The
+    /// target rides beside the grid rather than in each cell so a link whose
+    /// label hides its URL (`#76` over an issue URL) still resolves, and
+    /// [`ScreenCell`] stays a plain `Copy` value.
+    pub hyperlinks: Vec<HyperlinkSpan>,
     /// The palette's default background — what the GUI paints behind the grid
     /// (and skips repainting per cell). Carried here so the shell needs no
     /// palette knowledge.
@@ -54,6 +59,62 @@ pub struct ScreenCell {
     pub fg: [u8; 3],
     pub bg: [u8; 3],
     pub bold: bool,
+}
+
+/// One contiguous run of cells sharing an OSC 8 hyperlink, in visible
+/// coordinates: columns `start..end` (exclusive) of `row`, and the URI they
+/// point at. The same link printed in two places is two spans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HyperlinkSpan {
+    pub row: u16,
+    pub start: u16,
+    pub end: u16,
+    pub uri: String,
+}
+
+/// Folds the grid's cells into [`HyperlinkSpan`]s: a cell carrying the same
+/// hyperlink as the cell before it extends the open span, anything else closes
+/// it. Cells must arrive in row-major order — the display iterator's — so a
+/// span's end column alone tells whether the next cell continues it: a new
+/// row starts at column 0, which no open span ends at.
+#[derive(Default)]
+struct HyperlinkRuns {
+    spans: Vec<HyperlinkSpan>,
+    open: Option<(HyperlinkSpan, Hyperlink)>,
+}
+
+impl HyperlinkRuns {
+    fn push(&mut self, row: u16, col: u16, link: Option<Hyperlink>) {
+        if let Some((span, current)) = &mut self.open
+            && let Some(link) = &link
+            && span.end == col
+            && current == link
+        {
+            span.end = col + 1;
+            return;
+        }
+        self.close();
+        if let Some(link) = link {
+            let span = HyperlinkSpan {
+                row,
+                start: col,
+                end: col + 1,
+                uri: link.uri().to_owned(),
+            };
+            self.open = Some((span, link));
+        }
+    }
+
+    fn close(&mut self) {
+        if let Some((span, _)) = self.open.take() {
+            self.spans.push(span);
+        }
+    }
+
+    fn finish(mut self) -> Vec<HyperlinkSpan> {
+        self.close();
+        self.spans
+    }
 }
 
 /// The terminal colour scheme: the default foreground/background, the cursor
@@ -386,6 +447,7 @@ pub(crate) fn snapshot<T: EventListener>(term: &Term<T>, palette: &Palette) -> S
     let first_line = -(content.display_offset as i32);
     let cursor_shape = content.cursor.shape;
     let cursor_point = content.cursor.point;
+    let mut hyperlinks = HyperlinkRuns::default();
 
     for indexed in content.display_iter {
         let row = indexed.point.line.0 - first_line;
@@ -394,6 +456,9 @@ pub(crate) fn snapshot<T: EventListener>(term: &Term<T>, palette: &Palette) -> S
             continue;
         }
         let cell = indexed.cell;
+        // A wide glyph's spacer carries the link too: read it before the
+        // spacer is dropped, or the span would break at every wide glyph.
+        hyperlinks.push(row as u16, col as u16, cell.hyperlink());
         if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
             continue;
         }
@@ -434,6 +499,7 @@ pub(crate) fn snapshot<T: EventListener>(term: &Term<T>, palette: &Palette) -> S
         display_offset: content.display_offset,
         bracketed_paste: term.mode().contains(TermMode::BRACKETED_PASTE),
         selection: selected_spans(term, first_line, cols, rows),
+        hyperlinks: hyperlinks.finish(),
         default_bg: palette.background,
         cursor_color: palette.cursor,
     }
@@ -465,6 +531,93 @@ mod tests {
             assert_eq!(p.cursor, p.foreground);
         }
         assert_eq!(Palette::named("no-such-scheme"), None);
+    }
+
+    /// The OSC 8 target rides the snapshot as a span over the cells it covers,
+    /// so a link whose label is `#76` can still resolve to its full URL — the
+    /// text alone has nothing to detect.
+    #[test]
+    fn snapshot_carries_an_osc8_hyperlink_as_a_span_over_its_cells() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(
+            &mut term,
+            b"see \x1b]8;;https://ex.io/issues/76\x1b\\#76\x1b]8;;\x1b\\ now",
+        );
+        let screen = snapshot(&term, &Palette::default());
+        assert_eq!(
+            screen.hyperlinks,
+            vec![HyperlinkSpan {
+                row: 0,
+                start: 4,
+                end: 7,
+                uri: "https://ex.io/issues/76".into(),
+            }]
+        );
+        // The label is what the grid shows; the URI lives only on the span.
+        let text: String = screen.lines[0][4..7].iter().map(|c| c.c).collect();
+        assert_eq!(text, "#76");
+    }
+
+    /// One hyperlink id printed in two places is two spans: a click on either
+    /// run opens the same target, and neither underline bleeds across the gap.
+    #[test]
+    fn a_hyperlink_broken_by_plain_cells_is_two_spans() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(
+            &mut term,
+            b"\x1b]8;id=a;https://ex.io\x1b\\ab\x1b]8;;\x1b\\--\x1b]8;id=a;https://ex.io\x1b\\cd\x1b]8;;\x1b\\",
+        );
+        let spans = snapshot(&term, &Palette::default()).hyperlinks;
+        let cells: Vec<(u16, u16, u16)> = spans.iter().map(|s| (s.row, s.start, s.end)).collect();
+        assert_eq!(cells, vec![(0, 0, 2), (0, 4, 6)]);
+        assert!(spans.iter().all(|s| s.uri == "https://ex.io"));
+    }
+
+    /// A link that wraps at the right edge is one span per row: the underline
+    /// is drawn per row, and a span never crosses the line break.
+    #[test]
+    fn a_hyperlink_wrapping_the_row_edge_is_one_span_per_row() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(
+            &mut term,
+            b"\x1b]8;;https://ex.io\x1b\\abcdefghijkl\x1b]8;;\x1b\\",
+        );
+        let spans = snapshot(&term, &Palette::default()).hyperlinks;
+        let cells: Vec<(u16, u16, u16)> = spans.iter().map(|s| (s.row, s.start, s.end)).collect();
+        assert_eq!(cells, vec![(0, 0, 10), (1, 0, 2)]);
+    }
+
+    /// A wide glyph inside a link keeps the span whole: its spacer cell is not
+    /// rendered, but it is not a gap in the link either.
+    #[test]
+    fn a_wide_glyph_does_not_split_a_hyperlink_span() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(
+            &mut term,
+            "\x1b]8;;https://ex.io\x1b\\a日b\x1b]8;;\x1b\\".as_bytes(),
+        );
+        let spans = snapshot(&term, &Palette::default()).hyperlinks;
+        let cells: Vec<(u16, u16, u16)> = spans.iter().map(|s| (s.row, s.start, s.end)).collect();
+        assert_eq!(cells, vec![(0, 0, 4)]);
+    }
+
+    /// Plain text — a printed URL included — carries no OSC 8 span; finding
+    /// that URL stays the plaintext scan's job.
+    #[test]
+    fn plain_text_carries_no_hyperlink_span() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"see https://ex.io");
+        assert!(snapshot(&term, &Palette::default()).hyperlinks.is_empty());
     }
 
     #[test]
