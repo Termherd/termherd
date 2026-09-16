@@ -208,11 +208,16 @@ routed to the focused PTY; wheel scrollback; drag-to-select + copy; `claude
 --resume` on a session click; PTY resize follows the window. Verified
 end-to-end on Windows resuming a real Claude session. The widget shipped; the
 **terminal ergonomics a user compares against Ghostty/iTerm are still open**,
-each a refinement of this entry rather than a feature of its own:
-Cmd/Ctrl-clickable
-hyperlinks whose displayed text differs from the URL (OSC 8, #84), auto-scroll
+each a refinement of this entry rather than a feature of its own: auto-scroll
 when a drag-selection reaches the canvas edge (#157), and Alt+drag rectangular
-selection (#159). The **clipboard mouse conventions** closed on that list
+selection (#159). **Hidden hyperlinks** (OSC 8, #84) closed on that list: the
+`Screen` snapshot now carries every hyperlink as a span over the cells it
+covers, read off alacritty's own parse rather than re-detected, and the pointer
+answers that span before it scans the row's text — so a label like `#76`
+underlines and opens its issue URL exactly as a printed URL does. The span
+rides beside the grid rather than in each cell, which keeps `ScreenCell` a
+plain `Copy` value and mirrors how the selection already travels. The
+**clipboard mouse conventions** closed on that list
 (#36): `terminal.copy_on_select` and `terminal.paste_on_right_click`, both off
 by default. Copy-on-select was in fact already shipped and unconditional, so
 the setting *added the off position* — the automatic copy is now opt-in and the
