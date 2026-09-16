@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use termherd_core::ports::{PtyError, PtyHost};
 use termherd_core::workspace::SessionId;
-use termherd_core::{ScrollTarget, SelectOp, SpawnSpec};
+use termherd_core::{PointerEvent, ScrollTarget, SelectOp, SpawnSpec};
 
 use crate::events::EventSink;
 use crate::grid::Palette;
@@ -71,6 +71,22 @@ impl PtyManager {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+impl PtyManager {
+    /// Hand a command to a session's terminal thread.
+    fn send(&self, session: SessionId, cmd: TermCmd) -> Result<(), PtyError> {
+        let map = self
+            .sessions
+            .lock()
+            .map_err(|_| PtyError::Io("session lock poisoned".into()))?;
+        let s = map
+            .get(&session)
+            .ok_or(PtyError::NoSuchSession(session.0.get()))?;
+        s.ctrl
+            .send(cmd)
+            .map_err(|_| PtyError::Io("terminal thread gone".into()))
     }
 }
 
@@ -228,42 +244,19 @@ impl PtyHost for PtyManager {
     }
 
     fn scroll(&self, session: SessionId, target: ScrollTarget) -> Result<(), PtyError> {
-        let map = self
-            .sessions
-            .lock()
-            .map_err(|_| PtyError::Io("session lock poisoned".into()))?;
-        let s = map
-            .get(&session)
-            .ok_or(PtyError::NoSuchSession(session.0.get()))?;
-        s.ctrl
-            .send(TermCmd::Scroll(target))
-            .map_err(|_| PtyError::Io("terminal thread gone".into()))
+        self.send(session, TermCmd::Scroll(target))
     }
 
     fn select(&self, session: SessionId, op: SelectOp) -> Result<(), PtyError> {
-        let map = self
-            .sessions
-            .lock()
-            .map_err(|_| PtyError::Io("session lock poisoned".into()))?;
-        let s = map
-            .get(&session)
-            .ok_or(PtyError::NoSuchSession(session.0.get()))?;
-        s.ctrl
-            .send(TermCmd::Select(op))
-            .map_err(|_| PtyError::Io("terminal thread gone".into()))
+        self.send(session, TermCmd::Select(op))
+    }
+
+    fn pointer(&self, session: SessionId, pointer: PointerEvent) -> Result<(), PtyError> {
+        self.send(session, TermCmd::Pointer(pointer))
     }
 
     fn copy_selection(&self, session: SessionId) -> Result<(), PtyError> {
-        let map = self
-            .sessions
-            .lock()
-            .map_err(|_| PtyError::Io("session lock poisoned".into()))?;
-        let s = map
-            .get(&session)
-            .ok_or(PtyError::NoSuchSession(session.0.get()))?;
-        s.ctrl
-            .send(TermCmd::CopySelection)
-            .map_err(|_| PtyError::Io("terminal thread gone".into()))
+        self.send(session, TermCmd::CopySelection)
     }
 
     fn kill(&self, session: SessionId) -> Result<(), PtyError> {

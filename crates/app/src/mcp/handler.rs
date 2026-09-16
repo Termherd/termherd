@@ -24,11 +24,13 @@ use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
 use termherd_core::{
-    Action as KeymapAction, KeyChord, Section, SessionStatus, SnapshotFilter, TerminalScope,
+    Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, Section,
+    SessionStatus, SnapshotFilter, TerminalScope,
 };
 
 use crate::shell::bridge::{
-    Action, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo, SessionKind,
+    Action, ActionDetail, BridgeHandle, CallError, PointerOutcome, Press, PressStep, Reply,
+    Request, SessionInfo, SessionKind,
 };
 use crate::snapshot_dto::{SnapshotDto, status_str};
 
@@ -305,6 +307,32 @@ impl TermherdMcp {
             bytes: args.text.into_bytes(),
         })
         .await
+    }
+
+    /// Place a pointer event at a cell of a session's terminal — the pointer
+    /// half of `run_in_session`. → `mouse_in_session`.
+    #[tool(
+        name = "mouse_in_session",
+        description = "Place a mouse event at a cell of a session's terminal — \
+                       the pointer counterpart of `run_in_session`. Args: \
+                       `session` (handle), `kind` (one of \"press\", \
+                       \"release\", \"click\", \"drag\", \"move\"), `col` and \
+                       `row` (0-based cells of the visible screen; out of the \
+                       pane's geometry rejects the call), `button` (\"left\" \
+                       default, \"middle\", \"right\"). Returns `focused_handle` \
+                       and `pointer`: \"selection\" when the event drove the \
+                       terminal's own text selection (read it back with the \
+                       `copy` action), \"ignored\" when it drove nothing. A \
+                       drag is press at one cell, drag at another; a bare click \
+                       clears the selection."
+    )]
+    async fn mouse_in_session(
+        &self,
+        Parameters(args): Parameters<MouseArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+        let pointer = parse_pointer(&args)?;
+        self.act(Action::Pointer { session, pointer }).await
     }
 
     /// Block until a session's activity reaches one of the given statuses — the
@@ -615,15 +643,22 @@ impl TermherdMcp {
             return Err(ErrorData::invalid_params(reason, None));
         }
         let mut value = serde_json::json!({ "focused_handle": outcome.focused });
-        // The repo actions answer about a sidebar row, not about focus; the
-        // fields ride alongside rather than in a second reply kind.
-        if let Some(repo) = outcome.repo
+        // An action's detail rides alongside focus rather than in a second
+        // reply kind.
+        if let Some(detail) = outcome.detail
             && let Some(object) = value.as_object_mut()
         {
-            object.insert("repo_path".into(), repo.path.into());
-            object.insert("declared".into(), repo.declared.into());
-            object.insert("session_count".into(), repo.session_count.into());
-            object.insert("in_sidebar".into(), repo.visible.into());
+            match detail {
+                ActionDetail::Repo(repo) => {
+                    object.insert("repo_path".into(), repo.path.into());
+                    object.insert("declared".into(), repo.declared.into());
+                    object.insert("session_count".into(), repo.session_count.into());
+                    object.insert("in_sidebar".into(), repo.visible.into());
+                }
+                ActionDetail::Pointer(pointer) => {
+                    object.insert("pointer".into(), pointer_str(pointer).into());
+                }
+            }
         }
         structured(value)
     }
@@ -816,6 +851,68 @@ struct RunArgs {
     session: String,
     /// Text to type; include a trailing newline to submit a command.
     text: String,
+}
+
+/// Arguments for `mouse_in_session`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct MouseArgs {
+    /// The stable handle of the target session.
+    session: String,
+    /// One of `press`, `release`, `click`, `drag`, `move`.
+    kind: String,
+    /// 0-based column in the visible screen.
+    col: u16,
+    /// 0-based row in the visible screen.
+    row: u16,
+    /// `left` (default), `middle` or `right`.
+    #[serde(default)]
+    button: Option<String>,
+}
+
+/// The pointer event a `mouse_in_session` call describes, or the first word it
+/// got wrong — rejected before the bridge, so the whole call fails and nothing
+/// applies, as a malformed chord does for `press_keys`.
+fn parse_pointer(args: &MouseArgs) -> Result<PointerEvent, ErrorData> {
+    let unknown = |what: &str, word: &str| {
+        ErrorData::invalid_params(format!("unknown pointer {what} {word:?}"), None)
+    };
+    let kind = pointer_kind_from_str(&args.kind).ok_or_else(|| unknown("kind", &args.kind))?;
+    let mut pointer = PointerEvent::left(kind, args.col, args.row);
+    if let Some(word) = args.button.as_deref() {
+        pointer.button = pointer_button_from_str(word).ok_or_else(|| unknown("button", word))?;
+    }
+    Ok(pointer)
+}
+
+/// The external word for a pointer gesture, back to the type.
+fn pointer_kind_from_str(word: &str) -> Option<PointerKind> {
+    match word {
+        "press" => Some(PointerKind::Press),
+        "release" => Some(PointerKind::Release),
+        "click" => Some(PointerKind::Click),
+        "drag" => Some(PointerKind::Drag),
+        "move" => Some(PointerKind::Move),
+        _ => None,
+    }
+}
+
+/// The external word for a pointer button, back to the type.
+fn pointer_button_from_str(word: &str) -> Option<PointerButton> {
+    match word {
+        "left" => Some(PointerButton::Left),
+        "middle" => Some(PointerButton::Middle),
+        "right" => Some(PointerButton::Right),
+        _ => None,
+    }
+}
+
+/// The external word for what the terminal did with a pointer event.
+fn pointer_str(outcome: PointerOutcome) -> &'static str {
+    match outcome {
+        PointerOutcome::Selection => "selection",
+        PointerOutcome::Ignored => "ignored",
+    }
 }
 
 /// A tool result carrying `payload` as its `structuredContent`.
@@ -1110,13 +1207,7 @@ mod tests {
     fn sweep_case<'a>(mcp: &'a TermherdMcp, tool: &str) -> (Reply, SweepCall<'a>) {
         use crate::shell::bridge::{ActionOutcome, ShotResult, TerminalRead, WaitOutcome};
 
-        let acted = || {
-            Reply::Acted(ActionOutcome {
-                focused: Some("1".into()),
-                error: None,
-                repo: None,
-            })
-        };
+        let acted = || Reply::Acted(ActionOutcome::applied(Some("1".into())));
         match tool {
             "list_sessions" => (
                 Reply::Sessions(Vec::new()),
@@ -1166,6 +1257,19 @@ mod tests {
                 Box::pin(mcp.run_in_session(Parameters(RunArgs {
                     session: "1".into(),
                     text: "ls\n".into(),
+                }))),
+            ),
+            "mouse_in_session" => (
+                Reply::Acted(
+                    ActionOutcome::applied(Some("1".into()))
+                        .with_detail(ActionDetail::Pointer(PointerOutcome::Selection)),
+                ),
+                Box::pin(mcp.mouse_in_session(Parameters(MouseArgs {
+                    session: "1".into(),
+                    kind: "press".into(),
+                    col: 0,
+                    row: 0,
+                    ..MouseArgs::default()
                 }))),
             ),
             "wait_for_status" => (
@@ -1502,6 +1606,112 @@ mod tests {
                 bytes: b"ls\n".to_vec(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn mouse_in_session_tool_builds_a_pointer_action_from_its_words() {
+        let action = action_of(|mcp| async move {
+            mcp.mouse_in_session(Parameters(MouseArgs {
+                session: "3".into(),
+                kind: "drag".into(),
+                col: 7,
+                row: 2,
+                button: Some("right".into()),
+            }))
+            .await
+        })
+        .await;
+        assert_eq!(
+            action,
+            Action::Pointer {
+                session: 3,
+                pointer: PointerEvent {
+                    button: PointerButton::Right,
+                    ..PointerEvent::left(PointerKind::Drag, 7, 2)
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn mouse_in_session_tool_defaults_to_the_left_button() {
+        let action = action_of(|mcp| async move {
+            mcp.mouse_in_session(Parameters(MouseArgs {
+                session: "3".into(),
+                kind: "click".into(),
+                col: 0,
+                row: 0,
+                ..MouseArgs::default()
+            }))
+            .await
+        })
+        .await;
+        let Action::Pointer { pointer, .. } = action else {
+            panic!("expected a pointer action, got {action:?}");
+        };
+        assert_eq!(pointer, PointerEvent::left(PointerKind::Click, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn mouse_in_session_tool_rejects_an_unknown_word_before_the_bridge() {
+        // Two vocabularies, one rejection each — before the bridge, so the
+        // whole call fails and nothing applies, as a malformed chord does.
+        let bad = [
+            (
+                "tap",
+                MouseArgs {
+                    session: "1".into(),
+                    kind: "tap".into(),
+                    ..MouseArgs::default()
+                },
+            ),
+            (
+                "wheel",
+                MouseArgs {
+                    session: "1".into(),
+                    kind: "press".into(),
+                    button: Some("wheel".into()),
+                    ..MouseArgs::default()
+                },
+            ),
+        ];
+        for (word, args) in bad {
+            let (handle, requests) = channel();
+            drop(requests);
+            let error = TermherdMcp::new(handle)
+                .mouse_in_session(Parameters(args))
+                .await
+                .expect_err("an unknown word is rejected before the bridge");
+            assert!(
+                error.message.contains(word),
+                "the rejection names the word: {}",
+                error.message
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mouse_in_session_tool_reports_what_the_terminal_did() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(
+            requests,
+            Reply::Acted(
+                ActionOutcome::applied(Some("1".into()))
+                    .with_detail(ActionDetail::Pointer(PointerOutcome::Ignored)),
+            ),
+        );
+        let result = TermherdMcp::new(handle)
+            .mouse_in_session(Parameters(MouseArgs {
+                session: "1".into(),
+                kind: "move".into(),
+                ..MouseArgs::default()
+            }))
+            .await
+            .expect("the tool returns a result");
+        let _ = shell.await.expect("shell task");
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(value["pointer"], "ignored");
+        assert_eq!(value["focused_handle"], "1");
     }
 
     #[tokio::test]

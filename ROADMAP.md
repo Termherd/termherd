@@ -88,7 +88,6 @@ issues #18–#29.
 | [F-mcp-control-surface](#f-mcp-control-surface) | feature | mcp | ☐ | Termherd exposes its own control and orchestration surface as an MCP server. |
 | [F-mcp-ide-bridge](#f-mcp-ide-bridge) | feature | mcp | ☐ | A live MCP/IDE bridge to Claude — termherd as the client, not the server. |
 | [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) | feature | mcp, workspace | ☐ | The pointer rung, chrome half: click and drag termherd's own interface. |
-| [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) | feature | mcp, terminal | ☐ | The pointer rung, terminal half: place a mouse event inside a session. |
 | [F-multi-window](#f-multi-window) | feature | workspace | ☐ | More than one termherd window, and tabs that travel between them. |
 | [F-repo-prune](#f-repo-prune) | feature | sidebar | ☐ | Sweep the sidebar for projects whose directory no longer exists. |
 | [F-repo-remove](#f-repo-remove) | feature | sidebar | ☐ | Take a project or repository out of the sidebar, durably and explicitly. |
@@ -100,6 +99,7 @@ issues #18–#29.
 | [F-mcp-keys](#f-mcp-keys) | feature | mcp, keymap | ✅ | The keyboard rung: drive the app by key chords through the real keymap. |
 | [F-mcp-live-bridge](#f-mcp-live-bridge) | feature | mcp | ✅ | The gate: an in-process MCP server on loopback, reaching the live `core::App`. |
 | [F-mcp-orchestration](#f-mcp-orchestration) | feature | mcp, workspace | ✅ | The action rung: six mutating tools, each over an existing `core::App` event. |
+| [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) | feature | mcp, terminal | ✅ | The pointer rung, terminal half: place a mouse event inside a session. |
 | [F-mcp-screenshot](#f-mcp-screenshot) | feature | mcp, workspace | ✅ | The pixel rung: the window as a PNG, for what text cannot answer. |
 | [F-mcp-snapshot](#f-mcp-snapshot) | feature | mcp, workspace | ✅ | The perception rung: a filterable, light-by-default view of the whole app. |
 | [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) | feature | mcp, workspace | ✅ | One model, two readers: the capture dump is now the MCP snapshot. |
@@ -964,43 +964,6 @@ the manual's keyboard page.
 Sibling of [F-mcp-pointer-terminal](#f-mcp-pointer-terminal), which is the half
 that blocks #155.
 
-<a id="f-mcp-pointer-terminal"></a>
-
-### F-mcp-pointer-terminal
-
-The pointer rung, terminal half: place a mouse event inside a session.
-
-The pointer rung, terminal half: place a mouse event **inside a session's
-terminal**, the way `run_in_session` places text there. Filed as #300. Cell
-addressed — a terminal is a grid, and a grid is what an SGR report carries — so
-the tool is `mouse_in_session(session, kind, col, row, …)`, bounded by the
-pane's geometry, answering what the pane did with it (`forwarded` when the
-child had mouse reporting on, `selection` when it drove local text selection,
-`rejected` out of bounds).
-
-Two gaps close with it. The act→wait→observe loop has no pointer at all, so
-every mouse-mode TUI a session hosts — Claude Code's `/diff` and `/resume`,
-lazygit, fzf, vim — is unreachable to an agent whose keyboard already works.
-And #155 (mouse clicks are never encoded to the child) cannot be verified end
-to end by the agent that fixes it. Its encoder half unit-tests the way the
-wheel's already does in `pty::input`; what no test in the tree can produce is
-the gesture itself against a real child, which is the half that decides whether
-a TUI actually responds. **Blocks #155.**
-
-It shares one seam with that bug, and neither half is greenfield — the risk is
-a second copy, not a missing one. A cell-addressed pointer path already reaches
-`core` (`Event::ScrollViewport` carries a `ScrollTarget::Wheel` with a pointer
-cell, `SelectOp` carries grid coordinates), and `pty::input::wheel_bytes`
-already holds both the SGR/X10
-encoder and the mode gate that chooses between forwarding and local selection.
-So this rung *extends* that path with button state and exposes it over MCP,
-while #155 *extends* that same encoder and gate to press, release and drag.
-Local selection is the observable behaviour before #155 lands, so the rung has
-a test standing alone.
-
-Sibling of [F-mcp-pointer-chrome](#f-mcp-pointer-chrome), which drives
-termherd's own interface rather than a terminal and blocks nothing.
-
 <a id="f-multi-window"></a>
 
 ### F-multi-window
@@ -1273,6 +1236,47 @@ and address a pane **in any tab** — `Event::RevealPane` activates the owning
 tab first, since click-to-focus (`FocusPane`) only reaches the active one and a
 silent no-op there would let a close destroy the wrong terminal. Depends on #193;
 with #212 (perception) this closes the act→observe loop
+
+<a id="f-mcp-pointer-terminal"></a>
+
+### F-mcp-pointer-terminal
+
+The pointer rung, terminal half: place a mouse event inside a session.
+
+**The pointer rung, terminal half.** Place a mouse event **inside a session's
+terminal**, the way `run_in_session` places text there. Shipped as
+`mouse_in_session(session, kind, col, row, button?)` (#300). Cell
+addressed — a terminal is a grid, and a grid is what an SGR report carries — and
+bounded by the pane's last rendered geometry: a cell outside it rejects the
+whole call before anything applies, as a malformed chord does for `press_keys`.
+The answer says what the terminal did with it: `selection` when it drove the
+local text selection, `ignored` when the event maps to no local gesture (a
+release, a move, a button other than the left one).
+
+Two gaps motivated it. The act→wait→observe loop had no pointer at all, so
+every mouse-mode TUI a session hosts — Claude Code's `/diff` and `/resume`,
+lazygit, fzf, vim — was unreachable to an agent whose keyboard already worked.
+And #155 (mouse clicks are never encoded to the child) could not be verified
+end to end by the agent that fixes it: its encoder half unit-tests the way the
+wheel's already does in `pty::input`, but the gesture itself against a real
+child is what decides whether a TUI actually responds. **Blocks #155**, which
+is why it landed first.
+
+It shares one seam with that bug, and the rung built the seam without the
+second copy the design feared. The path mirrors the wheel's end to end —
+`Event::TerminalPointer` → `Effect::TerminalPointer` → `PtyHost::pointer` → the
+per-session terminal thread, which holds the live scroll offset — and the
+gesture rule lives once in `core::app::pointer`: *whether* an event drives the
+selection is read off the event (that is what the shell answers), *where* it
+lands is placed by the terminal with its live offset. #155 *extends* that arm
+with the SGR/X10
+press encoder and the mode gate beside `wheel_bytes`, adds `forwarded` as the
+third answer, and routes the canvas's own bare press/drag/release through the
+same path. Until then the tool drives the local selection only, and the book
+says so.
+
+Sibling of [F-mcp-pointer-chrome](#f-mcp-pointer-chrome), which drives
+termherd's own interface rather than a terminal and blocks nothing.
 
 <a id="f-mcp-screenshot"></a>
 

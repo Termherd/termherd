@@ -10,7 +10,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Flags, Hyperlink};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
-use termherd_core::{SelectOp, SelectSide};
+use termherd_core::{PointerEvent, SelectOp, SelectSide, pointer_select};
 
 /// A snapshot of the visible terminal grid handed to the GUI for rendering.
 /// Colours are resolved to RGB here so the shell needs no terminal knowledge.
@@ -354,6 +354,14 @@ fn resolve(color: Color, palette: &Palette) -> [u8; 3] {
         Color::Spec(rgb) => [rgb.r, rgb.g, rgb.b],
         Color::Indexed(i) => indexed_rgb(i, palette),
         Color::Named(named) => named_rgb(named, palette),
+    }
+}
+
+/// Apply a cell-addressed pointer event to the terminal's own selection,
+/// placed with the *live* scroll offset — a caller's snapshot may lag it.
+pub(crate) fn apply_pointer<T: EventListener>(term: &mut Term<T>, pointer: PointerEvent) {
+    if let Some(op) = pointer_select(&pointer, term.grid().display_offset()) {
+        apply_select(term, op);
     }
 }
 
@@ -851,5 +859,73 @@ mod tests {
         assert_eq!(screen.cursor_color, [0x01, 0x02, 0x03]);
         assert_eq!(screen.lines[0][0].fg, [0x10, 0x20, 0x30]);
         assert_eq!(screen.lines[0][0].bg, [0xfa, 0xfb, 0xfc]);
+    }
+
+    // --- cell-addressed pointer over a real grid --------------------------
+
+    /// A press then a drag over the text leaves the terminal's own selection
+    /// holding exactly the dragged text — the observable this rung has before
+    /// the child can be handed the mouse.
+    #[test]
+    fn a_pointer_press_and_drag_select_the_text_between_them() {
+        use alacritty_terminal::event::VoidListener;
+        use termherd_core::PointerKind;
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"hello wide\r\nworld");
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Press, 6, 0));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Drag, 4, 1));
+        assert_eq!(
+            snapshot(&term, &Palette::default()).selection,
+            vec![(0, 6, 9), (1, 0, 4)],
+            "row 0 from the press to the edge, row 1 up to the drag cell"
+        );
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("wide\nworld"),
+            "the dragged text is what a copy reads"
+        );
+    }
+
+    /// A bare click drops the highlight, as it does under a real pointer, so an
+    /// agent can dismiss a selection it made without a second tool.
+    #[test]
+    fn a_pointer_click_clears_the_selection() {
+        use alacritty_terminal::event::VoidListener;
+        use termherd_core::PointerKind;
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"hello");
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Press, 0, 0));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Drag, 4, 0));
+        assert!(!snapshot(&term, &Palette::default()).selection.is_empty());
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Click, 2, 0));
+        assert!(
+            snapshot(&term, &Palette::default()).selection.is_empty(),
+            "the click cleared it"
+        );
+    }
+
+    /// The pointer is addressed in visible rows; with the viewport scrolled up
+    /// into history the terminal anchors the selection to the text under that
+    /// row, not to the live line the row number would name at the tail.
+    #[test]
+    fn a_pointer_over_a_scrolled_viewport_selects_the_text_under_the_row() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::grid::Scroll;
+        use termherd_core::PointerKind;
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        // Six rows into a three-row screen: three lines of scrollback.
+        parser.advance(&mut term, b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5");
+        // Scrolled up two lines, the visible rows show l1 / l2 / l3.
+        term.scroll_display(Scroll::Delta(2));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Press, 0, 1));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Drag, 1, 1));
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("l2"),
+            "visible row 1 is l2 while scrolled, not l4"
+        );
     }
 }

@@ -1410,7 +1410,7 @@ mod key_routing {
     use iced::keyboard::{Key, Location, Modifiers};
     use std::sync::Mutex as StdMutex;
     use termherd_core::ports::{PtyError, ScanError};
-    use termherd_core::{Action, SelectSide, SnapshotFilter, SpawnSpec};
+    use termherd_core::{Action, PointerEvent, PointerKind, SelectSide, SnapshotFilter, SpawnSpec};
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]
@@ -1422,6 +1422,7 @@ mod key_routing {
         resizes: StdMutex<Vec<(u16, u16)>>,
         scrolls: StdMutex<Vec<ScrollTarget>>,
         selects: StdMutex<Vec<SelectOp>>,
+        pointers: StdMutex<Vec<(SessionId, PointerEvent)>>,
         copies: StdMutex<usize>,
     }
 
@@ -1457,6 +1458,9 @@ mod key_routing {
         fn copy_count(&self) -> usize {
             *self.copies.lock().expect("copies lock")
         }
+        fn pointers(&self) -> Vec<(SessionId, PointerEvent)> {
+            self.pointers.lock().expect("pointers lock").clone()
+        }
     }
 
     impl PtyHost for RecordingPty {
@@ -1488,6 +1492,13 @@ mod key_routing {
         }
         fn select(&self, _: SessionId, op: SelectOp) -> Result<(), PtyError> {
             self.selects.lock().expect("selects lock").push(op);
+            Ok(())
+        }
+        fn pointer(&self, session: SessionId, pointer: PointerEvent) -> Result<(), PtyError> {
+            self.pointers
+                .lock()
+                .expect("pointers lock")
+                .push((session, pointer));
             Ok(())
         }
         fn copy_selection(&self, _: SessionId) -> Result<(), PtyError> {
@@ -1772,6 +1783,111 @@ mod key_routing {
         assert_eq!(focused(&shell), before, "focus is untouched");
     }
 
+    /// The focused session's handle as an external caller spells it.
+    fn focused_handle(shell: &Shell) -> u64 {
+        focused(shell).expect("focused").parse().expect("numeric")
+    }
+
+    /// A shell with one focused terminal whose last render is `text` on one
+    /// row — the geometry a pointer is bounded by.
+    fn shell_showing(text: &str) -> (Shell, Arc<RecordingPty>, u64) {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of(text));
+        let handle = focused_handle(&shell);
+        (shell, pty, handle)
+    }
+
+    #[test]
+    fn pointer_action_rejects_an_unknown_handle_without_forwarding() {
+        let (mut shell, pty, _) = shell_showing("$ cargo test");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: 999,
+            pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+        });
+        assert!(
+            outcome.error.as_deref().is_some_and(|e| e.contains("999")),
+            "an unknown handle is rejected, naming it: {outcome:?}"
+        );
+        assert!(pty.pointers().is_empty(), "nothing reached any PTY");
+    }
+
+    #[test]
+    fn pointer_action_rejects_a_cell_outside_the_pane_naming_the_geometry() {
+        // "$ cargo test" is 12 columns on 1 row: col 12 and row 1 are both out.
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        for (col, row) in [(12, 0), (0, 1), (40, 40)] {
+            let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+                session: handle,
+                pointer: PointerEvent::left(PointerKind::Press, col, row),
+            });
+            let error = outcome
+                .error
+                .unwrap_or_else(|| panic!("({col},{row}) must be rejected"));
+            assert!(
+                error.contains("12x1"),
+                "the rejection names the pane's geometry so the caller can retry \
+                 inside it: {error}"
+            );
+        }
+        assert!(
+            pty.pointers().is_empty(),
+            "an out-of-range event never applies"
+        );
+    }
+
+    #[test]
+    fn pointer_action_rejects_a_session_that_has_not_rendered_yet() {
+        // No screen inserted: the session is live but nothing has been drawn,
+        // so there is no geometry to bound the cell by.
+        let (mut shell, pty) = shell_with_terminal();
+        let handle = focused_handle(&shell);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+        });
+        assert!(
+            outcome.error.is_some(),
+            "no geometry, no pointer: {outcome:?}"
+        );
+        assert!(pty.pointers().is_empty());
+    }
+
+    #[test]
+    fn pointer_action_forwards_an_in_bounds_press_and_reports_a_selection() {
+        use super::bridge::PointerOutcome;
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        let pointer = PointerEvent::left(PointerKind::Press, 11, 0);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer,
+        });
+        assert_eq!(outcome.error, None, "the last cell is inside the pane");
+        assert_eq!(outcome.pointer(), Some(PointerOutcome::Selection));
+        assert_eq!(outcome.focused, focused(&shell));
+        let session = shell.core.workspace.focused_session().expect("focused");
+        assert_eq!(
+            pty.pointers(),
+            vec![(session, pointer)],
+            "exactly the one event reached the terminal, as sent"
+        );
+    }
+
+    #[test]
+    fn pointer_action_reports_a_move_as_ignored_but_still_hands_it_over() {
+        use super::bridge::PointerOutcome;
+        // A move drives no local selection, so the caller learns nothing
+        // happened — yet the terminal still receives every event.
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: PointerEvent::left(PointerKind::Move, 3, 0),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.pointer(), Some(PointerOutcome::Ignored));
+        assert_eq!(pty.pointers().len(), 1);
+    }
+
     #[test]
     fn focus_action_moves_focus_to_the_target_pane_in_a_split() {
         let (mut shell, _pty) = shell_with_terminal();
@@ -1896,7 +2012,7 @@ mod key_routing {
             path: worktree.display().to_string(),
         });
         assert_eq!(outcome.error, None);
-        let answer = outcome.repo.expect("a repo action answers about the row");
+        let answer = outcome.repo().expect("a repo action answers about the row");
         let expected = repo.display().to_string();
         assert_eq!(
             answer.path, expected,
@@ -1913,7 +2029,7 @@ mod key_routing {
             path: sub.display().to_string(),
         });
         assert_eq!(
-            outcome.repo.expect("an answer").path,
+            outcome.repo().expect("an answer").path,
             sub.display().to_string()
         );
     }
@@ -1925,7 +2041,7 @@ mod key_routing {
             path: "/definitely/not/here".into(),
         });
         assert!(outcome.error.is_some(), "nothing to launch from, so refuse");
-        assert!(outcome.repo.is_none(), "and nothing was applied");
+        assert!(outcome.repo().is_none(), "and nothing was applied");
     }
 
     #[test]
@@ -1942,7 +2058,7 @@ mod key_routing {
         // No sessions: forgetting takes the row with it.
         let (outcome, _task) =
             shell.perform_action(BridgeAction::ForgetRepo { path: path.clone() });
-        let answer = outcome.repo.expect("a repo action answers about the row");
+        let answer = outcome.repo().expect("a repo action answers about the row");
         assert!(!answer.declared && !answer.visible);
 
         // Same repo, now with a scanned session: the row lives on without the
@@ -1954,7 +2070,7 @@ mod key_routing {
                 "s1", &repo,
             )]));
         let (outcome, _task) = shell.perform_action(BridgeAction::ForgetRepo { path });
-        let answer = outcome.repo.expect("a repo action answers about the row");
+        let answer = outcome.repo().expect("a repo action answers about the row");
         assert!(!answer.declared, "the declaration is gone");
         assert!(answer.visible, "but the scan still reports the project");
         assert_eq!(answer.session_count, 1);
@@ -1975,7 +2091,7 @@ mod key_routing {
 
         let (outcome, _task) =
             shell.perform_action(BridgeAction::DeclareRepo { path: repo.clone() });
-        let answer = outcome.repo.expect("a repo action answers about the row");
+        let answer = outcome.repo().expect("a repo action answers about the row");
         assert!(
             answer.visible,
             "the row is in the sidebar; a filter hiding it is not a failed add"
@@ -1989,7 +2105,7 @@ mod key_routing {
                 "s1", &repo,
             )]));
         let (outcome, _task) = shell.perform_action(BridgeAction::DeclareRepo { path: repo });
-        let answer = outcome.repo.expect("an answer");
+        let answer = outcome.repo().expect("an answer");
         assert_eq!(answer.session_count, 1, "the search does not decount it");
     }
 
@@ -2019,7 +2135,7 @@ mod key_routing {
             !shell.core.is_repo_declared(&key),
             "the textual half of the rule still applies, so the row goes"
         );
-        assert!(!outcome.repo.expect("an answer").declared);
+        assert!(!outcome.repo().expect("an answer").declared);
     }
 
     #[test]

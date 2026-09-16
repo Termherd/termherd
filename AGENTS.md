@@ -149,12 +149,13 @@ into its `mcpServers` at spawn (loopback, per-session token) — so it can read
 and drive the workspace it runs in. This is the richer sibling of the capture
 dump above: same `WorkspaceSnapshot` model, live instead of a file.
 
-**Settled.** Fifteen tools: `list_sessions` + `snapshot`
+**Settled.** Sixteen tools: `list_sessions` + `snapshot`
 (perception), `open_session` / `split_pane` / `focus_pane` / `rename_tab` /
-`close_pane` / `run_in_session` (action), `wait_for_status` + `read_terminal`
-(synchronisation), `screenshot` (pixels), `press_keys` + `run_action`
-(the app's own keyboard), `add_repo` + `forget_repo` (membership — what the
-sidebar *contains*, as against what the window draws). The loop they exist to
+`close_pane` / `run_in_session` / `mouse_in_session` (action),
+`wait_for_status` + `read_terminal` (synchronisation), `screenshot` (pixels),
+`press_keys` + `run_action` (the app's own keyboard), `add_repo` +
+`forget_repo` (membership — what the sidebar *contains*, as against what the
+window draws). The loop they exist to
 serve is **act → wait → observe**: `run_in_session` returns immediately, so
 synchronise with `wait_for_status` and then `read_terminal`. Do **not** poll
 `snapshot` in a loop — it races the transition you are watching for, which is
@@ -239,25 +240,45 @@ mutation goes through an existing `Event`. The keyboard rung adds
 (the inverse of `chord_of`), and `routing::KeyboardOwner` / `KeyVerdict` — the
 overlay ladder and its outcome named once, since three readers consult them.
 
-**Still open.** Four features and two defects: `F-mcp-agent-loop` (#196 —
+**The pointer reaches a terminal, by cell** (#300). `mouse_in_session` places
+one mouse event at a `(col, row)` of a session's visible screen — the pointer
+half of what `run_in_session` does for text. The path mirrors the wheel's end
+to end: `Event::TerminalPointer` → `Effect::TerminalPointer` →
+`PtyHost::pointer` → the per-session terminal thread, which holds the live
+scroll offset and applies the gesture to its own selection. The rule is split
+in two in `core::app::pointer`: `PointerEvent::local_gesture` says *whether*
+an event drives the selection (left press → start, left drag → extend
+*through* the cell, left click → clear, anything else → nothing) from the
+button and kind alone, so the shell answers `selection` / `ignored` off the
+event itself; `pointer_select` says *where*, and only the terminal, which
+holds the live offset, is handed that half. Bounds are checked in the shell
+against the session's last `Screen`, and a cell outside them rejects the whole
+call, as a malformed chord does.
+
+What it does **not** do is reach the child: a program with mouse reporting on
+still gets nothing, because the SGR/X10 press encoder and the mode gate belong
+to #155 — the rung exists so that fix can be *verified* by the agent that
+writes it, which is why it lands first. #155 adds `forwarded` beside the two
+outcomes and routes the canvas's own bare press/drag/release through the same
+path; the iced canvas keeps its content-dependent gestures (double-click word,
+shift-extend, link click) where they are.
+
+**Still open.** Three features and two defects: `F-mcp-agent-loop` (#196 —
 below), `F-mcp-attach` (#267 — the bridge is reachable only from a session
-termherd spawned, so the launcher itself cannot drive it), the two pointer
-rungs (#300 into a session's terminal, #301 at termherd's own chrome — the
-surface has no mouse at all today, only a keyboard), `enter` on the two renames
-(#246), and a doc editor that discards unsaved edits when it closes (#248).
-None of the six blocks another; #300 blocks #155, which lives on the terminal
-rather than on this surface.
+termherd spawned, so the launcher itself cannot drive it), the pointer at
+termherd's own chrome (#301 — the sidebar, tabs and gutters still have no
+mouse), `enter` on the two renames (#246), and a doc editor that discards
+unsaved edits when it closes (#248). None of the five blocks another.
 
 `F-mcp-agent-loop` (#196 — the composed prompt→wait→read in one
 round trip) is a child of the #90 epic — no longer the last one, since three
-siblings joined it. With `screenshot` and the keyboard tools the capability
-reads as whole in three parts: drive the UI, see the pixels, read the terminal.
-It is not, and the missing part is the pointer — the surface has no mouse at
-all, so a fix whose whole contract is a gesture (#155) is one an agent can
-propose and cannot verify. That is what #300 exists to close; until it lands,
-"drive the UI" means the keyboard alone. #196 *composes* the wait, which #236
-had to fix first — building it on a synchronisation that never fired would have
-been building on sand, and that ordering constraint is now discharged.
+siblings joined it. With `screenshot`, the keyboard tools and now the terminal
+pointer, the capability reads as whole in three parts: drive the UI, see the
+pixels, read the terminal. The gap left is that the pointer stops at the
+terminal's own selection until #155 forwards it, so a mouse-mode TUI is still
+driven by the keyboard alone. #196 *composes* the wait, which #236 had to fix
+first — building it on a synchronisation that never fired would have been
+building on sand, and that ordering constraint is now discharged.
 
 **Every overlay can now be left from the keyboard** (#237). An open sidebar
 session-rename used to swallow every key including `escape`, parking the whole

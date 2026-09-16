@@ -54,6 +54,7 @@ tool-level error; the text reads keep working.
 | `rename_tab` | `tab`, `title` | `tab` is the 0-based index `snapshot` reports; a blank title reverts to the derived one |
 | `close_pane` | `pane` | a lone pane is its whole tab, which closes |
 | `run_in_session` | `session`, `text` | include a trailing newline to submit |
+| `mouse_in_session` | `session`, `kind`, `col`, `row`, `button` | a mouse event at a **cell** of the terminal; see below |
 | `add_repo` | `path` | put a repository in the sidebar before it has any session |
 | `forget_repo` | `path` | drop an addition; the row survives on its sessions |
 
@@ -89,6 +90,40 @@ sent. A path that does not exist, or a relative one, is rejected.
 added is **not** an error, and forgetting one the scan still reports leaves the
 row standing. Read `in_sidebar` to tell the two outcomes apart — `false` means
 it is gone, `true` with `declared: false` means it lives on its sessions.
+
+#### The pointer, inside a terminal
+
+`mouse_in_session` is the pointer counterpart of `run_in_session`: it places
+one mouse event **inside** a session's terminal. It is addressed by cell, not
+by pixel — a terminal is a grid, and a grid is what a mouse report carries —
+so an agent with no screen coordinates can still point.
+
+| Arg | Values |
+| --- | --- |
+| `kind` | `press`, `release`, `click`, `drag`, `move` |
+| `col`, `row` | 0-based cells of the **visible** screen |
+| `button` | `left` (default), `middle`, `right` |
+
+The answer adds a `pointer` field saying what the terminal did:
+
+| `pointer` | Means |
+| --- | --- |
+| `selection` | the event drove the terminal's own text selection |
+| `ignored` | it maps to no local gesture — a release, a move, a middle or right button |
+
+A drag is two calls — `press` at one cell, then `drag` at another — and the
+text between them is selected, both cells included. Read it back with the
+`copy` action (`run_action`), which puts the selection on the clipboard. A bare
+`click` clears the selection. A cell outside the pane's geometry, or a session
+that has not rendered yet, **rejects the whole call** before anything applies,
+naming the geometry so you can retry inside it.
+
+What this rung does **not** do yet is forward the event to the child. A
+program that has turned mouse reporting on — Claude Code's `/diff`, lazygit,
+vim — still sees nothing; the event drives the local selection as it would for
+a human today, which is [#155](https://github.com/Termherd/termherd/issues/155).
+When that lands, the same tool answers `forwarded` for it, and the selection
+path stays for a child that is not reading the mouse.
 
 ### Synchronisation
 
@@ -146,12 +181,13 @@ A worked example, from inside a session TermHerd launched:
   `invalid_params` error naming the problem.
 - A malformed chord or unknown action name **rejects the whole call** before
   anything applies: half an applied sequence is worse than none, because the
-  caller cannot tell how far it got.
+  caller cannot tell how far it got. A pointer event outside the pane, or an
+  unknown pointer word, is refused the same way.
 - A wedged shell surfaces as a tool error, never a hang.
 
 ## What is still open
 
-Six follow-ups, and they are independent of each other:
+Five follow-ups, and they are independent of each other:
 
 | Gap | Issue |
 | --- | --- |
@@ -159,5 +195,5 @@ Six follow-ups, and they are independent of each other:
 | `enter` commits neither rename over MCP — see [Driving the keyboard](./keyboard.md). | [#246](https://github.com/Termherd/termherd/issues/246) |
 | The doc editor discards unsaved edits when it closes, by button or by `escape`. | [#248](https://github.com/Termherd/termherd/issues/248) |
 | The bridge is reachable only from a session termherd spawned, so the launcher itself cannot drive it — see [Two surfaces](./index.md). | [#267](https://github.com/Termherd/termherd/issues/267) |
-| No tool clicks. A mouse event inside a session's terminal, so a mouse-mode app — Claude Code's `/diff`, lazygit, vim — is reachable at all. | [#300](https://github.com/Termherd/termherd/issues/300) |
-| The same for TermHerd's own interface: the sidebar, the tab strip, a split gutter. | [#301](https://github.com/Termherd/termherd/issues/301) |
+| `mouse_in_session` drives the local selection only; a mouse-mode app — Claude Code's `/diff`, lazygit, vim — does not receive the event yet. | [#155](https://github.com/Termherd/termherd/issues/155) |
+| No pointer at TermHerd's own interface: the sidebar, the tab strip, a split gutter. | [#301](https://github.com/Termherd/termherd/issues/301) |

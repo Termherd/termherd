@@ -12,7 +12,8 @@ use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
 
 use super::{
-    LaunchSpec, PathRequest, ResolvedPath, ScrollTarget, SelectOp, SessionStatus, TargetProbe, Zoom,
+    LaunchSpec, PathRequest, PointerEvent, ResolvedPath, ScrollTarget, SelectOp, SessionStatus,
+    TargetProbe, Zoom,
 };
 
 #[derive(Debug, Clone)]
@@ -41,6 +42,12 @@ pub enum Event {
     Select {
         session: SessionId,
         op: SelectOp,
+    },
+    /// A cell-addressed pointer event for a terminal (FR4); see
+    /// [`pointer_select`](super::pointer_select) for what it does there.
+    TerminalPointer {
+        session: SessionId,
+        pointer: PointerEvent,
     },
     /// Copy a terminal's current selection to the clipboard. The text is read
     /// from the terminal's own selection (not a snapshot), so it is exact even

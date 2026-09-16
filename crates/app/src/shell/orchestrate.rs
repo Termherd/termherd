@@ -13,10 +13,11 @@ use std::num::NonZeroU64;
 
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
-use termherd_core::{Event, Launch};
+use termherd_core::{Event, Launch, PointerEvent};
 
 use super::bridge::{
-    Action, ActionOutcome, Press, PressOutcome, PressStep, RepoOutcome, SessionKind,
+    Action, ActionDetail, ActionOutcome, PointerOutcome, Press, PressOutcome, PressStep,
+    RepoOutcome, SessionKind,
 };
 use super::input::event_of;
 use super::repos::RepoGesture;
@@ -36,6 +37,7 @@ impl Shell {
             Action::Rename { tab, title } => self.act_rename(tab, title),
             Action::Close { pane } => self.act_close(pane),
             Action::Run { session, bytes } => self.act_run(session, bytes),
+            Action::Pointer { session, pointer } => self.act_pointer(session, pointer),
             Action::DeclareRepo { path } => self.act_declare_repo(&path),
             Action::ForgetRepo { path } => self.act_forget_repo(&path),
         }
@@ -54,7 +56,11 @@ impl Shell {
         };
         let key = key.display().to_string();
         let task = self.declare_repo_key(&key, RepoGesture::Mcp);
-        (self.applied().with_repo(self.repo_outcome(&key)), task)
+        (
+            self.applied()
+                .with_detail(ActionDetail::Repo(self.repo_outcome(&key))),
+            task,
+        )
     }
 
     /// Drop a repo's declaration. Unlike declaring, an unknown path is not an
@@ -71,7 +77,11 @@ impl Shell {
             |p| p.display().to_string(),
         );
         let task = self.forget_repo_key(&key, RepoGesture::Mcp);
-        (self.applied().with_repo(self.repo_outcome(&key)), task)
+        (
+            self.applied()
+                .with_detail(ActionDetail::Repo(self.repo_outcome(&key))),
+            task,
+        )
     }
 
     /// The sidebar row for `key` as it stands now — **membership**, not what
@@ -171,6 +181,52 @@ impl Shell {
         };
         let effects = self.core.apply(Event::TerminalInput { session: id, bytes });
         (self.applied(), self.perform(effects))
+    }
+
+    /// Place a pointer event at a cell of a session's terminal. Bounded by the
+    /// session's last rendered geometry — a cell outside it, or a session that
+    /// has not drawn yet, is rejected before anything applies, so a caller
+    /// never learns of a bad coordinate from a selection landing elsewhere.
+    fn act_pointer(
+        &mut self,
+        session: u64,
+        pointer: PointerEvent,
+    ) -> (ActionOutcome, Task<Message>) {
+        let Some(id) = self.resolve(session) else {
+            return (unknown_handle(session), Task::none());
+        };
+        let Some(screen) = self.screens.get(&id) else {
+            return (
+                ActionOutcome::rejected(format!(
+                    "session {session} has not rendered yet, so it has no geometry to \
+                     place a pointer in"
+                )),
+                Task::none(),
+            );
+        };
+        if pointer.col >= screen.cols || pointer.row >= screen.rows {
+            return (
+                ActionOutcome::rejected(format!(
+                    "cell ({}, {}) is outside the {}x{} pane",
+                    pointer.col, pointer.row, screen.cols, screen.rows
+                )),
+                Task::none(),
+            );
+        }
+        // Read off the event itself, which is all the local gesture depends on;
+        // the terminal places it with its own live offset.
+        let outcome = match pointer.local_gesture() {
+            Some(_) => PointerOutcome::Selection,
+            None => PointerOutcome::Ignored,
+        };
+        let effects = self.core.apply(Event::TerminalPointer {
+            session: id,
+            pointer,
+        });
+        (
+            self.applied().with_detail(ActionDetail::Pointer(outcome)),
+            self.perform(effects),
+        )
     }
 
     /// The shared prelude of the focus-relative actions (split, close): reveal

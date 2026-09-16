@@ -458,6 +458,46 @@ mod tests {
     }
 
     #[test]
+    fn a_pointer_reaches_a_live_terminal_and_is_absorbed_for_a_dead_one() {
+        use crate::app::{PointerEvent, PointerKind};
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Shell,
+            title: "proj".into(),
+        }));
+        let id = app.workspace.focused_session().expect("a focused session");
+        let pointer = PointerEvent::left(PointerKind::Press, 3, 1);
+        match app
+            .apply(Event::TerminalPointer {
+                session: id,
+                pointer,
+            })
+            .as_slice()
+        {
+            [
+                Effect::TerminalPointer {
+                    session,
+                    pointer: forwarded,
+                },
+            ] => {
+                assert_eq!(*session, id);
+                assert_eq!(*forwarded, pointer);
+            }
+            other => panic!("expected one TerminalPointer effect, got {other:?}"),
+        }
+        // A handle nothing owns is absorbed, as every per-session event is.
+        let ghost = SessionId(std::num::NonZeroU64::new(999).expect("non-zero"));
+        assert!(
+            app.apply(Event::TerminalPointer {
+                session: ghost,
+                pointer,
+            })
+            .is_empty()
+        );
+    }
+
+    #[test]
     fn launching_a_resume_records_its_claude_id() {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {

@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
 use termherd_core::{
-    Action as KeymapAction, App, KeyChord, Launch, LiveSession, SessionStatus, SnapshotFilter,
-    SnapshotInputs, WorkspaceSnapshot, workspace::SplitDir,
+    Action as KeymapAction, App, KeyChord, Launch, LiveSession, PointerEvent, SessionStatus,
+    SnapshotFilter, SnapshotInputs, WorkspaceSnapshot, workspace::SplitDir,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -262,6 +262,11 @@ pub enum Action {
     /// to synchronise follows with [`Request::WaitForStatus`].
     /// → `Event::TerminalInput`.
     Run { session: u64, bytes: Vec<u8> },
+    /// Place a pointer event at a cell of a session's terminal — the pointer
+    /// half of what [`Self::Run`] does for text. Bounded by the session's last
+    /// rendered geometry; out of range rejects before anything applies.
+    /// → `Event::TerminalPointer`.
+    Pointer { session: u64, pointer: PointerEvent },
     /// Add a repo to the sidebar by hand (`F-repo-add`). The path is normalised
     /// adapter-side first, so the caller may pass a subdirectory or a worktree.
     /// → `Event::DeclareRepo`.
@@ -283,8 +288,30 @@ pub struct ActionOutcome {
     pub focused: Option<String>,
     /// Why the action was rejected, or `None` when it applied.
     pub error: Option<String>,
-    /// Set by the two repo actions only: what the sidebar row looks like now.
-    pub repo: Option<RepoOutcome>,
+    /// What an action answers about beyond focus, when it has something to:
+    /// the repo actions about a sidebar row, the pointer action about what the
+    /// terminal did. One slot, so an outcome cannot claim two.
+    pub detail: Option<ActionDetail>,
+}
+
+/// The action-specific half of an [`ActionOutcome`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActionDetail {
+    Repo(RepoOutcome),
+    Pointer(PointerOutcome),
+}
+
+/// What a session's terminal did with a pointer event, for a caller that
+/// cannot see the pane. The two call for opposite responses: after `Selection`
+/// the text is there for `copy` to read; after `Ignored` the gesture drove
+/// nothing and retrying it changes nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerOutcome {
+    /// The event drove the terminal's own text selection.
+    Selection,
+    /// The event maps to no local gesture — a release, a move, a button other
+    /// than the left one.
+    Ignored,
 }
 
 /// What a repo action did, for a caller that cannot see the sidebar. `path` is
@@ -306,7 +333,7 @@ impl ActionOutcome {
         Self {
             focused: None,
             error: Some(reason.into()),
-            repo: None,
+            detail: None,
         }
     }
 
@@ -315,15 +342,34 @@ impl ActionOutcome {
         Self {
             focused,
             error: None,
-            repo: None,
+            detail: None,
         }
     }
 
-    /// An applied repo action, which also reports the resulting sidebar row.
+    /// An applied action that also answers about something beyond focus.
     #[must_use]
-    pub fn with_repo(mut self, repo: RepoOutcome) -> Self {
-        self.repo = Some(repo);
+    pub fn with_detail(mut self, detail: ActionDetail) -> Self {
+        self.detail = Some(detail);
         self
+    }
+
+    /// The sidebar row a repo action answered about, if this was one. The
+    /// handler reads `detail` whole; these two are for assertions.
+    #[cfg(test)]
+    pub fn repo(&self) -> Option<&RepoOutcome> {
+        match &self.detail {
+            Some(ActionDetail::Repo(repo)) => Some(repo),
+            _ => None,
+        }
+    }
+
+    /// What the terminal did with the pointer, if this was a pointer action.
+    #[cfg(test)]
+    pub fn pointer(&self) -> Option<PointerOutcome> {
+        match self.detail {
+            Some(ActionDetail::Pointer(pointer)) => Some(pointer),
+            _ => None,
+        }
     }
 }
 
