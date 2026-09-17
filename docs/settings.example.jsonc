@@ -18,8 +18,10 @@
 // warning: the rest of the file still applies.
 //
 // The same options are exposed to a Claude session over MCP: the
-// `termherd-mcp` server's `list_options` / `set_option` tools read and write
-// this file (see "MCP control surface" in the README).
+// `termherd-mcp` server's `list_options` reads this file and `set_option`
+// writes the ids flagged `writable` — `shell.program` / `shell.args` name what
+// termherd executes, so they are read-only there (see "MCP control surface"
+// in the README).
 {
   // ── Shell ────────────────────────────────────────────────────────────────
   // The shell launched for each session. Omit the whole block (or set it to

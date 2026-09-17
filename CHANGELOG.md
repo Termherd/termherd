@@ -7,6 +7,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (the stdio server could choose what termherd executes)
+
+- `set_option` listed `shell.program` / `shell.args` as writable beside
+  `theme` — and their value is what every shell session runs at the next
+  launch, so any client of `termherd-mcp` could set it unattended. Both are now
+  **read-only** over MCP; `list_options` and the schema resource carry a
+  `writable` flag per id, so a model can tell before it tries (#283).
+- A value that does not fit an option's kind (a non-array palette, a theme
+  outside `dark`/`light`) is now **refused** with a JSON-RPC error and nothing
+  is written. It used to be written anyway, with a warning in the answer; that
+  `warnings` text is gone.
+
 ### Fixed (the mouse reaches a program that reads it)
 
 - A full-screen program with mouse reporting on — Claude Code's `/diff` and

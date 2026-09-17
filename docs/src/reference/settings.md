@@ -163,8 +163,10 @@ or "switch me to a light theme" from any Claude session.
 The eight ids it covers today: `theme`, `shell.program`, `shell.args`,
 `terminal.colors.scheme`, `terminal.colors.foreground`,
 `terminal.colors.background`, `terminal.colors.cursor`,
-`terminal.colors.palette`. The `close`, `sidebar`, `record`, `open`, `keys`,
-`terminal.font_size`, `terminal.copy_on_select` and
+`terminal.colors.palette`. Two of them — `shell.program` and `shell.args` —
+are **read-only** over MCP: they name what TermHerd executes at the next
+launch, so an agent may read them but never set them. The `close`, `sidebar`,
+`record`, `open`, `keys`, `terminal.font_size`, `terminal.copy_on_select` and
 `terminal.paste_on_right_click` blocks are file-only for now; `keys` is
 published as a read-only resource.
 

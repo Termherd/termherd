@@ -29,20 +29,30 @@ Add it to your `mcpServers` config, pointing `command` at the built binary:
 | Tool | Args | Does |
 | --- | --- | --- |
 | `list_options` | — | lists the configurable options with their current values |
-| `set_option` | `id`, `value` | sets one option; the change lands in `settings.json` and applies on restart |
+| `set_option` | `id`, `value` | sets one **writable** option; the change lands in `settings.json` and applies on restart |
 
 Both speak the option **id** — a stable, dotted name:
 
-| id | Kind | Values |
-| --- | --- | --- |
-| `theme` | enum | `dark`, `light` |
-| `shell.program` | string | unset means the platform default login shell |
-| `shell.args` | array | |
-| `terminal.colors.scheme` | enum | `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |
-| `terminal.colors.foreground` | string | `"#rrggbb"` |
-| `terminal.colors.background` | string | `"#rrggbb"` |
-| `terminal.colors.cursor` | string | `"#rrggbb"` |
-| `terminal.colors.palette` | array | the 16 ANSI colours — normal 0–7, bright 8–15 |
+| id | Kind | Writable | Values |
+| --- | --- | --- | --- |
+| `theme` | enum | yes | `dark`, `light` |
+| `shell.program` | string | **no** | unset means the platform default login shell |
+| `shell.args` | array | **no** | |
+| `terminal.colors.scheme` | enum | yes | `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |
+| `terminal.colors.foreground` | string | yes | `"#rrggbb"` |
+| `terminal.colors.background` | string | yes | `"#rrggbb"` |
+| `terminal.colors.cursor` | string | yes | `"#rrggbb"` |
+| `terminal.colors.palette` | array | yes | the 16 ANSI colours — normal 0–7, bright 8–15 |
+
+`shell.program` and `shell.args` are **read-only** over MCP: their value is
+what TermHerd executes for every shell session at the next launch, and an
+agent must not get to choose that unattended. `list_options` and the schema
+carry the `writable` flag per id, so a model can tell before it tries.
+
+`set_option` **refuses** rather than degrades: a read-only id, an unknown id,
+or a value that does not fit the option's kind (a non-array palette, a theme
+outside `dark`/`light`) answers a JSON-RPC error and writes nothing. `null` is
+always accepted on a writable id — it unsets the option.
 
 That is the whole write surface today. The `close`, `sidebar`, `record`,
 `open`, `keys`, `terminal.font_size`, `terminal.copy_on_select` and
