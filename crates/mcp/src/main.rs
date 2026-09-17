@@ -69,8 +69,8 @@ fn write_error_response(message: &Value, detail: &str) -> Option<Value> {
 }
 
 /// Read `~/.termherd/settings.json` into a JSON value, falling back to an empty
-/// object when it is missing or unreadable — the read-only surface then reports
-/// every option as unset rather than failing.
+/// object when it is missing or unreadable — `list_options` then reports every
+/// option as unset rather than failing.
 fn load_settings() -> Value {
     let Some(path) = settings_path() else {
         return json!({});
