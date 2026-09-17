@@ -636,7 +636,9 @@ above names only the first. A key added to the schema also owes: the annotated
 `docs/settings.example.jsonc`; the block list under **Configuration** in
 `README.md`; the *file-only* sentence in `docs/src/reference/settings.md`
 **and** its copy in `docs/src/mcp/stdio.md`, which enumerate what MCP cannot
-write and must stay in lockstep; the `A complete example` block, which is
+write and must stay in lockstep (the *read-only ids* sentence beside each is
+the same kind of list — an id that reaches a command line joins it, not the
+writable catalogue); the `A complete example` block, which is
 headed "complete"; and the `docs/src/workspace/` page describing the behaviour.
 Three of those are exhaustive-sounding enumerations, and that is what makes
 them expensive: a list saying "these blocks are file-only" is read as the whole
