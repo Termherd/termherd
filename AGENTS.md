@@ -496,9 +496,9 @@ exists). Do not relax them locally.
   cache, which is all the copy chord ever read. Off by default, a mouse
   selection could then be copied by no gesture at all: the flag disabled a
   feature nobody had flagged. Every test passed, because each covered its own
-  side of a seam that no longer met. The fix was a *reordering* rather than
-  only a fallback — the chord reads the live selection first and keeps the
-  cache behind it, for the one case the screen cannot answer: a selection
+  side of a seam that no longer met. The first fix was a *reordering* rather
+  than only a fallback — the chord read the live selection first and kept the
+  cache behind it, for the one case the screen could not answer: a selection
   scrolled out of the viewport carries no visible spans. Putting the live read
   first also killed an older bug, where a stale cache outranked a fresh
   highlight. A cache named after what filled it (`selection`) that actually
