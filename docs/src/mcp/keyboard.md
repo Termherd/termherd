@@ -59,6 +59,11 @@ distinction useless.
 
 Seven handlers can refuse this way, and each says so at its own refusal site.
 
+One refusal is currently missing: `copy` in a `forwarded` pane (a program owns
+the mouse, so the terminal has no selection of its own) reports `ran` and
+writes the last text the terminal copied instead of refusing with
+`no-context` — [#316](https://github.com/Termherd/termherd/issues/316).
+
 ## Answering an overlay
 
 `escape` usually cancels; `enter` usually confirms. Three cautions:

@@ -37,7 +37,9 @@ empty close stack, `scroll_focused` with nothing focused, `cycle_tab` with
 nothing open, `toggle_record` mid-drain, `close_focused_pane` with no tab at
 all, `copy_selection` with nothing selected) and every one of them reported
 `ran`. The last two are the ones a caller would be hurt by soonest: a false
-`ran` on `copy` has an agent paste stale clipboard content, and `close-focused`
+`ran` on `copy` has an agent paste stale clipboard content — reopened for one
+case by #316, where a filled cache makes `copy` report `ran` in a pane that has
+no selection to copy — and `close-focused`
 is the very action the overlay behaviour rests on. So `inert` carries a
 `reason` — `no-surface` (wired to nothing, retrying is pointless) or
 `no-context` (a precondition the caller can create) — since the two call for

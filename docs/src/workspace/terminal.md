@@ -32,6 +32,12 @@ so nothing reaches the clipboard unless you asked for it:
   the selection outright. With it off the selection still highlights and waits
   for the copy chord, which reads the highlight currently on screen — so the
   text you copy is the text you just selected, never what you copied last.
+  One exception is a defect, not a rule: in a pane whose program owns the
+  mouse (below) there is never a highlight of the terminal's own, and the
+  chord then writes the last text it copied over the program's own copy
+  ([#316](https://github.com/Termherd/termherd/issues/316)). Until it is
+  fixed, do not press the chord after a drag in such a program — the drag's
+  copy is already on the clipboard.
 - **`paste_on_right_click`** — a right-click pastes into **the pane under the
   pointer**, which need not be the focused one, and is bracketed when that pane
   asked for bracketed paste. The click also focuses that pane, so the keys you

@@ -184,7 +184,10 @@ the pane under the pointer. Left off, the copy chord reads whatever is
 highlighted on screen. A full-screen program that reads the mouse — Claude
 Code's `/diff` and `/resume`, vim, lazygit, less — owns it while it runs:
 clicks, drags and the wheel go to the program, nothing is selected or pasted
-locally, and <kbd>Shift</kbd>+drag takes the mouse back for a selection. In
+locally, and <kbd>Shift</kbd>+drag takes the mouse back for a selection. Known
+defect there ([#316]): with nothing highlighted, the copy chord writes the last
+text TermHerd copied over what the program just put on the clipboard — after a
+drag in such a program, do not press the chord. In
 the sidebar, click a project or session to open it; a tab's `×` also closes
 it. Hovering a tab shows the session's fuller
 description (the same card the sidebar shows). **+ Add a repo** puts a
@@ -248,13 +251,14 @@ app on one it cannot answer; a sidebar rename used to be the exception
 rename — those go through a widget callback no synthesised event reaches
 ([#246]).
 
-Five follow-ups remain: a composed prompt→wait→read in one round trip
+Six follow-ups remain: a composed prompt→wait→read in one round trip
 ([#196]), `enter` on the renames ([#246]), a doc editor that discards unsaved
 edits when it closes ([#248]), reaching the bridge from outside a session
-termherd spawned — the launcher cannot drive it today ([#267]) — and the
+termherd spawned — the launcher cannot drive it today ([#267]) — the
 pointer at TermHerd's own interface ([#301]): it reaches a session's terminal,
 and through it a program reading the mouse, but not yet the sidebar, tabs or
-gutters.
+gutters — and `copy` in a pane a program owns, which reports `ran` while
+writing a stale clipboard ([#316]).
 
 ### The stdio server (manual)
 
@@ -286,6 +290,7 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 [#248]: https://github.com/Termherd/termherd/issues/248
 [#267]: https://github.com/Termherd/termherd/issues/267
 [#301]: https://github.com/Termherd/termherd/issues/301
+[#316]: https://github.com/Termherd/termherd/issues/316
 
 ## Test
 

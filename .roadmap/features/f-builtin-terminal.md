@@ -62,6 +62,8 @@ executable. Unconfigured, the OS handoff and its refusal both stand.
 Mouse buttons reach the child since #155: a program with mouse reporting on
 gets presses, releases, drags and motion in the SGR or X10 encoding it
 negotiated, the terminal selects nothing of its own over it, and Shift takes
-the mouse back for a local selection. One contract bug remains on the surface:
+the mouse back for a local selection. Two contract bugs remain on the surface:
 the `emitted_lines_never_drift` property has a known failing scroll sequence
-whose seed was never committed (#102)
+whose seed was never committed (#102), and the copy chord in a pane the child
+owns falls back to the last-copied cache and overwrites the child's own copy
+(#316)
