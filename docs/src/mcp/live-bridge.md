@@ -197,7 +197,7 @@ A worked example, from inside a session TermHerd launched:
 
 ## What is still open
 
-Five follow-ups, and they are independent of each other:
+Six follow-ups, and they are independent of each other:
 
 | Gap | Issue |
 | --- | --- |
@@ -206,3 +206,4 @@ Five follow-ups, and they are independent of each other:
 | The doc editor discards unsaved edits when it closes, by button or by `escape`. | [#248](https://github.com/Termherd/termherd/issues/248) |
 | The bridge is reachable only from a session termherd spawned, so the launcher itself cannot drive it — see [Two surfaces](./index.md). | [#267](https://github.com/Termherd/termherd/issues/267) |
 | No pointer at TermHerd's own interface: the sidebar, the tab strip, a split gutter. | [#301](https://github.com/Termherd/termherd/issues/301) |
+| `copy` in a `forwarded` pane has no selection to read, writes the last text the terminal copied, and still reports `ran`. | [#316](https://github.com/Termherd/termherd/issues/316) |

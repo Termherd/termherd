@@ -255,9 +255,11 @@ executable. Unconfigured, the OS handoff and its refusal both stand.
 Mouse buttons reach the child since #155: a program with mouse reporting on
 gets presses, releases, drags and motion in the SGR or X10 encoding it
 negotiated, the terminal selects nothing of its own over it, and Shift takes
-the mouse back for a local selection. One contract bug remains on the surface:
+the mouse back for a local selection. Two contract bugs remain on the surface:
 the `emitted_lines_never_drift` property has a known failing scroll sequence
-whose seed was never committed (#102)
+whose seed was never committed (#102), and the copy chord in a pane the child
+owns falls back to the last-copied cache and overwrites the child's own copy
+(#316)
 
 <a id="f-close-confirm-policy"></a>
 
@@ -1149,7 +1151,9 @@ empty close stack, `scroll_focused` with nothing focused, `cycle_tab` with
 nothing open, `toggle_record` mid-drain, `close_focused_pane` with no tab at
 all, `copy_selection` with nothing selected) and every one of them reported
 `ran`. The last two are the ones a caller would be hurt by soonest: a false
-`ran` on `copy` has an agent paste stale clipboard content, and `close-focused`
+`ran` on `copy` has an agent paste stale clipboard content — reopened for one
+case by #316, where a filled cache makes `copy` report `ran` in a pane that has
+no selection to copy — and `close-focused`
 is the very action the overlay behaviour rests on. So `inert` carries a
 `reason` — `no-surface` (wired to nothing, retrying is pointless) or
 `no-context` (a precondition the caller can create) — since the two call for
