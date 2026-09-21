@@ -59,10 +59,12 @@ distinction useless.
 
 Seven handlers can refuse this way, and each says so at its own refusal site.
 
-One refusal is currently missing: `copy` in a `forwarded` pane (a program owns
-the mouse, so the terminal has no selection of its own) reports `ran` and
-writes the last text the terminal copied instead of refusing with
-`no-context` — [#316](https://github.com/Termherd/termherd/issues/316).
+`copy` refuses on the terminal's own answer: it holds a selection or it does
+not, wherever that selection has scrolled to. An MCP drag in a `forwarded`
+pane selects nothing (it carries no Shift, so it is the program's), so `copy`
+after it is `no-context` — and the program's own clipboard write (Claude Code
+copies a drag on release) is left alone. A human's Shift+drag there is a
+selection, and `copy` runs on it.
 
 ## Answering an overlay
 

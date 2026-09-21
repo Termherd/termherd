@@ -298,15 +298,15 @@ carry is modifiers: the event lost its `modifiers` field in #311 as dead
 weight, and it comes back as one type shared with `KeyMods` when a caller
 needs it, not before.
 
-**Still open.** Three features and three defects: `F-mcp-agent-loop` (#196 —
+**Still open.** Three features and two defects: `F-mcp-agent-loop` (#196 —
 below), `F-mcp-attach` (#267 — the bridge is reachable only from a session
 termherd spawned, so the launcher itself cannot drive it), the pointer at
 termherd's own chrome (#301 — the sidebar, tabs and gutters still have no
-mouse), `enter` on the two renames (#246), a doc editor that discards
-unsaved edits when it closes (#248), and the copy chord in a pane whose
-program owns the mouse (#316 — with no selection of its own to read, `copy`
-writes the last text termherd copied over the one the program just put on the
-clipboard, and reports `ran`). None of the six blocks another.
+mouse), `enter` on the two renames (#246), and a doc editor that discards
+unsaved edits when it closes (#248). None of the five blocks another. A third
+defect, the copy chord overwriting a mouse-mode program's own clipboard write
+with termherd's last copy (#316), is fixed: the shell keeps no copy cache any
+more, and asks the terminal whether it holds a selection at all.
 
 `F-mcp-agent-loop` (#196 — the composed prompt→wait→read in one
 round trip) is a child of the #90 epic — no longer the last one, since three
@@ -503,11 +503,16 @@ exists). Do not relax them locally.
   first also killed an older bug, where a stale cache outranked a fresh
   highlight. A cache named after what filled it (`selection`) that actually
   holds what was last *copied* is how the gap stayed invisible; name a cache
-  for its contents. The cache kept "behind" the live read is not harmless
+  for its contents. The cache kept "behind" the live read was not harmless
   either: once a program owns the mouse (#155) the terminal *never* has a
-  visible selection in that pane, so the fallback fires on every `copy` there
-  and overwrites the clipboard the program filled itself — #316, filed
-  2026-09-21 and open.
+  visible selection in that pane, so the fallback fired on every `copy` there
+  and overwrote the clipboard the program had filled itself (#316). The cache
+  is gone: a `Screen` now says whether the terminal holds a selection at all
+  (`has_selection`, true even when it scrolled out of view), and the chord
+  asks the terminal or refuses. **A fallback that fires whenever a
+  precondition is absent becomes a bug the day a feature makes that
+  precondition permanently absent** — the day the mouse became the child's,
+  "no visible selection" stopped meaning "look somewhere else".
 - **A guard is unreachable and goes, or reachable and gets a test — there is
   no third state.** Defensive arithmetic nobody can trigger is not free: it
   reads as a live case to the next reader, and no test can pin it. Mutation

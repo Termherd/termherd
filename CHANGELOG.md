@@ -7,6 +7,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (the copy chord no longer overwrites a program's own copy)
+
+- In a pane whose program reads the mouse — Claude Code in full-screen mode,
+  vim, lazygit — the copy chord used to write the last text termherd had copied
+  over the clipboard, on every press, once anything had been copied anywhere:
+  the program's own copy of a drag was silently replaced by stale text (#316).
+  The shell no longer keeps a copy cache; the terminal reports whether it holds
+  a selection at all (including one scrolled out of view), and the chord asks
+  it to copy or does nothing. Over MCP, `copy` with nothing selected now
+  reports `inert` / `no-context` in that pane too.
+
 ### Fixed (the stdio server could choose what termherd executes)
 
 - `set_option` listed `shell.program` / `shell.args` as writable beside
