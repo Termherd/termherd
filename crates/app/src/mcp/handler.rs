@@ -30,7 +30,7 @@ use termherd_core::{
 
 use crate::shell::bridge::{
     Action, ActionDetail, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo,
-    SessionKind,
+    SessionKind, TerminalRead,
 };
 use crate::snapshot_dto::{SnapshotDto, status_str};
 
@@ -410,21 +410,7 @@ impl TermherdMcp {
         Parameters(args): Parameters<ReadArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let session = parse_handle(&args.session)?;
-        let lines = args.lines.unwrap_or(DEFAULT_TEXT_LINES);
-        let reply = self
-            .bridge
-            .call(Request::ReadTerminal { session, lines }, CALL_TIMEOUT)
-            .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        let Reply::Terminal(read) = reply else {
-            return Err(ErrorData::internal_error(
-                "bridge answered the wrong reply kind",
-                None,
-            ));
-        };
-        if let Some(reason) = read.error {
-            return Err(ErrorData::invalid_params(reason, None));
-        }
+        let read = self.read_session_terminal(session, args.lines).await?;
         structured(serde_json::json!({
             "text": read.text.as_deref().unwrap_or_default(),
             "rendered": read.text.is_some(),
@@ -455,35 +441,9 @@ impl TermherdMcp {
         let session = parse_handle(&args.session)?;
 
         // 1. Session lookup & Nesting opt-in verification
-        let list_reply = self
-            .bridge
-            .call(Request::ListSessions, CALL_TIMEOUT)
-            .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        let Reply::Sessions(sessions) = list_reply else {
-            return Err(ErrorData::internal_error(
-                "bridge answered the wrong reply kind",
-                None,
-            ));
-        };
-        let target_info = sessions
-            .iter()
-            .find(|s| s.handle == args.session)
-            .ok_or_else(|| {
-                ErrorData::invalid_params(format!("unknown session handle: {}", args.session), None)
-            })?;
-
-        if target_info.kind == SessionKind::Claude {
-            let allow_setting = crate::settings::Settings::load().mcp.allow_claude_nesting;
-            let allow_param = args.allow_claude_nesting.unwrap_or(false);
-            if !allow_setting && !allow_param {
-                return Err(ErrorData::invalid_params(
-                    "prompting a nested Claude session is disabled by default; enable it in \
-                     settings.json (`mcp.allow_claude_nesting: true`) or pass `allow_claude_nesting: true`",
-                    None,
-                ));
-            }
-        }
+        let target_info = self.fetch_session_info(&args.session).await?;
+        let allow_setting = crate::settings::Settings::load().mcp.allow_claude_nesting;
+        check_claude_nesting(target_info.kind, allow_setting, args.allow_claude_nesting)?;
 
         // 2. Step 1: Send text (run_in_session primitive)
         let act_reply = self
@@ -508,48 +468,12 @@ impl TermherdMcp {
         }
 
         // 3. Step 2: Wait for status (wait_for_status primitive)
-        let targets = parse_statuses(args.statuses)?;
-        let timeout = wait_timeout(args.timeout_ms);
-        let (status_str_val, timed_out) = match self
-            .bridge
-            .call(Request::WaitForStatus { session, targets }, timeout)
-            .await
-        {
-            Ok(Reply::Waited(waited_outcome)) => {
-                if let Some(reason) = waited_outcome.error {
-                    return Err(ErrorData::invalid_params(reason, None));
-                }
-                (waited_outcome.status.map(status_str), false)
-            }
-            Ok(_) => {
-                return Err(ErrorData::internal_error(
-                    "bridge answered the wrong reply kind",
-                    None,
-                ));
-            }
-            Err(CallError::Timeout(_)) => {
-                let status = self.current_status(session).await;
-                (status, true)
-            }
-            Err(error) => return Err(ErrorData::internal_error(error.to_string(), None)),
-        };
+        let (status_str_val, timed_out) = self
+            .wait_for_session_status(session, args.statuses, args.timeout_ms)
+            .await?;
 
         // 4. Step 3: Read terminal (read_terminal primitive)
-        let lines = args.lines.unwrap_or(DEFAULT_TEXT_LINES);
-        let read_reply = self
-            .bridge
-            .call(Request::ReadTerminal { session, lines }, CALL_TIMEOUT)
-            .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        let Reply::Terminal(read) = read_reply else {
-            return Err(ErrorData::internal_error(
-                "bridge answered the wrong reply kind",
-                None,
-            ));
-        };
-        if let Some(reason) = read.error {
-            return Err(ErrorData::invalid_params(reason, None));
-        }
+        let read = self.read_session_terminal(session, args.lines).await?;
 
         structured(serde_json::json!({
             "status": status_str_val,
@@ -685,6 +609,87 @@ impl TermherdMcp {
 }
 
 impl TermherdMcp {
+    /// Fetch the [`SessionInfo`] of a session by its string handle.
+    async fn fetch_session_info(&self, session_handle_str: &str) -> Result<SessionInfo, ErrorData> {
+        let list_reply = self
+            .bridge
+            .call(Request::ListSessions, CALL_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Sessions(sessions) = list_reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        sessions
+            .into_iter()
+            .find(|s| s.handle == session_handle_str)
+            .ok_or_else(|| {
+                ErrorData::invalid_params(
+                    format!("unknown session handle: {session_handle_str}"),
+                    None,
+                )
+            })
+    }
+
+    /// Block until `session` reaches one of `statuses` (default: idle or attention).
+    /// Returns `(status_str, timed_out)`. On timeout, reads back the current status.
+    async fn wait_for_session_status(
+        &self,
+        session: u64,
+        statuses: Option<Vec<String>>,
+        timeout_ms: Option<u64>,
+    ) -> Result<(Option<&'static str>, bool), ErrorData> {
+        let targets = parse_statuses(statuses)?;
+        let timeout = wait_timeout(timeout_ms);
+        match self
+            .bridge
+            .call(Request::WaitForStatus { session, targets }, timeout)
+            .await
+        {
+            Ok(Reply::Waited(waited_outcome)) => {
+                if let Some(reason) = waited_outcome.error {
+                    return Err(ErrorData::invalid_params(reason, None));
+                }
+                Ok((waited_outcome.status.map(status_str), false))
+            }
+            Ok(_) => Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            )),
+            Err(CallError::Timeout(_)) => {
+                let status = self.current_status(session).await;
+                Ok((status, true))
+            }
+            Err(error) => Err(ErrorData::internal_error(error.to_string(), None)),
+        }
+    }
+
+    /// Read the visible terminal text of `session`.
+    async fn read_session_terminal(
+        &self,
+        session: u64,
+        lines: Option<usize>,
+    ) -> Result<TerminalRead, ErrorData> {
+        let lines = lines.unwrap_or(DEFAULT_TEXT_LINES);
+        let read_reply = self
+            .bridge
+            .call(Request::ReadTerminal { session, lines }, CALL_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Terminal(read) = read_reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        if let Some(reason) = read.error {
+            return Err(ErrorData::invalid_params(reason, None));
+        }
+        Ok(read)
+    }
+
     /// A session's current activity, read back after a wait timed out. Best
     /// effort by design: `None` covers a handle that no longer resolves *and* a
     /// read-back that failed. The likeliest cause of the original timeout is a
@@ -1276,6 +1281,27 @@ fn status_from_str(name: &str) -> Option<SessionStatus> {
         "exited" => Some(SessionStatus::Exited),
         _ => None,
     }
+}
+
+/// Validate whether prompting a nested session of `kind` is permitted under
+/// `allow_setting` (from `settings.json`) or `allow_param` (per-call argument).
+/// `SessionKind::Shell` is always allowed; `SessionKind::Claude` requires opt-in.
+fn check_claude_nesting(
+    kind: SessionKind,
+    allow_setting: bool,
+    allow_param: Option<bool>,
+) -> Result<(), ErrorData> {
+    if kind == SessionKind::Claude {
+        let allowed = allow_setting || allow_param.unwrap_or(false);
+        if !allowed {
+            return Err(ErrorData::invalid_params(
+                "prompting a nested Claude session is disabled by default; enable it in \
+                 settings.json (`mcp.allow_claude_nesting: true`) or pass `allow_claude_nesting: true`",
+                None,
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2409,6 +2435,22 @@ mod tests {
         let value = result.structured_content.expect("structured content");
         assert_eq!(value["text"], "ready\n");
         let _ = shell.await;
+    }
+
+    #[test]
+    fn check_claude_nesting_allows_shell_sessions_unconditionally() {
+        assert!(check_claude_nesting(SessionKind::Shell, false, None).is_ok());
+        assert!(check_claude_nesting(SessionKind::Shell, false, Some(false)).is_ok());
+        assert!(check_claude_nesting(SessionKind::Shell, true, None).is_ok());
+    }
+
+    #[test]
+    fn check_claude_nesting_gates_claude_sessions_on_setting_or_param() {
+        assert!(check_claude_nesting(SessionKind::Claude, false, None).is_err());
+        assert!(check_claude_nesting(SessionKind::Claude, false, Some(false)).is_err());
+        assert!(check_claude_nesting(SessionKind::Claude, true, None).is_ok());
+        assert!(check_claude_nesting(SessionKind::Claude, true, Some(false)).is_ok());
+        assert!(check_claude_nesting(SessionKind::Claude, false, Some(true)).is_ok());
     }
 
     // ---- screenshot: the pixel companion to `snapshot` ----
