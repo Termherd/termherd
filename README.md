@@ -136,9 +136,10 @@ you want and strip the comments (the real file is strict JSON). In short:
 - `keys` — keyboard overrides, one chord or a list per action; the full
   action vocabulary and its default chords are listed in the template.
 
-Some of these are also readable and writable from inside a Claude session via
-the MCP control surface (below) — the catalogue there is narrower than this
-list, and widening it is tracked separately.
+Some of these are also readable from inside a Claude session via the MCP
+control surface (below), and a narrower set is writable there — `shell.program`
+/ `shell.args` are read-only over MCP, since they name what the next launch
+runs. Widening the catalogue is tracked separately.
 
 Window size and position persist separately to `~/.termherd/window.json` (a
 position left off every connected monitor — e.g. on a screen since unplugged —

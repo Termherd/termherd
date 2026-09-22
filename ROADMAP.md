@@ -83,7 +83,6 @@ issues #18–#29.
 | [F-capture](#f-capture) | feature | workspace | ☐ | Capture termherd along a fidelity ladder: debug dumps, promo, bug repros. |
 | [F-file-browser](#f-file-browser) | feature | workspace, sidebar | ☐ | A file tree for the focused repository, floating or as a right pane. |
 | [F-launch-profiles](#f-launch-profiles) | feature | sessions | ☐ | Persistent per-project `--add-dir`, applied to fresh and resumed launches. |
-| [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ☐ | The composed prompt→wait→read over any session, shell or Claude. |
 | [F-mcp-attach](#f-mcp-attach) | feature | mcp, workspace | ☐ | The attach rung: reach the live bridge from outside a spawned session. |
 | [F-mcp-control-surface](#f-mcp-control-surface) | feature | mcp | ☐ | Termherd exposes its own control and orchestration surface as an MCP server. |
 | [F-mcp-ide-bridge](#f-mcp-ide-bridge) | feature | mcp | ☐ | A live MCP/IDE bridge to Claude — termherd as the client, not the server. |
@@ -95,6 +94,7 @@ issues #18–#29.
 | [F-scheduled-tasks](#f-scheduled-tasks) | feature | sessions | ☐ | Launch a session on a schedule rather than on a click. |
 | [F-session-accent-colors](#f-session-accent-colors) | feature | workspace, sidebar | ☐ | A per-session accent on its tab, sidebar row and pane border. |
 | [F-session-grid](#f-session-grid) | feature | workspace | ☐ | A layout preset over the pane model. |
+| [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
 | [F-mcp-keys](#f-mcp-keys) | feature | mcp, keymap | ✅ | The keyboard rung: drive the app by key chords through the real keymap. |
 | [F-mcp-live-bridge](#f-mcp-live-bridge) | feature | mcp | ✅ | The gate: an in-process MCP server on loopback, reaching the live `core::App`. |
@@ -800,17 +800,6 @@ resume }` (`crates/core/src/app.rs`) and the command is *typed* into the shell
 (`launch_command`, `crates/pty/src/lib.rs`), so the one real cost is
 cross-shell path quoting (pwsh vs bash)
 
-<a id="f-mcp-agent-loop"></a>
-
-### F-mcp-agent-loop
-
-The composed prompt→wait→read over any session, shell or Claude.
-
-The composed prompt→wait→read over **any** session, shell or Claude: the
-primitive shipped as `run_in_session` (#194) and is kind-agnostic, so what is
-left is the one-round-trip composition, the guards, and an opt-in scoped to the
-nested-Claude case only. Depends on #195
-
 <a id="f-mcp-attach"></a>
 
 ### F-mcp-attach
@@ -1108,6 +1097,17 @@ A layout preset over the pane model.
 
 A layout preset over the pane model
 
+<a id="f-mcp-agent-loop"></a>
+
+### F-mcp-agent-loop
+
+The composed prompt→wait→read over any session, shell or Claude.
+
+The composed prompt→wait→read over **any** session, shell or Claude: the
+primitive shipped as `run_in_session` (#194) and is kind-agnostic, so what is
+left is the one-round-trip composition, the guards, and an opt-in scoped to the
+nested-Claude case only. Depends on #195
+
 <a id="f-mcp-config-write"></a>
 
 ### F-mcp-config-write
@@ -1117,6 +1117,12 @@ A layout preset over the pane model
 Shipped as #191. Config is a file, so this rung needed no live bridge — it was
 independent of the rest of [F-mcp-control-surface](#f-mcp-control-surface) and
 deliverable on its own.
+
+Narrowed in #283: `shell.program` and `shell.args` are read-only over MCP —
+their value is what the next launch executes — and `list_options` and the
+schema resource carry a `writable` flag per id so a model can tell before it
+tries. A value that does not fit an option's kind is refused with a JSON-RPC
+error and nothing is written; it used to be written anyway with a warning.
 
 <a id="f-mcp-keys"></a>
 

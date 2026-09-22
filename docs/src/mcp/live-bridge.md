@@ -140,10 +140,15 @@ pane — see [When the program reads the mouse](../workspace/terminal.md#when-th
 | Tool | Args | Returns |
 | --- | --- | --- |
 | `wait_for_status` | `session`, `statuses`, `timeout_ms` | `{ status, timed_out }` |
+| `prompt_in_session` | `session`, `text`, `statuses`, `lines`, `timeout_ms`, `allow_claude_nesting` | `{ status, timed_out, text, rendered, focused_handle }` — prompt, wait and read in one round trip |
 
 `statuses` defaults to idle-or-attention — the two a caller waiting on a
 command actually wants. `timeout_ms` defaults to 30 000 and is capped at
-300 000.
+300 000. `prompt_in_session` is the composed agent-loop tool: prompt a session,
+wait for its activity status to settle, and read back its terminal text in a
+single round trip. Prompting a shell session is enabled by default; prompting
+a nested Claude session requires opt-in via `mcp.allow_claude_nesting` setting or
+the `allow_claude_nesting: true` parameter.
 
 **A timeout is not an error.** On expiry the reported `status` is the session's
 current one, and `timed_out` is `true`. And a session that **exits** settles
@@ -170,6 +175,8 @@ wait_for_status(session, ["idle", "attention"])
 read_terminal(session, lines: 60)
 ```
 
+Alternatively, use `prompt_in_session` to run all three steps in **one** round trip.
+
 **Do not poll `snapshot` in a loop.** It races the transition you are watching
 for — that race is exactly why the wait tool exists.
 
@@ -177,12 +184,14 @@ A worked example, from inside a session TermHerd launched:
 
 ```text
 1. split_pane({ direction: "vertical" })     → focused_handle: "7"
-2. run_in_session({ session: "7",
-                    text: "cargo test --workspace\n" })
-3. wait_for_status({ session: "7",
-                     timeout_ms: 300000 })   → { status: "idle",
-                                                 timed_out: false }
-4. read_terminal({ session: "7", lines: 80 })
+2. prompt_in_session({ session: "7",
+                       text: "cargo test --workspace\n",
+                       timeout_ms: 300000,
+                       lines: 80 })          → { status: "idle",
+                                                 timed_out: false,
+                                                 text: "...",
+                                                 rendered: true,
+                                                 focused_handle: "7" }
 ```
 
 ## Errors and refusals
@@ -197,11 +206,10 @@ A worked example, from inside a session TermHerd launched:
 
 ## What is still open
 
-Five follow-ups, and they are independent of each other:
+Four follow-ups, and they are independent of each other:
 
 | Gap | Issue |
 | --- | --- |
-| The composed prompt → wait → read in **one** round trip. Today you compose it yourself from the three calls above. | [#196](https://github.com/Termherd/termherd/issues/196) |
 | `enter` commits neither rename over MCP — see [Driving the keyboard](./keyboard.md). | [#246](https://github.com/Termherd/termherd/issues/246) |
 | The doc editor discards unsaved edits when it closes, by button or by `escape`. | [#248](https://github.com/Termherd/termherd/issues/248) |
 | The bridge is reachable only from a session termherd spawned, so the launcher itself cannot drive it — see [Two surfaces](./index.md). | [#267](https://github.com/Termherd/termherd/issues/267) |

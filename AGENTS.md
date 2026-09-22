@@ -316,6 +316,18 @@ drive the UI, see the pixels, read the terminal. #196 *composes* the wait,
 which #236 had to fix first — building it on a synchronisation that never
 fired would have been building on sand, and that ordering constraint is now
 discharged.
+**Still open.** Two features and two defects: `F-mcp-attach` (#267 — the bridge
+is reachable only from a session termherd spawned, so the launcher itself cannot
+drive it), the pointer at termherd's own chrome (#301 — the sidebar, tabs and
+gutters still have no mouse), `enter` on the two renames (#246), and a doc editor
+that discards unsaved edits when it closes (#248). None of the four blocks another.
+
+**`F-mcp-agent-loop` shipped in #196 (`prompt_in_session`).** It composes
+`run_in_session`, `wait_for_status`, and `read_terminal` into a single MCP round
+trip, with bounded step-by-step execution and opt-in protection for nested Claude
+sessions. `F-mcp-agent-loop` was a child of the #90 epic — with `screenshot`,
+the keyboard tools, terminal pointer, and composed agent loop shipped, the live
+bridge control surface is complete.
 
 **Every overlay can now be left from the keyboard** (#237). An open sidebar
 session-rename used to swallow every key including `escape`, parking the whole
@@ -648,7 +660,9 @@ above names only the first. A key added to the schema also owes: the annotated
 `docs/settings.example.jsonc`; the block list under **Configuration** in
 `README.md`; the *file-only* sentence in `docs/src/reference/settings.md`
 **and** its copy in `docs/src/mcp/stdio.md`, which enumerate what MCP cannot
-write and must stay in lockstep; the `A complete example` block, which is
+write and must stay in lockstep (the *read-only ids* sentence beside each is
+the same kind of list — an id that reaches a command line joins it, not the
+writable catalogue); the `A complete example` block, which is
 headed "complete"; and the `docs/src/workspace/` page describing the behaviour.
 Three of those are exhaustive-sounding enumerations, and that is what makes
 them expensive: a list saying "these blocks are file-only" is read as the whole
