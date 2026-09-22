@@ -431,6 +431,135 @@ impl TermherdMcp {
         }))
     }
 
+    /// Composed agent-loop tool: prompt a session, wait for its activity status
+    /// to settle, and read back its terminal text in a single round trip.
+    #[tool(
+        name = "prompt_in_session",
+        description = "Prompt a session, wait until its activity reaches target statuses \
+                       (default: idle or attention), and read back its terminal text in a \
+                       single round trip. The composed form of `run_in_session` + \
+                       `wait_for_status` + `read_terminal`. Prompting a shell session is \
+                       enabled by default; prompting a nested Claude session requires opt-in \
+                       (via `allow_claude_nesting` setting or argument). Args: `session` \
+                       (handle), `text` (text/command to send; include trailing newline to submit), \
+                       `statuses` (target statuses, default [\"idle\", \"attention\"]), \
+                       `lines` (trailing lines to read back, default 40), `timeout_ms` \
+                       (wait bound in ms, default 30000, capped at 300000), `allow_claude_nesting` \
+                       (per-call opt-in for nested Claude sessions, default false). Returns \
+                       `{ status, timed_out, text, rendered, focused_handle }`."
+    )]
+    async fn prompt_in_session(
+        &self,
+        Parameters(args): Parameters<PromptInSessionArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+
+        // 1. Session lookup & Nesting opt-in verification
+        let list_reply = self
+            .bridge
+            .call(Request::ListSessions, CALL_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Sessions(sessions) = list_reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        let target_info = sessions
+            .iter()
+            .find(|s| s.handle == args.session)
+            .ok_or_else(|| {
+                ErrorData::invalid_params(format!("unknown session handle: {}", args.session), None)
+            })?;
+
+        if target_info.kind == SessionKind::Claude {
+            let allow_setting = crate::settings::Settings::load().mcp.allow_claude_nesting;
+            let allow_param = args.allow_claude_nesting.unwrap_or(false);
+            if !allow_setting && !allow_param {
+                return Err(ErrorData::invalid_params(
+                    "prompting a nested Claude session is disabled by default; enable it in \
+                     settings.json (`mcp.allow_claude_nesting: true`) or pass `allow_claude_nesting: true`",
+                    None,
+                ));
+            }
+        }
+
+        // 2. Step 1: Send text (run_in_session primitive)
+        let act_reply = self
+            .bridge
+            .call(
+                Request::Act(Action::Run {
+                    session,
+                    bytes: args.text.into_bytes(),
+                }),
+                CALL_TIMEOUT,
+            )
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Acted(outcome) = act_reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        if let Some(reason) = outcome.error {
+            return Err(ErrorData::invalid_params(reason, None));
+        }
+
+        // 3. Step 2: Wait for status (wait_for_status primitive)
+        let targets = parse_statuses(args.statuses)?;
+        let timeout = wait_timeout(args.timeout_ms);
+        let (status_str_val, timed_out) = match self
+            .bridge
+            .call(Request::WaitForStatus { session, targets }, timeout)
+            .await
+        {
+            Ok(Reply::Waited(waited_outcome)) => {
+                if let Some(reason) = waited_outcome.error {
+                    return Err(ErrorData::invalid_params(reason, None));
+                }
+                (waited_outcome.status.map(status_str), false)
+            }
+            Ok(_) => {
+                return Err(ErrorData::internal_error(
+                    "bridge answered the wrong reply kind",
+                    None,
+                ));
+            }
+            Err(CallError::Timeout(_)) => {
+                let status = self.current_status(session).await;
+                (status, true)
+            }
+            Err(error) => return Err(ErrorData::internal_error(error.to_string(), None)),
+        };
+
+        // 4. Step 3: Read terminal (read_terminal primitive)
+        let lines = args.lines.unwrap_or(DEFAULT_TEXT_LINES);
+        let read_reply = self
+            .bridge
+            .call(Request::ReadTerminal { session, lines }, CALL_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Terminal(read) = read_reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        if let Some(reason) = read.error {
+            return Err(ErrorData::invalid_params(reason, None));
+        }
+
+        structured(serde_json::json!({
+            "status": status_str_val,
+            "timed_out": timed_out,
+            "text": read.text.as_deref().unwrap_or_default(),
+            "rendered": read.text.is_some(),
+            "focused_handle": outcome.focused,
+        }))
+    }
+
     /// The window's pixels — what the text `snapshot` cannot show.
     #[tool(
         name = "screenshot",
@@ -1090,6 +1219,28 @@ struct ReadArgs {
     lines: Option<usize>,
 }
 
+/// Arguments for `prompt_in_session`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct PromptInSessionArgs {
+    /// The session handle to prompt.
+    session: String,
+    /// Text to type into the session's terminal. Include a trailing newline to submit.
+    text: String,
+    /// Target activity statuses to wait for (default: ["idle", "attention"]).
+    #[serde(default)]
+    statuses: Option<Vec<String>>,
+    /// Trailing terminal lines to read back (default: 40).
+    #[serde(default)]
+    lines: Option<usize>,
+    /// How long to wait before reporting the current status and terminal text instead.
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    /// Per-call opt-in to prompt a nested Claude session (default: false).
+    #[serde(default)]
+    allow_claude_nesting: Option<bool>,
+}
+
 /// Map the named statuses onto the core enum. An empty or omitted list means
 /// idle-or-attention — the two a caller waiting on a command actually wants.
 /// An unknown name is rejected rather than dropped: silently waiting on fewer
@@ -1205,70 +1356,100 @@ mod tests {
     type SweepCall<'a> =
         std::pin::Pin<Box<dyn Future<Output = Result<CallToolResult, ErrorData>> + 'a>>;
 
-    /// The reply the shell must give for `tool`, and the call that drives it.
+    /// The replies the shell must give for `tool`, and the call that drives it.
     ///
     /// One `match` states the tool list once, so a tool the sweep does not know
     /// panics here rather than being skipped in silence.
-    fn sweep_case<'a>(mcp: &'a TermherdMcp, tool: &str) -> (Reply, SweepCall<'a>) {
+    fn sweep_case<'a>(mcp: &'a TermherdMcp, tool: &str) -> (Vec<Reply>, SweepCall<'a>) {
         use crate::shell::bridge::{ActionOutcome, ShotResult, TerminalRead, WaitOutcome};
 
         let acted = || Reply::Acted(ActionOutcome::applied(Some("1".into())));
         match tool {
             "list_sessions" => (
-                Reply::Sessions(Vec::new()),
+                vec![Reply::Sessions(Vec::new())],
                 Box::pin(mcp.list_sessions()) as SweepCall<'a>,
             ),
             "snapshot" => (
-                Reply::Snapshot(
-                    App::new().snapshot(&SnapshotFilter::default(), &SnapshotInputs::default()),
-                ),
+                vec![Reply::Snapshot(App::new().snapshot(
+                    &SnapshotFilter::default(),
+                    &SnapshotInputs::default(),
+                ))],
                 Box::pin(mcp.snapshot(Parameters(SnapshotArgs::default()))),
             ),
             "open_session" => (
-                acted(),
+                vec![acted()],
                 Box::pin(mcp.open_session(Parameters(OpenArgs::default()))),
             ),
             "split_pane" => (
-                acted(),
+                vec![acted()],
                 Box::pin(mcp.split_pane(Parameters(SplitArgs::default()))),
             ),
             "focus_pane" => (
-                acted(),
+                vec![acted()],
                 Box::pin(mcp.focus_pane(Parameters(FocusArgs {
                     session: "1".into(),
                 }))),
             ),
             "rename_tab" => (
-                acted(),
+                vec![acted()],
                 Box::pin(mcp.rename_tab(Parameters(RenameArgs {
                     tab: 0,
                     title: "t".into(),
                 }))),
             ),
             "add_repo" => (
-                acted(),
+                vec![acted()],
                 Box::pin(mcp.add_repo(Parameters(RepoArgs { path: "/p".into() }))),
             ),
             "forget_repo" => (
-                acted(),
+                vec![acted()],
                 Box::pin(mcp.forget_repo(Parameters(RepoArgs { path: "/p".into() }))),
             ),
             "close_pane" => (
-                acted(),
+                vec![acted()],
                 Box::pin(mcp.close_pane(Parameters(CloseArgs::default()))),
             ),
             "run_in_session" => (
-                acted(),
+                vec![acted()],
                 Box::pin(mcp.run_in_session(Parameters(RunArgs {
                     session: "1".into(),
                     text: "ls\n".into(),
                 }))),
             ),
+            "prompt_in_session" => (
+                vec![
+                    Reply::Sessions(vec![SessionInfo {
+                        handle: "1".into(),
+                        title: "tab 0".into(),
+                        cwd: Some("/proj".into()),
+                        kind: SessionKind::Shell,
+                        resume_id: None,
+                        status: SessionStatus::Idle,
+                    }]),
+                    acted(),
+                    Reply::Waited(WaitOutcome {
+                        status: Some(SessionStatus::Idle),
+                        error: None,
+                    }),
+                    Reply::Terminal(TerminalRead {
+                        text: Some("output".into()),
+                        error: None,
+                    }),
+                ],
+                Box::pin(mcp.prompt_in_session(Parameters(PromptInSessionArgs {
+                    session: "1".into(),
+                    text: "echo hi\n".into(),
+                    statuses: None,
+                    lines: None,
+                    timeout_ms: None,
+                    allow_claude_nesting: None,
+                }))),
+            ),
             "mouse_in_session" => (
-                Reply::Acted(
+                vec![Reply::Acted(
                     ActionOutcome::applied(Some("1".into()))
                         .with_detail(ActionDetail::Pointer(PointerRoute::Select)),
-                ),
+                )],
                 Box::pin(mcp.mouse_in_session(Parameters(MouseArgs {
                     session: "1".into(),
                     kind: "press".into(),
@@ -1278,52 +1459,52 @@ mod tests {
                 }))),
             ),
             "wait_for_status" => (
-                Reply::Waited(WaitOutcome {
+                vec![Reply::Waited(WaitOutcome {
                     status: Some(SessionStatus::Idle),
                     error: None,
-                }),
+                })],
                 Box::pin(mcp.wait_for_status(Parameters(WaitArgs {
                     session: "1".into(),
                     ..WaitArgs::default()
                 }))),
             ),
             "read_terminal" => (
-                Reply::Terminal(TerminalRead {
+                vec![Reply::Terminal(TerminalRead {
                     text: Some("hello".into()),
                     error: None,
-                }),
+                })],
                 Box::pin(mcp.read_terminal(Parameters(ReadArgs {
                     session: "1".into(),
                     lines: None,
                 }))),
             ),
             "press_keys" => (
-                Reply::Pressed(PressOutcome {
+                vec![Reply::Pressed(PressOutcome {
                     steps: vec![PressStep::Unbound],
                     focused: Some("1".into()),
                     error: None,
-                }),
+                })],
                 Box::pin(mcp.press_keys(Parameters(PressKeysArgs {
                     keys: vec!["escape".into()],
                 }))),
             ),
             "run_action" => (
-                Reply::Pressed(PressOutcome {
+                vec![Reply::Pressed(PressOutcome {
                     steps: vec![PressStep::Ran("close-focused".into())],
                     focused: Some("1".into()),
                     error: None,
-                }),
+                })],
                 Box::pin(mcp.run_action(Parameters(RunActionArgs {
                     actions: vec!["close-focused".into()],
                 }))),
             ),
             "screenshot" => (
-                Reply::Shot(ShotResult {
+                vec![Reply::Shot(ShotResult {
                     png: Some(vec![0]),
                     width: 8,
                     height: 4,
                     error: None,
-                }),
+                })],
                 Box::pin(mcp.screenshot(Parameters(ScreenshotArgs::default()))),
             ),
             other => panic!("tool {other:?} is new: add it to the structuredContent sweep"),
@@ -1344,8 +1525,9 @@ mod tests {
         for tool in tools {
             let (handle, requests) = channel();
             let mcp = TermherdMcp::new(handle);
-            let (reply, call) = sweep_case(&mcp, &tool);
-            let _shell = spawn_test_shell(requests, reply);
+            let (replies, call) = sweep_case(&mcp, &tool);
+            let _shell =
+                spawn_test_shell_seq(requests, replies.into_iter().map(Some).collect::<Vec<_>>());
             let result = call.await.unwrap_or_else(|error| {
                 panic!("{tool} answered an error: {}", error.message);
             });
@@ -2113,6 +2295,120 @@ mod tests {
             "got: {}",
             error.message
         );
+    }
+
+    #[tokio::test]
+    async fn prompt_in_session_happy_path_for_shell_session() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell_seq(
+            requests,
+            vec![
+                Some(Reply::Sessions(vec![SessionInfo {
+                    handle: "7".into(),
+                    title: "shell".into(),
+                    cwd: Some("/tmp".into()),
+                    kind: SessionKind::Shell,
+                    resume_id: None,
+                    status: SessionStatus::Idle,
+                }])),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                Some(Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Idle),
+                    error: None,
+                })),
+                Some(Reply::Terminal(TerminalRead {
+                    text: Some("build ok\n".into()),
+                    error: None,
+                })),
+            ],
+        );
+        let result = TermherdMcp::new(handle)
+            .prompt_in_session(Parameters(PromptInSessionArgs {
+                session: "7".into(),
+                text: "cargo test\n".into(),
+                ..Default::default()
+            }))
+            .await
+            .expect("prompt_in_session succeeds");
+        let value = result.structured_content.expect("structured content");
+        assert_eq!(value["status"], "idle");
+        assert_eq!(value["timed_out"], false);
+        assert_eq!(value["text"], "build ok\n");
+        assert_eq!(value["rendered"], true);
+        assert_eq!(value["focused_handle"], "7");
+        let _ = shell.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_in_session_rejects_nested_claude_without_opt_in() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell_seq(
+            requests,
+            vec![Some(Reply::Sessions(vec![SessionInfo {
+                handle: "7".into(),
+                title: "claude".into(),
+                cwd: Some("/tmp".into()),
+                kind: SessionKind::Claude,
+                resume_id: Some("id1".into()),
+                status: SessionStatus::Idle,
+            }]))],
+        );
+        let error = TermherdMcp::new(handle)
+            .prompt_in_session(Parameters(PromptInSessionArgs {
+                session: "7".into(),
+                text: "hi\n".into(),
+                allow_claude_nesting: None,
+                ..Default::default()
+            }))
+            .await
+            .expect_err("nested claude without opt-in is rejected");
+        assert!(
+            error
+                .message
+                .contains("prompting a nested Claude session is disabled by default"),
+            "got: {}",
+            error.message
+        );
+        let _ = shell.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_in_session_allows_nested_claude_with_per_call_opt_in() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell_seq(
+            requests,
+            vec![
+                Some(Reply::Sessions(vec![SessionInfo {
+                    handle: "7".into(),
+                    title: "claude".into(),
+                    cwd: Some("/tmp".into()),
+                    kind: SessionKind::Claude,
+                    resume_id: Some("id1".into()),
+                    status: SessionStatus::Idle,
+                }])),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                Some(Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Idle),
+                    error: None,
+                })),
+                Some(Reply::Terminal(TerminalRead {
+                    text: Some("ready\n".into()),
+                    error: None,
+                })),
+            ],
+        );
+        let result = TermherdMcp::new(handle)
+            .prompt_in_session(Parameters(PromptInSessionArgs {
+                session: "7".into(),
+                text: "hello\n".into(),
+                allow_claude_nesting: Some(true),
+                ..Default::default()
+            }))
+            .await
+            .expect("opted-in nested claude succeeds");
+        let value = result.structured_content.expect("structured content");
+        assert_eq!(value["text"], "ready\n");
+        let _ = shell.await;
     }
 
     // ---- screenshot: the pixel companion to `snapshot` ----
