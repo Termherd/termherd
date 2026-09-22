@@ -59,6 +59,13 @@ distinction useless.
 
 Seven handlers can refuse this way, and each says so at its own refusal site.
 
+`copy` refuses on the terminal's own answer: it holds a selection or it does
+not, wherever that selection has scrolled to. An MCP drag in a `forwarded`
+pane selects nothing (it carries no Shift, so it is the program's), so `copy`
+after it is `no-context` — and the program's own clipboard write (Claude Code
+copies a drag on release) is left alone. A human's Shift+drag there is a
+selection, and `copy` runs on it.
+
 ## Answering an overlay
 
 `escape` usually cancels; `enter` usually confirms. Three cautions:

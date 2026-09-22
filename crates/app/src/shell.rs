@@ -277,8 +277,6 @@ struct Shell {
     waiters: Vec<serve::StatusWaiter>,
     /// Current keyboard target.
     focus: Focus,
-    /// Last non-empty terminal selection, for the keyboard copy shortcut (FR4).
-    selection: Option<String>,
     /// GUI chrome theme (FR10).
     theme: Theme,
     /// Configurable shortcut bindings (FR9).
@@ -716,7 +714,6 @@ impl Shell {
             screens: HashMap::new(),
             waiters: Vec::new(),
             focus: Focus::Search,
-            selection: None,
             theme: startup.theme.to_iced(),
             keymap: startup.keymap,
             renaming: None,
@@ -986,7 +983,6 @@ impl Shell {
                 if text.is_empty() {
                     select
                 } else {
-                    self.selection = Some(text.clone());
                     Task::batch([select, iced::clipboard::write(text)])
                 }
             }
@@ -1000,7 +996,6 @@ impl Shell {
                 if text.is_empty() {
                     Task::none()
                 } else {
-                    self.selection = Some(text.clone());
                     iced::clipboard::write(text)
                 }
             }
@@ -1307,32 +1302,29 @@ impl Shell {
 
     /// Put the terminal selection on the clipboard (FR4). `None` when there is
     /// nothing selected: a caller told the copy ran would follow with a paste and
-    /// paste whatever was on the clipboard before.
+    /// paste whatever was on the clipboard before. (A selection of blank cells
+    /// still runs and copies an empty string — the screen flag cannot see the
+    /// text, only that a selection is there.)
     ///
-    /// A **visible** selection outranks [`Self::selection`], which is a cache of
-    /// the last text copied, not of the last text selected. With copy-on-select
-    /// off, nothing but a copy fills that cache — so trusting it first would put
-    /// the previously copied text on the clipboard while a fresh highlight sits
-    /// on screen, silently copying the wrong thing. The terminal reads its own
-    /// live selection and answers out of band, which refills the cache on the
-    /// way. The cache still serves the case the screen cannot: a selection
-    /// scrolled out of the viewport carries no spans to see.
+    /// The terminal owns the selection, so it answers both questions: whether
+    /// one exists (`has_selection`, true even when it scrolled out of view and
+    /// shows no spans) and what it says (read live, out of band, so a fast drag
+    /// copies exactly what was dragged). The shell keeps no copy of either — a
+    /// cache of the last text copied once stood in for the scrolled-out case,
+    /// and in a pane whose program owns the mouse, where only a Shift-drag
+    /// selects, it overwrote the program's own clipboard write on every
+    /// unshifted chord.
     fn copy_selection(&mut self) -> Option<Task<Message>> {
-        if let Some(session) = self.core.workspace.focused_session()
-            && self
-                .screens
-                .get(&session)
-                .is_some_and(|screen| !screen.selection.is_empty())
-        {
-            let effects = self
-                .core
-                .apply(termherd_core::Event::CopyTerminalSelection { session });
-            return Some(self.perform(effects));
-        }
-        match &self.selection {
-            Some(sel) if !sel.is_empty() => Some(iced::clipboard::write(sel.clone())),
-            _ => None,
-        }
+        let session = self.core.workspace.focused_session()?;
+        self.screens
+            .get(&session)
+            .is_some_and(|screen| screen.has_selection)
+            .then(|| {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::CopyTerminalSelection { session });
+                self.perform(effects)
+            })
     }
 
     /// Move pane focus to `session` and give the keyboard to its terminal —
@@ -2595,14 +2587,13 @@ mod key_routing {
 
     #[test]
     fn copy_runs_only_with_something_selected() {
-        // Three states, because the negative case alone leaves the guard
+        // Both states, because the negative case alone leaves the guard
         // untested: mutation testing survived `copy_selection` always refusing
-        // *and* both settings of `!sel.is_empty()` until the positive case and
-        // the empty-string case were pinned alongside it.
-        //
-        // The clipboard write itself is an iced task and not observable here, so
-        // the verdict is the assertion — which is exactly what a caller reads.
-        let (mut shell, _pty) = shell_with_terminal();
+        // until the positive case was pinned alongside it. The terminal is the
+        // one source of "is anything selected", so the screen's own flag is
+        // what flips the verdict — no shell-side text does.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
 
         let (nothing, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
         assert_eq!(
@@ -2610,22 +2601,22 @@ mod key_routing {
             vec![inert("copy", "no-context")],
             "no selection at all"
         );
+        assert_eq!(pty.copy_count(), 0);
 
-        shell.selection = Some(String::new());
-        let (empty, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
-        assert_eq!(
-            empty.steps,
-            vec![inert("copy", "no-context")],
-            "an empty selection is nothing to copy either"
+        shell.screens.insert(
+            session,
+            Screen {
+                has_selection: true,
+                ..screen_of("cargo test")
+            },
         );
-
-        shell.selection = Some("cargo test".to_owned());
         let (text, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
         assert_eq!(
             text.steps,
             vec![PressStep::Ran("copy".to_owned())],
-            "real text on the clipboard is a copy that ran"
+            "a selection the terminal holds is a copy that ran"
         );
+        assert_eq!(pty.copy_count(), 1, "and it was asked of the terminal");
     }
 
     #[test]
@@ -2825,11 +2816,6 @@ mod key_routing {
             }],
             "the word range is applied to the terminal selection"
         );
-        assert_eq!(
-            shell.selection.as_deref(),
-            Some("src/main.rs"),
-            "the word is remembered as the last copy"
-        );
     }
 
     #[test]
@@ -2881,6 +2867,7 @@ mod key_routing {
         let session = shell.core.workspace.focused_session().expect("focused");
         let mut screen = screen_of("cargo test");
         screen.selection = vec![(0, 0, 4)];
+        screen.has_selection = true;
         shell.screens.insert(session, screen);
         (shell, pty, session)
     }
@@ -2905,17 +2892,52 @@ mod key_routing {
     }
 
     #[test]
-    fn the_copy_chord_prefers_the_live_selection_to_the_last_copied_text() {
-        // The cache holds what was last *copied*, not what is selected now.
-        // Reading it first would put stale text on the clipboard while a fresh
-        // highlight sits on screen — a silent wrong answer, the worst kind.
-        let (mut shell, pty, _session) = shell_with_a_visible_selection();
-        shell.selection = Some("an earlier copy".to_owned());
-        let _ = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+    fn the_copy_chord_is_inert_with_nothing_selected_even_after_an_earlier_copy() {
+        // The case a mouse-mode pane produces on every unshifted drag: the
+        // program took the gesture and put the dragged text on the clipboard
+        // itself, and the terminal holds no selection. The chord must then do
+        // nothing at all — an earlier copy elsewhere is not "something to copy"
+        // now, and writing it would overwrite the program's copy with stale
+        // text. Only the absence of a selection matters, so no mouse mode is set.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::CopySelection("an earlier copy".to_owned()));
+        shell.screens.insert(session, screen_of("claude"));
+        let (verdict, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            verdict.steps,
+            vec![PressStep::Inert {
+                action: "copy".to_owned(),
+                reason: "no-context",
+            }],
+            "nothing is selected, so there is nothing to copy"
+        );
+        assert_eq!(pty.copy_count(), 0, "no copy was asked of the terminal");
+    }
+
+    #[test]
+    fn the_copy_chord_reads_a_selection_that_scrolled_out_of_view() {
+        // The terminal's selection survives a scroll into history, where the
+        // viewport shows no highlight of it. The chord still copies it — the
+        // one case the visible spans cannot answer, which the screen reports
+        // in its own right rather than through a cache of an earlier copy.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(
+            session,
+            Screen {
+                has_selection: true,
+                scrolled: true,
+                display_offset: 40,
+                ..screen_of("cargo test")
+            },
+        );
+        let (verdict, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(verdict.steps, vec![PressStep::Ran("copy".to_owned())]);
         assert_eq!(
             pty.copy_count(),
             1,
-            "the live selection wins over the cache"
+            "the chord asks the terminal for the selection it still holds"
         );
     }
 

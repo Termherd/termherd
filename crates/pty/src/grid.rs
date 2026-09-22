@@ -45,6 +45,13 @@ pub struct Screen {
     /// the emulator rotates on every grid scroll — so the highlight follows the
     /// text through both scrollback and application-driven (alt-screen) scroll.
     pub selection: Vec<(u16, u16, u16)>,
+    /// True while the terminal holds a non-empty selection over rows it still
+    /// has — on screen or scrolled into history, but not one whose rows fell
+    /// off the end of the scrollback, which the emulator keeps rotating and
+    /// can no longer read. `selection` above answers "what to highlight"; this
+    /// answers "is there anything to copy", which the spans cannot, since a
+    /// selection scrolled off the viewport has none.
+    pub has_selection: bool,
     /// Every OSC 8 hyperlink on screen, as the runs of cells it covers. The
     /// target rides beside the grid rather than in each cell so a link whose
     /// label hides its URL (`#76` over an issue URL) still resolves, and
@@ -267,6 +274,7 @@ impl Screen {
             bracketed_paste: false,
             mouse_reporting: None,
             selection: Vec::new(),
+            has_selection: false,
             hyperlinks: Vec::new(),
             default_bg: palette.background,
             cursor_color: palette.cursor,
@@ -539,6 +547,10 @@ pub(crate) fn snapshot<T: EventListener>(term: &Term<T>, palette: &Palette) -> S
         bracketed_paste: term.mode().contains(TermMode::BRACKETED_PASTE),
         mouse_reporting: mouse_reporting(*term.mode()),
         selection: selected_spans(term, first_line, cols, rows),
+        has_selection: term
+            .selection
+            .as_ref()
+            .is_some_and(|s| !s.is_empty() && s.to_range(term).is_some()),
         hyperlinks: hyperlinks.finish(),
         default_bg: palette.background,
         cursor_color: palette.cursor,
@@ -962,6 +974,99 @@ mod tests {
     }
 
     // --- the child reads the mouse ------------------------------------------
+
+    /// The spans say what to highlight; `has_selection` says whether there is
+    /// anything to copy. They part ways exactly when a selection sits wholly
+    /// in history — highlighted nowhere, copyable still — and when a click
+    /// left an empty selection behind, which highlights nothing and copies
+    /// nothing.
+    #[test]
+    fn snapshot_reports_whether_a_selection_exists() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        let palette = Palette::default();
+        parser.advance(&mut term, b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5");
+        assert!(!snapshot(&term, &palette).has_selection, "nothing selected");
+
+        // A press with no drag: an empty range, not a selection.
+        term.selection = Some(Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(2)),
+            Side::Left,
+        ));
+        assert!(
+            !snapshot(&term, &palette).has_selection,
+            "a bare click leaves nothing to copy"
+        );
+
+        // A selection wholly in history: visible rows are l3..l5, so l1 is off.
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(-2), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(-2), Column(1)), Side::Right);
+        term.selection = Some(sel);
+        let screen = snapshot(&term, &palette);
+        assert!(
+            screen.selection.is_empty(),
+            "nothing to highlight on screen"
+        );
+        assert!(
+            screen.has_selection,
+            "the scrolled-out selection is still there to copy"
+        );
+
+        apply_select(&mut term, SelectOp::Clear);
+        assert!(!snapshot(&term, &palette).has_selection, "cleared");
+    }
+
+    /// The emulator rotates a selection into history on every scroll and never
+    /// clamps it to the scrollback it keeps, so a selection can outlive its
+    /// rows: still non-empty as geometry, but with no text behind it. Reporting
+    /// that as copyable would have the chord run and copy nothing.
+    #[test]
+    fn a_selection_whose_rows_fell_off_the_scrollback_is_nothing_to_copy() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let config = Config {
+            scrolling_history: 5,
+            ..Config::default()
+        };
+        let mut term = Term::new(config, &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        let palette = Palette::default();
+        parser.advance(&mut term, b"hello");
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(0), Column(4)), Side::Right);
+        term.selection = Some(sel);
+        assert!(
+            snapshot(&term, &palette).has_selection,
+            "selected on screen"
+        );
+        assert_eq!(term.selection_to_string().as_deref(), Some("hello"));
+
+        for _ in 0..20 {
+            parser.advance(&mut term, b"\r\nmore");
+        }
+        assert_eq!(
+            term.selection_to_string(),
+            None,
+            "the rows the selection covered are gone"
+        );
+        assert!(
+            !snapshot(&term, &palette).has_selection,
+            "so there is nothing to copy"
+        );
+    }
 
     #[test]
     fn snapshot_tracks_the_mouse_reporting_ladder() {

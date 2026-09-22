@@ -185,7 +185,10 @@ the pane under the pointer. Left off, the copy chord reads whatever is
 highlighted on screen. A full-screen program that reads the mouse — Claude
 Code's `/diff` and `/resume`, vim, lazygit, less — owns it while it runs:
 clicks, drags and the wheel go to the program, nothing is selected or pasted
-locally, and <kbd>Shift</kbd>+drag takes the mouse back for a selection. In
+locally, and <kbd>Shift</kbd>+drag takes the mouse back for a selection. The
+copy chord does nothing in such a pane unless a <kbd>Shift</kbd> selection
+exists, so a program's own clipboard write (Claude Code copies a drag on
+release) is never overwritten. In
 the sidebar, click a project or session to open it; a tab's `×` also closes
 it. Hovering a tab shows the session's fuller
 description (the same card the sidebar shows). **+ Add a repo** puts a
