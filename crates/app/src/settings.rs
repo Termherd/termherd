@@ -41,6 +41,17 @@ pub struct Settings {
     pub close: CloseSettings,
     /// How a clicked file leaves termherd. Absent → the OS default handler.
     pub open: OpenSettings,
+    /// MCP control surface settings. Absent → defaults.
+    pub mcp: McpSettings,
+}
+
+/// On-disk MCP control surface settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpSettings {
+    /// Allow an agent (via MCP) to prompt another Claude session (`SessionKind::Claude`).
+    /// Off by default (`false`). Shell sessions (`SessionKind::Shell`) are never gated by this.
+    pub allow_claude_nesting: bool,
 }
 
 /// The on-disk editor command. Absent (or unparsable) → the OS default
@@ -966,5 +977,14 @@ mod tests {
         assert_eq!(shell.program, "bash");
         assert_eq!(shell.args, vec!["-l".to_string()]);
         assert_eq!(s.theme, ThemeChoice::Light);
+    }
+
+    #[test]
+    fn mcp_settings_default_and_deserialisation() {
+        assert!(!Settings::default().mcp.allow_claude_nesting);
+
+        let s: Settings = serde_json::from_str(r#"{ "mcp": { "allow_claude_nesting": true } }"#)
+            .expect("valid json");
+        assert!(s.mcp.allow_claude_nesting);
     }
 }
