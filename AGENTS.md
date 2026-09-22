@@ -298,21 +298,18 @@ carry is modifiers: the event lost its `modifiers` field in #311 as dead
 weight, and it comes back as one type shared with `KeyMods` when a caller
 needs it, not before.
 
-**Still open.** Three features and two defects: `F-mcp-agent-loop` (#196 —
-below), `F-mcp-attach` (#267 — the bridge is reachable only from a session
-termherd spawned, so the launcher itself cannot drive it), the pointer at
-termherd's own chrome (#301 — the sidebar, tabs and gutters still have no
-mouse), `enter` on the two renames (#246), and a doc editor that discards
-unsaved edits when it closes (#248). None of the five blocks another.
+**Still open.** Two features and two defects: `F-mcp-attach` (#267 — the bridge
+is reachable only from a session termherd spawned, so the launcher itself cannot
+drive it), the pointer at termherd's own chrome (#301 — the sidebar, tabs and
+gutters still have no mouse), `enter` on the two renames (#246), and a doc editor
+that discards unsaved edits when it closes (#248). None of the four blocks another.
 
-`F-mcp-agent-loop` (#196 — the composed prompt→wait→read in one
-round trip) is a child of the #90 epic — no longer the last one, since three
-siblings joined it. With `screenshot`, the keyboard tools and the terminal
-pointer reaching the child, the capability reads as whole in three parts:
-drive the UI, see the pixels, read the terminal. #196 *composes* the wait,
-which #236 had to fix first — building it on a synchronisation that never
-fired would have been building on sand, and that ordering constraint is now
-discharged.
+**`F-mcp-agent-loop` shipped in #196 (`prompt_in_session`).** It composes
+`run_in_session`, `wait_for_status`, and `read_terminal` into a single MCP round
+trip, with bounded step-by-step execution and opt-in protection for nested Claude
+sessions. `F-mcp-agent-loop` was a child of the #90 epic — with `screenshot`,
+the keyboard tools, terminal pointer, and composed agent loop shipped, the live
+bridge control surface is complete.
 
 **Every overlay can now be left from the keyboard** (#237). An open sidebar
 session-rename used to swallow every key including `escape`, parking the whole
