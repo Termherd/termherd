@@ -167,6 +167,13 @@ why the aggregator matters: because protection pins only `ci-success` (which
 always runs), we never rely on GitHub counting a skipped *required* check as a
 pass, and `cross-os` may stay a matrix without wedging PRs.
 
+**The flip side: a skipped job is a green that tested nothing.** A file a test
+reads but the `rust` filter does not list merges on an unexercised pass. The
+proptest seeds under `proptest-regressions/` were such a file until they joined
+the filter: a PR that only moved them came back green with `test` and
+`portable` both skipped. When a test starts reading a new kind of non-`.rs`
+file, add its path to `rust`.
+
 **Post-merge coverage is not coverage of the merge.** `cross-os` runs after the
 fact *and* is path-filtered on `rust`, so a Windows-only defect can land and
 then sit through any number of docs-only merges before the next Rust push
