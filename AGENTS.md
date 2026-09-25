@@ -298,36 +298,24 @@ carry is modifiers: the event lost its `modifiers` field in #311 as dead
 weight, and it comes back as one type shared with `KeyMods` when a caller
 needs it, not before.
 
-**Still open.** Three features and two defects: `F-mcp-agent-loop` (#196 —
-below), `F-mcp-attach` (#267 — the bridge is reachable only from a session
-termherd spawned, so the launcher itself cannot drive it), the pointer at
-termherd's own chrome (#301 — the sidebar, tabs and gutters still have no
-mouse), `enter` on the two renames (#246), and a doc editor that discards
-unsaved edits when it closes (#248). None of the five blocks another. A third
-defect, the copy chord overwriting a mouse-mode program's own clipboard write
-with termherd's last copy (#316), is fixed: the shell keeps no copy cache any
-more, and asks the terminal whether it holds a selection at all.
-
-`F-mcp-agent-loop` (#196 — the composed prompt→wait→read in one
-round trip) is a child of the #90 epic — no longer the last one, since three
-siblings joined it. With `screenshot`, the keyboard tools and the terminal
-pointer reaching the child, the capability reads as whole in three parts:
-drive the UI, see the pixels, read the terminal. #196 *composes* the wait,
-which #236 had to fix first — building it on a synchronisation that never
-fired would have been building on sand, and that ordering constraint is now
-discharged.
 **Still open.** Two features and two defects: `F-mcp-attach` (#267 — the bridge
 is reachable only from a session termherd spawned, so the launcher itself cannot
 drive it), the pointer at termherd's own chrome (#301 — the sidebar, tabs and
 gutters still have no mouse), `enter` on the two renames (#246), and a doc editor
 that discards unsaved edits when it closes (#248). None of the four blocks another.
+The list leaves out the bridge's hardening defects (#284, #293). A third
+defect, the copy chord overwriting a mouse-mode program's own clipboard write
+with termherd's last copy (#316), is fixed: the shell keeps no copy cache any
+more, and asks the terminal whether it holds a selection at all.
 
 **`F-mcp-agent-loop` shipped in #196 (`prompt_in_session`).** It composes
 `run_in_session`, `wait_for_status`, and `read_terminal` into a single MCP round
 trip, with bounded step-by-step execution and opt-in protection for nested Claude
 sessions. `F-mcp-agent-loop` was a child of the #90 epic — with `screenshot`,
 the keyboard tools, terminal pointer, and composed agent loop shipped, the live
-bridge control surface is complete.
+bridge control surface is complete. It could only be built after #236: a
+composed wait on a synchronisation that never fired would have settled by
+timeout every time.
 
 **Every overlay can now be left from the keyboard** (#237). An open sidebar
 session-rename used to swallow every key including `escape`, parking the whole
@@ -558,6 +546,17 @@ exists). Do not relax them locally.
   mid-run (see `.wrap.md`): success and vacuity are indistinguishable from the
   outside. Probe with the operation you actually intend to perform, and if that
   is destructive, assert on something the operation *must* have changed.
+- **A proptest seed file is keyed by the test's source path, so moving the
+  test orphans it without a word.** proptest's default persistence reads
+  `proptest-regressions/<path of the .rs file>.txt`, derived from `file!()`.
+  When the scroll-drift property left `shell/terminal.rs` (for
+  `shell/terminal/mod.rs`, then `shell/terminal/canvas.rs`), its two committed
+  seeds stopped replaying from 2026-07-12 to 2026-09-25, and nothing reported
+  it: an unread seed file gives no signal either way. When a refactor moves a
+  file holding a `proptest!`, `git mv` its regressions file in the same commit.
+  The file is test input to CI as well: the `rust` path filter now watches
+  `proptest-regressions/**`, since the PR that moved it came up green with
+  `test` and `portable` both skipped.
 - **An unfinished check is not a passing check, and reporting it once is not
   reading it.** `portable` is the only gate that runs a Windows *behaviour*
   before merge, and it takes minutes while every other job takes seconds — so
