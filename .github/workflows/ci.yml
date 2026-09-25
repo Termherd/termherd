@@ -57,9 +57,12 @@ jobs:
           filters: |
             # `rust` = anything that can change build/lint/test output, plus
             # the source-scanning architecture scripts (they read `.rs` and must
-            # re-run when their own rules change).
+            # re-run when their own rules change). proptest replays the seeds
+            # in `proptest-regressions/` before any new case, so they are test
+            # input too.
             rust:
               - '**/*.rs'
+              - '**/proptest-regressions/**'
               - '**/Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
