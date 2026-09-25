@@ -546,6 +546,17 @@ exists). Do not relax them locally.
   mid-run (see `.wrap.md`): success and vacuity are indistinguishable from the
   outside. Probe with the operation you actually intend to perform, and if that
   is destructive, assert on something the operation *must* have changed.
+- **A proptest seed file is keyed by the test's source path, so moving the
+  test orphans it without a word.** proptest's default persistence reads
+  `proptest-regressions/<path of the .rs file>.txt`, derived from `file!()`.
+  When the scroll-drift property left `shell/terminal.rs` (for
+  `shell/terminal/mod.rs`, then `shell/terminal/canvas.rs`), its two committed
+  seeds stopped replaying from 2026-07-12 to 2026-09-25, and nothing reported
+  it: an unread seed file gives no signal either way. When a refactor moves a
+  file holding a `proptest!`, `git mv` its regressions file in the same commit.
+  The file is test input to CI as well: the `rust` path filter now watches
+  `proptest-regressions/**`, since the PR that moved it came up green with
+  `test` and `portable` both skipped.
 - **An unfinished check is not a passing check, and reporting it once is not
   reading it.** `portable` is the only gate that runs a Windows *behaviour*
   before merge, and it takes minutes while every other job takes seconds — so
