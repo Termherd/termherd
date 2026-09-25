@@ -259,9 +259,12 @@ the mouse back for a local selection. The copy chord used to fall back to a
 cache of the last text copied when no selection was visible, which in a pane
 the child owns — never a visible selection — overwrote the child's own copy on
 every chord (#316); the cache is gone and the chord asks the terminal whether
-it holds a selection, scrolled out of view or not. One contract bug remains on
-the surface: the `emitted_lines_never_drift` property has a known failing
-scroll sequence whose seed was never committed (#102)
+it holds a selection, scrolled out of view or not. The scroll-drift property no
+longer carries a known failure. This entry used to call its failing sequence
+the one contract bug remaining on the surface (#102). It was f32 noise in the
+test's own reference sum, not a scrolling defect, and `b1d8045` had already
+fixed it the day after it was filed. The issue closed on 2026-09-24, and its
+seed now replays (#328)
 
 <a id="f-close-confirm-policy"></a>
 
