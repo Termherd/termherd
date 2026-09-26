@@ -156,6 +156,14 @@
     "scale": 0.5
   },
 
+  // ── MCP live bridge ──────────────────────────────────────────────────────
+  // Whether `prompt_in_session` may prompt another *Claude* session (an agent
+  // driving an agent). Shell sessions are never gated. A single call can also
+  // opt in with its own `allow_claude_nesting: true`. Default: false.
+  "mcp": {
+    "allow_claude_nesting": false
+  },
+
   // ── Keyboard overrides ───────────────────────────────────────────────────
   // Each entry binds an action to one chord or a list of chords and REPLACES
   // that action's default; unlisted actions keep their per-platform default.

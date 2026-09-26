@@ -69,17 +69,22 @@ one for your platform:
   `.AppImage`, `chmod +x` it, and run it directly.
 
 Prefer a bare command-line binary? The same releases carry one-line installers
-that drop `termherd` into your Cargo bin directory:
+that drop `termherd` into your Cargo bin directory. Every release so far is a
+**pre-release**, which GitHub's `/releases/latest/` shortcut skips, so name the
+tag — the newest one is at the top of the
+[Releases](https://github.com/Termherd/termherd/releases) page:
 
 ```bash
 # macOS / Linux
+TAG=v0.1.0-prerelease.4
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.sh | sh
+  "https://github.com/Termherd/termherd/releases/download/$TAG/termherd-app-installer.sh" | sh
 ```
 
 ```powershell
 # Windows
-powershell -c "irm https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.ps1 | iex"
+$Tag = "v0.1.0-prerelease.4"
+irm "https://github.com/Termherd/termherd/releases/download/$Tag/termherd-app-installer.ps1" | iex
 ```
 
 ### Verify a Linux download
@@ -89,12 +94,15 @@ Linux release binaries carry a sigstore *keyless* build-provenance attestation
 in the public Rekor transparency log). Verify a download with the `gh` CLI:
 
 ```bash
-gh attestation verify termherd-x86_64-unknown-linux-gnu.tar.xz \
+gh attestation verify termherd-app-x86_64-unknown-linux-gnu.tar.xz \
   --repo Termherd/termherd
 ```
 
 A successful check proves both integrity and that the artifact was built by
-this repository's CI. A `SHA256SUMS` file is also attached to each release.
+this repository's CI. The attestation and its `SHA256SUMS` file come from a
+signing step added after `v0.1.0-prerelease.4`, so that pre-release has
+neither — only per-file `.sha256` checksums and a combined `sha256.sum`, which
+every release carries.
 
 ## Run from source
 
@@ -133,6 +141,9 @@ you want and strip the comments (the real file is strict JSON). In short:
 - `open` — the editor command a Ctrl/Cmd-clicked file path opens in, with
   `{path}` / `{line}` / `{col}` templates (default: the OS default handler,
   which cannot honour a line number).
+- `mcp` — `allow_claude_nesting`: whether `prompt_in_session` may prompt
+  another *Claude* session over the live bridge (default `false`; a shell is
+  never gated).
 - `keys` — keyboard overrides, one chord or a list per action; the full
   action vocabulary and its default chords are listed in the template.
 
@@ -234,6 +245,7 @@ nothing to configure. It exposes the running workspace:
 | `press_keys` · `run_action` | drive termherd's own interface — chords through the live keymap, or actions by name |
 | `mouse_in_session` | a mouse event at a cell of a terminal — forwarded to a program reading the mouse, else the terminal's own selection |
 | `add_repo` · `forget_repo` | put a repository in the sidebar before it has any session, and drop that addition |
+| `prompt_in_session` | type, wait and read in one round trip — prompting another Claude session is opt-in |
 
 The loop that makes it useful is **act → wait → observe**: `run_in_session`,
 then `wait_for_status`, then `read_terminal`. Sessions are addressed by a
@@ -252,13 +264,12 @@ app on one it cannot answer; a sidebar rename used to be the exception
 rename — those go through a widget callback no synthesised event reaches
 ([#246]).
 
-Five follow-ups remain: a composed prompt→wait→read in one round trip
-([#196]), `enter` on the renames ([#246]), a doc editor that discards unsaved
-edits when it closes ([#248]), reaching the bridge from outside a session
-termherd spawned — the launcher cannot drive it today ([#267]) — and the
-pointer at TermHerd's own interface ([#301]): it reaches a session's terminal,
-and through it a program reading the mouse, but not yet the sidebar, tabs or
-gutters.
+Four follow-ups remain: `enter` on the renames ([#246]), a doc editor that
+discards unsaved edits when it closes ([#248]), reaching the bridge from
+outside a session termherd spawned — the launcher cannot drive it today
+([#267]) — and the pointer at TermHerd's own interface ([#301]): it reaches a
+session's terminal, and through it a program reading the mouse, but not yet
+the sidebar, tabs or gutters.
 
 ### The stdio server (manual)
 
@@ -284,7 +295,6 @@ It speaks JSON-RPC over stdio. Register it with Claude Code by adding it to your
 Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 
 [#90]: https://github.com/Termherd/termherd/issues/90
-[#196]: https://github.com/Termherd/termherd/issues/196
 [#237]: https://github.com/Termherd/termherd/issues/237
 [#246]: https://github.com/Termherd/termherd/issues/246
 [#248]: https://github.com/Termherd/termherd/issues/248

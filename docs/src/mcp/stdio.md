@@ -55,7 +55,7 @@ outside `dark`/`light`) answers a JSON-RPC error and writes nothing. `null` is
 always accepted on a writable id — it unsets the option.
 
 That is the whole write surface today. The `close`, `sidebar`, `record`,
-`open`, `keys`, `terminal.font_size`, `terminal.copy_on_select` and
+`open`, `mcp`, `keys`, `terminal.font_size`, `terminal.copy_on_select` and
 `terminal.paste_on_right_click` blocks of
 [`settings.json`](../reference/settings.md) are file-only — `keys` is
 readable as a resource, below.
@@ -71,7 +71,9 @@ readable as a resource, below.
 keymap itself uses, so it cannot drift from the binary you are running. It is
 the machine-readable form of
 [Keyboard shortcuts](../reference/keyboard.md), and the catalogue the live
-bridge's `run_action` speaks.
+bridge's `run_action` speaks — less the `activate-tab-N` family, which
+`run_action` accepts but the resource does not list. `copy` and `paste` appear
+with no default: theirs differ per platform and are set outside that table.
 
 ## What it is not
 

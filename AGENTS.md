@@ -149,17 +149,17 @@ into its `mcpServers` at spawn (loopback, per-session token) — so it can read
 and drive the workspace it runs in. This is the richer sibling of the capture
 dump above: same `WorkspaceSnapshot` model, live instead of a file.
 
-**Settled.** Sixteen tools: `list_sessions` + `snapshot`
+**Settled.** Seventeen tools: `list_sessions` + `snapshot`
 (perception), `open_session` / `split_pane` / `focus_pane` / `rename_tab` /
 `close_pane` / `run_in_session` / `mouse_in_session` (action),
 `wait_for_status` + `read_terminal` (synchronisation), `screenshot` (pixels),
 `press_keys` + `run_action` (the app's own keyboard), `add_repo` +
 `forget_repo` (membership — what the sidebar *contains*, as against what the
-window draws). The loop they exist to
-serve is **act → wait → observe**: `run_in_session` returns immediately, so
-synchronise with `wait_for_status` and then `read_terminal`. Do **not** poll
-`snapshot` in a loop — it races the transition you are watching for, which is
-why the wait rung exists.
+window draws), and `prompt_in_session` (the loop below, composed). The loop
+they exist to serve is **act → wait → observe**: `run_in_session` returns
+immediately, so synchronise with `wait_for_status` and then `read_terminal`.
+Do **not** poll `snapshot` in a loop — it races the transition you are
+watching for, which is why the wait rung exists.
 
 **That loop did not run until #236, and now does.** Every session used to sit
 on `starting`, so `wait_for_status` only ever settled by timing out. Two

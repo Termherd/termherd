@@ -67,8 +67,9 @@ shows the matched line under the row so you can tell *why* it matched. See
 | Close the focused pane (a lone pane closes its tab) | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>W</kbd> |
 | Reopen the tab you just closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 
-Tabs also reorder by drag-and-drop. Splits resize by keyboard focus only for
-now — drag-resize is the remaining piece of `F-terminal-split`.
+Tabs also reorder by drag-and-drop. Split panes always share their space
+evenly — resizing them, by keyboard or by drag, is the remaining piece of
+`F-terminal-split`.
 
 ## 4. Watch what needs you
 

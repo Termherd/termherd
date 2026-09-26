@@ -53,8 +53,8 @@ there is no second, rival tab tree to drift out of sync.
 | Focus a neighbour | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>←↑↓→</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>←↑↓→</kbd> |
 
 A split opens a **fresh shell** beside the focused pane. Directional focus
-walks the pane tree geometrically — <kbd>Shift</kbd>+<kbd>→</kbd> goes to the
-pane on the right, whatever the nesting.
+walks the pane tree geometrically — <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>→</kbd>
+goes to the pane on the right, whatever the nesting.
 
 Closing the **last** pane in a tab closes the tab.
 
