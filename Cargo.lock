@@ -3888,7 +3888,7 @@ dependencies = [
 
 [[package]]
 name = "termherd-app"
-version = "0.1.0-prerelease.4"
+version = "0.1.0-prerelease.5"
 dependencies = [
  "base64",
  "bytes",
