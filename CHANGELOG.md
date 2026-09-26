@@ -7,6 +7,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-prerelease.5] - 2026-09-26
+
 ### Fixed (the copy chord no longer overwrites a program's own copy)
 
 - In a pane whose program reads the mouse — Claude Code in full-screen mode,
