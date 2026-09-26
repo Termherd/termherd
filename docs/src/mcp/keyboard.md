@@ -72,10 +72,11 @@ selection, and `copy` runs on it.
 
 - On **`quit-confirm`**, `enter` quits the app — killing every session and the
   connection you are speaking over.
-- **`session-rename`** (the sidebar's inline ✎ field) answers to neither
-  `enter` nor the rename in the doc pane: both commit through the widget's own
-  submit, which a synthesised key event never reaches. `escape` abandons it —
-  so you can always back out and start over — but committing a rename over MCP
+- **`session-rename`** (the sidebar's inline ✎ field) does not commit on
+  `enter`, and neither does **`tab-rename`**: both commit through the widget's
+  own submit, which a synthesised key event never reaches. `escape` abandons
+  either — so you can always back out and start over — but committing a rename
+  over MCP
   is a missing capability, tracked as
   [#246](https://github.com/Termherd/termherd/issues/246).
 - Every other overlay is exitable from the keyboard, and a test sweep derived
@@ -89,18 +90,19 @@ anything applies. The error names the offender and the syntax. This is
 deliberate: a half-applied sequence is worse than none, because the caller
 cannot tell how far it got.
 
-The action catalogue is published by the [stdio server](./stdio.md) at
+The action catalogue — less the `activate-tab-N` family, which `run_action`
+accepts all the same — is published by the [stdio server](./stdio.md) at
 `termherd://keys/schema`; the live bridge serves tools only, so its `run_action`
 error message carries the syntax instead.
 
 ## Example: verify a keyboard gesture end to end
 
 ```text
-run_action(["split-vertical"])        → { steps: [{ outcome: "ran",
+run_action(["split-vertical"])        → { steps: [{ result: "ran",
                                                     action: "split-vertical" }],
                                           focused_handle: "4" }
 screenshot({ max_width: 900 })        → the pixels, to check the divider
-press_keys(["cmd+w"])                 → { steps: [{ outcome: "overlay",
-                                                    overlay: "close-confirm" }] }
+press_keys(["cmd+w"])                 → { steps: [{ result: "overlay",
+                                                    overlay: "tab-close-confirm" }] }
 press_keys(["escape"])                → cancelled
 ```

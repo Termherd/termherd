@@ -110,6 +110,17 @@ Values clamp: fps 1–60, `max_seconds` 1–600, `scale` 0.1–1.0.
 "record": { "fps": 8, "max_seconds": 30, "scale": 0.5 }
 ```
 
+### `mcp`
+
+Whether the live bridge's `prompt_in_session` may prompt another **Claude**
+session — one agent driving another. Off by default; a shell session is never
+gated. A single call can opt in on its own with `allow_claude_nesting: true`
+(see [The live bridge](../mcp/live-bridge.md)).
+
+```json
+"mcp": { "allow_claude_nesting": false }
+```
+
 ### `open`
 
 The command a <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>-clicked file path opens in. Omit
@@ -166,9 +177,9 @@ The eight ids it covers today: `theme`, `shell.program`, `shell.args`,
 `terminal.colors.palette`. Two of them — `shell.program` and `shell.args` —
 are **read-only** over MCP: they name what TermHerd executes at the next
 launch, so an agent may read them but never set them. The `close`, `sidebar`,
-`record`, `open`, `keys`, `terminal.font_size`, `terminal.copy_on_select` and
-`terminal.paste_on_right_click` blocks are file-only for now; `keys` is
-published as a read-only resource.
+`record`, `open`, `mcp`, `keys`, `terminal.font_size`,
+`terminal.copy_on_select` and `terminal.paste_on_right_click` blocks are
+file-only for now; `keys` is published as a read-only resource.
 
 A `set_option` write lands in `settings.json` and **applies on restart**, like
 any other edit to the file.
@@ -189,6 +200,7 @@ any other edit to the file.
   "sidebar": { "session_limit": 0 },
   "record": { "fps": 10, "max_seconds": 20, "scale": 0.5 },
   "open": { "command": "code -g {path}:{line}:{col}" },
+  "mcp": { "allow_claude_nesting": false },
   "keys": {
     "toggle-sidebar": "ctrl+alt+b",
     "focus-next": "ctrl+alt+right"

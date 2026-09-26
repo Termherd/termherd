@@ -116,7 +116,7 @@ impl Shell {
         }
         // A handle to collapse the sidebar, mirroring the one that
         // restores it from the main pane.
-        let hide = button(text("◀ Masquer le panneau").size(11))
+        let hide = button(text(strings::SIDEBAR_HIDE).size(11))
             .on_press(Message::ToggleSidebar)
             .style(button::text)
             .padding(0);

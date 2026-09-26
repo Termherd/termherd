@@ -92,7 +92,9 @@ way an [MCP caller](../mcp/keyboard.md) can answer a prompt it armed.
 ## Chord syntax
 
 Case- and order-insensitive. Modifiers `ctrl`, `shift`, `alt`, `cmd`, joined to
-a key with `+`:
+a key with `+`. Aliases: `control` for `ctrl`, `option` for `alt`, and
+`super`, `logo`, `win` or `meta` for `cmd`. The `+` key itself is spelled
+`plus`, since a literal `+` is the separator:
 
 ```json
 "keys": {
@@ -107,7 +109,10 @@ chords are logged and skipped — they do not invalidate the rest of the file.
 
 ## Reading the live keymap
 
-The [stdio MCP server](../mcp/stdio.md) publishes the whole catalogue —
-every action with its default *and* current chords — as a resource at
-`termherd://keys/schema`. It is generated from the same in-code table this page
-describes, so it cannot drift from the binary you are running.
+The [stdio MCP server](../mcp/stdio.md) publishes the action catalogue — each
+action with its default chords and the override `settings.json` sets for it,
+if any — as a resource at `termherd://keys/schema`. It is generated from the
+same in-code table this page describes, so it cannot drift from the binary you
+are running. Two gaps: the `activate-tab-N` family is not listed, and `copy` /
+`paste` show no default, because theirs differ per platform and are set
+outside that table — this page has them.

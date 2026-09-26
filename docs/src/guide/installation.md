@@ -40,17 +40,21 @@ On Windows, SmartScreen may warn — choose **More info → Run anyway**.
 ## Bare command-line binary
 
 The same releases carry one-line installers that drop `termherd` into your
-Cargo bin directory:
+Cargo bin directory. Every release so far is a **pre-release**, which GitHub's
+`/releases/latest/` shortcut skips, so name the tag — the newest one is at the
+top of the [Releases](https://github.com/Termherd/termherd/releases) page:
 
 ```bash
 # macOS / Linux
+TAG=v0.1.0-prerelease.4
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.sh | sh
+  "https://github.com/Termherd/termherd/releases/download/$TAG/termherd-app-installer.sh" | sh
 ```
 
 ```powershell
 # Windows
-powershell -c "irm https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.ps1 | iex"
+$Tag = "v0.1.0-prerelease.4"
+irm "https://github.com/Termherd/termherd/releases/download/$Tag/termherd-app-installer.ps1" | iex
 ```
 
 ## Verifying a Linux download
@@ -60,12 +64,15 @@ attestation — no signing key; the signer is the release workflow itself, via
 GitHub OIDC, logged in the public Rekor transparency log.
 
 ```bash
-gh attestation verify termherd-x86_64-unknown-linux-gnu.tar.xz \
+gh attestation verify termherd-app-x86_64-unknown-linux-gnu.tar.xz \
   --repo Termherd/termherd
 ```
 
 A passing check proves both integrity and that the artifact was built by this
-repository's CI. A `SHA256SUMS` file is attached to each release as well.
+repository's CI. The attestation and its `SHA256SUMS` file come from a signing
+step added after `v0.1.0-prerelease.4`, so that pre-release has neither — only
+per-file `.sha256` checksums and a combined `sha256.sum`, which every release
+carries.
 
 ## From source
 
