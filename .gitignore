@@ -41,3 +41,6 @@ dev.termherd.lock
 # Per-directory tool caches the impeccable skill drops beside the sources it
 # reads; they reappear on every run, so ignore rather than clean repeatedly.
 .impeccable/
+
+# Serena MCP tool state (local)
+.serena/

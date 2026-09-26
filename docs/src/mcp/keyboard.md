@@ -72,10 +72,11 @@ selection, and `copy` runs on it.
 
 - On **`quit-confirm`**, `enter` quits the app — killing every session and the
   connection you are speaking over.
-- **`session-rename`** (the sidebar's inline ✎ field) answers to neither
-  `enter` nor the rename in the doc pane: both commit through the widget's own
-  submit, which a synthesised key event never reaches. `escape` abandons it —
-  so you can always back out and start over — but committing a rename over MCP
+- **`session-rename`** (the sidebar's inline ✎ field) does not commit on
+  `enter`, and neither does **`tab-rename`**: both commit through the widget's
+  own submit, which a synthesised key event never reaches. `escape` abandons
+  either — so you can always back out and start over — but committing a rename
+  over MCP
   is a missing capability, tracked as
   [#246](https://github.com/Termherd/termherd/issues/246).
 - Every other overlay is exitable from the keyboard, and a test sweep derived

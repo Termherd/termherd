@@ -36,9 +36,11 @@ just docs           # build → docs/book/index.html
 just docs-serve     # live reload on http://localhost:3000
 ```
 
-`create-missing = false` in `book.toml` means a link to a page that does not
-exist **fails the build** rather than silently minting an empty page. The
-chapter map in `SUMMARY.md` is a promise; that setting keeps it honest.
+`create-missing = false` in `book.toml` means a `SUMMARY.md` entry for a page
+that does not exist **fails the build** rather than silently minting an empty
+page. The chapter map is a promise; that setting keeps it honest. It covers
+`SUMMARY.md` only — a broken link *inside* a page still builds, so check those
+by hand.
 
 ## Three rules that surprise newcomers
 

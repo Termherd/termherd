@@ -92,7 +92,9 @@ way an [MCP caller](../mcp/keyboard.md) can answer a prompt it armed.
 ## Chord syntax
 
 Case- and order-insensitive. Modifiers `ctrl`, `shift`, `alt`, `cmd`, joined to
-a key with `+`:
+a key with `+`. Aliases: `control` for `ctrl`, `option` for `alt`, and
+`super`, `logo`, `win` or `meta` for `cmd`. The `+` key itself is spelled
+`plus`, since a literal `+` is the separator:
 
 ```json
 "keys": {
