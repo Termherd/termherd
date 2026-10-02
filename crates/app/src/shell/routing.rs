@@ -42,6 +42,8 @@ pub(super) enum KeyboardOwner {
     TabClose(usize),
     /// The archive confirmation.
     Archive,
+    /// The settings panel.
+    Settings,
     /// The document editor, which handles its own keys.
     Doc,
 }
@@ -54,12 +56,13 @@ impl KeyboardOwner {
     /// `match` below: a new variant fails to compile there, in this file, where
     /// this array is the next thing the author reads.
     #[cfg(test)]
-    pub(super) const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 7] = [
         Self::TabRename,
         Self::SessionRename,
         Self::Quit,
         Self::TabClose(0),
         Self::Archive,
+        Self::Settings,
         Self::Doc,
     ];
 
@@ -71,6 +74,7 @@ impl KeyboardOwner {
             Self::Quit => "quit-confirm",
             Self::TabClose(_) => "tab-close-confirm",
             Self::Archive => "archive-confirm",
+            Self::Settings => "settings",
             Self::Doc => "doc-editor",
         }
     }
@@ -189,6 +193,7 @@ impl Shell {
                 operate(focusable::focus(search_id()))
             }
             Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::OpenSettings => self.update(Message::ToggleSettings),
             Action::ScrollTop => self
                 .scroll_focused(ScrollTarget::Top)
                 .ok_or(Inertia::NoContext)?,
@@ -317,6 +322,9 @@ impl Shell {
         if self.archiving.is_some() {
             return Some(KeyboardOwner::Archive);
         }
+        if self.settings_open {
+            return Some(KeyboardOwner::Settings);
+        }
         if self.open_doc.is_some() {
             return Some(KeyboardOwner::Doc);
         }
@@ -333,6 +341,7 @@ impl Shell {
             KeyboardOwner::Quit => self.quit_confirm_key(event),
             KeyboardOwner::TabClose(index) => self.tab_close_confirm_key(event, index),
             KeyboardOwner::Archive => self.archive_confirm_key(event),
+            KeyboardOwner::Settings => self.settings_key(event),
             KeyboardOwner::Doc => self.open_doc_key(event),
         }
     }
@@ -387,6 +396,15 @@ impl Shell {
             }
             ConfirmKey::Swallow => Task::none(),
         }
+    }
+
+    /// Escape closes the settings panel; it has no text field, so every other
+    /// key is swallowed rather than typed into the terminal beneath it.
+    fn settings_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        if is_escape(event) {
+            return self.update(Message::CloseSettings);
+        }
+        Task::none()
     }
 
     /// The doc editor handles its own keys; only the save chord (Cmd/Ctrl+S)

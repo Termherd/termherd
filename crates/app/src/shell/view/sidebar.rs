@@ -16,7 +16,7 @@ use iced::{Element, Fill};
 use termherd_core::browser::{ProjectGroup, project_label, relative_age};
 use termherd_core::{SessionRecord, SessionStatus, SidebarFold};
 
-use super::{clip, session_card, sidebar_secondary_text, status_color};
+use super::{clip, session_card, sidebar_secondary_text, status_dot};
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
 use crate::strings;
 
@@ -132,10 +132,25 @@ impl Shell {
                 .style(container::rounded_box),
             tooltip::Position::Bottom,
         );
+        let settings = tooltip(
+            button(text(strings::SIDEBAR_SETTINGS).size(13))
+                .on_press(Message::ToggleSettings)
+                .style(button::text)
+                .padding(0),
+            container(text(strings::SIDEBAR_SETTINGS_HINT).size(11))
+                .padding(6)
+                .style(container::rounded_box),
+            tooltip::Position::Bottom,
+        );
         let chrome = column![
-            row![hide, iced::widget::Space::new().width(Fill), add_repo]
-                .spacing(6)
-                .align_y(iced::Center),
+            row![
+                hide,
+                iced::widget::Space::new().width(Fill),
+                add_repo,
+                settings
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
             search,
             titles_only,
             show_archived
@@ -196,7 +211,7 @@ impl Shell {
                     .padding(0);
                 let mut label_row = row![].spacing(6).align_y(iced::Center);
                 if let Some(status) = live.get(id) {
-                    label_row = label_row.push(text("●").size(9).color(status_color(*status)));
+                    label_row = label_row.push(status_dot(*status));
                 }
                 let title = self.core.session_title(s);
                 // The project label tells cross-project favourites apart.
@@ -382,7 +397,7 @@ impl Shell {
         // A coloured dot marks a session already open in TermHerd and
         // carries its live activity (FR8).
         if let Some(status) = live.get(id) {
-            content = content.push(text("●").size(9).color(status_color(*status)));
+            content = content.push(status_dot(*status));
         }
         let title = self.core.session_title(s);
         let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);

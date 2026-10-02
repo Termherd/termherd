@@ -28,7 +28,7 @@ mod window_geometry;
 
 use std::sync::Arc;
 
-use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost, ScanError};
+use termherd_core::ports::{PathResolver, ProjectScanner, ScanError};
 use termherd_pty::{EventSink, PtyEvent, PtyManager, Shell};
 use termherd_scan::FsScanner;
 use tracing::{info, warn};
@@ -68,12 +68,12 @@ fn main() -> iced::Result {
 
     // PTY output flows from the reader threads through this channel into the
     // iced subscription (M2). The manager is built here and injected as a
-    // `dyn PtyHost` — no global state (Q4).
+    // `dyn PtyHost` (and as the palette's live repaint) — no global state (Q4).
     let (tx, pty_rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
     let sink: EventSink = Arc::new(move |event| {
         let _ = tx.unbounded_send(event);
     });
-    let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink, shell, settings.palette()));
+    let pty = Arc::new(PtyManager::new(sink, shell, settings.palette()));
 
     // Async transport substrate (composition root only): a tokio runtime to host
     // future transport tasks, and the bridge channel that carries their requests

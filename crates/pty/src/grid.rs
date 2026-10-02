@@ -169,6 +169,15 @@ impl Palette {
         }
     }
 
+    /// Every name [`Palette::named`] resolves, in the order a picker lists
+    /// them.
+    pub const SCHEMES: [&'static str; 4] = [
+        "solarized-dark",
+        "solarized-light",
+        "gruvbox-dark",
+        "gruvbox-light",
+    ];
+
     /// A built-in scheme by its settings name (`terminal.colors.scheme`), or
     /// `None` when unknown. The unnamed built-in default is
     /// [`Palette::default`]. Values from the published Solarized (Ethan
@@ -1087,6 +1096,16 @@ mod tests {
                 snapshot(&term, &palette).mouse_reporting,
                 None,
                 "{expected:?} reset"
+            );
+        }
+    }
+
+    #[test]
+    fn every_listed_scheme_resolves() {
+        for name in Palette::SCHEMES {
+            assert!(
+                Palette::named(name).is_some(),
+                "{name} is listed but unknown"
             );
         }
     }

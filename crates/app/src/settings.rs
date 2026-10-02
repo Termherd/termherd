@@ -21,6 +21,7 @@ pub struct Settings {
     /// shell.
     pub shell: Option<ShellProfile>,
     /// GUI chrome theme (the terminal grid keeps its own colours).
+    #[serde(deserialize_with = "theme_or_default")]
     pub theme: ThemeChoice,
     /// Keyboard overrides: action name (kebab-case) → one chord or a list of
     /// chords. Each entry replaces that action's platform default (FR9). Same
@@ -237,6 +238,20 @@ where
     }))
 }
 
+/// Parse the chrome theme, degrading an unknown name to the default (with a
+/// warning) rather than failing serde for the whole file — a typo, or a theme a
+/// newer build added, costs the chrome and nothing else.
+fn theme_or_default<'de, D>(de: D) -> Result<ThemeChoice, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(de)?;
+    Ok(ThemeChoice::deserialize(&value).unwrap_or_else(|_| {
+        warn!(%value, "unknown theme; using the default");
+        ThemeChoice::default()
+    }))
+}
+
 /// Which mouse gestures reach the clipboard — the classic terminal
 /// conventions, both off unless asked for. Named once and carried whole, so
 /// the settings file, the shell and the canvas cannot disagree about which
@@ -381,6 +396,14 @@ pub enum ThemeChoice {
     GruvboxLight,
 }
 
+/// The name a person reads — iced's own, so the picker and the theme it
+/// applies cannot disagree.
+impl std::fmt::Display for ThemeChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_iced().fmt(f)
+    }
+}
+
 /// When a close that would terminate running session(s) asks for confirmation
 /// first. Shared vocabulary for both the tab close and the app quit; each gets
 /// its own policy via [`CloseSettings`].
@@ -439,6 +462,16 @@ impl Default for CloseSettings {
 }
 
 impl ThemeChoice {
+    /// Every choice, in the order the settings panel lists them.
+    pub const ALL: [Self; 6] = [
+        Self::Dark,
+        Self::Light,
+        Self::SolarizedDark,
+        Self::SolarizedLight,
+        Self::GruvboxDark,
+        Self::GruvboxLight,
+    ];
+
     /// The iced theme this choice maps to.
     #[must_use]
     pub fn to_iced(self) -> iced::Theme {
@@ -537,6 +570,59 @@ impl Settings {
     pub fn load() -> Self {
         crate::json_store::load_json(FILE)
     }
+}
+
+/// One appearance key the settings panel changed. Each pick persists only its
+/// own key, so a value another writer put in the file meanwhile — an MCP
+/// `set_option`, a hand edit — is not overwritten with a stale copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppearanceChange {
+    /// The GUI chrome theme.
+    Theme(ThemeChoice),
+    /// The terminal scheme; `None` clears it back to the built-in palette.
+    Scheme(Option<String>),
+}
+
+/// Persist one appearance change to `settings.json`, keeping the rest of the
+/// file — explicit colour overrides included — as the user wrote it.
+pub fn save_appearance(change: &AppearanceChange) {
+    crate::json_store::update_json(FILE, |root| apply_appearance(root, change));
+}
+
+/// The pure half of [`save_appearance`].
+fn apply_appearance(
+    root: &mut serde_json::Map<String, serde_json::Value>,
+    change: &AppearanceChange,
+) {
+    use serde_json::{Map, Value};
+    let scheme = match change {
+        AppearanceChange::Theme(theme) => {
+            if let Ok(theme) = serde_json::to_value(theme) {
+                root.insert("theme".into(), theme);
+            }
+            return;
+        }
+        AppearanceChange::Scheme(scheme) => scheme,
+    };
+    // Descend into `terminal.colors`, replacing a level that is not an object:
+    // it could not have parsed as one, so nothing readable is lost.
+    let mut level = root;
+    for key in ["terminal", "colors"] {
+        let entry = level
+            .entry(key)
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !entry.is_object() {
+            *entry = Value::Object(Map::new());
+        }
+        let Value::Object(next) = entry else {
+            return;
+        };
+        level = next;
+    }
+    match scheme {
+        Some(name) => level.insert("scheme".into(), Value::String(name.clone())),
+        None => level.remove("scheme"),
+    };
 }
 
 /// `~/.termherd/settings.json` — the app data dir from the PRD (§7).
@@ -926,6 +1012,90 @@ mod tests {
                 serde_json::from_str(&json).expect("a bad command must not fail the whole parse");
             assert!(s.open_command().is_none(), "{bad} must not configure");
             assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
+        }
+    }
+
+    #[test]
+    fn saving_the_appearance_keeps_every_other_key() {
+        let mut root = serde_json::json!({
+            "theme": "dark",
+            "shell": { "program": "pwsh" },
+            "terminal": { "font_size": 16, "colors": { "scheme": "gruvbox-dark", "cursor": "#ff0000" } },
+            "future-key": [1, 2]
+        });
+        let map = root.as_object_mut().expect("object");
+        apply_appearance(map, &AppearanceChange::Theme(ThemeChoice::SolarizedLight));
+        apply_appearance(
+            map,
+            &AppearanceChange::Scheme(Some("solarized-light".to_string())),
+        );
+        assert_eq!(
+            root,
+            serde_json::json!({
+                "theme": "solarized-light",
+                "shell": { "program": "pwsh" },
+                "terminal": { "font_size": 16, "colors": { "scheme": "solarized-light", "cursor": "#ff0000" } },
+                "future-key": [1, 2]
+            })
+        );
+    }
+
+    #[test]
+    fn a_theme_change_leaves_the_scheme_alone_and_the_reverse() {
+        let mut root = serde_json::json!({
+            "theme": "light",
+            "terminal": { "colors": { "scheme": "gruvbox-dark" } }
+        });
+        let map = root.as_object_mut().expect("object");
+        apply_appearance(map, &AppearanceChange::Theme(ThemeChoice::Dark));
+        assert_eq!(map["terminal"]["colors"]["scheme"], "gruvbox-dark");
+        apply_appearance(map, &AppearanceChange::Scheme(None));
+        assert_eq!(map["theme"], "dark");
+        assert_eq!(map["terminal"]["colors"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn a_scheme_reaches_a_file_whose_terminal_block_was_not_an_object() {
+        let mut root = serde_json::Map::new();
+        root.insert("terminal".into(), serde_json::json!("not an object"));
+        apply_appearance(
+            &mut root,
+            &AppearanceChange::Scheme(Some("gruvbox-light".to_string())),
+        );
+        assert_eq!(
+            serde_json::Value::Object(root),
+            serde_json::json!({ "terminal": { "colors": { "scheme": "gruvbox-light" } } })
+        );
+    }
+
+    #[test]
+    fn the_saved_theme_reads_back_as_what_was_picked() {
+        for theme in ThemeChoice::ALL {
+            let mut root = serde_json::Map::new();
+            apply_appearance(&mut root, &AppearanceChange::Theme(theme));
+            let s: Settings =
+                serde_json::from_value(serde_json::Value::Object(root)).expect("valid settings");
+            assert_eq!(s.theme, theme);
+        }
+    }
+
+    #[test]
+    fn an_unknown_theme_degrades_alone() {
+        for bad in [r#""banana""#, "3", "null"] {
+            let json = format!(
+                r#"{{ "theme": {bad}, "terminal": {{ "colors": {{ "scheme": "solarized-light" }} }} }}"#
+            );
+            let s: Settings = serde_json::from_str(&json).expect("bad theme keeps the file");
+            assert_eq!(
+                s.theme,
+                ThemeChoice::Dark,
+                "{bad} falls back to the default"
+            );
+            assert_eq!(
+                s.terminal.colors.scheme.as_deref(),
+                Some("solarized-light"),
+                "the rest of the file survives"
+            );
         }
     }
 

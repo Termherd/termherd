@@ -10,7 +10,7 @@ Toggle it with <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>B</kbd>.
 
 ```text
 ┌──────────────────────────┐
-│ ◀ Hide          + Add a repo │  ← add a folder the scan cannot know about
+│ ◀ Hide       + Add a repo  ⚙ │  ← add a folder · open the settings panel
 │ Search…                  │  ← Cmd/Ctrl+F focuses this
 │ ☐ Titles only            │
 │ ☐ Show archived          │

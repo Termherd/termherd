@@ -5,22 +5,42 @@
 //! view tracks the theme system once it lands.
 
 use iced::Color;
-use iced::widget::container;
+use iced::widget::text::Text;
+use iced::widget::{container, text};
 use termherd_core::SessionStatus;
 
-/// The dot colour for an activity status (FR8). Shared by the tab strip's
-/// chips and the sidebar's per-session dots so both stay in sync. The colour is
-/// the only place the UI shows a status; the word form an agent reads lives in
+/// The activity dot for a status (FR8). Shared by the tab strip's chips and
+/// the sidebar's per-session dots so both stay in sync. The colour is the only
+/// place the UI shows a status; the word form an agent reads lives in
 /// [`crate::snapshot_dto`], not on the screen.
-pub(super) fn status_color(status: SessionStatus) -> Color {
-    match status {
+pub(super) fn status_dot<'a>(status: SessionStatus) -> Text<'a> {
+    text("●")
+        .size(9)
+        .style(move |theme: &iced::Theme| text::Style {
+            color: Some(status_color(status, theme.extended_palette().is_dark)),
+        })
+}
+
+/// The dot colour for a status. The hues are tuned against a dark surface;
+/// on a light one they wash out, so they are darkened by the same step to keep
+/// the dot legible without changing which hue means what.
+fn status_color(status: SessionStatus, dark_surface: bool) -> Color {
+    let hue = match status {
         SessionStatus::Starting => Color::from_rgb(0.55, 0.55, 0.6),
         SessionStatus::Busy => Color::from_rgb(0.95, 0.7, 0.2),
         SessionStatus::Idle => Color::from_rgb(0.3, 0.8, 0.4),
         SessionStatus::Attention => Color::from_rgb(0.95, 0.35, 0.35),
         SessionStatus::Exited => Color::from_rgb(0.5, 0.5, 0.5),
+    };
+    if dark_surface {
+        hue
+    } else {
+        mix(hue, Color::BLACK, LIGHT_SURFACE_DARKEN)
     }
 }
+
+/// How far a status hue moves toward black on a light surface.
+const LIGHT_SURFACE_DARKEN: f32 = 0.4;
 
 /// Background for the session hover card — a step away from the surrounding
 /// surface (the `strong` palette tier rather than the default `weak`) so the
@@ -88,5 +108,67 @@ pub(super) fn clip(s: &str, max: usize) -> String {
         let mut out: String = cleaned.chars().take(max.saturating_sub(1)).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// WCAG relative luminance, enough to compare contrast ratios.
+    fn luminance(c: Color) -> f32 {
+        let lin = |v: f32| {
+            if v <= 0.039_28 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+    }
+
+    fn contrast(a: Color, b: Color) -> f32 {
+        let (hi, lo) = {
+            let (la, lb) = (luminance(a), luminance(b));
+            if la > lb { (la, lb) } else { (lb, la) }
+        };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    const ALL: [SessionStatus; 5] = [
+        SessionStatus::Starting,
+        SessionStatus::Busy,
+        SessionStatus::Idle,
+        SessionStatus::Attention,
+        SessionStatus::Exited,
+    ];
+
+    #[test]
+    fn every_status_dot_reads_on_every_light_chrome() {
+        // The WCAG floor for non-text UI components.
+        const FLOOR: f32 = 3.0;
+        for theme in [
+            iced::Theme::Light,
+            iced::Theme::SolarizedLight,
+            iced::Theme::GruvboxLight,
+        ] {
+            let palette = theme.extended_palette();
+            assert!(!palette.is_dark, "{theme} reads as light");
+            for surface in [palette.background.base.color, palette.background.weak.color] {
+                for status in ALL {
+                    let ratio = contrast(status_color(status, false), surface);
+                    assert!(ratio >= FLOOR, "{status:?} on {theme}: {ratio:.2}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_dark_surface_keeps_the_original_hues() {
+        for status in ALL {
+            let dark = status_color(status, true);
+            let light = status_color(status, false);
+            assert!(luminance(light) < luminance(dark), "{status:?} darkens");
+        }
     }
 }

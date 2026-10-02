@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, RwLock, mpsc};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use termherd_core::ports::{PtyError, PtyHost};
@@ -22,8 +22,8 @@ use crate::launch::{
     write_title_settings,
 };
 use crate::session::{
-    Session, SharedMaster, SharedWriter, TermCmd, spawn_reader, spawn_term, spawn_waiter,
-    spawn_watcher,
+    Session, SharedMaster, SharedPalette, SharedWriter, TermCmd, spawn_reader, spawn_term,
+    spawn_waiter, spawn_watcher,
 };
 
 /// How to launch a session's shell process (FR10). Built from the user's
@@ -44,8 +44,9 @@ pub struct PtyManager {
     sink: EventSink,
     /// User-configured shell; `None` falls back to the platform default.
     shell: Option<Shell>,
-    /// The terminal colour scheme every session renders with.
-    palette: Palette,
+    /// The terminal colour scheme every session renders with, shared with
+    /// each terminal thread so [`PtyManager::set_palette`] reaches them live.
+    palette: SharedPalette,
 }
 
 impl PtyManager {
@@ -58,7 +59,24 @@ impl PtyManager {
             sessions: Mutex::new(HashMap::new()),
             sink,
             shell,
-            palette,
+            palette: Arc::new(RwLock::new(palette)),
+        }
+    }
+
+    /// Switch every session — running and future — to `palette`. Each live
+    /// terminal re-emits its screen in the new colours; a later colour query
+    /// (OSC 10/11) is answered from it too. A program that asked once at start
+    /// (Claude Code picks light or dark that way) keeps its choice until it
+    /// asks again.
+    pub fn set_palette(&self, palette: Palette) {
+        match self.palette.write() {
+            Ok(mut guard) => *guard = palette,
+            Err(poisoned) => *poisoned.into_inner() = palette,
+        }
+        if let Ok(map) = self.sessions.lock() {
+            for session in map.values() {
+                let _ = session.ctrl.send(TermCmd::Repaint);
+            }
         }
     }
 
@@ -550,6 +568,44 @@ mod tests {
             }
         }
         assert!(verified, "expected a screen rendered in the custom palette");
+
+        mgr.kill(id).expect("kill");
+    }
+
+    /// A scheme change reaches a session that is already running: its next
+    /// screen arrives in the new colours with no respawn and no output of its
+    /// own to trigger it.
+    #[test]
+    fn set_palette_repaints_a_running_session() {
+        let next = Palette {
+            background: [0x12, 0x34, 0x56],
+            ..Palette::default()
+        };
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let mgr = PtyManager::new(sink, None, Palette::default());
+        let id = sid(8);
+        mgr.spawn(spec(id)).expect("spawn");
+        mgr.set_palette(next.clone());
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut repainted = false;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(PtyEvent::Output { screen, .. }) if screen.default_bg == next.background => {
+                    repainted = true;
+                    break;
+                }
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            repainted,
+            "expected a screen in the palette set after spawn"
+        );
 
         mgr.kill(id).expect("kill");
     }

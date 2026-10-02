@@ -73,6 +73,7 @@ issues #18–#29.
 | [F-terminal-split](#f-terminal-split) | feature | workspace, keymap | ☐ | Split panes with directional focus; drag-resize is what remains. |
 | [F-close-on-exit](#f-close-on-exit) | feature | terminal, workspace | ✅ | A pane whose shell exits cleanly closes itself; a failed one stays readable. |
 | [F-repo-add](#f-repo-add) | feature | sidebar, sessions | ✅ | Declare a repository in the sidebar, before it has any session. |
+| [F-settings-panel](#f-settings-panel) | feature | workspace | ✅ | An in-app settings panel — appearance first, applied live and saved on pick. |
 | [F-terminal-cwd](#f-terminal-cwd) | feature | terminal, mcp, sessions | ✅ | The shell announces the directory it is in, so a session's `cwd` follows a `cd`. |
 
 ## Could
@@ -409,8 +410,8 @@ Shell select, theme, window prefs (M3): `~/.termherd/settings.json` (serde,
 defaults on missing/corrupt) carries a shell profile (program + args), injected
 into the `PtyManager` so each session launches the chosen shell, and a GUI
 theme (dark/light) wired to the iced chrome. (thin) Window bounds keep their
-own `window.json` (FR12). File-based for now; an in-app settings panel is the
-full version later
+own `window.json` (FR12). The appearance is now also set live from
+[F-settings-panel](#f-settings-panel); the rest stays file-based
 
 <a id="f-status-notifications"></a>
 
@@ -671,6 +672,23 @@ read as one that never had any and was pinned to the top as freshly added.
 
 Adjacent: [F-repo-view](#f-repo-view) (#148) takes the other end — this is
 about a repository *existing* in the sidebar, that one about *viewing* it.
+
+<a id="f-settings-panel"></a>
+
+### F-settings-panel
+
+An in-app settings panel — appearance first, applied live and saved on pick.
+
+The ⚙ in the sidebar header, or `mod+,` (`open-settings`), opens a modal
+panel over the workspace: the chrome theme (`dark`, `light`, and the four
+presets named after the terminal schemes) and the terminal scheme. A pick
+applies at once — the chrome on the next frame, every running terminal through
+a shared palette the PTY manager repaints — and writes only its own key to
+`settings.json`, leaving the rest of the file as written. This is the live
+reload [F-terminal-palette](#f-terminal-palette) deferred, and the in-app
+panel [F-settings](#f-settings) promised. A running Claude session keeps the
+light/dark look it chose from its startup colour query until it restarts.
+Other settings stay file-only for now.
 
 <a id="f-terminal-cwd"></a>
 

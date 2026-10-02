@@ -117,7 +117,9 @@ Optional user settings live in `~/.termherd/settings.json` (on Windows,
 is missing or invalid, TermHerd falls back to defaults rather than refusing
 to start — out-of-range values clamp, and a single bad value (a typo'd
 colour, an unknown key action) degrades alone with a logged warning instead
-of resetting the rest of the file. There is no in-app settings panel yet —
+of resetting the rest of the file. The appearance (chrome theme and
+terminal colours) can also be changed live from the settings panel — ⚙ in
+the sidebar, or `Cmd`/`Ctrl`+`,` — which saves it here; everything else:
 edit the file and restart.
 
 The annotated reference template is

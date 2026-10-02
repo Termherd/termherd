@@ -7,6 +7,7 @@
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
 use std::path::PathBuf;
 use tracing::warn;
 
@@ -46,6 +47,33 @@ pub fn save_json<T: Serialize>(file: &str, value: &T) {
         }
         Err(e) => warn!(error = %e, path = %path.display(), "could not serialise config"),
     }
+}
+
+/// Rewrite some keys of the JSON object in `~/.termherd/<file>`, leaving every
+/// other key as found — including ones this build does not understand. A
+/// missing file starts from an empty object; a file that does not parse as an
+/// object is left alone (with a warning), since rewriting it would replace the
+/// user's whole configuration with the few keys being set.
+pub fn update_json(file: &str, edit: impl FnOnce(&mut Map<String, Value>)) {
+    let Some(path) = config_path(file) else {
+        return;
+    };
+    let mut root = match std::fs::read_to_string(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Map::new(),
+        Err(e) => {
+            warn!(error = %e, path = %path.display(), "could not read config file; not updating it");
+            return;
+        }
+        Ok(raw) => match serde_json::from_str(&raw) {
+            Ok(Value::Object(root)) => root,
+            _ => {
+                warn!(path = %path.display(), "config file is not a JSON object; not updating it");
+                return;
+            }
+        },
+    };
+    edit(&mut root);
+    save_json(file, &root);
 }
 
 /// `~/.termherd/<file>` — the app data dir from the PRD (§7).

@@ -67,6 +67,7 @@ across layouts.
 | --- | --- | --- |
 | `focus-search` | `mod+f` | focus the sidebar search box |
 | `toggle-sidebar` | `mod+b` | show / hide the sidebar |
+| `open-settings` | `mod+,` | open / close the [settings panel](../workspace/settings-panel.md) |
 | `capture` | `mod+shift+s` | write a state dump + screenshot |
 | `toggle-record` | `mod+shift+r` | start / stop a GIF screencast |
 

@@ -31,9 +31,10 @@ use termherd_pty::{PtyEvent, Screen};
 
 use crate::docs::DocEntry;
 use crate::record_config::RecordConfig;
-use crate::settings::{ClipboardGestures, CloseSettings, ThemeChoice};
+use crate::settings::{ClipboardGestures, CloseSettings, ColorSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
+mod appearance;
 pub(crate) mod bridge;
 mod docs;
 mod effects;
@@ -96,6 +97,9 @@ fn home_dir() -> String {
 /// Bundled so the composition root passes one value, not a long argument list.
 pub struct Startup {
     pub theme: ThemeChoice,
+    /// The terminal colour settings, kept whole so a scheme picked in the
+    /// settings panel still honours the user's explicit overrides.
+    pub colors: ColorSettings,
     pub keymap: Keymap,
     pub metadata: Overlay,
     /// Folded project paths restored from disk.
@@ -129,6 +133,7 @@ impl Startup {
         let record = settings.record_config();
         Self {
             theme: settings.theme,
+            colors: settings.terminal.colors.clone(),
             keymap: settings.keymap(),
             metadata,
             collapsed,
@@ -152,7 +157,7 @@ pub fn run(
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
     path_resolver: Arc<dyn PathResolver>,
-    pty: Arc<dyn PtyHost>,
+    pty: Arc<termherd_pty::PtyManager>,
     pty_rx: UnboundedReceiver<PtyEvent>,
     live_bridge: LiveBridge,
     startup: Startup,
@@ -177,10 +182,12 @@ pub fn run(
                     path_resolver: path_resolver.clone(),
                     pty: pty.clone(),
                     pty_output: pty_output.clone(),
+                    appearance: Arc::new(appearance::LiveAppearance(pty.clone())),
                 },
                 live_bridge.clone(),
                 Startup {
                     theme: startup.theme,
+                    colors: startup.colors.clone(),
                     keymap: startup.keymap.clone(),
                     metadata: startup.metadata.clone(),
                     collapsed: startup.collapsed.clone(),
@@ -277,8 +284,13 @@ struct Shell {
     waiters: Vec<serve::StatusWaiter>,
     /// Current keyboard target.
     focus: Focus,
-    /// GUI chrome theme (FR10).
-    theme: Theme,
+    /// The appearance the settings panel edits: the chrome theme, read every
+    /// frame by [`Shell::theme`], and the terminal colours.
+    appearance: appearance::Appearance,
+    /// Whether the settings panel is open.
+    settings_open: bool,
+    /// See [`Ports::appearance`].
+    appearance_sink: Arc<dyn appearance::AppearanceSink>,
     /// Configurable shortcut bindings (FR9).
     keymap: Keymap,
     /// In-progress inline rename: `(session id, edit buffer)` (F-session-metadata).
@@ -525,6 +537,14 @@ enum Message {
     ToggleCollapsed(String),
     /// Collapse or restore the whole session-browser sidebar.
     ToggleSidebar,
+    /// Open the settings panel, or close it when open.
+    ToggleSettings,
+    /// Close the settings panel (its close button, the scrim, Escape).
+    CloseSettings,
+    /// Apply and persist a GUI chrome theme picked in the settings panel.
+    PickTheme(ThemeChoice),
+    /// Apply and persist a terminal scheme picked in the settings panel.
+    PickScheme(appearance::SchemeChoice),
     /// Begin renaming a session inline, seeded with its current title.
     StartRename {
         session: String,
@@ -674,6 +694,9 @@ pub(crate) struct Ports {
     pub(crate) path_resolver: Arc<dyn PathResolver>,
     pub(crate) pty: Arc<dyn PtyHost>,
     pub(crate) pty_output: PtyOutput,
+    /// Where the settings panel's picks go: the live terminal palette and
+    /// `settings.json`.
+    pub(crate) appearance: Arc<dyn appearance::AppearanceSink>,
 }
 
 impl Shell {
@@ -684,6 +707,7 @@ impl Shell {
             path_resolver,
             pty,
             pty_output,
+            appearance: appearance_sink,
         } = ports;
         let LiveBridge {
             requests: bridge_requests,
@@ -714,7 +738,12 @@ impl Shell {
             screens: HashMap::new(),
             waiters: Vec::new(),
             focus: Focus::Search,
-            theme: startup.theme.to_iced(),
+            appearance: appearance::Appearance {
+                theme: startup.theme,
+                colors: startup.colors,
+            },
+            settings_open: false,
+            appearance_sink,
             keymap: startup.keymap,
             renaming: None,
             tab_rename: None,
@@ -740,7 +769,7 @@ impl Shell {
 
     /// The GUI chrome theme (FR10); the terminal grid keeps its own colours.
     fn theme(&self) -> Theme {
-        self.theme.clone()
+        self.appearance.theme.to_iced()
     }
 
     /// Run one scan off the UI thread (FR2) and feed the result back. At most
@@ -1161,6 +1190,22 @@ impl Shell {
                 self.perform(effects)
             }
             Message::ToggleSidebar => self.toggle_sidebar(),
+            Message::ToggleSettings => {
+                self.settings_open = !self.settings_open;
+                Task::none()
+            }
+            Message::CloseSettings => {
+                self.settings_open = false;
+                Task::none()
+            }
+            Message::PickTheme(theme) => {
+                self.pick_theme(theme);
+                Task::none()
+            }
+            Message::PickScheme(scheme) => {
+                self.pick_scheme(scheme);
+                Task::none()
+            }
             Message::StartRename { session, current } => {
                 self.renaming = Some((session, current));
                 operate(focusable::focus(rename_id()))
@@ -1530,6 +1575,7 @@ mod key_routing {
     fn test_startup() -> Startup {
         Startup {
             theme: ThemeChoice::default(),
+            colors: ColorSettings::default(),
             keymap: Keymap::defaults(),
             metadata: Overlay::default(),
             collapsed: HashSet::new(),
@@ -1578,6 +1624,7 @@ mod key_routing {
             path_resolver: Arc::new(termherd_scan::FsPathResolver::new()),
             pty,
             pty_output: PtyOutput::new(rx),
+            appearance: Arc::new(()),
         }
     }
 
@@ -3758,6 +3805,94 @@ mod key_routing {
     ///
     /// The `match` is what makes the sweep above honest: a new `KeyboardOwner`
     /// variant fails to compile here rather than quietly escaping it.
+    /// Records what the settings panel sent beyond the shell.
+    #[derive(Default)]
+    struct RecordingAppearance {
+        repainted: std::sync::Mutex<Vec<termherd_pty::Palette>>,
+        persisted: std::sync::Mutex<Vec<crate::settings::AppearanceChange>>,
+    }
+
+    impl appearance::AppearanceSink for RecordingAppearance {
+        fn repaint(&self, palette: termherd_pty::Palette) {
+            self.repainted.lock().expect("lock").push(palette);
+        }
+
+        fn persist(&self, change: &crate::settings::AppearanceChange) {
+            self.persisted.lock().expect("lock").push(change.clone());
+        }
+    }
+
+    fn shell_with_appearance(colors: ColorSettings) -> (Shell, Arc<RecordingAppearance>) {
+        let sink = Arc::new(RecordingAppearance::default());
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let mut ports = test_ports(Arc::new(RecordingPty::default()), rx);
+        ports.appearance = sink.clone();
+        let startup = Startup {
+            colors,
+            ..test_startup()
+        };
+        let shell = Shell::new(WindowConfig::default(), ports, test_live_bridge(), startup);
+        (shell, sink)
+    }
+
+    #[test]
+    fn the_settings_chord_opens_the_panel_and_escape_closes_it() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let chord = press(Key::Character(",".into()), Modifiers::COMMAND, Some(","));
+        let (verdict, _) = shell.on_key(chord);
+        assert_eq!(
+            verdict,
+            routing::KeyVerdict::Ran("open-settings".to_string())
+        );
+        assert!(shell.settings_open);
+
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+        assert!(!shell.settings_open);
+    }
+
+    #[test]
+    fn picking_a_theme_restyles_the_chrome_and_saves_it_without_recolouring() {
+        let (mut shell, sink) = shell_with_appearance(ColorSettings::default());
+        let _ = shell.update(Message::PickTheme(ThemeChoice::SolarizedLight));
+        assert_eq!(shell.theme(), iced::Theme::SolarizedLight);
+        assert_eq!(
+            *sink.persisted.lock().expect("lock"),
+            [crate::settings::AppearanceChange::Theme(
+                ThemeChoice::SolarizedLight
+            )]
+        );
+        assert!(sink.repainted.lock().expect("lock").is_empty());
+    }
+
+    #[test]
+    fn picking_a_scheme_recolours_with_the_overrides_kept_and_saves_it() {
+        // An explicit cursor override must survive a scheme picked live, as it
+        // does one read from the file at startup.
+        let colors: ColorSettings =
+            serde_json::from_str(r##"{ "cursor": "#ff0000" }"##).expect("valid colours");
+        let (mut shell, sink) = shell_with_appearance(colors);
+        let _ = shell.update(Message::PickScheme(appearance::SchemeChoice(Some(
+            "gruvbox-light",
+        ))));
+
+        let expected = termherd_pty::Palette {
+            cursor: [0xff, 0, 0],
+            ..termherd_pty::Palette::named("gruvbox-light").expect("known scheme")
+        };
+        assert_eq!(*sink.repainted.lock().expect("lock"), [expected]);
+        assert_eq!(
+            *sink.persisted.lock().expect("lock"),
+            [crate::settings::AppearanceChange::Scheme(Some(
+                "gruvbox-light".to_string()
+            ))]
+        );
+        assert_eq!(
+            shell.config.terminal_scheme.as_deref(),
+            Some("gruvbox-light"),
+            "the snapshot reports the scheme in force, not the startup one"
+        );
+    }
+
     fn arm_overlay(shell: &mut Shell, owner: KeyboardOwner) {
         match owner {
             KeyboardOwner::TabRename => {
@@ -3773,6 +3908,9 @@ mod key_routing {
             KeyboardOwner::Quit => shell.closing_window = Some(window::Id::unique()),
             KeyboardOwner::TabClose(index) => shell.closing = Some(index),
             KeyboardOwner::Archive => shell.archiving = Some("sess".to_string()),
+            KeyboardOwner::Settings => {
+                let _ = shell.update(Message::ToggleSettings);
+            }
             KeyboardOwner::Doc => {
                 let _ = shell.update(Message::DocLoaded {
                     label: "CLAUDE.md".to_string(),

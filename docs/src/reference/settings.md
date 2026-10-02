@@ -5,7 +5,8 @@
 %USERPROFILE%\.termherd\settings.json         (Windows)
 ```
 
-There is **no in-app settings panel yet**: edit the file and restart.
+The [settings panel](../workspace/settings-panel.md) changes the appearance
+live and saves it here. Everything else: edit the file and restart.
 
 The annotated template with every option, its default and its meaning is
 [`docs/settings.example.jsonc`](https://github.com/Termherd/termherd/blob/main/docs/settings.example.jsonc)
@@ -14,7 +15,8 @@ JSON**: no comments, no trailing commas.
 
 ## How it loads
 
-Read once at startup, and defensively:
+Read once at startup — the settings panel's two keys aside — and
+defensively:
 
 - Every field is optional. A missing file, a missing field, or a corrupt file
   falls back to built-in defaults — settings never block startup.
@@ -48,7 +50,8 @@ only when named explicitly. See [Status and attention](../workspace/status.md).
 `"solarized-dark"`, `"solarized-light"`, `"gruvbox-dark"`, `"gruvbox-light"`.
 GUI chrome only — sidebar, tab strip, buttons. The terminal grid keeps its own
 colours: pick the matching `terminal.colors.scheme` for a chrome that blends
-with it.
+with it. An unknown value falls back to `"dark"` alone. Both keys are
+also set live from the [settings panel](../workspace/settings-panel.md).
 
 ### `close`
 

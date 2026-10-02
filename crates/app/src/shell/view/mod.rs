@@ -22,13 +22,14 @@ use crate::strings;
 
 mod doc_editor;
 mod modals;
+mod settings_panel;
 mod sidebar;
 mod style;
 mod tabs;
 
 use doc_editor::doc_editor;
 use modals::modal;
-use style::{card_secondary_text, card_style, clip, mix, sidebar_secondary_text, status_color};
+use style::{card_secondary_text, card_style, clip, mix, sidebar_secondary_text, status_dot};
 
 impl Shell {
     pub(super) fn view(&self) -> Element<'_, Message> {
@@ -52,10 +53,15 @@ impl Shell {
         // Any armed confirmation — quit, tab-close or archive — overlays the
         // same centred modal, so the about-to-change sessions stay untouchable
         // until the user decides. `active_confirmation` picks the one in force.
-        match self.active_confirmation() {
-            Some((card, on_cancel)) => modal(base, card, on_cancel),
-            None => base,
+        // The settings panel sits under any confirmation, matching the
+        // keyboard ladder: a quit armed while it is open is answered first.
+        if let Some((card, on_cancel)) = self.active_confirmation() {
+            return modal(base, card, on_cancel);
         }
+        if self.settings_open {
+            return modal(base, self.settings_panel(), Message::CloseSettings);
+        }
+        base
     }
 
     /// The focused terminal: its tab strip, then its grid drawn on a canvas.
