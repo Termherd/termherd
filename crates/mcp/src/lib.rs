@@ -55,7 +55,14 @@ pub const OPTIONS: &[OptionSpec] = &[
         pointer: "/theme",
         description: "GUI chrome theme (the terminal grid keeps its own colours).",
         kind: "enum",
-        choices: &["dark", "light"],
+        choices: &[
+            "dark",
+            "light",
+            "solarized-dark",
+            "solarized-light",
+            "gruvbox-dark",
+            "gruvbox-light",
+        ],
         writable: true,
     },
     OptionSpec {
@@ -495,7 +502,17 @@ mod tests {
         let opts = resolve_options(&settings());
         let theme = opts.iter().find(|o| o["id"] == "theme").expect("theme");
         assert_eq!(theme["value"], json!("light"));
-        assert_eq!(theme["choices"], json!(["dark", "light"]));
+        assert_eq!(
+            theme["choices"],
+            json!([
+                "dark",
+                "light",
+                "solarized-dark",
+                "solarized-light",
+                "gruvbox-dark",
+                "gruvbox-light"
+            ])
+        );
         let program = opts
             .iter()
             .find(|o| o["id"] == "shell.program")

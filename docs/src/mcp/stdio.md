@@ -35,7 +35,7 @@ Both speak the option **id** — a stable, dotted name:
 
 | id | Kind | Writable | Values |
 | --- | --- | --- | --- |
-| `theme` | enum | yes | `dark`, `light` |
+| `theme` | enum | yes | `dark`, `light`, `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |
 | `shell.program` | string | **no** | unset means the platform default login shell |
 | `shell.args` | array | **no** | |
 | `terminal.colors.scheme` | enum | yes | `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |

@@ -361,14 +361,24 @@ impl TerminalSettings {
 }
 
 /// Which iced theme dresses the GUI chrome (sidebar, tab strip, buttons).
+/// The named variants mirror the built-in `terminal.colors.scheme` presets,
+/// so the chrome can match the grid it frames.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum ThemeChoice {
     /// A dark chrome, matching the terminal's dark background.
     #[default]
     Dark,
     /// A light chrome.
     Light,
+    /// Solarized Dark chrome.
+    SolarizedDark,
+    /// Solarized Light chrome.
+    SolarizedLight,
+    /// Gruvbox Dark chrome.
+    GruvboxDark,
+    /// Gruvbox Light chrome.
+    GruvboxLight,
 }
 
 /// When a close that would terminate running session(s) asks for confirmation
@@ -435,6 +445,10 @@ impl ThemeChoice {
         match self {
             ThemeChoice::Dark => iced::Theme::Dark,
             ThemeChoice::Light => iced::Theme::Light,
+            ThemeChoice::SolarizedDark => iced::Theme::SolarizedDark,
+            ThemeChoice::SolarizedLight => iced::Theme::SolarizedLight,
+            ThemeChoice::GruvboxDark => iced::Theme::GruvboxDark,
+            ThemeChoice::GruvboxLight => iced::Theme::GruvboxLight,
         }
     }
 }
@@ -913,6 +927,14 @@ mod tests {
             assert!(s.open_command().is_none(), "{bad} must not configure");
             assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
         }
+    }
+
+    #[test]
+    fn named_themes_serialise_kebab_cased_like_the_terminal_schemes() {
+        let json = serde_json::to_string(&ThemeChoice::SolarizedLight).expect("serialise");
+        assert_eq!(json, "\"solarized-light\"");
+        let back: ThemeChoice = serde_json::from_str(r#""gruvbox-dark""#).expect("deserialise");
+        assert_eq!(back, ThemeChoice::GruvboxDark);
     }
 
     #[test]

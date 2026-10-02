@@ -44,8 +44,11 @@ only when named explicitly. See [Status and attention](../workspace/status.md).
 
 ### `theme`
 
-`"dark"` (default) or `"light"`. GUI chrome only — sidebar, tab strip, buttons.
-The terminal grid keeps its own colours.
+`"dark"` (default), `"light"`, or one of the named presets
+`"solarized-dark"`, `"solarized-light"`, `"gruvbox-dark"`, `"gruvbox-light"`.
+GUI chrome only — sidebar, tab strip, buttons. The terminal grid keeps its own
+colours: pick the matching `terminal.colors.scheme` for a chrome that blends
+with it.
 
 ### `close`
 

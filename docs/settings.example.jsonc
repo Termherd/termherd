@@ -32,8 +32,10 @@
   },
 
   // ── Theme ────────────────────────────────────────────────────────────────
-  // GUI chrome theme (sidebar, tab strip, buttons): "dark" (default) or
-  // "light". The terminal grid keeps its own colours — see `terminal.colors`.
+  // GUI chrome theme (sidebar, tab strip, buttons): "dark" (default),
+  // "light", "solarized-dark", "solarized-light", "gruvbox-dark" or
+  // "gruvbox-light". The terminal grid keeps its own colours — pair a named
+  // theme with the same `terminal.colors.scheme` for a matching chrome.
   "theme": "dark",
 
   // ── Close confirmation ──────────────────────────────────────────────────

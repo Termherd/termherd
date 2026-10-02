@@ -127,8 +127,9 @@ you want and strip the comments (the real file is strict JSON). In short:
 
 - `shell` — program + args launched for each session (default: the platform
   login shell).
-- `theme` — `"dark"` (default) or `"light"` GUI chrome; the terminal grid
-  keeps its own colours.
+- `theme` — GUI chrome: `"dark"` (default), `"light"`, or a named preset
+  (`solarized-*`, `gruvbox-*`) matching the terminal schemes; the terminal
+  grid keeps its own colours.
 - `close` — per-action close confirmation (`tab`, `app`): always, only while
   a foreground process runs (default), or never.
 - `terminal` — base `font_size` (the zoom shortcuts step from it), grid
