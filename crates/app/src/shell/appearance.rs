@@ -1,45 +1,15 @@
 //! The settings panel's appearance controls: the chrome theme and the
 //! terminal scheme, each applied the moment it is picked and then persisted.
 //! The chrome follows on the next frame, since [`Shell::theme`] reads it every
-//! frame; the terminals and the file follow through [`AppearanceSink`].
+//! frame; the terminals and the file follow through
+//! [`super::live_settings::SettingsSink`].
 
 use std::fmt;
-use std::sync::Arc;
 
-use termherd_pty::{Palette, PtyManager};
+use termherd_pty::Palette;
 
 use super::Shell;
-use crate::settings::{AppearanceChange, ColorSettings, ThemeChoice, save_appearance};
-
-/// Where a picked appearance goes beyond the shell's own state. A port of its
-/// own rather than a [`termherd_core::ports::PtyHost`] method: a palette is
-/// RGB, which `core` never sees. Injected so a shell under test neither
-/// recolours real terminals nor rewrites the user's `settings.json`.
-pub(crate) trait AppearanceSink: Send + Sync {
-    /// Recolour every terminal, running and future.
-    fn repaint(&self, palette: Palette);
-    /// Persist one picked key.
-    fn persist(&self, change: &AppearanceChange);
-}
-
-/// The real sink: the PTY manager's live palette and `settings.json`.
-pub(crate) struct LiveAppearance(pub(crate) Arc<PtyManager>);
-
-impl AppearanceSink for LiveAppearance {
-    fn repaint(&self, palette: Palette) {
-        self.0.set_palette(palette);
-    }
-
-    fn persist(&self, change: &AppearanceChange) {
-        save_appearance(change);
-    }
-}
-
-/// Goes nowhere — the double for a shell whose test does not look.
-impl AppearanceSink for () {
-    fn repaint(&self, _palette: Palette) {}
-    fn persist(&self, _change: &AppearanceChange) {}
-}
+use crate::settings::{AppearanceChange, ColorSettings, ThemeChoice};
 
 /// What the settings panel edits.
 pub(super) struct Appearance {
@@ -99,8 +69,7 @@ impl Shell {
     /// Apply a chrome theme and persist it.
     pub(super) fn pick_theme(&mut self, theme: ThemeChoice) {
         self.appearance.theme = theme;
-        self.appearance_sink
-            .persist(&AppearanceChange::Theme(theme));
+        self.settings_sink.persist(&AppearanceChange::Theme(theme));
     }
 
     /// Apply a terminal scheme to every session and persist it.
@@ -108,9 +77,9 @@ impl Shell {
         let name = scheme.0.map(str::to_owned);
         self.appearance.colors.scheme.clone_from(&name);
         self.config.terminal_scheme = name;
-        self.appearance_sink
+        self.settings_sink
             .repaint(self.appearance.colors.to_palette());
-        self.appearance_sink.persist(&AppearanceChange::Scheme(
+        self.settings_sink.persist(&AppearanceChange::Scheme(
             self.appearance.colors.scheme.clone(),
         ));
     }

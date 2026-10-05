@@ -5,8 +5,9 @@
 %USERPROFILE%\.termherd\settings.json         (Windows)
 ```
 
-The [settings panel](../workspace/settings-panel.md) changes the appearance
-live and saves it here. Everything else: edit the file and restart.
+**Changes apply as soon as the file is saved** — no restart, no session
+lost. The [settings panel](../workspace/settings-panel.md) changes the
+appearance from inside the app and saves it here.
 
 The annotated template with every option, its default and its meaning is
 [`docs/settings.example.jsonc`](https://github.com/Termherd/termherd/blob/main/docs/settings.example.jsonc)
@@ -15,8 +16,9 @@ JSON**: no comments, no trailing commas.
 
 ## How it loads
 
-Read once at startup — the settings panel's two keys aside — and
-defensively:
+Read at startup, then again each time the file changes on disk — whoever
+wrote it: your editor, an MCP `set_option`, the settings panel. Defensively,
+both times:
 
 - Every field is optional. A missing file, a missing field, or a corrupt file
   falls back to built-in defaults — settings never block startup.
@@ -27,6 +29,23 @@ defensively:
 - Out-of-range values **clamp** instead of failing the file.
 - One bad value — a typo'd colour, an unknown action name — **degrades alone**
   with a logged warning. The rest of the file still applies.
+- While the app runs, a file that does not parse — a save your editor has
+  only half written, a missing brace — **changes nothing**: the running
+  settings stay until the next valid save. Nothing falls back to defaults
+  mid-run, and nothing is set aside.
+
+What a live change reaches:
+
+| Setting | Applies to |
+| --- | --- |
+| `theme`, `terminal.colors` | the chrome and **every open terminal**, at once |
+| `keys`, `close`, `sidebar`, `open`, `mcp`, `terminal.copy_on_select`, `terminal.paste_on_right_click` | the next keypress, click or call |
+| `terminal.font_size` | every terminal, at once (your zoom steps are kept on top) |
+| `shell` | the **next session** you open — a running one keeps its program |
+| `record` | the **next recording** — one in progress keeps its budget |
+
+A program that read the terminal's colours when it started — Claude Code
+picks its light or dark look that way — keeps its choice until it restarts.
 
 Two neighbouring files are TermHerd's, not yours to edit: `window.json` (size
 and position — a position left off every connected monitor is dropped, so the
@@ -191,8 +210,8 @@ launch, so an agent may read them but never set them. The `close`, `sidebar`,
 `terminal.copy_on_select` and `terminal.paste_on_right_click` blocks are
 file-only for now; `keys` is published as a read-only resource.
 
-A `set_option` write lands in `settings.json` and **applies on restart**, like
-any other edit to the file.
+A `set_option` write lands in `settings.json` and applies **as soon as it is
+written**, like any other edit to the file.
 
 ## A complete example
 

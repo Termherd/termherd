@@ -42,6 +42,7 @@ mod geometry;
 mod ime;
 mod input;
 mod launch;
+mod live_settings;
 mod orchestrate;
 mod record;
 mod repos;
@@ -145,15 +146,23 @@ impl Startup {
             close: settings.close,
             gestures: settings.clipboard_gestures(),
             open: settings.open_command(),
-            config: ConfigInput {
-                terminal_scheme: settings.terminal.colors.scheme.clone(),
-                record_fps: record.fps,
-                record_scale: record.scale,
-                keymap_overrides: settings.keys.len(),
-            },
+            config: config_input(settings),
             record,
             load_problems: Vec::new(),
         }
+    }
+}
+
+/// The settings the MCP `snapshot` tool reports that `core` cannot read —
+/// built in one place for startup and for a live reload, so the two cannot
+/// report different things.
+fn config_input(settings: &crate::settings::Settings) -> ConfigInput {
+    let record = settings.record_config();
+    ConfigInput {
+        terminal_scheme: settings.terminal.colors.scheme.clone(),
+        record_fps: record.fps,
+        record_scale: record.scale,
+        keymap_overrides: settings.keys.len(),
     }
 }
 
@@ -186,7 +195,7 @@ pub fn run(
                     path_resolver: path_resolver.clone(),
                     pty: pty.clone(),
                     pty_output: pty_output.clone(),
-                    appearance: Arc::new(appearance::LiveAppearance(pty.clone())),
+                    settings: Arc::new(live_settings::LiveSettings(pty.clone())),
                 },
                 live_bridge.clone(),
                 Startup {
@@ -296,8 +305,8 @@ struct Shell {
     settings_open: bool,
     /// Config files that could not be used, until the user dismisses them.
     load_problems: Vec<crate::json_store::LoadProblem>,
-    /// See [`Ports::appearance`].
-    appearance_sink: Arc<dyn appearance::AppearanceSink>,
+    /// See [`Ports::settings`].
+    settings_sink: Arc<dyn live_settings::SettingsSink>,
     /// Configurable shortcut bindings (FR9).
     keymap: Keymap,
     /// In-progress inline rename: `(session id, edit buffer)` (F-session-metadata).
@@ -548,6 +557,8 @@ enum Message {
     ToggleSettings,
     /// Hide the notice about config files that could not be used.
     DismissLoadProblems,
+    /// `settings.json` changed on disk: reload and apply it.
+    SettingsFileChanged,
     /// Close the settings panel (its close button, the scrim, Escape).
     CloseSettings,
     /// Apply and persist a GUI chrome theme picked in the settings panel.
@@ -703,9 +714,9 @@ pub(crate) struct Ports {
     pub(crate) path_resolver: Arc<dyn PathResolver>,
     pub(crate) pty: Arc<dyn PtyHost>,
     pub(crate) pty_output: PtyOutput,
-    /// Where the settings panel's picks go: the live terminal palette and
-    /// `settings.json`.
-    pub(crate) appearance: Arc<dyn appearance::AppearanceSink>,
+    /// Where a setting goes beyond the shell: the live terminal palette, the
+    /// next session's shell, and `settings.json`.
+    pub(crate) settings: Arc<dyn live_settings::SettingsSink>,
 }
 
 impl Shell {
@@ -716,7 +727,7 @@ impl Shell {
             path_resolver,
             pty,
             pty_output,
-            appearance: appearance_sink,
+            settings: settings_sink,
         } = ports;
         let LiveBridge {
             requests: bridge_requests,
@@ -753,7 +764,7 @@ impl Shell {
             },
             settings_open: false,
             load_problems: startup.load_problems,
-            appearance_sink,
+            settings_sink,
             keymap: startup.keymap,
             renaming: None,
             tab_rename: None,
@@ -1200,6 +1211,7 @@ impl Shell {
                 self.perform(effects)
             }
             Message::ToggleSidebar => self.toggle_sidebar(),
+            Message::SettingsFileChanged => self.reload_settings(),
             Message::DismissLoadProblems => {
                 self.load_problems.clear();
                 Task::none()
@@ -1446,6 +1458,12 @@ impl Shell {
             subs.push(Subscription::run_with(root.clone(), watch_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
+        if let Some(file) = crate::settings::path() {
+            subs.push(Subscription::run_with(
+                file,
+                live_settings::settings_watch_stream,
+            ));
+        }
         subs.push(Subscription::run_with(
             self.bridge_requests.clone(),
             bridge::request_stream,
@@ -1639,7 +1657,7 @@ mod key_routing {
             path_resolver: Arc::new(termherd_scan::FsPathResolver::new()),
             pty,
             pty_output: PtyOutput::new(rx),
-            appearance: Arc::new(()),
+            settings: Arc::new(()),
         }
     }
 
@@ -3825,11 +3843,19 @@ mod key_routing {
     struct RecordingAppearance {
         repainted: std::sync::Mutex<Vec<termherd_pty::Palette>>,
         persisted: std::sync::Mutex<Vec<crate::settings::AppearanceChange>>,
+        shells: std::sync::Mutex<Vec<Option<String>>>,
     }
 
-    impl appearance::AppearanceSink for RecordingAppearance {
+    impl live_settings::SettingsSink for RecordingAppearance {
         fn repaint(&self, palette: termherd_pty::Palette) {
             self.repainted.lock().expect("lock").push(palette);
+        }
+
+        fn set_shell(&self, shell: Option<termherd_pty::Shell>) {
+            self.shells
+                .lock()
+                .expect("lock")
+                .push(shell.map(|s| s.program));
         }
 
         fn persist(&self, change: &crate::settings::AppearanceChange) {
@@ -3841,13 +3867,89 @@ mod key_routing {
         let sink = Arc::new(RecordingAppearance::default());
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
         let mut ports = test_ports(Arc::new(RecordingPty::default()), rx);
-        ports.appearance = sink.clone();
+        ports.settings = sink.clone();
         let startup = Startup {
             colors,
             ..test_startup()
         };
         let shell = Shell::new(WindowConfig::default(), ports, test_live_bridge(), startup);
         (shell, sink)
+    }
+
+    #[test]
+    fn a_reloaded_file_applies_every_live_setting() {
+        let (mut shell, sink) = shell_with_appearance(ColorSettings::default());
+        let settings: crate::settings::Settings = serde_json::from_str(
+            r#"{
+                "theme": "gruvbox-light",
+                "shell": { "program": "fish" },
+                "keys": { "toggle-sidebar": "ctrl+alt+b" },
+                "close": { "tab": "noConfirmation" },
+                "sidebar": { "session_limit": 2 },
+                "terminal": {
+                    "font_size": 20,
+                    "copy_on_select": true,
+                    "colors": { "scheme": "gruvbox-light" }
+                },
+                "record": { "fps": 12 }
+            }"#,
+        )
+        .expect("valid settings");
+
+        let _ = shell.apply_settings(&settings);
+
+        assert_eq!(shell.theme(), iced::Theme::GruvboxLight);
+        assert_eq!(
+            *sink.repainted.lock().expect("lock"),
+            [termherd_pty::Palette::named("gruvbox-light").expect("known scheme")]
+        );
+        assert_eq!(
+            *sink.shells.lock().expect("lock"),
+            [Some("fish".to_string())]
+        );
+        assert_eq!(
+            shell
+                .keymap
+                .lookup(&KeyChord::parse("ctrl+alt+b").expect("a test chord parses")),
+            Some(termherd_core::Action::ToggleSidebar)
+        );
+        assert_eq!(
+            shell.close_confirm.tab,
+            crate::settings::ConfirmClose::NoConfirmation
+        );
+        assert!(shell.gestures.copy_on_select);
+        assert_eq!(shell.core.sidebar.session_limit, 2);
+        assert!((shell.core.font_size() - 20.0).abs() < f32::EPSILON);
+        assert_eq!(
+            shell.config.terminal_scheme.as_deref(),
+            Some("gruvbox-light")
+        );
+        assert_eq!(shell.config.record_fps, 12);
+        assert!(
+            sink.persisted.lock().expect("lock").is_empty(),
+            "a reload reads the file; writing it back would loop"
+        );
+    }
+
+    #[test]
+    fn reapplying_the_settings_in_force_does_not_repaint() {
+        // The settings panel's own write comes back through the watch: it must
+        // be a no-op, not a second recolour of every terminal.
+        let (mut shell, sink) = shell_with_appearance(ColorSettings::default());
+        let _ = shell.update(Message::PickScheme(appearance::SchemeChoice(Some(
+            "solarized-dark",
+        ))));
+        let echoed: crate::settings::Settings =
+            serde_json::from_str(r#"{ "terminal": { "colors": { "scheme": "solarized-dark" } } }"#)
+                .expect("valid settings");
+
+        let _ = shell.apply_settings(&echoed);
+
+        assert_eq!(
+            sink.repainted.lock().expect("lock").len(),
+            1,
+            "only the pick repainted"
+        );
     }
 
     #[test]

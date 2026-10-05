@@ -50,6 +50,34 @@ pub fn load_json<T: Default + DeserializeOwned>(file: &str) -> T {
     }
 }
 
+/// Re-read `~/.termherd/<file>` while the app runs: `Some` only when it parses.
+/// A missing, unreadable or invalid file — an editor's half-written save
+/// included — is `None`, so the caller keeps what it has rather than falling
+/// back to defaults mid-run. Touches nothing on disk.
+#[must_use]
+pub fn reload_json<T: DeserializeOwned>(file: &str) -> Option<T> {
+    reload_at(&config_path(file)?)
+}
+
+/// The body of [`reload_json`], on an explicit path.
+fn reload_at<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    match read_at(path) {
+        Read::Parsed(value) => Some(value),
+        Read::Missing => {
+            warn!(path = %path.display(), "config file gone; keeping the running values");
+            None
+        }
+        Read::Unreadable(e) => {
+            warn!(error = %e, path = %path.display(), "unreadable config file; keeping the running values");
+            None
+        }
+        Read::Invalid(e) => {
+            warn!(error = %e, path = %path.display(), "invalid config file; keeping the running values");
+            None
+        }
+    }
+}
+
 /// The startup load: [`load_json`], but a file that does not parse is set
 /// aside (see [`set_aside`]) and reported, so the defaults adopted in its place
 /// can be saved without destroying it. Startup only — a later read may see a
@@ -230,6 +258,23 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(dir.path().join("settings.json.corrupt-1")).expect("first"),
             "first"
+        );
+    }
+
+    #[test]
+    fn a_reload_keeps_the_running_values_on_anything_but_a_parse_and_moves_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        assert_eq!(reload_at::<Value>(&path), None, "missing");
+
+        std::fs::write(&path, "{ \"theme\": ").expect("write");
+        assert_eq!(reload_at::<Value>(&path), None, "half-written");
+        assert!(path.exists(), "a mid-run read never sets a file aside");
+
+        std::fs::write(&path, "{\"theme\": \"light\"}").expect("write");
+        assert_eq!(
+            reload_at::<Value>(&path),
+            Some(serde_json::json!({ "theme": "light" }))
         );
     }
 

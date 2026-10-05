@@ -29,7 +29,7 @@ mod window_geometry;
 use std::sync::Arc;
 
 use termherd_core::ports::{PathResolver, ProjectScanner, ScanError};
-use termherd_pty::{EventSink, PtyEvent, PtyManager, Shell};
+use termherd_pty::{EventSink, PtyEvent, PtyManager};
 use termherd_scan::FsScanner;
 use tracing::{info, warn};
 
@@ -62,10 +62,7 @@ fn main() -> iced::Result {
     // defaults rather than blocking startup — set aside, and reported in the
     // sidebar, so the defaults never overwrite it.
     let (settings, settings_problem) = settings::Settings::load_checked();
-    let shell = settings.shell.as_ref().map(|s| Shell {
-        program: s.program.clone(),
-        args: s.args.clone(),
-    });
+    let shell = settings.shell_profile();
 
     // PTY output flows from the reader threads through this channel into the
     // iced subscription (M2). The manager is built here and injected as a

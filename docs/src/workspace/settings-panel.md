@@ -12,8 +12,9 @@ outside it closes it.
 └──────────────────────────────────────────────┘
 ```
 
-Today it holds the appearance. The rest of `settings.json` is still edited in
-the file — see [settings.json](../reference/settings.md).
+Today it holds the appearance. The rest of `settings.json` is edited in the
+file, which applies on save too — see [settings.json](../reference/settings.md).
+An edit to the file while the panel is open shows in it at once.
 
 ## A pick applies at once, and saves itself
 

@@ -43,7 +43,9 @@ pub struct PtyManager {
     sessions: Mutex<HashMap<SessionId, Session>>,
     sink: EventSink,
     /// User-configured shell; `None` falls back to the platform default.
-    shell: Option<Shell>,
+    /// Read when a session spawns, so [`PtyManager::set_shell`] reaches the
+    /// next session and leaves the running ones alone.
+    shell: RwLock<Option<Shell>>,
     /// The terminal colour scheme every session renders with, shared with
     /// each terminal thread so [`PtyManager::set_palette`] reaches them live.
     palette: SharedPalette,
@@ -58,8 +60,17 @@ impl PtyManager {
         Self {
             sessions: Mutex::new(HashMap::new()),
             sink,
-            shell,
+            shell: RwLock::new(shell),
             palette: Arc::new(RwLock::new(palette)),
+        }
+    }
+
+    /// Launch `shell` (or the platform default for `None`) from the next
+    /// spawned session on. A running session keeps the program it started.
+    pub fn set_shell(&self, shell: Option<Shell>) {
+        match self.shell.write() {
+            Ok(mut guard) => *guard = shell,
+            Err(poisoned) => *poisoned.into_inner() = shell,
         }
     }
 
@@ -124,7 +135,11 @@ impl PtyHost for PtyManager {
         // project directory with a sane TERM. Resuming a real Claude session
         // lands in a later slice; the id flows through so the adapter never has
         // to invent one (Q6).
-        let mut cmd = match &self.shell {
+        let configured = match self.shell.read() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+        let mut cmd = match &configured {
             Some(shell) => {
                 let mut c = CommandBuilder::new(&shell.program);
                 for arg in &shell.args {
@@ -140,7 +155,7 @@ impl PtyHost for PtyManager {
         apply_terminal_env(&mut cmd);
         // Which shell is about to run decides the integration recipe; the
         // default program only resolves to a name here, so ask the builder.
-        let program = match &self.shell {
+        let program = match &configured {
             Some(shell) => shell.program.clone(),
             None => cmd.get_shell(),
         };

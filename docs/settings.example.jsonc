@@ -10,7 +10,8 @@
 // settings.json and strip the comments.
 //
 // ── Load behaviour ─────────────────────────────────────────────────────────
-// The file is read once at startup (edit + restart; no in-app panel yet).
+// The file is read at startup and again whenever it is saved: a change
+// applies without a restart (a half-written save changes nothing).
 // Every field is optional: a missing file, a missing field, or a corrupt
 // file falls back to the built-in defaults — settings never block startup.
 // Out-of-range values clamp instead of failing the file, and one bad value

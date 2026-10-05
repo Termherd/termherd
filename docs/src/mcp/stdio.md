@@ -29,7 +29,7 @@ Add it to your `mcpServers` config, pointing `command` at the built binary:
 | Tool | Args | Does |
 | --- | --- | --- |
 | `list_options` | — | lists the configurable options with their current values |
-| `set_option` | `id`, `value` | sets one **writable** option; the change lands in `settings.json` and applies on restart |
+| `set_option` | `id`, `value` | sets one **writable** option; the change lands in `settings.json` and applies at once |
 
 Both speak the option **id** — a stable, dotted name:
 

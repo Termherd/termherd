@@ -571,6 +571,23 @@ impl Settings {
         crate::json_store::load_json(FILE)
     }
 
+    /// Re-read the file while the app runs. `None` when it does not parse,
+    /// so the running settings stay as they are.
+    #[must_use]
+    pub fn reload() -> Option<Self> {
+        crate::json_store::reload_json(FILE)
+    }
+
+    /// The shell to launch, as the PTY adapter takes it; `None` for the
+    /// platform default login shell.
+    #[must_use]
+    pub fn shell_profile(&self) -> Option<termherd_pty::Shell> {
+        self.shell.as_ref().map(|s| termherd_pty::Shell {
+            program: s.program.clone(),
+            args: s.args.clone(),
+        })
+    }
+
     /// The startup load: an unparseable file is set aside and reported rather
     /// than silently replaced by defaults the next save would write over it.
     #[must_use]
@@ -630,6 +647,13 @@ fn apply_appearance(
         Some(name) => level.insert("scheme".into(), Value::String(name.clone())),
         None => level.remove("scheme"),
     };
+}
+
+/// Where the settings file lives, for the live-reload watch. `None` without a
+/// home directory.
+#[must_use]
+pub fn path() -> Option<std::path::PathBuf> {
+    Some(crate::paths::termherd_dir()?.join(FILE))
 }
 
 /// `~/.termherd/settings.json` — the app data dir from the PRD (§7).
