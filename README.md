@@ -249,6 +249,7 @@ nothing to configure. It exposes the running workspace:
 | `mouse_in_session` | a mouse event at a cell of a terminal — forwarded to a program reading the mouse, else the terminal's own selection |
 | `add_repo` · `forget_repo` | put a repository in the sidebar before it has any session, and drop that addition |
 | `prompt_in_session` | type, wait and read in one round trip — prompting another Claude session is opt-in |
+| `list_options` · `set_option` | read and change `settings.json` — the same catalogue as the stdio server; a running TermHerd applies a change at once |
 
 The loop that makes it useful is **act → wait → observe**: `run_in_session`,
 then `wait_for_status`, then `read_terminal`. Sessions are addressed by a
@@ -278,11 +279,12 @@ the sidebar, tabs or gutters.
 
 `termherd-mcp` is a separate small binary that exposes termherd's own
 **configuration** — so you can ask "what can I configure here?", or "switch me
-to a light theme", from any Claude session. Two tools, `list_options` (read)
-and `set_option` (write), plus the option **schema** as a resource, all
-reflecting `~/.termherd/settings.json`. The two options that name what
-termherd executes — `shell.program`, `shell.args` — are readable but never
-writable over MCP.
+to a light theme", from a Claude session termherd did **not** launch (one it
+launched already has the same tools on the live bridge). Two tools,
+`list_options` (read) and `set_option` (write), plus the option **schema** as
+a resource, all reflecting `~/.termherd/settings.json`. The two options that
+name what termherd executes — `shell.program`, `shell.args` — are readable but
+never writable over MCP.
 
 It speaks JSON-RPC over stdio. Register it with Claude Code by adding it to your
 `mcpServers` config (point `command` at the built binary):

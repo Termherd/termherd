@@ -46,6 +46,14 @@ pub struct OptionSpec {
     pub writable: bool,
 }
 
+/// What `list_options` does, worded once for both surfaces that carry it (this
+/// stdio server and the live bridge).
+pub const LIST_OPTIONS_DESCRIPTION: &str =
+    "List termherd's configurable options with their current values.";
+
+/// What `set_option` does, worded once for both surfaces that carry it.
+pub const SET_OPTION_DESCRIPTION: &str = "Set one writable termherd option by id (see `writable` in list_options); the change lands in settings.json, which a running termherd applies at once. A read-only option or an out-of-shape value is refused, nothing written.";
+
 /// The option catalog — the single source of what the control surface exposes.
 /// Kept small for this first draft; `keys` (the keymap overrides) and the
 /// orchestration surface are deferred.
@@ -362,12 +370,12 @@ fn tools_list_result() -> Value {
         "tools": [
             {
                 "name": "list_options",
-                "description": "List termherd's configurable options with their current values.",
+                "description": LIST_OPTIONS_DESCRIPTION,
                 "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
             },
             {
                 "name": "set_option",
-                "description": "Set one writable termherd option by id (see `writable` in list_options); the change lands in settings.json and applies on restart. A read-only option or an out-of-shape value is refused, nothing written.",
+                "description": SET_OPTION_DESCRIPTION,
                 "inputSchema": {
                     "type": "object",
                     "properties": {

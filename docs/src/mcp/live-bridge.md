@@ -156,6 +156,20 @@ current one, and `timed_out` is `true`. And a session that **exits** settles
 the wait whatever you asked for — it can no longer reach your target. Both
 behaviours exist so a wait can never silently park you.
 
+### Settings
+
+| Tool | Args | Returns |
+| --- | --- | --- |
+| `list_options` | — | `{ options }` — every configurable option with its current value |
+| `set_option` | `id`, `value` | `{ id, value }` — one writable option, written to `settings.json` |
+
+The same two tools as [the stdio server](./stdio.md), over the same catalogue —
+the option ids, which ones are writable, and what each accepts are defined
+once and read by both. The write lands in `settings.json`, and the running app
+applies it the moment the file changes, as it does for any edit to the file.
+A refused value is an `invalid_params` error; a `settings.json` that does not
+parse is refused too, rather than overwritten.
+
 ### The keyboard
 
 `press_keys` and `run_action` drive TermHerd's own interface — see

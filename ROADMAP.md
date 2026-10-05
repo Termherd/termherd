@@ -99,6 +99,7 @@ issues #18–#29.
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
 | [F-mcp-keys](#f-mcp-keys) | feature | mcp, keymap | ✅ | The keyboard rung: drive the app by key chords through the real keymap. |
 | [F-mcp-live-bridge](#f-mcp-live-bridge) | feature | mcp | ✅ | The gate: an in-process MCP server on loopback, reaching the live `core::App`. |
+| [F-mcp-options-bridge](#f-mcp-options-bridge) | feature | mcp | ✅ | `list_options` and `set_option` on the live bridge, not only the stdio slice. |
 | [F-mcp-orchestration](#f-mcp-orchestration) | feature | mcp, workspace | ✅ | The action rung: six mutating tools, each over an existing `core::App` event. |
 | [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) | feature | mcp, terminal | ✅ | The pointer rung, terminal half: place a mouse event inside a session. |
 | [F-mcp-screenshot](#f-mcp-screenshot) | feature | mcp, workspace | ✅ | The pixel rung: the window as a PNG, for what text cannot answer. |
@@ -932,6 +933,8 @@ shippable:
   terminal half: a mouse event inside a session. Unblocked #155, now fixed.
 - [ ] [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) — The pointer rung, chrome
   half: click and drag termherd's own interface.
+- [x] [F-mcp-options-bridge](#f-mcp-options-bridge) — `list_options` and
+  `set_option` on the live bridge too, over the stdio slice's catalogue.
 
 <a id="f-mcp-ide-bridge"></a>
 
@@ -1251,6 +1254,23 @@ JSON-RPC / handshake / tool routing so we never hand-roll the protocol),
 Apache-2.0 (cargo-deny allows it), edition 2024, tokio-native (reuses the #192
 runtime, now `enable_all` for the listener); the http stack is
 `hyper`/`hyper-util` (frugal base — no axum). Unblocks #194/#195/#196
+
+<a id="f-mcp-options-bridge"></a>
+
+### F-mcp-options-bridge
+
+`list_options` and `set_option` on the live bridge, not only the stdio slice.
+
+Shipped as #298. A session termherd launched — the only kind it launches —
+saw seventeen tools, none about settings, so "switch me to a light theme"
+needed the stdio server registered by hand. The bridge now carries both over
+the same pure catalogue in `crates/mcp` (one implementation, two transports;
+the tool descriptions are pinned equal by a test, since `#[tool]` takes only
+a literal). Neither surface writes over a `settings.json` that does not
+parse. Paired with the settings hot reload (#297): this makes the change
+reachable from a session, that one makes it visible without a restart. Rung
+of [F-mcp-control-surface](#f-mcp-control-surface), after
+[F-mcp-config-write](#f-mcp-config-write).
 
 <a id="f-mcp-orchestration"></a>
 

@@ -3913,6 +3913,7 @@ dependencies = [
  "tempfile",
  "termherd-claude",
  "termherd-core",
+ "termherd-mcp",
  "termherd-pty",
  "termherd-scan",
  "thiserror 2.0.18",

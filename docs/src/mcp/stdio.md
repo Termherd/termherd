@@ -6,7 +6,10 @@ to a light theme", from *any* Claude session, whether or not TermHerd is
 running.
 
 It speaks JSON-RPC over stdio and is stateless: it reads and writes
-`~/.termherd/settings.json`, nothing else.
+`~/.termherd/settings.json`, nothing else. A session TermHerd launched does not
+need it — [the live bridge](./live-bridge.md#settings) carries the same two
+tools over the same catalogue. Register this one for a session started
+elsewhere.
 
 ## Registering it
 
@@ -51,7 +54,9 @@ carry the `writable` flag per id, so a model can tell before it tries.
 
 `set_option` **refuses** rather than degrades: a read-only id, an unknown id,
 or a value that does not fit the option's kind (a non-array palette, a theme
-outside `dark`/`light`) answers a JSON-RPC error and writes nothing. `null` is
+outside the listed choices) answers a JSON-RPC error and writes nothing. So
+does a `settings.json` that does not parse: writing the one option onto an
+empty object would discard the rest of the file. `null` is
 always accepted on a writable id — it unsets the option.
 
 That is the whole write surface today. The `close`, `sidebar`, `record`,

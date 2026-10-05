@@ -165,47 +165,65 @@ pub fn save_json<T: Serialize>(file: &str, value: &T) {
     let Some(path) = config_path(file) else {
         return;
     };
-    if let Some(dir) = path.parent()
-        && let Err(e) = std::fs::create_dir_all(dir)
-    {
-        warn!(error = %e, "could not create config dir");
-        return;
-    }
-    match serde_json::to_string_pretty(value) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(&path, json) {
-                warn!(error = %e, path = %path.display(), "could not save config file");
-            }
-        }
-        Err(e) => warn!(error = %e, path = %path.display(), "could not serialise config"),
+    if let Err(e) = write_json_at(&path, value) {
+        warn!(error = %e, "could not save config file");
     }
 }
 
 /// Rewrite some keys of the JSON object in `~/.termherd/<file>`, leaving every
 /// other key as found — including ones this build does not understand. A
-/// missing file starts from an empty object; a file that does not parse as an
-/// object is left alone (with a warning), since rewriting it would replace the
-/// user's whole configuration with the few keys being set.
+/// failure is logged, never fatal; see [`edit_json_at`] for what refuses.
 pub fn update_json(file: &str, edit: impl FnOnce(&mut Map<String, Value>)) {
     let Some(path) = config_path(file) else {
         return;
     };
-    let mut root = match std::fs::read_to_string(&path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Map::new(),
-        Err(e) => {
-            warn!(error = %e, path = %path.display(), "could not read config file; not updating it");
-            return;
+    let result = edit_json_at(&path, |mut root| {
+        if let Value::Object(map) = &mut root {
+            edit(map);
         }
-        Ok(raw) => match serde_json::from_str(&raw) {
-            Ok(Value::Object(root)) => root,
-            _ => {
-                warn!(path = %path.display(), "config file is not a JSON object; not updating it");
-                return;
-            }
-        },
-    };
-    edit(&mut root);
-    save_json(file, &root);
+        Ok(root)
+    });
+    if let Err(e) = result {
+        warn!(error = %e, path = %path.display(), "could not update config file");
+    }
+}
+
+/// Read the JSON object at `path`, pass it through `edit`, and write back what
+/// `edit` returns. A missing file starts from an empty object. A file that
+/// exists but is not a JSON object is refused rather than rewritten: writing
+/// the few keys being set onto an empty object would replace the user's whole
+/// configuration. `edit` may refuse too; nothing is written then.
+pub fn edit_json_at(
+    path: &Path,
+    edit: impl FnOnce(Value) -> Result<Value, String>,
+) -> Result<(), String> {
+    let root = read_object_at(path)?;
+    let edited = edit(root)?;
+    write_json_at(path, &edited)
+}
+
+/// The JSON object at `path`; an empty one when the file does not exist.
+pub fn read_object_at(path: &Path) -> Result<Value, String> {
+    match read_at::<Value>(path) {
+        Read::Missing => Ok(Value::Object(Map::new())),
+        Read::Parsed(value) if value.is_object() => Ok(value),
+        Read::Parsed(_) | Read::Invalid(_) => Err(format!(
+            "{} is not a valid JSON object; fix it first",
+            path.display()
+        )),
+        Read::Unreadable(e) => Err(format!("could not read {}: {e}", path.display())),
+    }
+}
+
+/// Pretty-print `value` to `path`, creating its directory.
+fn write_json_at<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+    }
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|e| format!("could not encode {}: {e}", path.display()))?;
+    std::fs::write(path, json).map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
 /// `~/.termherd/<file>` — the app data dir from the PRD (§7).
@@ -275,6 +293,38 @@ mod tests {
         assert_eq!(
             reload_at::<Value>(&path),
             Some(serde_json::json!({ "theme": "light" }))
+        );
+    }
+
+    #[test]
+    fn an_edit_refuses_a_file_that_is_not_an_object_and_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "{ broken").expect("write");
+
+        let result = edit_json_at(&path, |_| Ok(serde_json::json!({ "theme": "light" })));
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "{ broken");
+    }
+
+    #[test]
+    fn an_edit_starts_a_missing_file_and_an_edit_that_refuses_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings.json");
+
+        let refused = edit_json_at(&path, |_| Err("no".to_string()));
+        assert_eq!(refused, Err("no".to_string()));
+        assert!(!path.exists());
+
+        edit_json_at(&path, |mut root| {
+            root["theme"] = serde_json::json!("light");
+            Ok(root)
+        })
+        .expect("written");
+        assert_eq!(
+            read_object_at(&path).expect("object"),
+            serde_json::json!({ "theme": "light" })
         );
     }
 
