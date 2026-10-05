@@ -539,14 +539,16 @@ impl canvas::Program<Message> for TerminalView<'_> {
         }
 
         // An unfocused window renders behind a translucent scrim so the
-        // active window is visually obvious among several.
+        // active window is visually obvious among several. The scrim is the
+        // grid's own background, so the text fades into it on a light scheme
+        // as on a dark one — black would turn a light grid grey instead.
         if self.dimmed {
             frame.fill_rectangle(
                 Point::ORIGIN,
                 bounds.size(),
                 Color {
-                    a: 0.35,
-                    ..Color::BLACK
+                    a: 0.45,
+                    ..rgb(self.screen.default_bg)
                 },
             );
         }

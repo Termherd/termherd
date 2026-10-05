@@ -55,6 +55,13 @@ impl RecordState {
         }
     }
 
+    /// Replace the budget from a reloaded `settings.json`. It governs the next
+    /// recording: one in progress keeps the throttle and encoder it started
+    /// with.
+    pub(super) fn set_config(&mut self, config: RecordConfig) {
+        self.config = config;
+    }
+
     /// The frame cap `core` needs to decide the auto-stop.
     pub(super) fn max_frames(&self) -> u32 {
         self.config.max_frames()

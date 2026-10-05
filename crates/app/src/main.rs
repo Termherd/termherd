@@ -28,8 +28,8 @@ mod window_geometry;
 
 use std::sync::Arc;
 
-use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost, ScanError};
-use termherd_pty::{EventSink, PtyEvent, PtyManager, Shell};
+use termherd_core::ports::{PathResolver, ProjectScanner, ScanError};
+use termherd_pty::{EventSink, PtyEvent, PtyManager};
 use termherd_scan::FsScanner;
 use tracing::{info, warn};
 
@@ -59,21 +59,19 @@ fn main() -> iced::Result {
 
     // Thin user settings (FR10): the configured shell is injected into the PTY
     // host, the theme into the iced shell. A corrupt file falls back to
-    // defaults rather than blocking startup.
-    let settings = settings::Settings::load();
-    let shell = settings.shell.as_ref().map(|s| Shell {
-        program: s.program.clone(),
-        args: s.args.clone(),
-    });
+    // defaults rather than blocking startup — set aside, and reported in the
+    // sidebar, so the defaults never overwrite it.
+    let (settings, settings_problem) = settings::Settings::load_checked();
+    let shell = settings.shell_profile();
 
     // PTY output flows from the reader threads through this channel into the
     // iced subscription (M2). The manager is built here and injected as a
-    // `dyn PtyHost` — no global state (Q4).
+    // `dyn PtyHost` (and as the palette's live repaint) — no global state (Q4).
     let (tx, pty_rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
     let sink: EventSink = Arc::new(move |event| {
         let _ = tx.unbounded_send(event);
     });
-    let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink, shell, settings.palette()));
+    let pty = Arc::new(PtyManager::new(sink, shell, settings.palette()));
 
     // Async transport substrate (composition root only): a tokio runtime to host
     // future transport tasks, and the bridge channel that carries their requests
@@ -109,8 +107,16 @@ fn main() -> iced::Result {
         mcp_endpoint,
         mcp_tokens,
     };
-    let startup =
-        shell::Startup::from_settings(&settings, metadata_store::load(), collapsed_store::load());
+    let (metadata, metadata_problem) = metadata_store::load();
+    let startup = shell::Startup {
+        settings,
+        metadata,
+        collapsed: collapsed_store::load(),
+        load_problems: settings_problem
+            .into_iter()
+            .chain(metadata_problem)
+            .collect(),
+    };
     // Terminal path candidates are checked against the real filesystem — the
     // one thing that tells `src/main.rs` from prose like `and/or`.
     let path_resolver: Arc<dyn PathResolver> = Arc::new(termherd_scan::FsPathResolver::new());

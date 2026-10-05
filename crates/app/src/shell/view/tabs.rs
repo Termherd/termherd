@@ -10,7 +10,7 @@ use iced::widget::{button, column, container, mouse_area, row, text, text_input,
 use iced::{Color, Element};
 use termherd_core::workspace::Tab;
 
-use super::{card_secondary_text, card_style, clip, session_card, status_color};
+use super::{card_secondary_text, card_style, clip, session_card, status_dot};
 use crate::shell::{Message, Shell, tab_rename_id};
 
 impl Shell {
@@ -53,7 +53,7 @@ impl Shell {
                 let buffer = self.tab_rename.as_ref().map_or("", |(_, b)| b.as_str());
                 let mut inner = row![].spacing(6).align_y(iced::Center);
                 if let Some(status) = self.core.tab_status(index) {
-                    inner = inner.push(text("●").size(9).color(status_color(status)));
+                    inner = inner.push(status_dot(status));
                 }
                 inner = inner.push(
                     text_input("", buffer)
@@ -71,7 +71,7 @@ impl Shell {
             } else {
                 let mut inner = row![].spacing(6).align_y(iced::Center);
                 if let Some(status) = self.core.tab_status(index) {
-                    inner = inner.push(text("●").size(9).color(status_color(status)));
+                    inner = inner.push(status_dot(status));
                 }
                 inner = inner.push(text(clip(tab.display_title(), 24)).size(12));
                 // The × lives inside the chip so it sits on the active tab's fill,

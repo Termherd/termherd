@@ -21,6 +21,8 @@ pub const SIDEBAR_HIDE: &str = "◀ Hide";
 pub const SIDEBAR_ADD_REPO: &str = "+ Add a repo";
 pub const SIDEBAR_ADD_REPO_HINT: &str = "Pick a folder, or drop one on the window";
 pub const SIDEBAR_FORGET_REPO: &str = "Remove this repo from the sidebar";
+pub const SIDEBAR_SETTINGS: &str = "⚙";
+pub const SIDEBAR_SETTINGS_HINT: &str = "Settings";
 pub const SIDEBAR_REPO_NO_SESSIONS: &str = "No sessions yet — start one with $ or 🤖";
 
 /// Expander under a truncated session list: how many more are folded.
@@ -99,3 +101,26 @@ pub fn quit_prompt(live: usize) -> String {
         )
     }
 }
+
+/// Sidebar notice for a config file that existed and could not be used.
+#[must_use]
+pub fn config_unusable(file: &str, kept_as: Option<&std::path::Path>) -> String {
+    match kept_as {
+        Some(kept) => format!(
+            "{file} could not be read; defaults are in use. Your file was kept as {}.",
+            kept.display()
+        ),
+        None => format!("{file} could not be read; defaults are in use."),
+    }
+}
+pub const DISMISS: &str = "✕";
+
+// --- Settings panel ---
+pub const SETTINGS_TITLE: &str = "Settings";
+pub const SETTINGS_THEME: &str = "Interface theme";
+pub const SETTINGS_SCHEME: &str = "Terminal colours";
+pub const SETTINGS_SCHEME_BUILTIN: &str = "Built-in";
+pub const SETTINGS_CLOSE: &str = "Close";
+pub const SETTINGS_SAVED_NOTE: &str = "Changes apply now and are saved to settings.json.";
+pub const SETTINGS_CLAUDE_NOTE: &str =
+    "A running Claude session keeps its own light or dark look until it restarts.";

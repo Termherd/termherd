@@ -113,12 +113,15 @@ cargo run -p termherd-app
 ## Configuration
 
 Optional user settings live in `~/.termherd/settings.json` (on Windows,
-`%USERPROFILE%\.termherd\settings.json`). The file is read at startup; if it
-is missing or invalid, TermHerd falls back to defaults rather than refusing
-to start — out-of-range values clamp, and a single bad value (a typo'd
-colour, an unknown key action) degrades alone with a logged warning instead
-of resetting the rest of the file. There is no in-app settings panel yet —
-edit the file and restart.
+`%USERPROFILE%\.termherd\settings.json`). A change **applies as soon as
+the file is saved** — no restart; a save that does not parse changes
+nothing. If the file is invalid at startup, TermHerd falls back to defaults
+rather than refusing to start (the file is first set aside as
+`settings.json.corrupt-1`, and the sidebar says so). Out-of-range values
+clamp, and a single bad value (a typo'd colour, an unknown key action)
+degrades alone with a logged warning instead of resetting the rest of the
+file. The appearance (chrome theme and terminal colours) can also be set
+from the settings panel — ⚙ in the sidebar, or `Cmd`/`Ctrl`+`,`.
 
 The annotated reference template is
 [`docs/settings.example.jsonc`](docs/settings.example.jsonc): every option
@@ -127,8 +130,9 @@ you want and strip the comments (the real file is strict JSON). In short:
 
 - `shell` — program + args launched for each session (default: the platform
   login shell).
-- `theme` — `"dark"` (default) or `"light"` GUI chrome; the terminal grid
-  keeps its own colours.
+- `theme` — GUI chrome: `"dark"` (default), `"light"`, or a named preset
+  (`solarized-*`, `gruvbox-*`) matching the terminal schemes; the terminal
+  grid keeps its own colours.
 - `close` — per-action close confirmation (`tab`, `app`): always, only while
   a foreground process runs (default), or never.
 - `terminal` — base `font_size` (the zoom shortcuts step from it), grid
@@ -245,6 +249,7 @@ nothing to configure. It exposes the running workspace:
 | `mouse_in_session` | a mouse event at a cell of a terminal — forwarded to a program reading the mouse, else the terminal's own selection |
 | `add_repo` · `forget_repo` | put a repository in the sidebar before it has any session, and drop that addition |
 | `prompt_in_session` | type, wait and read in one round trip — prompting another Claude session is opt-in |
+| `list_options` · `set_option` | read and change `settings.json` — the same catalogue as the stdio server; a running TermHerd applies a change at once |
 
 The loop that makes it useful is **act → wait → observe**: `run_in_session`,
 then `wait_for_status`, then `read_terminal`. Sessions are addressed by a
@@ -274,11 +279,12 @@ the sidebar, tabs or gutters.
 
 `termherd-mcp` is a separate small binary that exposes termherd's own
 **configuration** — so you can ask "what can I configure here?", or "switch me
-to a light theme", from any Claude session. Two tools, `list_options` (read)
-and `set_option` (write), plus the option **schema** as a resource, all
-reflecting `~/.termherd/settings.json`. The two options that name what
-termherd executes — `shell.program`, `shell.args` — are readable but never
-writable over MCP.
+to a light theme", from a Claude session termherd did **not** launch (one it
+launched already has the same tools on the live bridge). Two tools,
+`list_options` (read) and `set_option` (write), plus the option **schema** as
+a resource, all reflecting `~/.termherd/settings.json`. The two options that
+name what termherd executes — `shell.program`, `shell.args` — are readable but
+never writable over MCP.
 
 It speaks JSON-RPC over stdio. Register it with Claude Code by adding it to your
 `mcpServers` config (point `command` at the built binary):

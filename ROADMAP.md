@@ -73,6 +73,7 @@ issues #18–#29.
 | [F-terminal-split](#f-terminal-split) | feature | workspace, keymap | ☐ | Split panes with directional focus; drag-resize is what remains. |
 | [F-close-on-exit](#f-close-on-exit) | feature | terminal, workspace | ✅ | A pane whose shell exits cleanly closes itself; a failed one stays readable. |
 | [F-repo-add](#f-repo-add) | feature | sidebar, sessions | ✅ | Declare a repository in the sidebar, before it has any session. |
+| [F-settings-panel](#f-settings-panel) | feature | workspace | ✅ | An in-app settings panel — appearance first, applied live and saved on pick. |
 | [F-terminal-cwd](#f-terminal-cwd) | feature | terminal, mcp, sessions | ✅ | The shell announces the directory it is in, so a session's `cwd` follows a `cd`. |
 
 ## Could
@@ -98,6 +99,7 @@ issues #18–#29.
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
 | [F-mcp-keys](#f-mcp-keys) | feature | mcp, keymap | ✅ | The keyboard rung: drive the app by key chords through the real keymap. |
 | [F-mcp-live-bridge](#f-mcp-live-bridge) | feature | mcp | ✅ | The gate: an in-process MCP server on loopback, reaching the live `core::App`. |
+| [F-mcp-options-bridge](#f-mcp-options-bridge) | feature | mcp | ✅ | `list_options` and `set_option` on the live bridge, not only the stdio slice. |
 | [F-mcp-orchestration](#f-mcp-orchestration) | feature | mcp, workspace | ✅ | The action rung: six mutating tools, each over an existing `core::App` event. |
 | [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) | feature | mcp, terminal | ✅ | The pointer rung, terminal half: place a mouse event inside a session. |
 | [F-mcp-screenshot](#f-mcp-screenshot) | feature | mcp, workspace | ✅ | The pixel rung: the window as a PNG, for what text cannot answer. |
@@ -409,8 +411,9 @@ Shell select, theme, window prefs (M3): `~/.termherd/settings.json` (serde,
 defaults on missing/corrupt) carries a shell profile (program + args), injected
 into the `PtyManager` so each session launches the chosen shell, and a GUI
 theme (dark/light) wired to the iced chrome. (thin) Window bounds keep their
-own `window.json` (FR12). File-based for now; an in-app settings panel is the
-full version later
+own `window.json` (FR12). The file is reloaded on save (#297) —
+every setting applies without a restart, the shell from the next session —
+and the appearance is also set from [F-settings-panel](#f-settings-panel)
 
 <a id="f-status-notifications"></a>
 
@@ -672,6 +675,23 @@ read as one that never had any and was pinned to the top as freshly added.
 Adjacent: [F-repo-view](#f-repo-view) (#148) takes the other end — this is
 about a repository *existing* in the sidebar, that one about *viewing* it.
 
+<a id="f-settings-panel"></a>
+
+### F-settings-panel
+
+An in-app settings panel — appearance first, applied live and saved on pick.
+
+The ⚙ in the sidebar header, or `mod+,` (`open-settings`), opens a modal
+panel over the workspace: the chrome theme (`dark`, `light`, and the four
+presets named after the terminal schemes) and the terminal scheme. A pick
+applies at once — the chrome on the next frame, every running terminal through
+a shared palette the PTY manager repaints — and writes only its own key to
+`settings.json`, leaving the rest of the file as written. This is the live
+reload [F-terminal-palette](#f-terminal-palette) deferred, and the in-app
+panel [F-settings](#f-settings) promised. A running Claude session keeps the
+light/dark look it chose from its startup colour query until it restarts.
+Other settings stay file-only for now.
+
 <a id="f-terminal-cwd"></a>
 
 ### F-terminal-cwd
@@ -913,6 +933,8 @@ shippable:
   terminal half: a mouse event inside a session. Unblocked #155, now fixed.
 - [ ] [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) — The pointer rung, chrome
   half: click and drag termherd's own interface.
+- [x] [F-mcp-options-bridge](#f-mcp-options-bridge) — `list_options` and
+  `set_option` on the live bridge too, over the stdio slice's catalogue.
 
 <a id="f-mcp-ide-bridge"></a>
 
@@ -1232,6 +1254,23 @@ JSON-RPC / handshake / tool routing so we never hand-roll the protocol),
 Apache-2.0 (cargo-deny allows it), edition 2024, tokio-native (reuses the #192
 runtime, now `enable_all` for the listener); the http stack is
 `hyper`/`hyper-util` (frugal base — no axum). Unblocks #194/#195/#196
+
+<a id="f-mcp-options-bridge"></a>
+
+### F-mcp-options-bridge
+
+`list_options` and `set_option` on the live bridge, not only the stdio slice.
+
+Shipped as #298. A session termherd launched — the only kind it launches —
+saw seventeen tools, none about settings, so "switch me to a light theme"
+needed the stdio server registered by hand. The bridge now carries both over
+the same pure catalogue in `crates/mcp` (one implementation, two transports;
+the tool descriptions are pinned equal by a test, since `#[tool]` takes only
+a literal). Neither surface writes over a `settings.json` that does not
+parse. Paired with the settings hot reload (#297): this makes the change
+reachable from a session, that one makes it visible without a restart. Rung
+of [F-mcp-control-surface](#f-mcp-control-surface), after
+[F-mcp-config-write](#f-mcp-config-write).
 
 <a id="f-mcp-orchestration"></a>
 

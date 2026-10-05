@@ -2,7 +2,7 @@
 //! independent leaf: the notify/coalesce seam, with no dependency on the walk
 //! or its cache.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
@@ -22,17 +22,64 @@ pub struct WatchHandle {
 pub fn watch_changes(
     root: PathBuf,
     debounce: Duration,
+    on_change: impl FnMut() + Send + 'static,
+) -> Result<WatchHandle, ScanError> {
+    watch(
+        &root,
+        RecursiveMode::Recursive,
+        |_| true,
+        debounce,
+        on_change,
+    )
+}
+
+/// Watch one file and invoke `on_change` once per debounced burst of events
+/// that name it. The parent directory is what is watched, not the file: an
+/// editor that saves by writing a temporary and renaming it over the original
+/// replaces the inode a file watch would hold, and the file may not exist yet.
+/// Events about its neighbours are ignored.
+pub fn watch_file(
+    file: PathBuf,
+    debounce: Duration,
+    on_change: impl FnMut() + Send + 'static,
+) -> Result<WatchHandle, ScanError> {
+    let dir = file
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| ScanError::Unreadable(format!("{}: no parent", file.display())))?;
+    let name = file.file_name().map(std::ffi::OsStr::to_os_string);
+    watch(
+        &dir,
+        RecursiveMode::NonRecursive,
+        move |event| {
+            event
+                .paths
+                .iter()
+                .any(|path| path.file_name() == name.as_deref())
+        },
+        debounce,
+        on_change,
+    )
+}
+
+/// The shared body: watch `root` in `mode`, keep the events `relevant` admits,
+/// and coalesce them into one `on_change` per quiet `debounce`.
+fn watch(
+    root: &Path,
+    mode: RecursiveMode,
+    relevant: impl Fn(&notify::Event) -> bool + Send + 'static,
+    debounce: Duration,
     mut on_change: impl FnMut() + Send + 'static,
 ) -> Result<WatchHandle, ScanError> {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event.is_ok() {
+        if event.is_ok_and(|event| relevant(&event)) {
             let _ = tx.send(());
         }
     })
     .map_err(|e| ScanError::Unreadable(format!("watcher: {e}")))?;
     watcher
-        .watch(&root, RecursiveMode::Recursive)
+        .watch(root, mode)
         .map_err(|e| ScanError::Unreadable(format!("{}: {e}", root.display())))?;
 
     std::thread::Builder::new()
@@ -87,6 +134,37 @@ mod tests {
             extra <= 2,
             "burst was not coalesced: {} extra signals",
             extra + 1
+        );
+    }
+
+    #[test]
+    fn a_file_watch_fires_for_its_file_and_ignores_its_neighbours() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("settings.json");
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let _handle = watch_file(
+            file.clone(),
+            std::time::Duration::from_millis(100),
+            move || {
+                let _ = tx.send(());
+            },
+        )
+        .unwrap();
+
+        fs::write(tmp.path().join("metadata.json"), "{}").unwrap();
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_millis(800))
+                .is_err(),
+            "a neighbour's write must not fire"
+        );
+
+        // Written as an editor saves: a temporary renamed over the target.
+        let staged = tmp.path().join("settings.json.tmp");
+        fs::write(&staged, "{}").unwrap();
+        fs::rename(&staged, &file).unwrap();
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(10)).is_ok(),
+            "no change signal for the watched file within 10s"
         );
     }
 }

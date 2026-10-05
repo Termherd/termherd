@@ -6,7 +6,7 @@
 //! colour queries the parser raises.
 
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, mpsc};
 use std::thread::JoinHandle;
 
 use alacritty_terminal::Term;
@@ -45,6 +45,20 @@ pub(crate) type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 /// thread (reading the foreground process group). Neither holds it for long.
 pub(crate) type SharedMaster = Arc<Mutex<Box<dyn MasterPty + Send>>>;
 
+/// The palette every session renders with, shared between the manager and
+/// each terminal thread so a scheme change reaches running sessions without a
+/// respawn.
+pub(crate) type SharedPalette = Arc<RwLock<Palette>>;
+
+/// The palette in force right now. A poisoned lock still holds a whole
+/// palette — a writer cannot half-assign one — so its value is read anyway.
+fn current(palette: &SharedPalette) -> Palette {
+    palette
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
 /// How often the watcher thread asks the PTY which process group owns it. Short
 /// enough that `wait_for_status` on an unintegrated shell settles promptly,
 /// long enough to be free: one `tcgetpgrp` per session per tick.
@@ -61,14 +75,14 @@ const FOREGROUND_POLL: std::time::Duration = std::time::Duration::from_millis(25
 #[derive(Clone)]
 struct PtyResponder {
     writer: SharedWriter,
-    palette: Palette,
+    palette: SharedPalette,
 }
 
 impl EventListener for PtyResponder {
     fn send_event(&self, event: Event) {
         let reply = match event {
             Event::PtyWrite(text) => text,
-            Event::ColorRequest(index, format) => match query_rgb(index, &self.palette) {
+            Event::ColorRequest(index, format) => match query_rgb(index, &current(&self.palette)) {
                 Some([r, g, b]) => format(Rgb { r, g, b }),
                 None => return,
             },
@@ -112,6 +126,8 @@ pub(crate) enum TermCmd {
     /// activity, or `None` when the platform cannot say. The stand-in source
     /// for a shell whose integration did not take (see [`crate::status`]).
     Foreground(Option<SessionStatus>),
+    /// The shared palette changed: emit a fresh screen in the new colours.
+    Repaint,
     /// The PTY reached end of file; the process is gone. `clean` carries the
     /// reaped exit status (see [`PtyEvent::Exited`]).
     Eof { clean: bool },
@@ -334,7 +350,7 @@ pub(crate) fn spawn_term(
     size: (u16, u16),
     writer: SharedWriter,
     sink: EventSink,
-    palette: Palette,
+    palette: SharedPalette,
 ) -> JoinHandle<()> {
     let (cols, rows) = size;
     let term_sink = sink.clone();
@@ -427,6 +443,9 @@ pub(crate) fn spawn_term(
                         PointerInput::Selected => {}
                         PointerInput::Dropped => continue,
                     },
+                    // Nothing to apply: the snapshot below reads the new
+                    // palette.
+                    TermCmd::Repaint => {}
                     TermCmd::CopySelection => {
                         // Read the text from the live selection, not a snapshot,
                         // so a fast drag's copy is exact. Commands are FIFO, so
@@ -469,14 +488,14 @@ pub(crate) fn spawn_term(
                 }
                 term_sink(PtyEvent::Output {
                     session,
-                    screen: snapshot(&term, &palette),
+                    screen: snapshot(&term, &current(&palette)),
                 });
             }
             // A final snapshot so any drained bytes reach the screen the tab
             // keeps showing on an unclean exit.
             term_sink(PtyEvent::Output {
                 session,
-                screen: snapshot(&term, &palette),
+                screen: snapshot(&term, &current(&palette)),
             });
             term_sink(PtyEvent::Exited { session, clean });
         })
@@ -570,7 +589,9 @@ mod tests {
             (80, 24),
             writer,
             sink,
-            Palette::named("solarized-light").expect("known scheme"),
+            Arc::new(RwLock::new(
+                Palette::named("solarized-light").expect("known scheme"),
+            )),
         );
         for chunk in chunks {
             ctrl.send(TermCmd::Bytes(chunk.as_bytes().to_vec()))
@@ -641,7 +662,7 @@ mod tests {
             &TermSize::new(20, 5),
             PtyResponder {
                 writer,
-                palette: palette.clone(),
+                palette: Arc::new(RwLock::new(palette.clone())),
             },
         );
         let mut parser: Processor = Processor::new();
@@ -665,7 +686,7 @@ mod tests {
             &TermSize::new(20, 5),
             PtyResponder {
                 writer,
-                palette: palette.clone(),
+                palette: Arc::new(RwLock::new(palette.clone())),
             },
         );
         let mut parser: Processor = Processor::new();
@@ -739,7 +760,14 @@ mod tests {
         let sink: EventSink = Arc::new(|_| {});
         let session = SessionId(std::num::NonZeroU64::new(1).expect("nonzero"));
         let (ctrl, ctrl_rx) = mpsc::channel();
-        let term = spawn_term(session, ctrl_rx, (80, 24), writer, sink, Palette::default());
+        let term = spawn_term(
+            session,
+            ctrl_rx,
+            (80, 24),
+            writer,
+            sink,
+            Arc::new(RwLock::new(Palette::default())),
+        );
         ctrl.send(TermCmd::Bytes(b"\x1b[?1000h\x1b[?1006h".to_vec()))
             .expect("terminal thread alive");
         ctrl.send(TermCmd::Pointer(PointerEvent::left(

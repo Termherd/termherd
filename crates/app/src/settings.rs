@@ -21,6 +21,7 @@ pub struct Settings {
     /// shell.
     pub shell: Option<ShellProfile>,
     /// GUI chrome theme (the terminal grid keeps its own colours).
+    #[serde(deserialize_with = "theme_or_default")]
     pub theme: ThemeChoice,
     /// Keyboard overrides: action name (kebab-case) → one chord or a list of
     /// chords. Each entry replaces that action's platform default (FR9). Same
@@ -237,6 +238,20 @@ where
     }))
 }
 
+/// Parse the chrome theme, degrading an unknown name to the default (with a
+/// warning) rather than failing serde for the whole file — a typo, or a theme a
+/// newer build added, costs the chrome and nothing else.
+fn theme_or_default<'de, D>(de: D) -> Result<ThemeChoice, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(de)?;
+    Ok(ThemeChoice::deserialize(&value).unwrap_or_else(|_| {
+        warn!(%value, "unknown theme; using the default");
+        ThemeChoice::default()
+    }))
+}
+
 /// Which mouse gestures reach the clipboard — the classic terminal
 /// conventions, both off unless asked for. Named once and carried whole, so
 /// the settings file, the shell and the canvas cannot disagree about which
@@ -361,14 +376,32 @@ impl TerminalSettings {
 }
 
 /// Which iced theme dresses the GUI chrome (sidebar, tab strip, buttons).
+/// The named variants mirror the built-in `terminal.colors.scheme` presets,
+/// so the chrome can match the grid it frames.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum ThemeChoice {
     /// A dark chrome, matching the terminal's dark background.
     #[default]
     Dark,
     /// A light chrome.
     Light,
+    /// Solarized Dark chrome.
+    SolarizedDark,
+    /// Solarized Light chrome.
+    SolarizedLight,
+    /// Gruvbox Dark chrome.
+    GruvboxDark,
+    /// Gruvbox Light chrome.
+    GruvboxLight,
+}
+
+/// The name a person reads — iced's own, so the picker and the theme it
+/// applies cannot disagree.
+impl std::fmt::Display for ThemeChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_iced().fmt(f)
+    }
 }
 
 /// When a close that would terminate running session(s) asks for confirmation
@@ -429,12 +462,26 @@ impl Default for CloseSettings {
 }
 
 impl ThemeChoice {
+    /// Every choice, in the order the settings panel lists them.
+    pub const ALL: [Self; 6] = [
+        Self::Dark,
+        Self::Light,
+        Self::SolarizedDark,
+        Self::SolarizedLight,
+        Self::GruvboxDark,
+        Self::GruvboxLight,
+    ];
+
     /// The iced theme this choice maps to.
     #[must_use]
     pub fn to_iced(self) -> iced::Theme {
         match self {
             ThemeChoice::Dark => iced::Theme::Dark,
             ThemeChoice::Light => iced::Theme::Light,
+            ThemeChoice::SolarizedDark => iced::Theme::SolarizedDark,
+            ThemeChoice::SolarizedLight => iced::Theme::SolarizedLight,
+            ThemeChoice::GruvboxDark => iced::Theme::GruvboxDark,
+            ThemeChoice::GruvboxLight => iced::Theme::GruvboxLight,
         }
     }
 }
@@ -523,6 +570,74 @@ impl Settings {
     pub fn load() -> Self {
         crate::json_store::load_json(FILE)
     }
+
+    /// Re-read the file while the app runs. `None` when it does not parse,
+    /// so the running settings stay as they are.
+    #[must_use]
+    pub fn reload() -> Option<Self> {
+        crate::json_store::reload_json(FILE)
+    }
+
+    /// The shell to launch, as the PTY adapter takes it; `None` for the
+    /// platform default login shell.
+    #[must_use]
+    pub fn shell_profile(&self) -> Option<termherd_pty::Shell> {
+        self.shell.as_ref().map(|s| termherd_pty::Shell {
+            program: s.program.clone(),
+            args: s.args.clone(),
+        })
+    }
+
+    /// The startup load: an unparseable file is set aside and reported rather
+    /// than silently replaced by defaults the next save would write over it.
+    #[must_use]
+    pub fn load_checked() -> (Self, Option<crate::json_store::LoadProblem>) {
+        crate::json_store::load_json_checked(FILE)
+    }
+}
+
+/// One appearance key the settings panel changed. Each pick persists only its
+/// own key, so a value another writer put in the file meanwhile — an MCP
+/// `set_option`, a hand edit — is not overwritten with a stale copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppearanceChange {
+    /// The GUI chrome theme.
+    Theme(ThemeChoice),
+    /// The terminal scheme; `None` clears it back to the built-in palette.
+    Scheme(Option<String>),
+}
+
+impl AppearanceChange {
+    /// The catalogue option this change sets, and its value: the panel writes
+    /// through the same validated setter as both MCP surfaces.
+    fn option(&self) -> (&'static str, serde_json::Value) {
+        match self {
+            AppearanceChange::Theme(theme) => ("theme", serde_json::json!(theme)),
+            AppearanceChange::Scheme(scheme) => {
+                ("terminal.colors.scheme", serde_json::json!(scheme))
+            }
+        }
+    }
+}
+
+/// Persist one appearance change to `settings.json`, keeping the rest of the
+/// file — explicit colour overrides included — as the user wrote it. A
+/// failure is logged, never fatal.
+pub fn save_appearance(change: &AppearanceChange) {
+    let Some(path) = path() else {
+        return;
+    };
+    let (id, value) = change.option();
+    if let Err(e) = termherd_mcp::file::set_option_at(&path, id, &value) {
+        warn!(error = %e, path = %path.display(), "could not save the appearance");
+    }
+}
+
+/// Where the settings file lives, for the live-reload watch. `None` without a
+/// home directory.
+#[must_use]
+pub fn path() -> Option<std::path::PathBuf> {
+    Some(crate::paths::termherd_dir()?.join(FILE))
 }
 
 /// `~/.termherd/settings.json` — the app data dir from the PRD (§7).
@@ -913,6 +1028,59 @@ mod tests {
             assert!(s.open_command().is_none(), "{bad} must not configure");
             assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
         }
+    }
+
+    /// What the panel would write, applied by the catalogue's own setter.
+    fn saved(change: &AppearanceChange) -> Settings {
+        let (id, value) = change.option();
+        let written = termherd_mcp::set_option(&serde_json::json!({}), id, &value)
+            .expect("the catalogue accepts every panel choice");
+        serde_json::from_value(written).expect("valid settings")
+    }
+
+    #[test]
+    fn every_saved_theme_reads_back_as_what_was_picked() {
+        for theme in ThemeChoice::ALL {
+            assert_eq!(saved(&AppearanceChange::Theme(theme)).theme, theme);
+        }
+    }
+
+    #[test]
+    fn every_saved_scheme_reads_back_as_what_was_picked() {
+        for scheme in Palette::SCHEMES {
+            let s = saved(&AppearanceChange::Scheme(Some(scheme.to_string())));
+            assert_eq!(s.terminal.colors.scheme.as_deref(), Some(scheme));
+        }
+        let s = saved(&AppearanceChange::Scheme(None));
+        assert_eq!(s.terminal.colors.scheme, None, "built-in clears the scheme");
+    }
+
+    #[test]
+    fn an_unknown_theme_degrades_alone() {
+        for bad in [r#""banana""#, "3", "null"] {
+            let json = format!(
+                r#"{{ "theme": {bad}, "terminal": {{ "colors": {{ "scheme": "solarized-light" }} }} }}"#
+            );
+            let s: Settings = serde_json::from_str(&json).expect("bad theme keeps the file");
+            assert_eq!(
+                s.theme,
+                ThemeChoice::Dark,
+                "{bad} falls back to the default"
+            );
+            assert_eq!(
+                s.terminal.colors.scheme.as_deref(),
+                Some("solarized-light"),
+                "the rest of the file survives"
+            );
+        }
+    }
+
+    #[test]
+    fn named_themes_serialise_kebab_cased_like_the_terminal_schemes() {
+        let json = serde_json::to_string(&ThemeChoice::SolarizedLight).expect("serialise");
+        assert_eq!(json, "\"solarized-light\"");
+        let back: ThemeChoice = serde_json::from_str(r#""gruvbox-dark""#).expect("deserialise");
+        assert_eq!(back, ThemeChoice::GruvboxDark);
     }
 
     #[test]

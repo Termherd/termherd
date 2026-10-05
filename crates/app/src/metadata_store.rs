@@ -74,10 +74,13 @@ impl<'de> Deserialize<'de> for StoredOverlay {
 }
 
 /// Load the overlay; any problem (no file, bad JSON) yields an empty overlay —
-/// metadata must never block startup.
+/// metadata must never block startup. An unparseable file is set aside and
+/// reported: stars, titles and added repos are the user's own work, and the
+/// next save would otherwise overwrite them with the empty overlay.
 #[must_use]
-pub fn load() -> Overlay {
-    from_dto(crate::json_store::load_json::<StoredOverlay>(FILE).0)
+pub fn load() -> (Overlay, Option<crate::json_store::LoadProblem>) {
+    let (stored, problem) = crate::json_store::load_json_checked::<StoredOverlay>(FILE);
+    (from_dto(stored.0), problem)
 }
 
 /// Persist the overlay. Failures are logged, never fatal.

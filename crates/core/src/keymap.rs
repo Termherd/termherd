@@ -120,6 +120,8 @@ pub enum Action {
     PrevTab,
     FocusSearch,
     ToggleSidebar,
+    /// Open the settings panel, or close it when it is already open.
+    OpenSettings,
     Copy,
     Paste,
     /// Jump the focused terminal's viewport to the top of its scrollback.
@@ -242,6 +244,11 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::ToggleSidebar,
         name: "toggle-sidebar",
         default_chords: &["mod+b"],
+    },
+    ActionDef {
+        action: Action::OpenSettings,
+        name: "open-settings",
+        default_chords: &["mod+,"],
     },
     ActionDef {
         action: Action::Copy,

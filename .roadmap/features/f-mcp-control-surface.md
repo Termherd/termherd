@@ -57,3 +57,5 @@ shippable:
   terminal half: a mouse event inside a session. Unblocked #155, now fixed.
 - [ ] [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) — The pointer rung, chrome
   half: click and drag termherd's own interface.
+- [x] [F-mcp-options-bridge](#f-mcp-options-bridge) — `list_options` and
+  `set_option` on the live bridge too, over the stdio slice's catalogue.

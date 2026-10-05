@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, mpsc};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use termherd_core::ports::{PtyError, PtyHost};
@@ -22,8 +22,8 @@ use crate::launch::{
     write_title_settings,
 };
 use crate::session::{
-    Session, SharedMaster, SharedWriter, TermCmd, spawn_reader, spawn_term, spawn_waiter,
-    spawn_watcher,
+    Session, SharedMaster, SharedPalette, SharedWriter, TermCmd, spawn_reader, spawn_term,
+    spawn_waiter, spawn_watcher,
 };
 
 /// How to launch a session's shell process (FR10). Built from the user's
@@ -43,9 +43,12 @@ pub struct PtyManager {
     sessions: Mutex<HashMap<SessionId, Session>>,
     sink: EventSink,
     /// User-configured shell; `None` falls back to the platform default.
-    shell: Option<Shell>,
-    /// The terminal colour scheme every session renders with.
-    palette: Palette,
+    /// Read when a session spawns, so [`PtyManager::set_shell`] reaches the
+    /// next session and leaves the running ones alone.
+    shell: RwLock<Option<Shell>>,
+    /// The terminal colour scheme every session renders with, shared with
+    /// each terminal thread so [`PtyManager::set_palette`] reaches them live.
+    palette: SharedPalette,
 }
 
 impl PtyManager {
@@ -57,8 +60,28 @@ impl PtyManager {
         Self {
             sessions: Mutex::new(HashMap::new()),
             sink,
-            shell,
-            palette,
+            shell: RwLock::new(shell),
+            palette: Arc::new(RwLock::new(palette)),
+        }
+    }
+
+    /// Launch `shell` (or the platform default for `None`) from the next
+    /// spawned session on. A running session keeps the program it started.
+    pub fn set_shell(&self, shell: Option<Shell>) {
+        *self.shell.write().unwrap_or_else(PoisonError::into_inner) = shell;
+    }
+
+    /// Switch every session — running and future — to `palette`. Each live
+    /// terminal re-emits its screen in the new colours; a later colour query
+    /// (OSC 10/11) is answered from it too. A program that asked once at start
+    /// (Claude Code picks light or dark that way) keeps its choice until it
+    /// asks again.
+    pub fn set_palette(&self, palette: Palette) {
+        *self.palette.write().unwrap_or_else(PoisonError::into_inner) = palette;
+        if let Ok(map) = self.sessions.lock() {
+            for session in map.values() {
+                let _ = session.ctrl.send(TermCmd::Repaint);
+            }
         }
     }
 
@@ -106,7 +129,12 @@ impl PtyHost for PtyManager {
         // project directory with a sane TERM. Resuming a real Claude session
         // lands in a later slice; the id flows through so the adapter never has
         // to invent one (Q6).
-        let mut cmd = match &self.shell {
+        let configured = self
+            .shell
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let mut cmd = match &configured {
             Some(shell) => {
                 let mut c = CommandBuilder::new(&shell.program);
                 for arg in &shell.args {
@@ -122,7 +150,7 @@ impl PtyHost for PtyManager {
         apply_terminal_env(&mut cmd);
         // Which shell is about to run decides the integration recipe; the
         // default program only resolves to a name here, so ask the builder.
-        let program = match &self.shell {
+        let program = match &configured {
             Some(shell) => shell.program.clone(),
             None => cmd.get_shell(),
         };
@@ -550,6 +578,44 @@ mod tests {
             }
         }
         assert!(verified, "expected a screen rendered in the custom palette");
+
+        mgr.kill(id).expect("kill");
+    }
+
+    /// A scheme change reaches a session that is already running: its next
+    /// screen arrives in the new colours with no respawn and no output of its
+    /// own to trigger it.
+    #[test]
+    fn set_palette_repaints_a_running_session() {
+        let next = Palette {
+            background: [0x12, 0x34, 0x56],
+            ..Palette::default()
+        };
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let mgr = PtyManager::new(sink, None, Palette::default());
+        let id = sid(8);
+        mgr.spawn(spec(id)).expect("spawn");
+        mgr.set_palette(next.clone());
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut repainted = false;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(PtyEvent::Output { screen, .. }) if screen.default_bg == next.background => {
+                    repainted = true;
+                    break;
+                }
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(_) => break,
+            }
+        }
+        assert!(
+            repainted,
+            "expected a screen in the palette set after spawn"
+        );
 
         mgr.kill(id).expect("kill");
     }

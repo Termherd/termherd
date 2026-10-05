@@ -16,6 +16,11 @@
 //! no I/O, no globals — so the protocol is unit-testable. A write is *described*
 //! (the returned [`Reply::write_settings`]) here and *performed* by the thin
 //! stdio loop in `main.rs`, keeping the same Event→Effect split as `core`.
+//!
+//! The one exception is [`file`]: the guarded read-modify-write of
+//! `settings.json`, shared with the GUI so its rule lives in one place.
+
+pub mod file;
 
 use serde_json::{Value, json};
 
@@ -46,6 +51,14 @@ pub struct OptionSpec {
     pub writable: bool,
 }
 
+/// What `list_options` does, worded once for both surfaces that carry it (this
+/// stdio server and the live bridge).
+pub const LIST_OPTIONS_DESCRIPTION: &str =
+    "List termherd's configurable options with their current values.";
+
+/// What `set_option` does, worded once for both surfaces that carry it.
+pub const SET_OPTION_DESCRIPTION: &str = "Set one writable termherd option by id (see `writable` in list_options); the change lands in settings.json, which a running termherd applies at once. A read-only option or an out-of-shape value is refused, nothing written.";
+
 /// The option catalog — the single source of what the control surface exposes.
 /// Kept small for this first draft; `keys` (the keymap overrides) and the
 /// orchestration surface are deferred.
@@ -55,7 +68,14 @@ pub const OPTIONS: &[OptionSpec] = &[
         pointer: "/theme",
         description: "GUI chrome theme (the terminal grid keeps its own colours).",
         kind: "enum",
-        choices: &["dark", "light"],
+        choices: &[
+            "dark",
+            "light",
+            "solarized-dark",
+            "solarized-light",
+            "gruvbox-dark",
+            "gruvbox-light",
+        ],
         writable: true,
     },
     OptionSpec {
@@ -355,12 +375,12 @@ fn tools_list_result() -> Value {
         "tools": [
             {
                 "name": "list_options",
-                "description": "List termherd's configurable options with their current values.",
+                "description": LIST_OPTIONS_DESCRIPTION,
                 "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
             },
             {
                 "name": "set_option",
-                "description": "Set one writable termherd option by id (see `writable` in list_options); the change lands in settings.json and applies on restart. A read-only option or an out-of-shape value is refused, nothing written.",
+                "description": SET_OPTION_DESCRIPTION,
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -495,7 +515,17 @@ mod tests {
         let opts = resolve_options(&settings());
         let theme = opts.iter().find(|o| o["id"] == "theme").expect("theme");
         assert_eq!(theme["value"], json!("light"));
-        assert_eq!(theme["choices"], json!(["dark", "light"]));
+        assert_eq!(
+            theme["choices"],
+            json!([
+                "dark",
+                "light",
+                "solarized-dark",
+                "solarized-light",
+                "gruvbox-dark",
+                "gruvbox-light"
+            ])
+        );
         let program = opts
             .iter()
             .find(|o| o["id"] == "shell.program")

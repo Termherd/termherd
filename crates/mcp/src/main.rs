@@ -30,8 +30,8 @@ fn main() {
             continue;
         };
         // Read settings fresh per request so a live edit is reflected without a
-        // restart; a missing or invalid file reads as "no options set".
-        let settings = load_settings();
+        // restart; a missing file reads as "no options set".
+        let (settings, writable) = load_settings();
         let reply = termherd_mcp::handle_message(&message, &settings);
         // Perform the write effect the pure layer described, before replying,
         // so a caller that reads back sees its own change. A write that fails
@@ -40,7 +40,7 @@ fn main() {
         // exists to avoid).
         let mut response = reply.response;
         if let Some(new_settings) = reply.write_settings
-            && let Err(err) = store_settings(&new_settings)
+            && let Err(err) = writable.and_then(|()| store_settings(&new_settings))
         {
             eprintln!("termherd-mcp: {err}");
             response = write_error_response(&message, &err);
@@ -68,33 +68,31 @@ fn write_error_response(message: &Value, detail: &str) -> Option<Value> {
     }))
 }
 
-/// Read `~/.termherd/settings.json` into a JSON value, falling back to an empty
-/// object when it is missing or unreadable — `list_options` then reports every
-/// option as unset rather than failing.
-fn load_settings() -> Value {
-    let Some(path) = settings_path() else {
-        return json!({});
-    };
-    match std::fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|_| json!({})),
-        Err(_) => json!({}),
+/// Read `~/.termherd/settings.json`, falling back to an empty object when it
+/// cannot be used — `list_options` then reports every option as unset rather
+/// than failing. The second half says whether a write may replace the file:
+/// not when it exists but is not a JSON object (see [`termherd_mcp::file`]).
+fn load_settings() -> (Value, Result<(), String>) {
+    match settings_path() {
+        Some(path) => load_settings_at(&path),
+        None => (json!({}), Ok(())),
     }
 }
 
-/// Persist the mutated settings to `~/.termherd/settings.json`, pretty-printed
-/// like the file the GUI writes. Creates the `~/.termherd` directory if needed.
-/// Returns an error message (not a panic — the server stays up) so the caller
-/// can report the failure instead of a false success.
+/// The body of [`load_settings`], on an explicit path.
+fn load_settings_at(path: &std::path::Path) -> (Value, Result<(), String>) {
+    match termherd_mcp::file::read_object(path) {
+        Ok(value) => (value, Ok(())),
+        Err(reason) => (json!({}), Err(reason)),
+    }
+}
+
+/// Persist the mutated settings to `~/.termherd/settings.json`. Returns an
+/// error message (not a panic — the server stays up) so the caller can report
+/// the failure instead of a false success.
 fn store_settings(settings: &Value) -> Result<(), String> {
     let path = settings_path().ok_or("no home directory; cannot write settings")?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|err| format!("could not create {}: {err}", dir.display()))?;
-    }
-    let raw = serde_json::to_string_pretty(settings)
-        .map_err(|err| format!("could not encode settings: {err}"))?;
-    std::fs::write(&path, raw + "\n")
-        .map_err(|err| format!("could not write {}: {err}", path.display()))
+    termherd_mcp::file::write(&path, settings)
 }
 
 /// `~/.termherd/settings.json` — the same file the GUI shell reads.
@@ -106,6 +104,32 @@ fn settings_path() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_file_that_does_not_parse_is_read_as_empty_but_never_written_over() {
+        let dir = std::env::temp_dir().join(format!("termherd-mcp-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("settings.json");
+
+        std::fs::write(&path, "{ broken").expect("write");
+        let (settings, writable) = load_settings_at(&path);
+        assert_eq!(settings, json!({}));
+        assert!(writable.is_err(), "a write would discard the user's file");
+
+        std::fs::write(&path, r#"{ "theme": "dark" }"#).expect("write");
+        assert_eq!(
+            load_settings_at(&path),
+            (json!({ "theme": "dark" }), Ok(()))
+        );
+
+        std::fs::remove_file(&path).expect("remove");
+        assert_eq!(
+            load_settings_at(&path),
+            (json!({}), Ok(())),
+            "missing is writable"
+        );
+        let _ = std::fs::remove_dir(&dir);
+    }
 
     #[test]
     fn a_failed_write_becomes_an_error_for_the_same_request() {

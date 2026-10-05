@@ -6,7 +6,13 @@
 //! the timeout-bounded [`Reply`], and shapes it back into an MCP result. No state
 //! and no `core` access live here; the shell owns `core::App` and answers on the
 //! bridge, so a tool can never touch it directly.
+//!
+//! The two options tools are the exception that proves it: `settings.json` is
+//! a file, not `core` state, so they read and write it directly — through the
+//! same pure catalogue as the stdio server — and the running shell picks the
+//! write up through its settings watch like any other edit.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use rmcp::{
@@ -27,6 +33,7 @@ use termherd_core::{
     Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, PointerRoute,
     Section, SessionStatus, SnapshotFilter, TerminalScope,
 };
+use termherd_mcp::file::SetAtError;
 
 use crate::shell::bridge::{
     Action, ActionDetail, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo,
@@ -72,6 +79,9 @@ const READ_BACK_TIMEOUT: Duration = Duration::from_millis(250);
 #[derive(Clone)]
 pub struct TermherdMcp {
     bridge: BridgeHandle,
+    /// The `settings.json` the options tools read and write; `None` without a
+    /// home directory.
+    settings_file: Option<PathBuf>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -82,8 +92,60 @@ impl TermherdMcp {
     pub fn new(bridge: BridgeHandle) -> Self {
         Self {
             bridge,
+            settings_file: crate::settings::path(),
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Point the options tools at another file — a test's own, so a call never
+    /// reaches the user's settings.
+    #[cfg(test)]
+    fn with_settings_file(mut self, file: PathBuf) -> Self {
+        self.settings_file = Some(file);
+        self
+    }
+
+    /// Every configurable option with its current value — the same catalogue
+    /// and resolution as the stdio server's tool of the same name.
+    #[tool(
+        name = "list_options",
+        description = "List termherd's configurable options with their current values."
+    )]
+    async fn list_options(&self) -> Result<CallToolResult, ErrorData> {
+        let file = self.settings_file()?;
+        let settings = termherd_mcp::file::read_object(file)
+            .map_err(|reason| ErrorData::internal_error(reason, None))?;
+        structured(serde_json::json!({
+            "options": termherd_mcp::resolve_options(&settings),
+        }))
+    }
+
+    /// Set one writable option. Validated by the shared catalogue; the running
+    /// shell applies the write when its settings watch sees it.
+    #[tool(
+        name = "set_option",
+        description = "Set one writable termherd option by id (see `writable` in list_options); the change lands in settings.json, which a running termherd applies at once. A read-only option or an out-of-shape value is refused, nothing written."
+    )]
+    async fn set_option(
+        &self,
+        Parameters(args): Parameters<SetOptionArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let file = self.settings_file()?;
+        // A refusal by the catalogue is the caller's to fix; anything else is
+        // the file's. Told apart so a model reads which one it is.
+        termherd_mcp::file::set_option_at(file, &args.id, &args.value).map_err(
+            |error| match error {
+                SetAtError::Refused(_) => ErrorData::invalid_params(error.to_string(), None),
+                SetAtError::File(_) => ErrorData::internal_error(error.to_string(), None),
+            },
+        )?;
+        structured(serde_json::json!({ "id": args.id, "value": args.value }))
+    }
+
+    fn settings_file(&self) -> Result<&PathBuf, ErrorData> {
+        self.settings_file.as_ref().ok_or_else(|| {
+            ErrorData::internal_error("no home directory; there is no settings.json", None)
+        })
     }
 
     /// The spike tool: list the live terminal sessions termherd is hosting, each
@@ -1213,6 +1275,16 @@ fn unknown_action(name: &str) -> ErrorData {
     )
 }
 
+/// Arguments for `set_option`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct SetOptionArgs {
+    /// The option id, e.g. "theme" — see `list_options`.
+    id: String,
+    /// The new value, typed per the option's `kind`; `null` unsets it.
+    value: serde_json::Value,
+}
+
 /// Arguments for `read_terminal`.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -1382,12 +1454,29 @@ mod tests {
     type SweepCall<'a> =
         std::pin::Pin<Box<dyn Future<Output = Result<CallToolResult, ErrorData>> + 'a>>;
 
+    /// The sweep's options tools: they read and write a file, so they need no
+    /// reply from the shell.
+    fn options_sweep_case<'a>(mcp: &'a TermherdMcp, tool: &str) -> Option<SweepCall<'a>> {
+        match tool {
+            "list_options" => Some(Box::pin(mcp.list_options())),
+            "set_option" => Some(Box::pin(mcp.set_option(Parameters(SetOptionArgs {
+                id: "theme".into(),
+                value: serde_json::json!("light"),
+            })))),
+            _ => None,
+        }
+    }
+
     /// The replies the shell must give for `tool`, and the call that drives it.
     ///
     /// One `match` states the tool list once, so a tool the sweep does not know
     /// panics here rather than being skipped in silence.
     fn sweep_case<'a>(mcp: &'a TermherdMcp, tool: &str) -> (Vec<Reply>, SweepCall<'a>) {
         use crate::shell::bridge::{ActionOutcome, ShotResult, TerminalRead, WaitOutcome};
+
+        if let Some(call) = options_sweep_case(mcp, tool) {
+            return (Vec::new(), call);
+        }
 
         let acted = || Reply::Acted(ActionOutcome::applied(Some("1".into())));
         match tool {
@@ -1548,9 +1637,11 @@ mod tests {
             .collect();
         assert!(!tools.is_empty(), "an empty router would pass vacuously");
 
+        // The options tools touch a file: never the user's.
+        let dir = tempfile::tempdir().expect("tempdir");
         for tool in tools {
             let (handle, requests) = channel();
-            let mcp = TermherdMcp::new(handle);
+            let mcp = TermherdMcp::new(handle).with_settings_file(dir.path().join("settings.json"));
             let (replies, call) = sweep_case(&mcp, &tool);
             let _shell =
                 spawn_test_shell_seq(requests, replies.into_iter().map(Some).collect::<Vec<_>>());
@@ -1565,6 +1656,106 @@ mod tests {
                 "{tool} must answer a JSON object, got: {value}"
             );
         }
+    }
+
+    #[test]
+    fn the_options_tools_say_what_the_stdio_server_says() {
+        // `#[tool]` takes only a literal, so the text is spelled here and in
+        // `termherd_mcp`; this keeps the two surfaces from drifting apart.
+        let router = TermherdMcp::tool_router();
+        for (name, expected) in [
+            ("list_options", termherd_mcp::LIST_OPTIONS_DESCRIPTION),
+            ("set_option", termherd_mcp::SET_OPTION_DESCRIPTION),
+        ] {
+            let tool = router
+                .list_all()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name} is on the bridge"));
+            assert_eq!(tool.description.as_deref(), Some(expected), "{name}");
+        }
+    }
+
+    fn options_mcp(dir: &tempfile::TempDir) -> TermherdMcp {
+        TermherdMcp::new(channel().0).with_settings_file(dir.path().join("settings.json"))
+    }
+
+    #[tokio::test]
+    async fn set_option_writes_one_key_and_list_options_reads_it_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("settings.json");
+        std::fs::write(&file, r#"{ "keys": { "copy": "ctrl+c" } }"#).expect("write");
+        let mcp = options_mcp(&dir);
+
+        mcp.set_option(Parameters(SetOptionArgs {
+            id: "terminal.colors.scheme".into(),
+            value: serde_json::json!("solarized-light"),
+        }))
+        .await
+        .expect("a writable option is set");
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).expect("read")).expect("json");
+        assert_eq!(
+            written,
+            serde_json::json!({
+                "keys": { "copy": "ctrl+c" },
+                "terminal": { "colors": { "scheme": "solarized-light" } }
+            }),
+            "the rest of the file is kept"
+        );
+        let listed = mcp
+            .list_options()
+            .await
+            .expect("listed")
+            .structured_content
+            .expect("structured");
+        let scheme = listed["options"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|o| o["id"] == "terminal.colors.scheme")
+            .expect("scheme option");
+        assert_eq!(scheme["value"], "solarized-light");
+    }
+
+    #[tokio::test]
+    async fn set_option_refuses_what_the_catalogue_refuses_and_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mcp = options_mcp(&dir);
+        for (id, value) in [
+            ("theme", serde_json::json!("banana")),
+            ("shell.program", serde_json::json!("/bin/evil")),
+            ("no.such", serde_json::json!(1)),
+        ] {
+            let error = mcp
+                .set_option(Parameters(SetOptionArgs {
+                    id: id.into(),
+                    value,
+                }))
+                .await
+                .expect_err("refused");
+            assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{id}");
+        }
+        assert!(!dir.path().join("settings.json").exists());
+    }
+
+    #[tokio::test]
+    async fn set_option_will_not_write_over_a_file_it_cannot_parse() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("settings.json");
+        std::fs::write(&file, "{ broken").expect("write");
+
+        let error = options_mcp(&dir)
+            .set_option(Parameters(SetOptionArgs {
+                id: "theme".into(),
+                value: serde_json::json!("light"),
+            }))
+            .await
+            .expect_err("refused");
+
+        assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "{ broken");
     }
 
     #[tokio::test]
