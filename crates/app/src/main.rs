@@ -108,11 +108,15 @@ fn main() -> iced::Result {
         mcp_tokens,
     };
     let (metadata, metadata_problem) = metadata_store::load();
-    let mut startup = shell::Startup::from_settings(&settings, metadata, collapsed_store::load());
-    startup.load_problems = settings_problem
-        .into_iter()
-        .chain(metadata_problem)
-        .collect();
+    let startup = shell::Startup {
+        settings,
+        metadata,
+        collapsed: collapsed_store::load(),
+        load_problems: settings_problem
+            .into_iter()
+            .chain(metadata_problem)
+            .collect(),
+    };
     // Terminal path candidates are checked against the real filesystem — the
     // one thing that tells `src/main.rs` from prose like `and/or`.
     let path_resolver: Arc<dyn PathResolver> = Arc::new(termherd_scan::FsPathResolver::new());

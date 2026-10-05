@@ -76,32 +76,39 @@ impl Shell {
     /// makes the settings panel's own writes — echoed back by the watch —
     /// harmless.
     pub(super) fn apply_settings(&mut self, settings: &Settings) -> Task<Message> {
-        self.appearance.theme = settings.theme;
         let palette = settings.palette();
         if palette != self.appearance.colors.to_palette() {
             self.settings_sink.repaint(palette);
         }
+        self.settings_sink.set_shell(settings.shell_profile());
+        let font_before = self.core.font_size();
+        self.adopt_settings(settings);
+        // A new base size re-derives every grid, as a zoom does.
+        if self.core.font_size() == font_before {
+            Task::none()
+        } else {
+            self.resize_panes()
+        }
+    }
+
+    /// The shell's own share of `settings`: what it holds itself and what it
+    /// tells `core`. Startup takes this path too — there the terminals
+    /// already start with the file's palette and shell, so the sink is not
+    /// told again.
+    pub(super) fn adopt_settings(&mut self, settings: &Settings) {
+        self.appearance.theme = settings.theme;
         self.appearance.colors = settings.terminal.colors.clone();
         self.keymap = settings.keymap();
         self.close_confirm = settings.close;
         self.gestures = settings.clipboard_gestures();
         self.record.set_config(settings.record_config());
         self.config = super::config_input(settings);
-        self.settings_sink.set_shell(settings.shell_profile());
-
-        let font_before = self.core.font_size();
         for event in [
             termherd_core::Event::SessionLimitLoaded(settings.session_limit()),
             termherd_core::Event::FontSizeLoaded(settings.font_size()),
             termherd_core::Event::OpenCommandLoaded(settings.open_command()),
         ] {
             self.core.apply(event);
-        }
-        // A new base size re-derives every grid, as a zoom does.
-        if self.core.font_size() == font_before {
-            Task::none()
-        } else {
-            self.resize_panes()
         }
     }
 }

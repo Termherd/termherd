@@ -607,46 +607,30 @@ pub enum AppearanceChange {
     Scheme(Option<String>),
 }
 
-/// Persist one appearance change to `settings.json`, keeping the rest of the
-/// file — explicit colour overrides included — as the user wrote it.
-pub fn save_appearance(change: &AppearanceChange) {
-    crate::json_store::update_json(FILE, |root| apply_appearance(root, change));
+impl AppearanceChange {
+    /// The catalogue option this change sets, and its value: the panel writes
+    /// through the same validated setter as both MCP surfaces.
+    fn option(&self) -> (&'static str, serde_json::Value) {
+        match self {
+            AppearanceChange::Theme(theme) => ("theme", serde_json::json!(theme)),
+            AppearanceChange::Scheme(scheme) => {
+                ("terminal.colors.scheme", serde_json::json!(scheme))
+            }
+        }
+    }
 }
 
-/// The pure half of [`save_appearance`].
-fn apply_appearance(
-    root: &mut serde_json::Map<String, serde_json::Value>,
-    change: &AppearanceChange,
-) {
-    use serde_json::{Map, Value};
-    let scheme = match change {
-        AppearanceChange::Theme(theme) => {
-            if let Ok(theme) = serde_json::to_value(theme) {
-                root.insert("theme".into(), theme);
-            }
-            return;
-        }
-        AppearanceChange::Scheme(scheme) => scheme,
+/// Persist one appearance change to `settings.json`, keeping the rest of the
+/// file — explicit colour overrides included — as the user wrote it. A
+/// failure is logged, never fatal.
+pub fn save_appearance(change: &AppearanceChange) {
+    let Some(path) = path() else {
+        return;
     };
-    // Descend into `terminal.colors`, replacing a level that is not an object:
-    // it could not have parsed as one, so nothing readable is lost.
-    let mut level = root;
-    for key in ["terminal", "colors"] {
-        let entry = level
-            .entry(key)
-            .or_insert_with(|| Value::Object(Map::new()));
-        if !entry.is_object() {
-            *entry = Value::Object(Map::new());
-        }
-        let Value::Object(next) = entry else {
-            return;
-        };
-        level = next;
+    let (id, value) = change.option();
+    if let Err(e) = termherd_mcp::file::set_option_at(&path, id, &value) {
+        warn!(error = %e, path = %path.display(), "could not save the appearance");
     }
-    match scheme {
-        Some(name) => level.insert("scheme".into(), Value::String(name.clone())),
-        None => level.remove("scheme"),
-    };
 }
 
 /// Where the settings file lives, for the live-reload watch. `None` without a
@@ -1046,68 +1030,29 @@ mod tests {
         }
     }
 
-    #[test]
-    fn saving_the_appearance_keeps_every_other_key() {
-        let mut root = serde_json::json!({
-            "theme": "dark",
-            "shell": { "program": "pwsh" },
-            "terminal": { "font_size": 16, "colors": { "scheme": "gruvbox-dark", "cursor": "#ff0000" } },
-            "future-key": [1, 2]
-        });
-        let map = root.as_object_mut().expect("object");
-        apply_appearance(map, &AppearanceChange::Theme(ThemeChoice::SolarizedLight));
-        apply_appearance(
-            map,
-            &AppearanceChange::Scheme(Some("solarized-light".to_string())),
-        );
-        assert_eq!(
-            root,
-            serde_json::json!({
-                "theme": "solarized-light",
-                "shell": { "program": "pwsh" },
-                "terminal": { "font_size": 16, "colors": { "scheme": "solarized-light", "cursor": "#ff0000" } },
-                "future-key": [1, 2]
-            })
-        );
+    /// What the panel would write, applied by the catalogue's own setter.
+    fn saved(change: &AppearanceChange) -> Settings {
+        let (id, value) = change.option();
+        let written = termherd_mcp::set_option(&serde_json::json!({}), id, &value)
+            .expect("the catalogue accepts every panel choice");
+        serde_json::from_value(written).expect("valid settings")
     }
 
     #[test]
-    fn a_theme_change_leaves_the_scheme_alone_and_the_reverse() {
-        let mut root = serde_json::json!({
-            "theme": "light",
-            "terminal": { "colors": { "scheme": "gruvbox-dark" } }
-        });
-        let map = root.as_object_mut().expect("object");
-        apply_appearance(map, &AppearanceChange::Theme(ThemeChoice::Dark));
-        assert_eq!(map["terminal"]["colors"]["scheme"], "gruvbox-dark");
-        apply_appearance(map, &AppearanceChange::Scheme(None));
-        assert_eq!(map["theme"], "dark");
-        assert_eq!(map["terminal"]["colors"], serde_json::json!({}));
-    }
-
-    #[test]
-    fn a_scheme_reaches_a_file_whose_terminal_block_was_not_an_object() {
-        let mut root = serde_json::Map::new();
-        root.insert("terminal".into(), serde_json::json!("not an object"));
-        apply_appearance(
-            &mut root,
-            &AppearanceChange::Scheme(Some("gruvbox-light".to_string())),
-        );
-        assert_eq!(
-            serde_json::Value::Object(root),
-            serde_json::json!({ "terminal": { "colors": { "scheme": "gruvbox-light" } } })
-        );
-    }
-
-    #[test]
-    fn the_saved_theme_reads_back_as_what_was_picked() {
+    fn every_saved_theme_reads_back_as_what_was_picked() {
         for theme in ThemeChoice::ALL {
-            let mut root = serde_json::Map::new();
-            apply_appearance(&mut root, &AppearanceChange::Theme(theme));
-            let s: Settings =
-                serde_json::from_value(serde_json::Value::Object(root)).expect("valid settings");
-            assert_eq!(s.theme, theme);
+            assert_eq!(saved(&AppearanceChange::Theme(theme)).theme, theme);
         }
+    }
+
+    #[test]
+    fn every_saved_scheme_reads_back_as_what_was_picked() {
+        for scheme in Palette::SCHEMES {
+            let s = saved(&AppearanceChange::Scheme(Some(scheme.to_string())));
+            assert_eq!(s.terminal.colors.scheme.as_deref(), Some(scheme));
+        }
+        let s = saved(&AppearanceChange::Scheme(None));
+        assert_eq!(s.terminal.colors.scheme, None, "built-in clears the scheme");
     }
 
     #[test]

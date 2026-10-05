@@ -147,13 +147,12 @@ mod tests {
     fn every_status_dot_reads_on_every_light_chrome() {
         // The WCAG floor for non-text UI components.
         const FLOOR: f32 = 3.0;
-        for theme in [
-            iced::Theme::Light,
-            iced::Theme::SolarizedLight,
-            iced::Theme::GruvboxLight,
-        ] {
+        let light = crate::settings::ThemeChoice::ALL
+            .map(crate::settings::ThemeChoice::to_iced)
+            .into_iter()
+            .filter(|theme| !theme.extended_palette().is_dark);
+        for theme in light {
             let palette = theme.extended_palette();
-            assert!(!palette.is_dark, "{theme} reads as light");
             for surface in [palette.background.base.color, palette.background.weak.color] {
                 for status in ALL {
                     let ratio = contrast(status_color(status, false), surface);

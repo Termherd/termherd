@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, mpsc};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use termherd_core::ports::{PtyError, PtyHost};
@@ -68,10 +68,7 @@ impl PtyManager {
     /// Launch `shell` (or the platform default for `None`) from the next
     /// spawned session on. A running session keeps the program it started.
     pub fn set_shell(&self, shell: Option<Shell>) {
-        match self.shell.write() {
-            Ok(mut guard) => *guard = shell,
-            Err(poisoned) => *poisoned.into_inner() = shell,
-        }
+        *self.shell.write().unwrap_or_else(PoisonError::into_inner) = shell;
     }
 
     /// Switch every session — running and future — to `palette`. Each live
@@ -80,10 +77,7 @@ impl PtyManager {
     /// (Claude Code picks light or dark that way) keeps its choice until it
     /// asks again.
     pub fn set_palette(&self, palette: Palette) {
-        match self.palette.write() {
-            Ok(mut guard) => *guard = palette,
-            Err(poisoned) => *poisoned.into_inner() = palette,
-        }
+        *self.palette.write().unwrap_or_else(PoisonError::into_inner) = palette;
         if let Ok(map) = self.sessions.lock() {
             for session in map.values() {
                 let _ = session.ctrl.send(TermCmd::Repaint);
@@ -135,10 +129,11 @@ impl PtyHost for PtyManager {
         // project directory with a sane TERM. Resuming a real Claude session
         // lands in a later slice; the id flows through so the adapter never has
         // to invent one (Q6).
-        let configured = match self.shell.read() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
-        };
+        let configured = self
+            .shell
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
         let mut cmd = match &configured {
             Some(shell) => {
                 let mut c = CommandBuilder::new(&shell.program);

@@ -12,7 +12,6 @@
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
@@ -144,7 +143,7 @@ fn read_at<T: DeserializeOwned>(path: &Path) -> Read<T> {
 /// Move an unparseable file to the first free `<name>.corrupt-<n>` beside
 /// it, so the next save starts a fresh file instead of overwriting the
 /// original. `None` when no name is free or the move fails — then the file
-/// stays, and [`update_json`] still refuses to write over it.
+/// stays, and the settings writer still refuses to write over it.
 fn set_aside(path: &Path) -> Option<PathBuf> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     let target = (1..=99)
@@ -170,51 +169,6 @@ pub fn save_json<T: Serialize>(file: &str, value: &T) {
     }
 }
 
-/// Rewrite some keys of the JSON object in `~/.termherd/<file>`, leaving every
-/// other key as found — including ones this build does not understand. A
-/// failure is logged, never fatal; see [`edit_json_at`] for what refuses.
-pub fn update_json(file: &str, edit: impl FnOnce(&mut Map<String, Value>)) {
-    let Some(path) = config_path(file) else {
-        return;
-    };
-    let result = edit_json_at(&path, |mut root| {
-        if let Value::Object(map) = &mut root {
-            edit(map);
-        }
-        Ok(root)
-    });
-    if let Err(e) = result {
-        warn!(error = %e, path = %path.display(), "could not update config file");
-    }
-}
-
-/// Read the JSON object at `path`, pass it through `edit`, and write back what
-/// `edit` returns. A missing file starts from an empty object. A file that
-/// exists but is not a JSON object is refused rather than rewritten: writing
-/// the few keys being set onto an empty object would replace the user's whole
-/// configuration. `edit` may refuse too; nothing is written then.
-pub fn edit_json_at(
-    path: &Path,
-    edit: impl FnOnce(Value) -> Result<Value, String>,
-) -> Result<(), String> {
-    let root = read_object_at(path)?;
-    let edited = edit(root)?;
-    write_json_at(path, &edited)
-}
-
-/// The JSON object at `path`; an empty one when the file does not exist.
-pub fn read_object_at(path: &Path) -> Result<Value, String> {
-    match read_at::<Value>(path) {
-        Read::Missing => Ok(Value::Object(Map::new())),
-        Read::Parsed(value) if value.is_object() => Ok(value),
-        Read::Parsed(_) | Read::Invalid(_) => Err(format!(
-            "{} is not a valid JSON object; fix it first",
-            path.display()
-        )),
-        Read::Unreadable(e) => Err(format!("could not read {}: {e}", path.display())),
-    }
-}
-
 /// Pretty-print `value` to `path`, creating its directory.
 fn write_json_at<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(dir) = path.parent() {
@@ -234,6 +188,7 @@ fn config_path(file: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn an_unparseable_file_is_set_aside_and_reported() {
@@ -293,38 +248,6 @@ mod tests {
         assert_eq!(
             reload_at::<Value>(&path),
             Some(serde_json::json!({ "theme": "light" }))
-        );
-    }
-
-    #[test]
-    fn an_edit_refuses_a_file_that_is_not_an_object_and_writes_nothing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("settings.json");
-        std::fs::write(&path, "{ broken").expect("write");
-
-        let result = edit_json_at(&path, |_| Ok(serde_json::json!({ "theme": "light" })));
-
-        assert!(result.is_err());
-        assert_eq!(std::fs::read_to_string(&path).expect("read"), "{ broken");
-    }
-
-    #[test]
-    fn an_edit_starts_a_missing_file_and_an_edit_that_refuses_writes_nothing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("settings.json");
-
-        let refused = edit_json_at(&path, |_| Err("no".to_string()));
-        assert_eq!(refused, Err("no".to_string()));
-        assert!(!path.exists());
-
-        edit_json_at(&path, |mut root| {
-            root["theme"] = serde_json::json!("light");
-            Ok(root)
-        })
-        .expect("written");
-        assert_eq!(
-            read_object_at(&path).expect("object"),
-            serde_json::json!({ "theme": "light" })
         );
     }
 

@@ -33,6 +33,7 @@ use termherd_core::{
     Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, PointerRoute,
     Section, SessionStatus, SnapshotFilter, TerminalScope,
 };
+use termherd_mcp::file::SetAtError;
 
 use crate::shell::bridge::{
     Action, ActionDetail, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo,
@@ -112,7 +113,7 @@ impl TermherdMcp {
     )]
     async fn list_options(&self) -> Result<CallToolResult, ErrorData> {
         let file = self.settings_file()?;
-        let settings = crate::json_store::read_object_at(file)
+        let settings = termherd_mcp::file::read_object(file)
             .map_err(|reason| ErrorData::internal_error(reason, None))?;
         structured(serde_json::json!({
             "options": termherd_mcp::resolve_options(&settings),
@@ -132,18 +133,12 @@ impl TermherdMcp {
         let file = self.settings_file()?;
         // A refusal by the catalogue is the caller's to fix; anything else is
         // the file's. Told apart so a model reads which one it is.
-        let mut refused = None;
-        crate::json_store::edit_json_at(file, |settings| {
-            termherd_mcp::set_option(&settings, &args.id, &args.value).map_err(|error| {
-                let reason = error.to_string();
-                refused = Some(reason.clone());
-                reason
-            })
-        })
-        .map_err(|reason| match refused.take() {
-            Some(reason) => ErrorData::invalid_params(reason, None),
-            None => ErrorData::internal_error(reason, None),
-        })?;
+        termherd_mcp::file::set_option_at(file, &args.id, &args.value).map_err(
+            |error| match error {
+                SetAtError::Refused(_) => ErrorData::invalid_params(error.to_string(), None),
+                SetAtError::File(_) => ErrorData::internal_error(error.to_string(), None),
+            },
+        )?;
         structured(serde_json::json!({ "id": args.id, "value": args.value }))
     }
 

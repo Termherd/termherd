@@ -55,7 +55,7 @@ pub fn watch_file(
             event
                 .paths
                 .iter()
-                .any(|path| path.file_name().map(std::ffi::OsStr::to_os_string) == name)
+                .any(|path| path.file_name() == name.as_deref())
         },
         debounce,
         on_change,

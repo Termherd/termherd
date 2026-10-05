@@ -68,12 +68,10 @@ fn write_error_response(message: &Value, detail: &str) -> Option<Value> {
     }))
 }
 
-/// Read `~/.termherd/settings.json` into a JSON value, falling back to an empty
-/// object when it is missing or unreadable — `list_options` then reports every
-/// option as unset rather than failing. The second half says whether a write
-/// may replace the file: not when it exists but does not parse, since writing
-/// the one option set onto an empty object would discard everything else the
-/// user wrote.
+/// Read `~/.termherd/settings.json`, falling back to an empty object when it
+/// cannot be used — `list_options` then reports every option as unset rather
+/// than failing. The second half says whether a write may replace the file:
+/// not when it exists but is not a JSON object (see [`termherd_mcp::file`]).
 fn load_settings() -> (Value, Result<(), String>) {
     match settings_path() {
         Some(path) => load_settings_at(&path),
@@ -83,35 +81,18 @@ fn load_settings() -> (Value, Result<(), String>) {
 
 /// The body of [`load_settings`], on an explicit path.
 fn load_settings_at(path: &std::path::Path) -> (Value, Result<(), String>) {
-    match std::fs::read_to_string(path) {
-        Ok(raw) => match serde_json::from_str::<Value>(&raw) {
-            Ok(value) if value.is_object() => (value, Ok(())),
-            _ => (
-                json!({}),
-                Err(format!(
-                    "{} is not a valid JSON object; fix it before setting options",
-                    path.display()
-                )),
-            ),
-        },
-        Err(_) => (json!({}), Ok(())),
+    match termherd_mcp::file::read_object(path) {
+        Ok(value) => (value, Ok(())),
+        Err(reason) => (json!({}), Err(reason)),
     }
 }
 
-/// Persist the mutated settings to `~/.termherd/settings.json`, pretty-printed
-/// like the file the GUI writes. Creates the `~/.termherd` directory if needed.
-/// Returns an error message (not a panic — the server stays up) so the caller
-/// can report the failure instead of a false success.
+/// Persist the mutated settings to `~/.termherd/settings.json`. Returns an
+/// error message (not a panic — the server stays up) so the caller can report
+/// the failure instead of a false success.
 fn store_settings(settings: &Value) -> Result<(), String> {
     let path = settings_path().ok_or("no home directory; cannot write settings")?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|err| format!("could not create {}: {err}", dir.display()))?;
-    }
-    let raw = serde_json::to_string_pretty(settings)
-        .map_err(|err| format!("could not encode settings: {err}"))?;
-    std::fs::write(&path, raw + "\n")
-        .map_err(|err| format!("could not write {}: {err}", path.display()))
+    termherd_mcp::file::write(&path, settings)
 }
 
 /// `~/.termherd/settings.json` — the same file the GUI shell reads.

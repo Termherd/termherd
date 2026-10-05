@@ -16,6 +16,11 @@
 //! no I/O, no globals — so the protocol is unit-testable. A write is *described*
 //! (the returned [`Reply::write_settings`]) here and *performed* by the thin
 //! stdio loop in `main.rs`, keeping the same Event→Effect split as `core`.
+//!
+//! The one exception is [`file`]: the guarded read-modify-write of
+//! `settings.json`, shared with the GUI so its rule lives in one place.
+
+pub mod file;
 
 use serde_json::{Value, json};
 

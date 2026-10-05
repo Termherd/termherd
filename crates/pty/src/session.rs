@@ -6,7 +6,7 @@
 //! colour queries the parser raises.
 
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, mpsc};
 use std::thread::JoinHandle;
 
 use alacritty_terminal::Term;
@@ -53,10 +53,10 @@ pub(crate) type SharedPalette = Arc<RwLock<Palette>>;
 /// The palette in force right now. A poisoned lock still holds a whole
 /// palette — a writer cannot half-assign one — so its value is read anyway.
 fn current(palette: &SharedPalette) -> Palette {
-    match palette.read() {
-        Ok(guard) => guard.clone(),
-        Err(poisoned) => poisoned.into_inner().clone(),
-    }
+    palette
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
 }
 
 /// How often the watcher thread asks the PTY which process group owns it. Short

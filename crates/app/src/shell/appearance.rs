@@ -12,6 +12,7 @@ use super::Shell;
 use crate::settings::{AppearanceChange, ColorSettings, ThemeChoice};
 
 /// What the settings panel edits.
+#[derive(Default)]
 pub(super) struct Appearance {
     pub(super) theme: ThemeChoice,
     /// Kept whole, so a picked scheme still honours the user's explicit
@@ -36,13 +37,7 @@ impl SchemeChoice {
     /// built-in answers to, so the picker shows no selection rather than a
     /// wrong one.
     pub(super) fn of(scheme: Option<&str>) -> Option<Self> {
-        match scheme {
-            None => Some(Self(None)),
-            Some(name) => Palette::SCHEMES
-                .into_iter()
-                .find(|known| *known == name)
-                .map(|known| Self(Some(known))),
-        }
+        Self::all().into_iter().find(|choice| choice.0 == scheme)
     }
 }
 

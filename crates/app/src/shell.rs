@@ -31,7 +31,7 @@ use termherd_pty::{PtyEvent, Screen};
 
 use crate::docs::DocEntry;
 use crate::record_config::RecordConfig;
-use crate::settings::{ClipboardGestures, CloseSettings, ColorSettings, ThemeChoice};
+use crate::settings::{ClipboardGestures, CloseSettings, ThemeChoice};
 use crate::window_config::WindowConfig;
 
 mod appearance;
@@ -96,61 +96,17 @@ fn home_dir() -> String {
 /// Resolved user configuration handed to the shell at startup: the theme,
 /// keymap and metadata overlay built from `settings.json` / `metadata.json`.
 /// Bundled so the composition root passes one value, not a long argument list.
+#[derive(Clone)]
 pub struct Startup {
-    pub theme: ThemeChoice,
-    /// The terminal colour settings, kept whole so a scheme picked in the
-    /// settings panel still honours the user's explicit overrides.
-    pub colors: ColorSettings,
-    pub keymap: Keymap,
+    /// The parsed `settings.json`, adopted through the same path a live
+    /// reload takes, so a setting cannot apply at startup and not on reload.
+    pub settings: crate::settings::Settings,
     pub metadata: Overlay,
     /// Folded project paths restored from disk.
     pub collapsed: HashSet<String>,
-    /// GIF screencast budget from settings.
-    pub record: RecordConfig,
-    /// Sidebar session limit from settings; `0` shows every session.
-    pub session_limit: usize,
-    /// Terminal base font size from settings.
-    pub font_size: f32,
-    /// Close-confirmation policy for tab close and app quit.
-    pub close: CloseSettings,
-    /// Which mouse gestures reach the clipboard.
-    pub gestures: ClipboardGestures,
-    /// The editor command from settings, or `None` for the OS default handler.
-    pub open: Option<termherd_core::OpenCommand>,
-    /// Adapter-owned config bits for the MCP `snapshot` tool's config section
-    /// (the live font size is stamped by `core`, not carried here).
-    pub config: ConfigInput,
     /// Config files that existed but could not be used at startup, shown in
     /// the sidebar until dismissed.
     pub load_problems: Vec<crate::json_store::LoadProblem>,
-}
-
-impl Startup {
-    /// Bundle the sanitised settings with the other persisted state, so the
-    /// composition root passes one value instead of fanning fields by hand.
-    #[must_use]
-    pub fn from_settings(
-        settings: &crate::settings::Settings,
-        metadata: Overlay,
-        collapsed: HashSet<String>,
-    ) -> Self {
-        let record = settings.record_config();
-        Self {
-            theme: settings.theme,
-            colors: settings.terminal.colors.clone(),
-            keymap: settings.keymap(),
-            metadata,
-            collapsed,
-            session_limit: settings.session_limit(),
-            font_size: settings.font_size(),
-            close: settings.close,
-            gestures: settings.clipboard_gestures(),
-            open: settings.open_command(),
-            config: config_input(settings),
-            record,
-            load_problems: Vec::new(),
-        }
-    }
 }
 
 /// The settings the MCP `snapshot` tool reports that `core` cannot read —
@@ -198,21 +154,7 @@ pub fn run(
                     settings: Arc::new(live_settings::LiveSettings(pty.clone())),
                 },
                 live_bridge.clone(),
-                Startup {
-                    theme: startup.theme,
-                    colors: startup.colors.clone(),
-                    keymap: startup.keymap.clone(),
-                    metadata: startup.metadata.clone(),
-                    collapsed: startup.collapsed.clone(),
-                    record: startup.record,
-                    session_limit: startup.session_limit,
-                    font_size: startup.font_size,
-                    close: startup.close,
-                    gestures: startup.gestures,
-                    open: startup.open.clone(),
-                    config: startup.config.clone(),
-                    load_problems: startup.load_problems.clone(),
-                },
+                startup.clone(),
             );
             let initial_scan = shell.rescan();
             (shell, initial_scan)
@@ -266,6 +208,8 @@ struct Shell {
     bounds: WindowConfig,
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
+    /// The `settings.json` the live-reload watch follows; resolved once.
+    settings_file: Option<PathBuf>,
     scan_error: Option<String>,
     /// Checks whether a path-shaped run of terminal text names a real file.
     /// The one thing that tells `src/main.rs` from `and/or`.
@@ -737,16 +681,14 @@ impl Shell {
         let mut core = termherd_core::App::new();
         core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
         core.apply(termherd_core::Event::CollapsedLoaded(startup.collapsed));
-        core.apply(termherd_core::Event::SessionLimitLoaded(
-            startup.session_limit,
-        ));
-        core.apply(termherd_core::Event::FontSizeLoaded(startup.font_size));
-        core.apply(termherd_core::Event::OpenCommandLoaded(startup.open));
-        Self {
+        // Every settings-derived field starts at its default and is then
+        // adopted from the file below, exactly as a reload adopts it.
+        let mut shell = Self {
             core,
             bounds,
             scanner,
             watch_root,
+            settings_file: crate::settings::path(),
             scan_error: None,
             path_resolver,
             pty,
@@ -758,14 +700,11 @@ impl Shell {
             screens: HashMap::new(),
             waiters: Vec::new(),
             focus: Focus::Search,
-            appearance: appearance::Appearance {
-                theme: startup.theme,
-                colors: startup.colors,
-            },
+            appearance: appearance::Appearance::default(),
             settings_open: false,
             load_problems: startup.load_problems,
             settings_sink,
-            keymap: startup.keymap,
+            keymap: Keymap::defaults(),
             renaming: None,
             tab_rename: None,
             // Populated by the first scan's `refresh_docs` — `discover` does
@@ -775,17 +714,19 @@ impl Shell {
             rescan_pending: false,
             open_doc: None,
             closing: None,
-            close_confirm: startup.close,
-            gestures: startup.gestures,
+            close_confirm: CloseSettings::default(),
+            gestures: ClipboardGestures::default(),
             archiving: None,
             closing_window: None,
             link_modifier: false,
             shift_modifier: false,
             tab_drag: None,
             exiting: false,
-            record: RecordState::new(startup.record),
-            config: startup.config,
-        }
+            record: RecordState::new(RecordConfig::default()),
+            config: config_input(&crate::settings::Settings::default()),
+        };
+        shell.adopt_settings(&startup.settings);
+        shell
     }
 
     /// The GUI chrome theme (FR10); the terminal grid keeps its own colours.
@@ -1458,9 +1399,9 @@ impl Shell {
             subs.push(Subscription::run_with(root.clone(), watch_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
-        if let Some(file) = crate::settings::path() {
+        if let Some(file) = &self.settings_file {
             subs.push(Subscription::run_with(
-                file,
+                file.clone(),
                 live_settings::settings_watch_stream,
             ));
         }
@@ -1488,7 +1429,7 @@ impl Shell {
 mod key_routing {
     use super::routing::KeyboardOwner;
     use super::*;
-    use crate::settings::ConfirmClose;
+    use crate::settings::{ColorSettings, ConfirmClose};
     use iced::keyboard::key::{Named, NativeCode, Physical};
     use iced::keyboard::{Key, Location, Modifiers};
     use std::sync::Mutex as StdMutex;
@@ -1606,30 +1547,10 @@ mod key_routing {
     /// The default startup payload the test shells boot with.
     fn test_startup() -> Startup {
         Startup {
-            theme: ThemeChoice::default(),
-            colors: ColorSettings::default(),
-            keymap: Keymap::defaults(),
+            settings: crate::settings::Settings::default(),
             metadata: Overlay::default(),
             collapsed: HashSet::new(),
-            record: RecordConfig::default(),
-            session_limit: 0,
-            font_size: 14.0,
-            close: CloseSettings::default(),
-            gestures: ClipboardGestures::default(),
-            open: None,
-            config: test_config_input(),
             load_problems: Vec::new(),
-        }
-    }
-
-    /// A neutral config input for test shells — the snapshot tool's config
-    /// section is exercised in the `core` builder tests, not here.
-    fn test_config_input() -> ConfigInput {
-        ConfigInput {
-            terminal_scheme: None,
-            record_fps: 8,
-            record_scale: 0.5,
-            keymap_overrides: 0,
         }
     }
 
@@ -1686,7 +1607,10 @@ mod key_routing {
             WindowConfig::default(),
             test_ports(Arc::new(RecordingPty::default()), rx),
             test_live_bridge(),
-            Startup::from_settings(&settings, Overlay::default(), HashSet::new()),
+            Startup {
+                settings,
+                ..test_startup()
+            },
         );
 
         let request = termherd_core::PathRequest {
@@ -3868,10 +3792,8 @@ mod key_routing {
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
         let mut ports = test_ports(Arc::new(RecordingPty::default()), rx);
         ports.settings = sink.clone();
-        let startup = Startup {
-            colors,
-            ..test_startup()
-        };
+        let mut startup = test_startup();
+        startup.settings.terminal.colors = colors;
         let shell = Shell::new(WindowConfig::default(), ports, test_live_bridge(), startup);
         (shell, sink)
     }
