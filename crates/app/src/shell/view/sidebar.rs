@@ -142,7 +142,29 @@ impl Shell {
                 .style(container::rounded_box),
             tooltip::Position::Bottom,
         );
-        let chrome = column![
+        let mut chrome = column![].spacing(8);
+        if !self.load_problems.is_empty() {
+            let mut notes = column![].spacing(4);
+            for problem in &self.load_problems {
+                notes = notes.push(
+                    text(strings::config_unusable(
+                        &problem.file,
+                        problem.kept_as.as_deref(),
+                    ))
+                    .size(11),
+                );
+            }
+            let dismiss = button(text(strings::DISMISS).size(11))
+                .on_press(Message::DismissLoadProblems)
+                .style(button::text)
+                .padding(0);
+            chrome = chrome.push(
+                container(row![notes.width(Fill), dismiss].spacing(6))
+                    .padding(6)
+                    .style(container::bordered_box),
+            );
+        }
+        let chrome = chrome.extend([column![
             row![
                 hide,
                 iced::widget::Space::new().width(Fill),
@@ -155,7 +177,8 @@ impl Shell {
             titles_only,
             show_archived
         ]
-        .spacing(8);
+        .spacing(8)
+        .into()]);
         container(chrome.push(scrollable(list).height(Fill)).padding(8))
             .width(300)
             .style(container::rounded_box)

@@ -119,6 +119,9 @@ pub struct Startup {
     /// Adapter-owned config bits for the MCP `snapshot` tool's config section
     /// (the live font size is stamped by `core`, not carried here).
     pub config: ConfigInput,
+    /// Config files that existed but could not be used at startup, shown in
+    /// the sidebar until dismissed.
+    pub load_problems: Vec<crate::json_store::LoadProblem>,
 }
 
 impl Startup {
@@ -149,6 +152,7 @@ impl Startup {
                 keymap_overrides: settings.keys.len(),
             },
             record,
+            load_problems: Vec::new(),
         }
     }
 }
@@ -198,6 +202,7 @@ pub fn run(
                     gestures: startup.gestures,
                     open: startup.open.clone(),
                     config: startup.config.clone(),
+                    load_problems: startup.load_problems.clone(),
                 },
             );
             let initial_scan = shell.rescan();
@@ -289,6 +294,8 @@ struct Shell {
     appearance: appearance::Appearance,
     /// Whether the settings panel is open.
     settings_open: bool,
+    /// Config files that could not be used, until the user dismisses them.
+    load_problems: Vec<crate::json_store::LoadProblem>,
     /// See [`Ports::appearance`].
     appearance_sink: Arc<dyn appearance::AppearanceSink>,
     /// Configurable shortcut bindings (FR9).
@@ -539,6 +546,8 @@ enum Message {
     ToggleSidebar,
     /// Open the settings panel, or close it when open.
     ToggleSettings,
+    /// Hide the notice about config files that could not be used.
+    DismissLoadProblems,
     /// Close the settings panel (its close button, the scrim, Escape).
     CloseSettings,
     /// Apply and persist a GUI chrome theme picked in the settings panel.
@@ -743,6 +752,7 @@ impl Shell {
                 colors: startup.colors,
             },
             settings_open: false,
+            load_problems: startup.load_problems,
             appearance_sink,
             keymap: startup.keymap,
             renaming: None,
@@ -1190,6 +1200,10 @@ impl Shell {
                 self.perform(effects)
             }
             Message::ToggleSidebar => self.toggle_sidebar(),
+            Message::DismissLoadProblems => {
+                self.load_problems.clear();
+                Task::none()
+            }
             Message::ToggleSettings => {
                 self.settings_open = !self.settings_open;
                 Task::none()
@@ -1586,6 +1600,7 @@ mod key_routing {
             gestures: ClipboardGestures::default(),
             open: None,
             config: test_config_input(),
+            load_problems: Vec::new(),
         }
     }
 
@@ -3833,6 +3848,27 @@ mod key_routing {
         };
         let shell = Shell::new(WindowConfig::default(), ports, test_live_bridge(), startup);
         (shell, sink)
+    }
+
+    #[test]
+    fn a_startup_load_problem_is_kept_until_dismissed() {
+        let problem = crate::json_store::LoadProblem {
+            file: "settings.json".to_string(),
+            kept_as: Some(PathBuf::from("/home/u/.termherd/settings.json.corrupt-1")),
+        };
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let mut shell = Shell::new(
+            WindowConfig::default(),
+            test_ports(Arc::new(RecordingPty::default()), rx),
+            test_live_bridge(),
+            Startup {
+                load_problems: vec![problem.clone()],
+                ..test_startup()
+            },
+        );
+        assert_eq!(shell.load_problems, [problem]);
+        let _ = shell.update(Message::DismissLoadProblems);
+        assert!(shell.load_problems.is_empty());
     }
 
     #[test]

@@ -20,6 +20,10 @@ defensively:
 
 - Every field is optional. A missing file, a missing field, or a corrupt file
   falls back to built-in defaults — settings never block startup.
+- A file that is not valid JSON is **set aside** as `settings.json.corrupt-1`
+  (then `-2`, …) and the sidebar says so, so nothing TermHerd saves later can
+  overwrite what you wrote. Fix the copy and move it back. `metadata.json` is
+  protected the same way.
 - Out-of-range values **clamp** instead of failing the file.
 - One bad value — a typo'd colour, an unknown action name — **degrades alone**
   with a logged warning. The rest of the file still applies.

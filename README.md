@@ -115,12 +115,13 @@ cargo run -p termherd-app
 Optional user settings live in `~/.termherd/settings.json` (on Windows,
 `%USERPROFILE%\.termherd\settings.json`). The file is read at startup; if it
 is missing or invalid, TermHerd falls back to defaults rather than refusing
-to start — out-of-range values clamp, and a single bad value (a typo'd
-colour, an unknown key action) degrades alone with a logged warning instead
-of resetting the rest of the file. The appearance (chrome theme and
-terminal colours) can also be changed live from the settings panel — ⚙ in
-the sidebar, or `Cmd`/`Ctrl`+`,` — which saves it here; everything else:
-edit the file and restart.
+to start (an invalid file is first set aside as `settings.json.corrupt-1`,
+and the sidebar says so). Out-of-range values clamp, and a single bad value
+(a typo'd colour, an unknown key action) degrades alone with a logged
+warning instead of resetting the rest of the file. The appearance (chrome
+theme and terminal colours) can also be changed live from the settings
+panel — ⚙ in the sidebar, or `Cmd`/`Ctrl`+`,` — which saves it here;
+everything else: edit the file and restart.
 
 The annotated reference template is
 [`docs/settings.example.jsonc`](docs/settings.example.jsonc): every option

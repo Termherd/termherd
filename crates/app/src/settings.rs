@@ -570,6 +570,13 @@ impl Settings {
     pub fn load() -> Self {
         crate::json_store::load_json(FILE)
     }
+
+    /// The startup load: an unparseable file is set aside and reported rather
+    /// than silently replaced by defaults the next save would write over it.
+    #[must_use]
+    pub fn load_checked() -> (Self, Option<crate::json_store::LoadProblem>) {
+        crate::json_store::load_json_checked(FILE)
+    }
 }
 
 /// One appearance key the settings panel changed. Each pick persists only its

@@ -102,6 +102,19 @@ pub fn quit_prompt(live: usize) -> String {
     }
 }
 
+/// Sidebar notice for a config file that existed and could not be used.
+#[must_use]
+pub fn config_unusable(file: &str, kept_as: Option<&std::path::Path>) -> String {
+    match kept_as {
+        Some(kept) => format!(
+            "{file} could not be read; defaults are in use. Your file was kept as {}.",
+            kept.display()
+        ),
+        None => format!("{file} could not be read; defaults are in use."),
+    }
+}
+pub const DISMISS: &str = "✕";
+
 // --- Settings panel ---
 pub const SETTINGS_TITLE: &str = "Settings";
 pub const SETTINGS_THEME: &str = "Interface theme";

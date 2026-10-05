@@ -59,8 +59,9 @@ fn main() -> iced::Result {
 
     // Thin user settings (FR10): the configured shell is injected into the PTY
     // host, the theme into the iced shell. A corrupt file falls back to
-    // defaults rather than blocking startup.
-    let settings = settings::Settings::load();
+    // defaults rather than blocking startup — set aside, and reported in the
+    // sidebar, so the defaults never overwrite it.
+    let (settings, settings_problem) = settings::Settings::load_checked();
     let shell = settings.shell.as_ref().map(|s| Shell {
         program: s.program.clone(),
         args: s.args.clone(),
@@ -109,8 +110,12 @@ fn main() -> iced::Result {
         mcp_endpoint,
         mcp_tokens,
     };
-    let startup =
-        shell::Startup::from_settings(&settings, metadata_store::load(), collapsed_store::load());
+    let (metadata, metadata_problem) = metadata_store::load();
+    let mut startup = shell::Startup::from_settings(&settings, metadata, collapsed_store::load());
+    startup.load_problems = settings_problem
+        .into_iter()
+        .chain(metadata_problem)
+        .collect();
     // Terminal path candidates are checked against the real filesystem — the
     // one thing that tells `src/main.rs` from prose like `and/or`.
     let path_resolver: Arc<dyn PathResolver> = Arc::new(termherd_scan::FsPathResolver::new());
