@@ -324,6 +324,24 @@ struct TabDrag {
     over: usize,
 }
 
+/// Ends a tab drag on a left release anywhere in the window, not only over
+/// the strip: the pointer routinely overshoots it. Captured events count too,
+/// since the terminal canvas captures the releases that land on it. A lifted
+/// finger counts as a release, as it does for the chip that started the drag.
+fn tab_drag_release(
+    event: iced::Event,
+    _status: iced::event::Status,
+    _window: window::Id,
+) -> Option<Message> {
+    matches!(
+        event,
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+            iced::mouse::Button::Left
+        )) | iced::Event::Touch(iced::touch::Event::FingerLifted { .. })
+    )
+    .then_some(Message::TabDragEnd)
+}
+
 #[derive(Debug, Clone)]
 enum Message {
     Window(window::Id, window::Event),
@@ -455,11 +473,10 @@ enum Message {
     TabDragStart(usize),
     /// During a drag, the pointer entered the tab at this index.
     TabDragOver(usize),
-    /// The drag's pointer was released: commit the reorder, else it was a
-    /// plain click that activates the pressed tab.
+    /// The drag's pointer was released anywhere in the window: commit the
+    /// reorder at the last slot hovered, else it was a plain click that
+    /// activates the pressed tab.
     TabDragEnd,
-    /// The drag left the tab strip without a drop — abandon it.
-    TabDragCancel,
     /// Begin renaming a tab inline (double-click its chip), seeded with the
     /// title currently shown.
     StartTabRename {
@@ -609,7 +626,6 @@ impl Message {
                 | Self::Paste(_)
                 | Self::RequestPaste { .. }
                 | Self::TabDragStart(_)
-                | Self::TabDragEnd
                 | Self::RequestCloseTab(_)
                 | Self::CloseTab(_)
                 | Self::ToggleStar(_)
@@ -1047,10 +1063,6 @@ impl Shell {
                 Some(TabDrag { from, .. }) => self.activate_tab(from),
                 None => Task::none(),
             },
-            Message::TabDragCancel => {
-                self.tab_drag = None;
-                Task::none()
-            }
             Message::StartTabRename { index, current } => {
                 // Anchor on the tab's first session so the edit survives a
                 // reorder; every tab hosts at least one, so this is `Some` for a
@@ -1399,6 +1411,12 @@ impl Shell {
             subs.push(Subscription::run_with(root.clone(), watch_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
+        // Always live, not only during a drag: iced broadcasts a batch's events
+        // to the subscriptions that exist *before* the batch's messages run, so
+        // one started by `TabDragStart` would miss a release in the same batch
+        // (a quick click) and leave the drag armed for the next click anywhere.
+        // A release with no drag in flight is a no-op.
+        subs.push(iced::event::listen_with(tab_drag_release));
         if let Some(file) = &self.settings_file {
             subs.push(Subscription::run_with(
                 file.clone(),
@@ -4132,23 +4150,133 @@ mod key_routing {
         assert!(shell.tab_drag.is_none());
     }
 
+    fn left_release() -> iced::Event {
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+            iced::mouse::Button::Left,
+        ))
+    }
+
+    /// What the window-wide listener hands the shell for `event`, run through
+    /// `update` the way the subscription would.
+    fn deliver_window_event(shell: &mut Shell, event: iced::Event) {
+        if let Some(message) =
+            tab_drag_release(event, iced::event::Status::Captured, window::Id::unique())
+        {
+            let _ = shell.update(message);
+        }
+    }
+
     #[test]
-    fn leaving_the_strip_abandons_a_drag() {
+    fn tab_drag_release_maps_only_a_release() {
+        use iced::event::Status;
+        use iced::mouse::{Button, Event as Mouse};
+        // A move ending the drag would drop the tab on the first pixel of
+        // travel; the press is the one that started it. A lifted finger ends a
+        // drag a finger started, since the chip's press handler accepts one.
+        let cases = [
+            (left_release(), Status::Captured, true),
+            (left_release(), Status::Ignored, true),
+            (
+                iced::Event::Touch(iced::touch::Event::FingerLifted {
+                    id: iced::touch::Finger(0),
+                    position: iced::Point::ORIGIN,
+                }),
+                Status::Captured,
+                true,
+            ),
+            (
+                iced::Event::Mouse(Mouse::CursorMoved {
+                    position: iced::Point::ORIGIN,
+                }),
+                Status::Ignored,
+                false,
+            ),
+            (
+                iced::Event::Mouse(Mouse::ButtonPressed(Button::Left)),
+                Status::Captured,
+                false,
+            ),
+        ];
+        for (event, status, ends) in cases {
+            let message = tab_drag_release(event.clone(), status, window::Id::unique());
+            let ok = if ends {
+                matches!(message, Some(Message::TabDragEnd))
+            } else {
+                message.is_none()
+            };
+            assert!(ok, "{event:?} ({status:?}) → {message:?}");
+        }
+    }
+
+    #[test]
+    fn a_release_with_no_tab_drag_leaves_everything_alone() {
+        // The window-wide listener hears every left release, including the
+        // click that places the caret in a sidebar rename field.
+        let mut shell = shell_with_three_tabs();
+        let before = tab_order(&shell);
+        let active_before = shell.core.workspace.active;
+        shell.renaming = Some(("sid".to_string(), "typing".to_string()));
+        deliver_window_event(&mut shell, left_release());
+        assert_eq!(
+            shell.renaming.as_ref().map(|(_, b)| b.as_str()),
+            Some("typing"),
+            "the session rename survives"
+        );
+        assert_eq!(tab_order(&shell), before);
+        assert_eq!(shell.core.workspace.active, active_before);
+    }
+
+    #[test]
+    fn a_release_off_the_strip_drops_the_tab_at_the_last_slot() {
+        let mut shell = shell_with_three_tabs();
+        let before = tab_order(&shell);
+        let _ = shell.update(Message::TabDragStart(0));
+        let _ = shell.update(Message::TabDragOver(2));
+        // The pointer has left the strip; the release lands on the terminal.
+        deliver_window_event(&mut shell, left_release());
+        assert_eq!(tab_order(&shell), vec![before[1], before[2], before[0]]);
+        assert!(shell.tab_drag.is_none(), "the drag is over");
+    }
+
+    #[test]
+    fn losing_window_focus_abandons_a_drag() {
         let mut shell = shell_with_three_tabs();
         let before = tab_order(&shell);
         let active_before = shell.core.workspace.active;
         let _ = shell.update(Message::TabDragStart(0));
         let _ = shell.update(Message::TabDragOver(2));
-        let _ = shell.update(Message::TabDragCancel);
-        // A release that arrives after the cancel finds no drag and does nothing.
-        let _ = shell.update(Message::TabDragEnd);
-        assert_eq!(
-            tab_order(&shell),
-            before,
-            "an abandoned drag changes nothing"
-        );
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::Unfocused,
+        ));
+        assert!(shell.tab_drag.is_none(), "focus loss ends the drag");
+        // The release the window could not see must not commit later.
+        deliver_window_event(&mut shell, left_release());
+        assert_eq!(tab_order(&shell), before, "nothing moved");
         assert_eq!(shell.core.workspace.active, active_before);
-        assert!(shell.tab_drag.is_none());
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+        #[test]
+        fn a_release_moves_the_tab_once_to_the_last_slot_hovered(
+            from in 0usize..3,
+            hovered in proptest::collection::vec(0usize..3, 0..6),
+        ) {
+            let mut shell = shell_with_three_tabs();
+            let mut expected = tab_order(&shell);
+            let _ = shell.update(Message::TabDragStart(from));
+            for &slot in &hovered {
+                let _ = shell.update(Message::TabDragOver(slot));
+            }
+            deliver_window_event(&mut shell, left_release());
+
+            let to = hovered.last().copied().unwrap_or(from);
+            let carried = expected.remove(from);
+            expected.insert(to, carried);
+            proptest::prop_assert_eq!(tab_order(&shell), expected);
+            proptest::prop_assert!(shell.tab_drag.is_none());
+        }
     }
 
     #[test]

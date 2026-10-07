@@ -138,6 +138,9 @@ impl Shell {
                 // modifiers when focus returns.
                 self.link_modifier = false;
                 self.shift_modifier = false;
+                // Same for a tab drag's release: committing it on some later,
+                // unrelated release would drop the tab where nobody aimed it.
+                self.tab_drag = None;
                 let effects = self
                     .core
                     .apply(termherd_core::Event::WindowFocusChanged(false));
