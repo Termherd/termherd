@@ -7,7 +7,18 @@
 use iced::Color;
 use iced::widget::text::Text;
 use iced::widget::{container, text};
-use termherd_core::SessionStatus;
+use termherd_core::{SessionKind, SessionStatus};
+
+/// The tab chip's mark for what a tab runs: `✳` is the glyph Claude Code
+/// puts in its own title, `❯` a shell prompt. It takes the chip's text
+/// colour, leaving colour to the status dot beside it.
+pub(super) fn kind_icon<'a>(kind: SessionKind) -> Text<'a> {
+    text(match kind {
+        SessionKind::Claude => "✳",
+        SessionKind::Shell => "❯",
+    })
+    .size(12)
+}
 
 /// The activity dot for a status (FR8). Shared by the tab strip's chips and
 /// the sidebar's per-session dots so both stay in sync. The colour is the only

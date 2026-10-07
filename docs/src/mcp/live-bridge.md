@@ -24,6 +24,9 @@ Every tool answers a JSON **object**: MCP clients reject anything else on their
 schema check, which is why `list_sessions` puts its rows in a `sessions` field
 rather than answering the array itself.
 
+A tab title carries no kind marker: a fresh tab is titled after its project
+alone (`my-app`). Read what a session runs from its `kind` field.
+
 **`snapshot` is light by default**: structure only, no terminal text. Scope
 text to named handles with `terminals` (or set `focused_terminal: true` for the
 focused pane, when you do not know its handle yet), or pass `sections` (any of `"config"`,
