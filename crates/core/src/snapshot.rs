@@ -16,6 +16,8 @@
 
 use std::collections::BTreeMap;
 
+use termherd_claude::session_file::SessionFile;
+
 use crate::app::SessionStatus;
 
 /// Default number of trailing terminal lines a snapshot keeps per scoped
@@ -109,6 +111,11 @@ pub struct SnapshotInputs {
     /// Full visible text per session handle, from the `pty` adapter. The core
     /// keeps only the scoped handles and truncates each to `text_lines`.
     pub terminals: BTreeMap<u64, String>,
+    /// Claude's per-process session files, keyed by the pid that names them,
+    /// read by the adapter for the pids the panes report. A pid with no entry
+    /// had no readable file, which is not an error: an older CLI, or a
+    /// session still starting, writes none.
+    pub session_files: BTreeMap<u32, SessionFile>,
 }
 
 /// The config bits the pure core cannot read — the terminal scheme, the record
@@ -233,6 +240,23 @@ pub struct PaneSnapshot {
     pub cwd: Option<String>,
     /// Current activity.
     pub status: SessionStatus,
+    /// Who the Claude in this pane is; all `None` for a shell pane.
+    pub identity: ClaudeIdentity,
+}
+
+/// What identifies the Claude process a pane runs, to a peer that wants to
+/// address it. Every field is `None` for a shell pane, and wherever the
+/// platform or Claude Code itself does not say.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClaudeIdentity {
+    /// The Claude process id — the job in front of the pane's shell. `None`
+    /// on Windows, where ConPTY reports no foreground process group.
+    pub pid: Option<u32>,
+    /// The name other Claude sessions address this one by, from its session
+    /// file. `None` when the file is absent or names none.
+    pub peer_name: Option<String>,
+    /// The Claude session id, from the same file. `None` likewise.
+    pub session_id: Option<String>,
 }
 
 /// The kind of program a session runs, as an external client sees it — the

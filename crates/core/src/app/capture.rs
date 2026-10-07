@@ -36,6 +36,7 @@ mod tests {
                 keymap_overrides: 2,
             }),
             terminals: BTreeMap::from([(focused.0.get(), text.to_owned())]),
+            ..SnapshotInputs::default()
         }
     }
 

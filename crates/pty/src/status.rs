@@ -156,6 +156,16 @@ pub(crate) fn foreground_status(leader: Option<i32>, shell: Option<u32>) -> Opti
     })
 }
 
+/// The process id of the job a PTY's shell is running in the foreground, or
+/// `None` while the shell itself is in front, or where the platform cannot
+/// say. A job's process-group leader is its first process, so for a Claude
+/// launched at the prompt this is Claude's own pid — the one naming its
+/// session file.
+pub(crate) fn foreground_job(leader: Option<i32>, shell: Option<u32>) -> Option<u32> {
+    let _ = (leader, shell);
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +293,26 @@ mod tests {
         // waiting on it.
         assert_eq!(foreground_status(None, Some(4321)), None);
         assert_eq!(foreground_status(Some(4321), None), None);
+    }
+
+    #[test]
+    fn a_job_in_front_of_the_shell_is_reported_by_its_pid() {
+        assert_eq!(foreground_job(Some(4399), Some(4321)), Some(4399));
+    }
+
+    #[test]
+    fn the_shell_in_front_means_no_job() {
+        assert_eq!(foreground_job(Some(4321), Some(4321)), None);
+    }
+
+    #[test]
+    fn no_job_is_invented_where_the_platform_cannot_report_one() {
+        assert_eq!(foreground_job(None, Some(4321)), None);
+        // Without the shell's own pid there is nothing to tell a job from the
+        // shell by.
+        assert_eq!(foreground_job(Some(4399), None), None);
+        // A leader is a pid, and no pid is negative.
+        assert_eq!(foreground_job(Some(-1), Some(4321)), None);
     }
 
     #[test]

@@ -27,6 +27,13 @@ pub enum PtyEvent {
     /// from the last one reported — so a `cd` stops being invisible to
     /// everything that reads a session's directory.
     Cwd { session: SessionId, cwd: String },
+    /// The job in front of the shell changed: its pid, or `None` once the
+    /// shell is back in front. Sent on change only, from the same foreground
+    /// poll that drives a shell's status.
+    ForegroundJob {
+        session: SessionId,
+        pid: Option<u32>,
+    },
     /// An OSC 9 notification fired: Claude wants the user. Carries the
     /// raw payload text, forwarded to the OS notification centre on top of the
     /// in-app `Attention` status (which `Status` already conveys).

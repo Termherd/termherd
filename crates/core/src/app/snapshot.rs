@@ -6,10 +6,12 @@
 
 use crate::browser::{SessionRecord, session_matches};
 use crate::snapshot::{
-    ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section, SidebarSnapshot,
-    SnapshotFilter, SnapshotInputs, TabSnapshot, TerminalScope, WorkspaceSnapshot, tail_lines,
+    ClaudeIdentity, ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section,
+    SidebarSnapshot, SnapshotFilter, SnapshotInputs, TabSnapshot, TerminalScope, WorkspaceSnapshot,
+    tail_lines,
 };
 use std::collections::BTreeMap;
+use termherd_claude::session_file::SessionFile;
 
 use super::*;
 
@@ -177,7 +179,21 @@ fn pane_snapshot(session: &LiveSession) -> PaneSnapshot {
         kind: session.launch.kind(),
         cwd: session.cwd.clone(),
         status: session.status,
+        identity: ClaudeIdentity::default(),
     }
+}
+
+/// Who the Claude in `session` is: its pid, and what its session file says
+/// about it among `session_files`. The one place that decides a shell pane
+/// has no identity and that a file must belong to the pid in front, so the
+/// snapshot and `list_sessions` cannot disagree about either.
+#[must_use]
+pub fn claude_identity(
+    session: &LiveSession,
+    session_files: &BTreeMap<u32, SessionFile>,
+) -> ClaudeIdentity {
+    let _ = (session, session_files);
+    ClaudeIdentity::default()
 }
 
 #[cfg(test)]
@@ -185,9 +201,11 @@ mod tests {
     use super::*;
     use crate::app::testsupport::*;
     use crate::snapshot::{
-        ConfigInput, Section, SessionKind, SnapshotFilter, SnapshotInputs, TerminalScope,
+        ConfigInput, PaneSnapshot, Section, SessionKind, SnapshotFilter, SnapshotInputs,
+        TerminalScope,
     };
     use crate::workspace::SplitDir;
+    use termherd_claude::session_file::SessionFile;
 
     /// A filter for exactly the sections named, otherwise light (no terminal
     /// text).
@@ -498,6 +516,153 @@ mod tests {
             Some("/proj/crates/pty"),
             "the snapshot must follow the shell, not the launch"
         );
+    }
+
+    fn session(handle: u64) -> SessionId {
+        SessionId(std::num::NonZeroU64::new(handle).expect("nonzero"))
+    }
+
+    fn session_file(pid: u32, name: &str, session_id: &str) -> SessionFile {
+        SessionFile {
+            pid,
+            name: Some(name.to_owned()),
+            session_id: Some(session_id.to_owned()),
+        }
+    }
+
+    fn panes(app: &App, inputs: &SnapshotInputs) -> Vec<PaneSnapshot> {
+        let snap = app.snapshot(&only_sections(&[Section::Tabs]), inputs);
+        snap.tabs
+            .expect("tabs were requested")
+            .into_iter()
+            .flat_map(|tab| tab.panes)
+            .collect()
+    }
+
+    #[test]
+    fn a_claude_pane_reports_its_pid_and_the_identity_its_session_file_names() {
+        let mut app = App::new();
+        let handle = launch_claude_in(&mut app, "/proj", "work");
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            pid: Some(4399),
+        });
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(4399, session_file(4399, "proj-35", "7eff"))]),
+            ..SnapshotInputs::default()
+        };
+
+        let pane = &panes(&app, &inputs)[0];
+        assert_eq!(pane.identity.pid, Some(4399));
+        assert_eq!(pane.identity.peer_name.as_deref(), Some("proj-35"));
+        assert_eq!(pane.identity.session_id.as_deref(), Some("7eff"));
+    }
+
+    #[test]
+    fn a_claude_pane_with_no_session_file_reports_its_pid_alone() {
+        let mut app = App::new();
+        let handle = launch_claude_in(&mut app, "/proj", "work");
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            pid: Some(4399),
+        });
+
+        let pane = &panes(&app, &SnapshotInputs::default())[0];
+        assert_eq!(pane.identity.pid, Some(4399));
+        assert_eq!(pane.identity.peer_name, None);
+        assert_eq!(pane.identity.session_id, None);
+    }
+
+    #[test]
+    fn the_shell_back_in_front_clears_the_pid_and_the_identity() {
+        let mut app = App::new();
+        let handle = launch_claude_in(&mut app, "/proj", "work");
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            pid: Some(4399),
+        });
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            pid: None,
+        });
+        // A stale file for the old pid must not resurface once Claude left.
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(4399, session_file(4399, "proj-35", "7eff"))]),
+            ..SnapshotInputs::default()
+        };
+
+        let pane = &panes(&app, &inputs)[0];
+        assert_eq!(
+            (pane.identity.pid, pane.identity.peer_name.as_deref()),
+            (None, None),
+            "no job in front means no Claude to name"
+        );
+    }
+
+    #[test]
+    fn a_shell_pane_reports_no_claude_identity_even_while_a_job_runs() {
+        let mut app = App::new();
+        let handle = launch(&mut app, "a").0.get();
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            pid: Some(5000),
+        });
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(5000, session_file(5000, "typed-claude", "s"))]),
+            ..SnapshotInputs::default()
+        };
+
+        let pane = &panes(&app, &inputs)[0];
+        assert_eq!(pane.kind, SessionKind::Shell);
+        assert_eq!(
+            (
+                pane.identity.pid,
+                pane.identity.peer_name.as_deref(),
+                pane.identity.session_id.as_deref()
+            ),
+            (None, None, None),
+            "the fields describe Claude panes only"
+        );
+    }
+
+    #[test]
+    fn two_claude_panes_in_one_directory_keep_their_own_identities() {
+        // Same cwd, so nothing a pane already reported told them apart: the
+        // case that sent a peer message to the wrong session.
+        let mut app = App::new();
+        let first = launch_claude_in(&mut app, "/proj", "one");
+        let second = launch_claude_in(&mut app, "/proj", "two");
+        for (handle, pid) in [(first, 4001), (second, 4002)] {
+            app.apply(Event::ForegroundJobChanged {
+                session: session(handle),
+                pid: Some(pid),
+            });
+        }
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([
+                (4001, session_file(4001, "proj-1", "aaaa")),
+                (4002, session_file(4002, "proj-2", "bbbb")),
+            ]),
+            ..SnapshotInputs::default()
+        };
+
+        let by_handle: BTreeMap<u64, Option<String>> = panes(&app, &inputs)
+            .into_iter()
+            .map(|pane| (pane.handle, pane.identity.peer_name))
+            .collect();
+        assert_eq!(by_handle[&first].as_deref(), Some("proj-1"));
+        assert_eq!(by_handle[&second].as_deref(), Some("proj-2"));
+    }
+
+    #[test]
+    fn a_job_change_for_an_unknown_session_is_ignored() {
+        let mut app = App::new();
+        let effects = app.apply(Event::ForegroundJobChanged {
+            session: session(99),
+            pid: Some(1),
+        });
+        assert!(effects.is_empty());
+        assert!(panes(&app, &SnapshotInputs::default()).is_empty());
     }
 
     #[test]

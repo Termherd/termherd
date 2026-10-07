@@ -368,6 +368,7 @@ mod tests {
                     | PtyEvent::Title { .. }
                     | PtyEvent::Notification { .. }
                     | PtyEvent::Cwd { .. }
+                    | PtyEvent::ForegroundJob { .. }
                     | PtyEvent::SelectionCopied { .. },
                 ) => continue,
                 Ok(PtyEvent::Exited { .. }) => break,
@@ -498,6 +499,57 @@ mod tests {
         assert!(
             wait_for(&rx, SessionStatus::Busy, &mut seen),
             "a shell running a command must report busy, saw {seen:?}"
+        );
+        mgr.kill(id).expect("kill");
+    }
+
+    /// A **real job** in front of a real shell is reported by its pid, and the
+    /// shell's return to the front clears it — the seam a Claude pane's
+    /// session file is found through. `sleep` stands in for `claude`: both are
+    /// a foreground job the shell started.
+    ///
+    /// Skipped on Windows: ConPTY exposes no foreground process group.
+    #[test]
+    fn a_job_in_front_of_a_real_shell_is_reported_by_pid_then_cleared() {
+        if cfg!(windows) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel::<PtyEvent>();
+        let sink: EventSink = Arc::new(move |ev| {
+            let _ = tx.send(ev);
+        });
+        let mgr = PtyManager::new(sink, None, Palette::default());
+        let id = sid(5);
+        mgr.spawn(spec(id)).expect("spawn");
+        mgr.write(id, b"sleep 2\r\n").expect("write");
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut reported = Vec::new();
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(500)) {
+                Ok(PtyEvent::ForegroundJob { pid, .. }) => {
+                    reported.push(pid);
+                    if pid.is_none() && reported.iter().any(Option::is_some) {
+                        break;
+                    }
+                }
+                Ok(PtyEvent::Exited { .. }) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            }
+        }
+        let job = reported.iter().flatten().next();
+        assert!(
+            job.is_some_and(|&pid| pid > 0),
+            "the running job must be reported by its pid, saw {reported:?}"
+        );
+        assert_eq!(
+            reported.last(),
+            Some(&None),
+            "the shell back in front must clear the job, saw {reported:?}"
+        );
+        assert!(
+            reported.windows(2).all(|pair| pair[0] != pair[1]),
+            "a job is reported on change only, saw {reported:?}"
         );
         mgr.kill(id).expect("kill");
     }

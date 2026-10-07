@@ -20,7 +20,8 @@ pub use app::{
     App, DEFAULT_FONT_SIZE, Effect, Event, HoverTarget, Launch, LaunchSpec, LiveSession, McpConfig,
     MouseReporting, PathPurpose, PathRequest, PathRoots, PointerButton, PointerEvent, PointerKind,
     PointerRoute, ProbeKind, ResolvedPath, ScrollTarget, SelectOp, SelectSide, SessionStatus,
-    SidebarFold, SpawnSpec, TargetProbe, TermHover, Zoom, grid_line, pointer_select,
+    SidebarFold, SpawnSpec, TargetProbe, TermHover, Zoom, claude_identity, grid_line,
+    pointer_select,
 };
 pub use browser::{ProjectGroup, SessionRecord};
 pub use keymap::{Action, ActionBinding, ChordError, KeyChord, Keymap, action_catalog};
@@ -28,7 +29,8 @@ pub use metadata::{Overlay, RepoMeta, SessionMeta};
 pub use open::{OpenCommand, OpenCommandError, OpenTarget};
 pub use record::Recording;
 pub use snapshot::{
-    ConfigInput, ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section, SessionKind,
-    SidebarSnapshot, SnapshotFilter, SnapshotInputs, TabSnapshot, TerminalScope, WorkspaceSnapshot,
+    ClaudeIdentity, ConfigInput, ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section,
+    SessionKind, SidebarSnapshot, SnapshotFilter, SnapshotInputs, TabSnapshot, TerminalScope,
+    WorkspaceSnapshot,
 };
 pub use workspace::{Branch, Pane, SessionId, SplitDir, Tab, Workspace};

@@ -154,3 +154,49 @@ fn pane_dto(pane: &termherd_core::PaneSnapshot) -> PaneDto {
         status: status_str(pane.status),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use termherd_core::{ClaudeIdentity, PaneSnapshot};
+
+    fn pane(kind: SessionKind, identity: ClaudeIdentity) -> serde_json::Value {
+        serde_json::to_value(pane_dto(&PaneSnapshot {
+            handle: 7,
+            kind,
+            cwd: Some("/proj".to_owned()),
+            status: SessionStatus::Idle,
+            identity,
+        }))
+        .expect("encode")
+    }
+
+    #[test]
+    fn a_claude_pane_carries_pid_peer_name_and_session_id_flat() {
+        let json = pane(
+            SessionKind::Claude,
+            ClaudeIdentity {
+                pid: Some(4399),
+                peer_name: Some("proj-35".to_owned()),
+                session_id: Some("7eff".to_owned()),
+            },
+        );
+        assert_eq!(json["pid"], 4399);
+        assert_eq!(json["peer_name"], "proj-35");
+        assert_eq!(json["session_id"], "7eff");
+    }
+
+    #[test]
+    fn an_unknown_identity_is_null_not_missing() {
+        // A reader tells "termherd does not know" from "this termherd predates
+        // the field" by the key being there.
+        let json = pane(SessionKind::Shell, ClaudeIdentity::default());
+        for key in ["pid", "peer_name", "session_id"] {
+            assert_eq!(
+                json.get(key),
+                Some(&serde_json::Value::Null),
+                "{key} must be present and null"
+            );
+        }
+    }
+}

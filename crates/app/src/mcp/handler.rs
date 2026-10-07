@@ -1377,7 +1377,9 @@ fn check_claude_nesting(
 mod tests {
     use super::*;
     use crate::shell::bridge::{Reply, Request, ShotResult, channel, spawn_test_shell};
-    use termherd_core::{App, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs};
+    use termherd_core::{
+        App, ClaudeIdentity, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs,
+    };
 
     #[tokio::test]
     async fn list_sessions_tool_shapes_the_bridge_reply_into_structured_json() {
@@ -1392,6 +1394,7 @@ mod tests {
                 kind: SessionKind::Claude,
                 resume_id: Some("claude-xyz".into()),
                 status: SessionStatus::Busy,
+                identity: ClaudeIdentity::default(),
             }]),
         );
 
@@ -1418,6 +1421,53 @@ mod tests {
             rows[0]["resume_id"], "claude-xyz",
             "the Claude id rides alongside the handle, not as it"
         );
+    }
+
+    #[tokio::test]
+    async fn list_sessions_carries_each_claude_identity_flat_and_null_when_unknown() {
+        let (handle, requests) = channel();
+        let row = |handle: &str, kind, identity| SessionInfo {
+            handle: handle.into(),
+            title: "proj".into(),
+            cwd: Some("/proj".into()),
+            kind,
+            resume_id: None,
+            status: SessionStatus::Idle,
+            identity,
+        };
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Sessions(vec![
+                row(
+                    "7",
+                    SessionKind::Claude,
+                    ClaudeIdentity {
+                        pid: Some(4399),
+                        peer_name: Some("proj-35".into()),
+                        session_id: Some("7eff".into()),
+                    },
+                ),
+                row("8", SessionKind::Shell, ClaudeIdentity::default()),
+            ]),
+        );
+
+        let result = TermherdMcp::new(handle)
+            .list_sessions()
+            .await
+            .expect("the tool returns a result");
+
+        let value = result.structured_content.expect("structured json content");
+        let rows = value["sessions"].as_array().cloned().expect("rows");
+        assert_eq!(rows[0]["pid"], 4399);
+        assert_eq!(rows[0]["peer_name"], "proj-35");
+        assert_eq!(rows[0]["session_id"], "7eff");
+        for key in ["pid", "peer_name", "session_id"] {
+            assert_eq!(
+                rows[1].get(key),
+                Some(&serde_json::Value::Null),
+                "{key} must be present and null on a shell row"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1537,6 +1587,7 @@ mod tests {
                         kind: SessionKind::Shell,
                         resume_id: None,
                         status: SessionStatus::Idle,
+                        identity: ClaudeIdentity::default(),
                     }]),
                     acted(),
                     Reply::Waited(WaitOutcome {
@@ -2350,6 +2401,7 @@ mod tests {
                     kind: SessionKind::Shell,
                     resume_id: None,
                     status: SessionStatus::Busy,
+                    identity: ClaudeIdentity::default(),
                 }])),
             ],
         );
@@ -2524,6 +2576,7 @@ mod tests {
                     kind: SessionKind::Shell,
                     resume_id: None,
                     status: SessionStatus::Idle,
+                    identity: ClaudeIdentity::default(),
                 }])),
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Waited(WaitOutcome {
@@ -2565,6 +2618,7 @@ mod tests {
                 kind: SessionKind::Claude,
                 resume_id: Some("id1".into()),
                 status: SessionStatus::Idle,
+                identity: ClaudeIdentity::default(),
             }]))],
         );
         let error = TermherdMcp::new(handle)
@@ -2599,6 +2653,7 @@ mod tests {
                     kind: SessionKind::Claude,
                     resume_id: Some("id1".into()),
                     status: SessionStatus::Idle,
+                    identity: ClaudeIdentity::default(),
                 }])),
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Waited(WaitOutcome {

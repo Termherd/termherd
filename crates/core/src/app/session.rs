@@ -36,6 +36,10 @@ pub struct LiveSession {
     pub launch: Launch,
     /// Activity derived from the OSC stream (FR8).
     pub status: SessionStatus,
+    /// The pid of the job in front of the shell, as the PTY adapter last
+    /// reported it ([`Event::ForegroundJobChanged`]). `None` at the prompt and
+    /// wherever the platform has no foreground process group (ConPTY).
+    pub foreground_pid: Option<u32>,
 }
 
 impl LiveSession {
@@ -272,6 +276,7 @@ impl App {
             launch_cwd: spec.cwd.clone(),
             launch: spec.launch.clone(),
             status: SessionStatus::Starting,
+            foreground_pid: None,
         });
         self.workspace.open(id, spec.title);
         vec![Effect::Spawn(SpawnSpec {
@@ -306,6 +311,7 @@ impl App {
             launch_cwd: cwd.clone(),
             launch: Launch::Shell,
             status: SessionStatus::Starting,
+            foreground_pid: None,
         });
         vec![Effect::Spawn(SpawnSpec {
             session: id,
@@ -327,6 +333,17 @@ impl App {
     /// exit on a Claude tab is that same shell `exit`, closed like any other.
     /// If launching ever `exec`s Claude directly, revisit: the CLI quitting
     /// would then end the PTY cleanly and auto-close a tab worth reviewing.
+    /// Record the job now in front of `session`'s shell. Unknown sessions are
+    /// ignored, like every other adapter report about one.
+    pub(super) fn foreground_job_changed(
+        &mut self,
+        session: SessionId,
+        pid: Option<u32>,
+    ) -> Vec<Effect> {
+        let _ = (session, pid);
+        Vec::new()
+    }
+
     pub(super) fn pty_exited(&mut self, session: SessionId, clean: bool) -> Vec<Effect> {
         if clean
             && self.sessions.contains_key(&session)

@@ -172,6 +172,7 @@ impl Shell {
                 .includes(Section::Config)
                 .then(|| self.config.clone()),
             terminals: self.scoped_terminal_text(filter),
+            session_files: BTreeMap::new(),
         }
     }
 

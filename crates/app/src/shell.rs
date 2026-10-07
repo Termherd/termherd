@@ -392,6 +392,11 @@ enum Message {
         session: SessionId,
         cwd: String,
     },
+    /// The job in front of a session's shell changed (its pid, or none).
+    PtyForegroundJob {
+        session: SessionId,
+        pid: Option<u32>,
+    },
     /// A session fired an OSC 9 notification; forward it to the OS.
     PtyNotify {
         session: SessionId,
@@ -912,6 +917,12 @@ impl Shell {
                 let effects = self
                     .core
                     .apply(termherd_core::Event::SessionCwdChanged { session, cwd });
+                self.perform(effects)
+            }
+            Message::PtyForegroundJob { session, pid } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::ForegroundJobChanged { session, pid });
                 self.perform(effects)
             }
             Message::PtyNotify { session, body } => {

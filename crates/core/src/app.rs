@@ -50,6 +50,7 @@ pub use pointer::{
 pub use session::{Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
+pub use snapshot::claude_identity;
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -217,6 +218,9 @@ impl App {
                     s.cwd = Some(cwd);
                 }
                 Vec::new()
+            }
+            Event::ForegroundJobChanged { session, pid } => {
+                self.foreground_job_changed(session, pid)
             }
             Event::ActivateTab(index) => {
                 self.workspace.activate(index);
