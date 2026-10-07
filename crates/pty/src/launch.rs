@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn a_fresh_claude_launch_types_bare_claude() {
-        // The 🤖 button must start Claude *fresh*, never with
+        // The Claude button must start Claude *fresh*, never with
         // a stray `--resume`.
         assert_eq!(
             launch_command(&Launch::Claude { resume: None }, None, None),

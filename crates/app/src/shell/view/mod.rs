@@ -30,7 +30,8 @@ mod tabs;
 use doc_editor::doc_editor;
 use modals::modal;
 use style::{
-    card_secondary_text, card_style, clip, kind_icon, mix, sidebar_secondary_text, status_dot,
+    card_secondary_text, card_style, clip, kind_glyph, kind_icon, mix, sidebar_secondary_text,
+    status_dot,
 };
 
 impl Shell {

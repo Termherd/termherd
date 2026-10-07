@@ -18,13 +18,13 @@ Toggle it with <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>B</kbd>.
 │ ★ Favorites              │
 │   my-app · fix the race  │
 ├──────────────────────────┤
-│   new-repo     $  🤖  ✕  │  ← added by hand, no sessions yet
+│   new-repo     ❯  ✳   ✕  │  ← added by hand, no sessions yet
 │     No sessions yet …    │
-│ ▾ my-app          $  🤖  │  ← launch a shell / a fresh Claude session
+│ ▾ my-app          ❯  ✳   │  ← launch a shell / a fresh Claude session
 │     fix the race  ★ ⊟ ✎  │
 │     add the cache ★ ⊟ ✎  │
 │     … 3 more             │
-│ ▸ other-repo      $  🤖  │
+│ ▸ other-repo      ❯  ✳   │
 ├──────────────────────────┤
 │ Plans & memory           │
 │   CLAUDE.md (global)     │
@@ -37,8 +37,8 @@ Toggle it with <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>B</kbd>.
 
 Click a project to expand it, then a session to resume it in a new tab.
 
-Beside each project row are two launch buttons: **`$`** opens a plain shell in
-that project's directory, **🤖** starts a fresh Claude session there. The same
+Beside each project row are two launch buttons: **`❯`** opens a plain shell in
+that project's directory, **`✳`** starts a fresh Claude session there. The same
 two actions are on the keyboard as <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>T</kbd>
 and <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>, which use the
 *focused* session's
@@ -54,7 +54,7 @@ the window**. Both do the same thing.
 Drop a **folder**, not a file: a dropped file is ignored, so dragging one onto
 a terminal never quietly adds its directory.
 
-The row that appears carries the same `$` and 🤖 buttons as any other, and says
+The row that appears carries the same `❯` and `✳` buttons as any other, and says
 `No sessions yet` until it has one. When it does, it becomes an ordinary
 project row — there is no second entry.
 
@@ -135,5 +135,5 @@ edits without asking** — a known rough edge, tracked as
 ## When nothing is open
 
 With no session open, the main pane shows a welcome card: how many sessions in
-how many projects were found, and the two ways to start — the `$` / 🤖 buttons
+how many projects were found, and the two ways to start — the `❯` / `✳` buttons
 beside a project, or a click on a session to resume it.

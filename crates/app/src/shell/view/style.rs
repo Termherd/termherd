@@ -9,15 +9,21 @@ use iced::widget::text::Text;
 use iced::widget::{container, text};
 use termherd_core::{SessionKind, SessionStatus};
 
-/// The tab chip's mark for what a tab runs: `✳` is the glyph Claude Code
-/// puts in its own title, `❯` a shell prompt. It takes the chip's text
-/// colour, leaving colour to the status dot beside it.
-pub(super) fn kind_icon<'a>(kind: SessionKind) -> Text<'a> {
-    text(match kind {
+/// The mark for what a session runs, shared by the sidebar's launch buttons
+/// and the tab chips so the button that opens a tab shows what the tab will
+/// show: `✳` is the glyph Claude Code puts in its own title, `❯` a shell
+/// prompt.
+pub(super) fn kind_glyph(kind: SessionKind) -> &'static str {
+    match kind {
         SessionKind::Claude => "✳",
         SessionKind::Shell => "❯",
-    })
-    .size(12)
+    }
+}
+
+/// The tab chip's kind mark. It takes the chip's text colour, leaving colour
+/// to the status dot beside it.
+pub(super) fn kind_icon<'a>(kind: SessionKind) -> Text<'a> {
+    text(kind_glyph(kind)).size(12)
 }
 
 /// The activity dot for a status (FR8). Shared by the tab strip's chips and
