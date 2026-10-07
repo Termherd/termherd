@@ -90,9 +90,9 @@ impl Shell {
                     .padding(6)
                     .style(move |theme: &iced::Theme| tab_chip_style(theme, active, dragging_this));
                 // A press starts a drag; entering another chip moves the drop
-                // slot; a double-click opens the inline rename. Release/cancel are
-                // handled by the strip below, so a plain click (press and release
-                // on the same chip) still just activates it. The × button captures
+                // slot; a double-click opens the inline rename. The release is
+                // heard by the shell's window-wide listener, which runs after this
+                // press, so a plain click still just activates it. The × captures
                 // its own click, so it never starts a drag.
                 let chip = mouse_area(chip)
                     .on_press(Message::TabDragStart(index))
@@ -120,14 +120,9 @@ impl Shell {
         if caret_at == Some(tabs.len()) {
             bar = bar.push(insertion_caret());
         }
-        // One release anywhere over the strip ends the drag (committing the
-        // reorder at the last-hovered slot); leaving the strip abandons it.
-        Some(
-            mouse_area(bar)
-                .on_release(Message::TabDragEnd)
-                .on_exit(Message::TabDragCancel)
-                .into(),
-        )
+        // The release that ends a drag is heard window-wide by the shell's
+        // subscription, so the strip carries no release or exit handler.
+        Some(bar.into())
     }
 
     /// The hover card for a tab. A tab that resumes a browsed session
