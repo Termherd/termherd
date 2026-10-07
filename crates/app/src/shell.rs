@@ -1730,9 +1730,9 @@ mod key_routing {
     // pin the shell-side seam: handle resolution, the applied mutation, and
     // the reported resulting focus.
 
-    // `Action`/`SessionKind` already name the `termherd_core` types in this
-    // module, so the bridge's carry a `Bridge` prefix here.
-    use super::bridge::{Action as BridgeAction, SessionKind as BridgeKind};
+    // `Action` already names the `termherd_core` type in this module, so the
+    // bridge's carries a `Bridge` prefix here.
+    use super::bridge::Action as BridgeAction;
     use termherd_core::workspace::SplitDir;
 
     /// The focused session's handle string, or `None` when nothing is focused.
@@ -1750,7 +1750,7 @@ mod key_routing {
         let mut shell = shell_over(pty.clone());
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: Some("/tmp/x".into()),
-            kind: BridgeKind::Shell,
+            kind: SessionKind::Shell,
         });
         assert_eq!(outcome.error, None, "opening a session never rejects");
         assert_eq!(
@@ -1769,7 +1769,7 @@ mod key_routing {
         let mut shell = shell_over(pty.clone());
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: None,
-            kind: BridgeKind::Claude,
+            kind: SessionKind::Claude,
         });
         assert_eq!(outcome.error, None);
         assert_eq!(

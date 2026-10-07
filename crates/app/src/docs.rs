@@ -30,7 +30,7 @@ pub struct DocEntry {
 #[must_use]
 pub fn discover(project_paths: &[String]) -> Vec<DocEntry> {
     let mut docs = Vec::new();
-    if let Some(home) = claude_home() {
+    if let Some(home) = crate::paths::claude_dir() {
         let global = home.join("CLAUDE.md");
         if global.is_file() {
             docs.push(DocEntry {
@@ -172,16 +172,11 @@ fn last_component(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-/// `~/.claude` — home of plans and memory.
-fn claude_home() -> Option<PathBuf> {
-    Some(crate::paths::home_dir()?.join(".claude"))
-}
-
 /// `~/.claude` if it resolves, else a path that is the prefix of nothing — so a
 /// project `CLAUDE.md` (outside any home) is still writable while no file can be
 /// mistaken for one inside the protected tree.
 fn home_or_sentinel() -> PathBuf {
-    claude_home().unwrap_or_else(|| PathBuf::from("\0/no-claude-home"))
+    crate::paths::claude_dir().unwrap_or_else(|| PathBuf::from("\0/no-claude-home"))
 }
 
 #[cfg(test)]

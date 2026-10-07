@@ -31,15 +31,15 @@ use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
 use termherd_core::{
     Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, PointerRoute,
-    Section, SessionStatus, SnapshotFilter, TerminalScope,
+    Section, SessionKind, SessionStatus, SnapshotFilter, TerminalScope,
 };
 use termherd_mcp::file::SetAtError;
 
 use crate::shell::bridge::{
     Action, ActionDetail, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo,
-    SessionKind, TerminalRead,
+    TerminalRead,
 };
-use crate::snapshot_dto::{SnapshotDto, status_str};
+use crate::snapshot_dto::{SnapshotDto, kind_str, status_str};
 
 /// How long a tool waits for the shell to answer before failing the caller.
 /// Bounds the whole round-trip (enqueue + reply) via [`BridgeHandle::call`], so
@@ -917,10 +917,7 @@ impl From<&SessionInfo> for SessionDto {
             handle: info.handle.clone(),
             title: info.title.clone(),
             cwd: info.cwd.clone(),
-            kind: match info.kind {
-                SessionKind::Shell => "shell",
-                SessionKind::Claude => "claude",
-            },
+            kind: kind_str(info.kind),
             resume_id: info.resume_id.clone(),
             status: status_str(info.status),
         }

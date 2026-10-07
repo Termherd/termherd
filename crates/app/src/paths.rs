@@ -1,8 +1,8 @@
-//! Shared filesystem locations — the user's home dir and the `~/.termherd` app
-//! data dir (PRD §7). Resolved in one place so every store speaks the same
-//! `USERPROFILE`/`HOME` precedence and the same dir name; the alternative is the
-//! seven hand-rolled copies this replaces, which drift the day the location
-//! moves.
+//! Shared filesystem locations — the user's home dir, the `~/.termherd` app
+//! data dir (PRD §7) and Claude's `~/.claude`. Resolved in one place so every
+//! store speaks the same `USERPROFILE`/`HOME` precedence and the same dir name;
+//! the alternative is the seven hand-rolled copies this replaces, which drift
+//! the day the location moves.
 
 use std::path::PathBuf;
 
@@ -20,4 +20,12 @@ pub fn home_dir() -> Option<PathBuf> {
 #[must_use]
 pub fn termherd_dir() -> Option<PathBuf> {
     home_dir().map(|home| home.join(".termherd"))
+}
+
+/// `~/.claude` — Claude Code's own data dir, which termherd reads (plans,
+/// memory, per-process session files) and never owns. `None` when no home
+/// directory is set.
+#[must_use]
+pub fn claude_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".claude"))
 }

@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
 use termherd_core::{
-    Action as KeymapAction, App, KeyChord, Launch, LiveSession, PointerEvent, PointerRoute,
+    Action as KeymapAction, App, KeyChord, LiveSession, PointerEvent, PointerRoute, SessionKind,
     SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot, workspace::SplitDir,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -115,7 +115,7 @@ pub enum Press {
 /// What the routing ladder did with one [`Press`].
 ///
 /// The wire-side twin of the shell's internal `KeyVerdict`, kept separate for
-/// the reason [`SessionKind`] is: the external surface stays plain and owned,
+/// the reason [`Action`] is: the external surface stays plain and owned,
 /// with no shell-internal type leaking through it. The mapping between them is
 /// one exhaustive `match`, so a new verdict is a compile error here rather than
 /// a case that quietly reports as something else.
@@ -378,15 +378,6 @@ pub enum Reply {
     Pressed(PressOutcome),
 }
 
-/// The kind of program a session runs, as an MCP client sees it. Distinct from
-/// `core::Launch` (which also carries the resume id) so the external surface
-/// stays a plain tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionKind {
-    Shell,
-    Claude,
-}
-
 /// One live session as an external MCP client sees it.
 ///
 /// `handle` is the **stable external id** — the runtime `SessionId`, minted once
@@ -545,10 +536,7 @@ pub fn list_sessions(core: &App) -> Vec<SessionInfo> {
                 .map(|tab| tab.title.clone())
                 .unwrap_or_default(),
             cwd: s.cwd.clone(),
-            kind: match s.launch {
-                Launch::Shell => SessionKind::Shell,
-                Launch::Claude { .. } => SessionKind::Claude,
-            },
+            kind: s.launch.kind(),
             resume_id: s.launch.resume_id().map(str::to_owned),
             status: s.status,
         })

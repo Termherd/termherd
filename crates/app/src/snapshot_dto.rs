@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use termherd_core::{SessionStatus, WorkspaceSnapshot};
+use termherd_core::{SessionKind, SessionStatus, WorkspaceSnapshot};
 
 /// The on-the-wire snapshot.
 #[derive(Serialize)]
@@ -81,6 +81,14 @@ struct PaneDto {
     status: &'static str,
 }
 
+/// The stable external string for a session kind — one place every DTO reads.
+pub(crate) fn kind_str(kind: SessionKind) -> &'static str {
+    match kind {
+        SessionKind::Shell => "shell",
+        SessionKind::Claude => "claude",
+    }
+}
+
 /// The stable external string for a session status — one place every DTO reads.
 pub(crate) fn status_str(status: SessionStatus) -> &'static str {
     match status {
@@ -141,10 +149,7 @@ impl From<&WorkspaceSnapshot> for SnapshotDto {
 fn pane_dto(pane: &termherd_core::PaneSnapshot) -> PaneDto {
     PaneDto {
         handle: pane.handle.to_string(),
-        kind: match pane.kind {
-            termherd_core::SessionKind::Shell => "shell",
-            termherd_core::SessionKind::Claude => "claude",
-        },
+        kind: kind_str(pane.kind),
         cwd: pane.cwd.clone(),
         status: status_str(pane.status),
     }
