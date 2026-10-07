@@ -85,7 +85,6 @@ issues #18–#29.
 | [F-activity-stats](#f-activity-stats) | feature | sessions | ☐ | Aggregate what the sessions have been doing — counts, durations, activity. |
 | [F-capture](#f-capture) | feature | workspace | ☐ | Capture termherd along a fidelity ladder: debug dumps, promo, bug repros. |
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ☐ | Send a confirmed slash command into an idle Claude session. |
-| [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ☐ | Copy a session's agent name, the one `/list-agents` shows. |
 | [F-file-browser](#f-file-browser) | feature | workspace, sidebar | ☐ | A file tree for the focused repository, floating or as a right pane. |
 | [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ☐ | A `rename-tab` keymap action opening the focused tab's inline rename. |
 | [F-launch-profiles](#f-launch-profiles) | feature | sessions | ☐ | Persistent per-project `--add-dir`, applied to fresh and resumed launches. |
@@ -107,6 +106,7 @@ issues #18–#29.
 | [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ☐ | The tab hover card shows agent name, model, effort, version and elapsed time. |
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
 | [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ☐ | A Claude tab's title follows the session name Claude holds. |
+| [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
 | [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
 | [F-mcp-keys](#f-mcp-keys) | feature | mcp, keymap | ✅ | The keyboard rung: drive the app by key chords through the real keymap. |
@@ -846,17 +846,6 @@ is idle, behind a confirmation overlay that names the exact line typed. The
 overlay is a `KeyboardOwner` rung, so `escape` leaves it. Claude drives the
 information termherd shows; termherd sends actions.
 
-<a id="f-copy-agent-name"></a>
-
-### F-copy-agent-name
-
-Copy a session's agent name, the one `/list-agents` shows.
-
-The peer name Claude Code gives a session (`termherd-b0`) is how one session
-addresses another (#339). Read from `~/.claude/sessions/<pid>.json`, through
-the pid-to-session-file reader #333 needs anyway. Also shown in
-[F-tab-hover-details](#f-tab-hover-details).
-
 <a id="f-file-browser"></a>
 
 ### F-file-browser
@@ -1295,6 +1284,24 @@ session name and resumes following (#119). Renaming a Claude tab sends
 local copy that disagrees with Claude. Needs
 [F-session-id-at-launch](#f-session-id-at-launch) for fresh tabs. Torture
 report: `.personal/feature-torture/reports/F-tab-title-sync.md`.
+
+<a id="f-copy-agent-name"></a>
+
+### F-copy-agent-name
+
+Copy a session's agent name, the one `/list-agents` shows.
+
+The peer name Claude Code gives a session (`termherd-b0`) is how one session
+addresses another (#339). Read from `~/.claude/sessions/<pid>.json`, through
+the pid-to-session-file reader #333 needs anyway. Also shown in
+[F-tab-hover-details](#f-tab-hover-details).
+
+Shipped (#339): a `copy-agent-name` action, unbound by default and reachable
+through `run_action`, which re-reads the file on every press and is inert
+(`no-context`) when no Claude in front has written one; and an `Agent:` line
+in the tab hover card, read from a cache refreshed when the foreground job
+changes and when the pointer enters the tab. The tab menu entry waits
+for #340.
 
 <a id="f-mcp-agent-loop"></a>
 

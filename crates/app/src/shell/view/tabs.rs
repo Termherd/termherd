@@ -138,15 +138,15 @@ impl Shell {
         tab: &Tab,
         now: SystemTime,
     ) -> Element<'static, Message> {
+        let first = tab.sessions().first().copied();
+        let agent = first.and_then(|id| self.core.peer_name(id));
         match self.core.tab_record(index) {
-            Some(record) => session_card(self.core.session_title(record), record, now),
+            Some(record) => session_card(self.core.session_title(record), agent, record, now),
             None => {
-                let cwd = tab
-                    .sessions()
-                    .first()
-                    .and_then(|id| self.core.sessions.get(id))
+                let cwd = first
+                    .and_then(|id| self.core.sessions.get(&id))
                     .and_then(|s| s.cwd.clone());
-                tab_card(tab.display_title().to_owned(), cwd)
+                tab_card(tab.display_title().to_owned(), agent, cwd)
             }
         }
     }
@@ -204,8 +204,15 @@ fn insertion_caret<'a>() -> Element<'a, Message> {
 /// The minimal hover card for a tab with no browsed record — a shell or a fresh
 /// session: the full, untruncated title and the working directory it runs
 /// in. Styled like [`session_card`] so the two hover surfaces read alike.
-fn tab_card(title: String, cwd: Option<String>) -> Element<'static, Message> {
+fn tab_card(
+    title: String,
+    agent: Option<String>,
+    cwd: Option<String>,
+) -> Element<'static, Message> {
     let mut card = column![text(title).size(12)].spacing(4);
+    if let Some(agent) = agent {
+        card = card.push(super::agent_line(&agent));
+    }
     if let Some(cwd) = cwd {
         card = card.push(text(cwd).size(10).style(card_secondary_text));
     }

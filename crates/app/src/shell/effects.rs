@@ -195,15 +195,18 @@ impl Shell {
     // ponytail: one small read per pane on the GUI thread, per snapshot or
     // list_sessions; move it to the terminal thread if a caller polls hard.
     fn session_files(&self) -> BTreeMap<u32, SessionFile> {
-        let Some(dir) = &self.claude_sessions else {
-            return BTreeMap::new();
-        };
         self.core
             .sessions
             .values()
             .filter_map(|session| session.foreground.as_ref().map(|job| job.pid))
-            .filter_map(|pid| read_session_file(dir, pid).map(|file| (pid, file)))
+            .filter_map(|pid| self.session_file(pid).map(|file| (pid, file)))
             .collect()
+    }
+
+    /// Claude's session file for `pid`, read now. `None` when there is no
+    /// sessions directory, no file, or none that decodes.
+    pub(super) fn session_file(&self, pid: u32) -> Option<SessionFile> {
+        read_session_file(self.claude_sessions.as_ref()?, pid)
     }
 
     /// The full visible text of the sessions the filter scopes in, keyed by

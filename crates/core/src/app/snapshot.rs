@@ -204,16 +204,23 @@ pub fn claude_identity(
     session: &LiveSession,
     session_files: &BTreeMap<u32, SessionFile>,
 ) -> ClaudeIdentity {
-    let Some((job, file)) = session
-        .foreground
-        .as_ref()
-        .and_then(|job| session_files.get(&job.pid).map(|file| (job, file)))
-    else {
+    let job = session.foreground.as_ref();
+    identity_of(job, job.and_then(|job| session_files.get(&job.pid)))
+}
+
+/// The identity `file` proves for `job`, or none. Pure over the two, so a
+/// caller holding a cached file decides it exactly as the snapshot does.
+#[must_use]
+pub(super) fn identity_of(
+    job: Option<&ForegroundJob>,
+    file: Option<&SessionFile>,
+) -> ClaudeIdentity {
+    let (Some(job), Some(file)) = (job, file) else {
         return ClaudeIdentity::default();
     };
     // A crashed Claude leaves its file behind, and its pid free for whatever
     // the OS starts next: only the writer's own start time tells them apart.
-    if job.started.is_none() || job.started != file.proc_start {
+    if file.pid != job.pid || job.started.is_none() || job.started != file.proc_start {
         return ClaudeIdentity::default();
     }
     ClaudeIdentity {
@@ -840,5 +847,66 @@ mod tests {
             vec![second]
         );
         assert_eq!(snap.terminals.get(&second).map(String::as_str), Some("bbb"));
+    }
+
+    /// A Claude pane with `job` in front, the shell having read `file` for it.
+    fn pane_with(job: Option<ForegroundJob>, file: Option<SessionFile>) -> (App, SessionId) {
+        let mut app = App::new();
+        let id = session(launch_claude_in(&mut app, "/proj", "work"));
+        app.apply(Event::ForegroundJobChanged { session: id, job });
+        app.apply(Event::SessionFileRead { session: id, file });
+        (app, id)
+    }
+
+    #[test]
+    fn the_cached_session_file_names_the_claude_in_front() {
+        let (app, id) = pane_with(
+            Some(job(4399)),
+            Some(session_file(4399, "termherd-b0", "s")),
+        );
+        assert_eq!(app.peer_name(id).as_deref(), Some("termherd-b0"));
+    }
+
+    #[test]
+    fn a_file_read_for_an_earlier_job_names_nobody_once_another_runs() {
+        let (mut app, id) = pane_with(
+            Some(job(4399)),
+            Some(session_file(4399, "knowledge-hub-35", "s")),
+        );
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: Some(job(4500)),
+        });
+        assert_eq!(app.peer_name(id), None);
+    }
+
+    #[test]
+    fn a_reread_that_finds_no_file_forgets_the_name() {
+        let (mut app, id) = pane_with(
+            Some(job(4399)),
+            Some(session_file(4399, "termherd-b0", "s")),
+        );
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: None,
+        });
+        assert_eq!(app.peer_name(id), None);
+    }
+
+    #[test]
+    fn no_job_in_front_names_nobody_whatever_file_was_read() {
+        // Windows: ConPTY reports no foreground group, so there is no pid.
+        let (app, id) = pane_with(None, Some(session_file(4399, "termherd-b0", "s")));
+        assert_eq!(app.peer_name(id), None);
+    }
+
+    #[test]
+    fn a_dead_claudes_file_on_a_reused_pid_names_nobody() {
+        let stale = ForegroundJob {
+            pid: 4399,
+            started: Some("Thu Oct  8 09:00:00 2026".to_owned()),
+        };
+        let (app, id) = pane_with(Some(stale), Some(session_file(4399, "termherd-b0", "s")));
+        assert_eq!(app.peer_name(id), None);
     }
 }

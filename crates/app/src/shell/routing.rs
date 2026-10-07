@@ -184,6 +184,10 @@ impl Shell {
     pub(super) fn run_action(&mut self, action: Action) -> Result<Task<Message>, Inertia> {
         Ok(match action {
             Action::Copy => self.copy_selection().ok_or(Inertia::NoContext)?,
+            Action::CopyAgentName => self
+                .focused_agent_name()
+                .map(iced::clipboard::write)
+                .ok_or(Inertia::NoContext)?,
             Action::Paste => iced::clipboard::read().map(Message::Paste),
             Action::NextTab => self.cycle_tab(1).ok_or(Inertia::NoContext)?,
             Action::PrevTab => self.cycle_tab(-1).ok_or(Inertia::NoContext)?,

@@ -124,6 +124,9 @@ pub enum Action {
     OpenSettings,
     Copy,
     Paste,
+    /// Copy the focused Claude's peer name, the one other Claude sessions
+    /// address it by. Inert when no Claude in front of it has written one.
+    CopyAgentName,
     /// Jump the focused terminal's viewport to the top of its scrollback.
     ScrollTop,
     /// Jump the focused terminal's viewport back to the live bottom.
@@ -258,6 +261,11 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         action: Action::Paste,
         name: "paste",
+        default_chords: &[],
+    },
+    ActionDef {
+        action: Action::CopyAgentName,
+        name: "copy-agent-name",
         default_chords: &[],
     },
     ActionDef {

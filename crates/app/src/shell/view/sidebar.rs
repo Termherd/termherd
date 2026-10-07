@@ -470,7 +470,7 @@ impl Shell {
             // without opening it.
             tooltip(
                 launch,
-                session_card(title.clone(), s, now),
+                session_card(title.clone(), None, s, now),
                 tooltip::Position::Right,
             )
             .into()
