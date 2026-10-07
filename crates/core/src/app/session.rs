@@ -121,6 +121,15 @@ impl Launch {
             _ => None,
         }
     }
+
+    /// The program kind this launch runs, without the resume id.
+    #[must_use]
+    pub fn kind(&self) -> crate::snapshot::SessionKind {
+        match self {
+            Launch::Shell => crate::snapshot::SessionKind::Shell,
+            Launch::Claude { .. } => crate::snapshot::SessionKind::Claude,
+        }
+    }
 }
 
 /// What the user asked to open (FR4): a terminal in `cwd`, running some

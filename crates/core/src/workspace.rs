@@ -83,6 +83,16 @@ impl Tab {
         out
     }
 
+    /// The session in this tab's focused pane, `None` if the focus path no
+    /// longer lands on a leaf.
+    #[must_use]
+    pub fn focused_session(&self) -> Option<SessionId> {
+        match navigate(&self.root, &self.focus)? {
+            Pane::Leaf(s) => Some(*s),
+            Pane::Split { .. } => None,
+        }
+    }
+
     /// The title to display: the manual override when set, else the derived
     /// title. This is the single read every surface (tab chip, close prompt,
     /// hover card) should use so the override is honoured everywhere.
@@ -257,11 +267,7 @@ impl Workspace {
 
     /// Session id of the focused pane in the active tab, if any.
     pub fn focused_session(&self) -> Option<SessionId> {
-        let tab = self.tabs.get(self.active)?;
-        match navigate(&tab.root, &tab.focus)? {
-            Pane::Leaf(s) => Some(*s),
-            Pane::Split { .. } => None,
-        }
+        self.tabs.get(self.active)?.focused_session()
     }
 
     /// Close the focused pane in the active tab (FR6), returning its session so
@@ -297,11 +303,7 @@ impl Workspace {
                 Pane::Leaf(session) => *session,
                 Pane::Split { .. } => return None,
             };
-            let focused = match navigate(&tab.root, &tab.focus) {
-                Some(Pane::Leaf(session)) => Some(*session),
-                _ => None,
-            };
-            (removed, focused)
+            (removed, tab.focused_session())
         };
         if path.is_empty() {
             self.close_tab(index);

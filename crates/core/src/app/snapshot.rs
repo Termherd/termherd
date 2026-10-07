@@ -6,7 +6,7 @@
 
 use crate::browser::{SessionRecord, session_matches};
 use crate::snapshot::{
-    ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section, SessionKind, SidebarSnapshot,
+    ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section, SidebarSnapshot,
     SnapshotFilter, SnapshotInputs, TabSnapshot, TerminalScope, WorkspaceSnapshot, tail_lines,
 };
 use std::collections::BTreeMap;
@@ -174,10 +174,7 @@ impl App {
 fn pane_snapshot(session: &LiveSession) -> PaneSnapshot {
     PaneSnapshot {
         handle: session.id.0.get(),
-        kind: match session.launch {
-            Launch::Shell => SessionKind::Shell,
-            Launch::Claude { .. } => SessionKind::Claude,
-        },
+        kind: session.launch.kind(),
         cwd: session.cwd.clone(),
         status: session.status,
     }
