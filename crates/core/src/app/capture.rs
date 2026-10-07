@@ -43,8 +43,8 @@ mod tests {
     fn capture_dumps_every_section_of_the_workspace_snapshot() {
         let mut app = App::new();
         app.apply(Event::ScanCompleted(vec![record("s0", "/p", "work")]));
-        let first = launch(&mut app, "proj $");
-        let second = launch(&mut app, "repo 🤖");
+        let first = launch(&mut app, "proj");
+        let second = launch(&mut app, "repo");
         app.apply(Event::StatusChanged {
             session: second,
             status: SessionStatus::Busy,
@@ -65,7 +65,7 @@ mod tests {
         let tabs = snapshot.tabs.as_ref().expect("tabs section");
         assert_eq!(tabs.len(), 2);
         assert!(!tabs[0].active);
-        assert_eq!(tabs[0].title, "proj $");
+        assert_eq!(tabs[0].title, "proj");
         assert_eq!(tabs[0].status, Some(SessionStatus::Starting));
         assert_eq!(tabs[0].panes[0].handle, first.0.get());
         assert!(tabs[1].active);

@@ -2,6 +2,7 @@
 //! status / record read models.
 
 use crate::browser::{SessionRecord, project_label};
+use crate::snapshot::SessionKind;
 
 use super::*;
 
@@ -134,9 +135,9 @@ impl App {
     /// The kind of program the tab at `index` runs, read from its focused
     /// pane's launch so a split mixing kinds shows the one being worked in.
     #[must_use]
-    pub fn tab_kind(&self, index: usize) -> Option<crate::snapshot::SessionKind> {
+    pub fn tab_kind(&self, index: usize) -> Option<SessionKind> {
         let focused = self.workspace.tabs.get(index)?.focused_session()?;
-        Some(self.sessions.get(&focused)?.launch.kind())
+        self.sessions.get(&focused).map(|s| s.launch.kind())
     }
 
     /// Count of sessions whose PTY is still running — the ones a quit would
@@ -155,7 +156,6 @@ impl App {
 mod tests {
     use super::*;
     use crate::app::testsupport::*;
-    use crate::snapshot::SessionKind;
     use crate::workspace::SplitDir;
 
     #[test]
@@ -211,7 +211,7 @@ mod tests {
             launch: Launch::Claude {
                 resume: Some("abc".into()),
             },
-            title: "repo 🤖".into(),
+            title: "repo".into(),
         }));
         let original = app.workspace.focused_session().expect("focused");
         app.apply(Event::CloseTab(0));
@@ -231,7 +231,7 @@ mod tests {
             }
         );
         assert_eq!(app.workspace.tabs.len(), 1);
-        assert_eq!(app.workspace.tabs[0].title, "repo 🤖");
+        assert_eq!(app.workspace.tabs[0].title, "repo");
     }
 
     #[test]
@@ -381,13 +381,13 @@ mod tests {
             launch: Launch::Claude {
                 resume: Some("abc-123".into()),
             },
-            title: "proj 🤖".into(),
+            title: "proj".into(),
         }));
         // Tab 1: a plain shell — no resume id, so no record.
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
-            title: "proj $".into(),
+            title: "proj".into(),
         }));
         assert_eq!(
             app.tab_record(0).map(|r| r.session_id.as_str()),

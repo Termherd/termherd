@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
+use crate::snapshot::SessionKind;
 use crate::workspace::SplitDir;
 
 use super::*;
@@ -124,10 +125,10 @@ impl Launch {
 
     /// The program kind this launch runs, without the resume id.
     #[must_use]
-    pub fn kind(&self) -> crate::snapshot::SessionKind {
+    pub fn kind(&self) -> SessionKind {
         match self {
-            Launch::Shell => crate::snapshot::SessionKind::Shell,
-            Launch::Claude { .. } => crate::snapshot::SessionKind::Claude,
+            Launch::Shell => SessionKind::Shell,
+            Launch::Claude { .. } => SessionKind::Claude,
         }
     }
 }

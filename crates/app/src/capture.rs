@@ -147,13 +147,13 @@ mod tests {
             tabs: Some(vec![
                 TabSnapshot {
                     active: false,
-                    title: "proj $".to_owned(),
+                    title: "proj".to_owned(),
                     status: Some(SessionStatus::Idle),
                     panes: vec![pane(3, SessionStatus::Idle)],
                 },
                 TabSnapshot {
                     active: true,
-                    title: "repo 🤖".to_owned(),
+                    title: "repo".to_owned(),
                     status: Some(SessionStatus::Busy),
                     panes: vec![pane(6, SessionStatus::Idle), pane(7, SessionStatus::Busy)],
                 },
@@ -181,7 +181,7 @@ mod tests {
         assert_eq!(json["focus"]["session"], "7", "handles are strings");
         assert_eq!(json["config"]["terminal_scheme"], "gruvbox-dark");
         assert_eq!(json["sidebar"]["projects"][0]["path"], "/proj");
-        assert_eq!(json["tabs"][0]["title"], "proj $");
+        assert_eq!(json["tabs"][0]["title"], "proj");
         assert_eq!(json["tabs"][0]["status"], "idle");
         assert_eq!(json["tabs"][1]["panes"][1]["handle"], "7");
         assert_eq!(json["tabs"][1]["panes"][1]["status"], "busy");
@@ -197,10 +197,7 @@ mod tests {
             Some("capture-20010909-014640-000.json")
         );
         let read = std::fs::read_to_string(&path).expect("read back");
-        assert!(
-            read.contains("\"repo 🤖\""),
-            "dump should hold the tab title"
-        );
+        assert!(read.contains("\"repo\""), "dump should hold the tab title");
     }
 
     #[test]

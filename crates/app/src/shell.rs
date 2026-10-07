@@ -362,9 +362,9 @@ enum Message {
     RepoPicked(Option<PathBuf>),
     /// Drop a hand-added repo's declaration (`F-repo-add`).
     ForgetRepo(String),
-    /// Open a fresh shell in the given project directory (FR4a, `$` button).
+    /// Open a fresh shell in the given project directory (FR4a, `❯` button).
     LaunchProject(String),
-    /// Start a fresh Claude session in the given project directory (FR4a, 🤖
+    /// Start a fresh Claude session in the given project directory (FR4a, `✳`
     /// button) — distinct from resuming an existing one.
     LaunchClaude(String),
     /// Resume a Claude session in its project directory (FR4).
@@ -3078,24 +3078,22 @@ mod key_routing {
         // The kind is the chip's icon, read from the launch; the title is the
         // project alone, so a rename opens on a clean name.
         let (mut shell, _pty) = shell_with_terminal();
+        let active_tab = |shell: &Shell| {
+            let active = shell.core.workspace.active;
+            (
+                shell.core.workspace.tabs[active].display_title().to_owned(),
+                shell.core.tab_kind(active),
+            )
+        };
         let _ = shell.update(Message::LaunchProject("/tmp/faceto".to_string()));
-        let _ = shell.update(Message::LaunchClaude("/tmp/faceto".to_string()));
-        // The fixture already hosts a tab; the two launches are the last two.
-        let open = shell.core.workspace.tabs.len();
-        let tabs: Vec<_> = (open - 2..open)
-            .map(|i| {
-                (
-                    shell.core.workspace.tabs[i].display_title().to_owned(),
-                    shell.core.tab_kind(i),
-                )
-            })
-            .collect();
         assert_eq!(
-            tabs,
-            vec![
-                ("faceto".to_owned(), Some(SessionKind::Shell)),
-                ("faceto".to_owned(), Some(SessionKind::Claude)),
-            ]
+            active_tab(&shell),
+            ("faceto".to_owned(), Some(SessionKind::Shell))
+        );
+        let _ = shell.update(Message::LaunchClaude("/tmp/faceto".to_string()));
+        assert_eq!(
+            active_tab(&shell),
+            ("faceto".to_owned(), Some(SessionKind::Claude))
         );
     }
 
