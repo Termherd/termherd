@@ -326,7 +326,8 @@ struct TabDrag {
 
 /// Ends a tab drag on a left release anywhere in the window, not only over
 /// the strip: the pointer routinely overshoots it. Captured events count too,
-/// since the terminal canvas captures the releases that land on it.
+/// since the terminal canvas captures the releases that land on it. A lifted
+/// finger counts as a release, as it does for the chip that started the drag.
 fn tab_drag_release(
     event: iced::Event,
     _status: iced::event::Status,
@@ -336,7 +337,7 @@ fn tab_drag_release(
         event,
         iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
             iced::mouse::Button::Left
-        ))
+        )) | iced::Event::Touch(iced::touch::Event::FingerLifted { .. })
     )
     .then_some(Message::TabDragEnd)
 }
@@ -4166,14 +4167,23 @@ mod key_routing {
     }
 
     #[test]
-    fn tab_drag_release_maps_only_a_left_release() {
+    fn tab_drag_release_maps_only_a_release() {
         use iced::event::Status;
         use iced::mouse::{Button, Event as Mouse};
         // A move ending the drag would drop the tab on the first pixel of
-        // travel; the press is the one that started it.
+        // travel; the press is the one that started it. A lifted finger ends a
+        // drag a finger started, since the chip's press handler accepts one.
         let cases = [
             (left_release(), Status::Captured, true),
             (left_release(), Status::Ignored, true),
+            (
+                iced::Event::Touch(iced::touch::Event::FingerLifted {
+                    id: iced::touch::Finger(0),
+                    position: iced::Point::ORIGIN,
+                }),
+                Status::Captured,
+                true,
+            ),
             (
                 iced::Event::Mouse(Mouse::CursorMoved {
                     position: iced::Point::ORIGIN,
@@ -4242,7 +4252,6 @@ mod key_routing {
         assert!(shell.tab_drag.is_none(), "focus loss ends the drag");
         // The release the window could not see must not commit later.
         deliver_window_event(&mut shell, left_release());
-        let _ = shell.update(Message::TabDragEnd);
         assert_eq!(tab_order(&shell), before, "nothing moved");
         assert_eq!(shell.core.workspace.active, active_before);
     }

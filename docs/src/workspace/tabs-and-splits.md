@@ -41,8 +41,9 @@ same card the sidebar shows.
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on
 release. The drag survives the pointer leaving the strip: releasing anywhere
-drops the tab at the last slot shown, and switching away from termherd
-mid-drag abandons it. A plain click still just activates the tab.
+drops the tab at the last slot shown. To cancel, drag back onto the carried
+tab before releasing; switching away from termherd mid-drag abandons it too.
+A plain click still just activates the tab.
 The order lives in the pure workspace model — the tab strip holds only
 transient pointer state, so there is no second, rival tab tree to drift out
 of sync.
