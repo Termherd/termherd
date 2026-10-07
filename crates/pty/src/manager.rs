@@ -525,9 +525,14 @@ mod tests {
 
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut reported = Vec::new();
+        let mut stamps = Vec::new();
         while Instant::now() < deadline {
             match rx.recv_timeout(Duration::from_millis(500)) {
-                Ok(PtyEvent::ForegroundJob { pid, .. }) => {
+                Ok(PtyEvent::ForegroundJob { job, .. }) => {
+                    if let Some(started) = job.as_ref().and_then(|job| job.started.clone()) {
+                        stamps.push(started);
+                    }
+                    let pid = job.map(|job| job.pid);
                     reported.push(pid);
                     if pid.is_none() && reported.iter().any(Option::is_some) {
                         break;
@@ -541,6 +546,10 @@ mod tests {
         assert!(
             job.is_some_and(|&pid| pid > 0),
             "the running job must be reported by its pid, saw {reported:?}"
+        );
+        assert!(
+            !stamps.is_empty(),
+            "the running job must carry its start stamp, the check against a reused pid"
         );
         assert_eq!(
             reported.last(),

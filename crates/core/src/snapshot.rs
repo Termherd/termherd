@@ -246,7 +246,8 @@ pub struct PaneSnapshot {
 
 /// What identifies the Claude process a pane runs, to a peer that wants to
 /// address it. Every field is `None` unless the job in front of the pane has a
-/// session file, whatever kind the pane was launched as.
+/// session file it wrote itself (its start time matches), whatever kind the
+/// pane was launched as.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ClaudeIdentity {
     /// The Claude process id — the job in front of the pane's shell. `None`

@@ -32,6 +32,7 @@
 
 mod cache;
 mod derive;
+mod open_file;
 mod paths;
 mod repo;
 mod session_file;

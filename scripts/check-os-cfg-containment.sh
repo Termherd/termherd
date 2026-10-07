@@ -37,6 +37,7 @@ declare -A allowed=(
     [crates/app/src/shell/session_ops.rs]="macOS-only quit reroute on window Opened (repoints Cmd+Q through the shell)"
     [crates/pty/src/kill.rs]="the kill reconciliation quarantine — Unix reaps, Windows does not"
     [crates/pty/src/status.rs]="the foreground process group is a Unix-only notion — portable_pty declares its accessor under cfg(unix), so the fork is compile-time"
+    [crates/scan/src/open_file.rs]="a FIFO or symlink in place of a session file is refused at open (O_NONBLOCK, O_NOFOLLOW), flags Unix alone has"
     [crates/pty/src/launch.rs]="the private mcp-config and settings files are written with Unix-only permissions (0600) via a cfg fork"
 )
 

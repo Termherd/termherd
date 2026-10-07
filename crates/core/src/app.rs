@@ -47,7 +47,9 @@ pub use pointer::{
     MouseReporting, PointerButton, PointerEvent, PointerKind, PointerRoute, grid_line,
     pointer_select,
 };
-pub use session::{Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec};
+pub use session::{
+    ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec,
+};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
 pub use snapshot::claude_identity;
@@ -219,8 +221,8 @@ impl App {
                 }
                 Vec::new()
             }
-            Event::ForegroundJobChanged { session, pid } => {
-                self.foreground_job_changed(session, pid)
+            Event::ForegroundJobChanged { session, job } => {
+                self.foreground_job_changed(session, job)
             }
             Event::ActivateTab(index) => {
                 self.workspace.activate(index);

@@ -12,8 +12,8 @@ use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
 
 use super::{
-    LaunchSpec, PathRequest, PointerEvent, ResolvedPath, ScrollTarget, SelectOp, SessionStatus,
-    TargetProbe, Zoom,
+    ForegroundJob, LaunchSpec, PathRequest, PointerEvent, ResolvedPath, ScrollTarget, SelectOp,
+    SessionStatus, TargetProbe, Zoom,
 };
 
 #[derive(Debug, Clone)]
@@ -95,7 +95,7 @@ pub enum Event {
     /// names Claude's own session file, the only record of its peer name.
     ForegroundJobChanged {
         session: SessionId,
-        pid: Option<u32>,
+        job: Option<ForegroundJob>,
     },
     /// The user clicked a tab to bring it to the front (FR5).
     ActivateTab(usize),

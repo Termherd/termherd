@@ -2,9 +2,10 @@
 //! directory is normally `~/.claude/sessions`). The decoding is the codec's;
 //! this module owns only the bounds on the read.
 
-use std::fs;
-use std::io::Read;
+use std::io::{self, Read};
 use std::path::Path;
+
+use crate::open_file::open_without_waiting;
 
 use termherd_claude::session_file::{self, SessionFile};
 use tracing::debug;
@@ -17,23 +18,31 @@ pub const MAX_SESSION_FILE_BYTES: u64 = 16 * 1024;
 ///
 /// `None` for every way the file can fail to describe that process, none of
 /// them an error to the caller: absent (an older CLI, a session still
-/// starting), a symlink (the path is fixed by convention, so a link there is
-/// something other than Claude Code's own write), larger than
-/// [`MAX_SESSION_FILE_BYTES`], unreadable, or not decodable as `pid`'s file.
+/// starting), not a regular file, a symlink on Unix (the path is fixed by
+/// convention, so a link there is something other than Claude Code's own
+/// write), larger than [`MAX_SESSION_FILE_BYTES`], unreadable, or not
+/// decodable as `pid`'s file.
 #[must_use]
 pub fn read_session_file(dir: &Path, pid: u32) -> Option<SessionFile> {
     let path = dir.join(format!("{pid}.json"));
-    // Absent is the common case (a shell's job, an older CLI), so not logged.
-    let meta = fs::symlink_metadata(&path).ok()?;
-    if !meta.file_type().is_file() || meta.len() > MAX_SESSION_FILE_BYTES {
+    let file = open_without_waiting(&path)
+        .inspect_err(|error| {
+            // Absent is the common case (a shell's job, an older CLI).
+            if error.kind() != io::ErrorKind::NotFound {
+                debug!(path = %path.display(), %error, "session file unopenable");
+            }
+        })
+        .ok()?;
+    // Checked on the descriptor, not the path, so nothing swapped in after
+    // the check can be what gets read.
+    let opened = file.metadata().ok()?;
+    if !opened.file_type().is_file() || opened.len() > MAX_SESSION_FILE_BYTES {
         debug!(path = %path.display(), "session file refused: not a regular file within bounds");
         return None;
     }
-    // ponytail: a swap to a symlink between the stat and the open is followed;
-    // O_NOFOLLOW is Unix-only, and `take` still bounds what such a swap reads.
     let mut text = String::new();
-    fs::File::open(&path)
-        .and_then(|file| file.take(MAX_SESSION_FILE_BYTES).read_to_string(&mut text))
+    file.take(MAX_SESSION_FILE_BYTES)
+        .read_to_string(&mut text)
         .inspect_err(|error| debug!(path = %path.display(), %error, "session file unreadable"))
         .ok()?;
     session_file::parse(&text, pid)
@@ -42,6 +51,7 @@ pub fn read_session_file(dir: &Path, pid: u32) -> Option<SessionFile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn write(dir: &Path, pid: u32, body: &str) {
         fs::write(dir.join(format!("{pid}.json")), body).expect("write session file");
@@ -61,6 +71,7 @@ mod tests {
                 pid: 4242,
                 name: Some("knowledge-hub-35".to_owned()),
                 session_id: Some("abc".to_owned()),
+                proc_start: None,
             })
         );
     }
@@ -79,6 +90,20 @@ mod tests {
             dir.path(),
             4242,
             &format!(r#"{{"pid":4242,"name":"big"{padding}}}"#),
+        );
+        assert_eq!(read_session_file(dir.path(), 4242), None);
+    }
+
+    #[test]
+    fn a_file_over_the_bound_is_refused_even_when_its_head_is_a_whole_file() {
+        // What `take` would hand the decoder is a complete object here, so only
+        // the size check stands between it and a file of any length.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let padding = " ".repeat(usize::try_from(MAX_SESSION_FILE_BYTES).expect("fits"));
+        write(
+            dir.path(),
+            4242,
+            &format!(r#"{{"pid":4242,"name":"big"}}{padding}"#),
         );
         assert_eq!(read_session_file(dir.path(), 4242), None);
     }

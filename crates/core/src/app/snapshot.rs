@@ -204,14 +204,20 @@ pub fn claude_identity(
     session: &LiveSession,
     session_files: &BTreeMap<u32, SessionFile>,
 ) -> ClaudeIdentity {
-    let Some((pid, file)) = session
-        .foreground_pid
-        .and_then(|pid| session_files.get(&pid).map(|file| (pid, file)))
+    let Some((job, file)) = session
+        .foreground
+        .as_ref()
+        .and_then(|job| session_files.get(&job.pid).map(|file| (job, file)))
     else {
         return ClaudeIdentity::default();
     };
+    // A crashed Claude leaves its file behind, and its pid free for whatever
+    // the OS starts next: only the writer's own start time tells them apart.
+    if job.started.is_none() || job.started != file.proc_start {
+        return ClaudeIdentity::default();
+    }
     ClaudeIdentity {
-        pid: Some(pid),
+        pid: Some(job.pid),
         peer_name: file.name.clone(),
         session_id: file.session_id.clone(),
     }
@@ -543,11 +549,22 @@ mod tests {
         SessionId(std::num::NonZeroU64::new(handle).expect("nonzero"))
     }
 
+    const STARTED: &str = "Wed Oct  7 06:48:07 2026";
+
     fn session_file(pid: u32, name: &str, session_id: &str) -> SessionFile {
         SessionFile {
             pid,
             name: Some(name.to_owned()),
             session_id: Some(session_id.to_owned()),
+            proc_start: Some(STARTED.to_owned()),
+        }
+    }
+
+    /// The job a file written by `session_file(pid, ..)` describes.
+    fn job(pid: u32) -> ForegroundJob {
+        ForegroundJob {
+            pid,
+            started: Some(STARTED.to_owned()),
         }
     }
 
@@ -566,7 +583,7 @@ mod tests {
         let handle = launch_claude_in(&mut app, "/proj", "work");
         app.apply(Event::ForegroundJobChanged {
             session: session(handle),
-            pid: Some(4399),
+            job: Some(job(4399)),
         });
         let inputs = SnapshotInputs {
             session_files: BTreeMap::from([(4399, session_file(4399, "proj-35", "7eff"))]),
@@ -587,7 +604,7 @@ mod tests {
         let handle = launch_claude_in(&mut app, "/proj", "work");
         app.apply(Event::ForegroundJobChanged {
             session: session(handle),
-            pid: Some(4399),
+            job: Some(job(4399)),
         });
 
         let pane = &panes(&app, &SnapshotInputs::default())[0];
@@ -600,11 +617,11 @@ mod tests {
         let handle = launch_claude_in(&mut app, "/proj", "work");
         app.apply(Event::ForegroundJobChanged {
             session: session(handle),
-            pid: Some(4399),
+            job: Some(job(4399)),
         });
         app.apply(Event::ForegroundJobChanged {
             session: session(handle),
-            pid: None,
+            job: None,
         });
         // A stale file for the old pid must not resurface once Claude left.
         let inputs = SnapshotInputs {
@@ -626,7 +643,7 @@ mod tests {
         let handle = launch(&mut app, "a").0.get();
         app.apply(Event::ForegroundJobChanged {
             session: session(handle),
-            pid: Some(5000),
+            job: Some(job(5000)),
         });
         let inputs = SnapshotInputs {
             session_files: BTreeMap::from([(5000, session_file(5000, "typed-claude", "s"))]),
@@ -655,7 +672,7 @@ mod tests {
         for (handle, pid) in [(first, 4001), (second, 4002)] {
             app.apply(Event::ForegroundJobChanged {
                 session: session(handle),
-                pid: Some(pid),
+                job: Some(job(pid)),
             });
         }
         let inputs = SnapshotInputs {
@@ -680,7 +697,7 @@ mod tests {
         let handle = launch_claude_in(&mut app, "/proj", "work");
         app.apply(Event::ForegroundJobChanged {
             session: session(handle),
-            pid: Some(4399),
+            job: Some(job(4399)),
         });
         app.apply(Event::PtyExited {
             session: session(handle),
@@ -702,11 +719,53 @@ mod tests {
     }
 
     #[test]
+    fn a_file_left_by_a_dead_claude_names_no_process_that_reuses_its_pid() {
+        let mut app = App::new();
+        let handle = launch(&mut app, "a").0.get();
+        // `vim`, handed the pid a crashed Claude held, under that Claude's file.
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            job: Some(ForegroundJob {
+                pid: 4399,
+                started: Some("Thu Oct  8 09:12:44 2026".to_owned()),
+            }),
+        });
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(4399, session_file(4399, "proj-35", "7eff"))]),
+            ..SnapshotInputs::default()
+        };
+
+        assert_eq!(panes(&app, &inputs)[0].identity, ClaudeIdentity::default());
+    }
+
+    #[test]
+    fn a_job_whose_start_is_unknown_is_not_vouched_for() {
+        let mut app = App::new();
+        let handle = launch(&mut app, "a").0.get();
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            job: Some(ForegroundJob {
+                pid: 4399,
+                started: None,
+            }),
+        });
+        // A file with no stamp either: two absences are not a match.
+        let mut file = session_file(4399, "proj-35", "7eff");
+        file.proc_start = None;
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(4399, file)]),
+            ..SnapshotInputs::default()
+        };
+
+        assert_eq!(panes(&app, &inputs)[0].identity, ClaudeIdentity::default());
+    }
+
+    #[test]
     fn a_job_change_for_an_unknown_session_is_ignored() {
         let mut app = App::new();
         let effects = app.apply(Event::ForegroundJobChanged {
             session: session(99),
-            pid: Some(1),
+            job: Some(job(1)),
         });
         assert!(effects.is_empty());
         assert!(panes(&app, &SnapshotInputs::default()).is_empty());

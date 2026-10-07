@@ -201,7 +201,7 @@ impl Shell {
         self.core
             .sessions
             .values()
-            .filter_map(|session| session.foreground_pid)
+            .filter_map(|session| session.foreground.as_ref().map(|job| job.pid))
             .filter_map(|pid| read_session_file(dir, pid).map(|file| (pid, file)))
             .collect()
     }

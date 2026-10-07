@@ -403,7 +403,8 @@ pub struct SessionInfo {
     pub resume_id: Option<String>,
     /// Current activity (FR8).
     pub status: SessionStatus,
-    /// Who the Claude in this session is; all `None` for a shell.
+    /// Who the Claude in front of this session is, whatever its `kind`; all
+    /// `None` when no Claude is.
     pub identity: ClaudeIdentity,
 }
 
@@ -679,7 +680,9 @@ impl FirstRequest for tokio::task::JoinHandle<Vec<Request>> {
 mod tests {
     use super::*;
     use std::time::Duration;
-    use termherd_core::{Event, Launch, LaunchSpec, SessionStatus, SnapshotFilter, SnapshotInputs};
+    use termherd_core::{
+        Event, ForegroundJob, Launch, LaunchSpec, SessionStatus, SnapshotFilter, SnapshotInputs,
+    };
 
     /// Open `n` shell tabs in a fresh `App`, so a snapshot has real workspace
     /// state to read.
@@ -702,7 +705,7 @@ mod tests {
         let session = app.workspace.focused_session().expect("focused");
         app.apply(Event::ForegroundJobChanged {
             session,
-            pid: Some(4399),
+            job: Some(job(4399)),
         });
         let files = BTreeMap::from([(
             4399,
@@ -710,6 +713,7 @@ mod tests {
                 pid: 4399,
                 name: Some("proj-35".to_owned()),
                 session_id: Some("7eff".to_owned()),
+                proc_start: Some(STARTED.to_owned()),
             },
         )]);
 
@@ -732,7 +736,7 @@ mod tests {
         let session = app.workspace.focused_session().expect("focused");
         app.apply(Event::ForegroundJobChanged {
             session,
-            pid: Some(4399),
+            job: Some(job(4399)),
         });
         let inputs = SnapshotInputs {
             session_files: BTreeMap::from([(
@@ -741,6 +745,7 @@ mod tests {
                     pid: 4399,
                     name: Some("proj-35".to_owned()),
                     session_id: None,
+                    proc_start: Some(STARTED.to_owned()),
                 },
             )]),
             ..SnapshotInputs::default()
@@ -752,9 +757,51 @@ mod tests {
         assert_eq!(rows[0].identity.peer_name.as_deref(), Some("proj-35"));
     }
 
+    const STARTED: &str = "Wed Oct  7 06:48:07 2026";
+
+    /// The job a session file stamped with [`STARTED`] describes.
+    fn job(pid: u32) -> ForegroundJob {
+        ForegroundJob {
+            pid,
+            started: Some(STARTED.to_owned()),
+        }
+    }
+
     #[test]
-    fn a_shell_session_lists_no_claude_identity() {
-        let app = app_with_tabs(1);
+    fn a_shell_session_running_claude_lists_the_identity_its_file_names() {
+        // The file is the proof, not the kind: a `claude` typed at a shell
+        // prompt is as much a peer as one the pane was launched with.
+        let mut app = app_with_tabs(1);
+        let session = app.workspace.focused_session().expect("focused");
+        app.apply(Event::ForegroundJobChanged {
+            session,
+            job: Some(job(5000)),
+        });
+        let files = BTreeMap::from([(
+            5000,
+            SessionFile {
+                pid: 5000,
+                name: Some("typed-claude".to_owned()),
+                session_id: None,
+                proc_start: Some(STARTED.to_owned()),
+            },
+        )]);
+
+        let info = &list_sessions(&app, &files)[0];
+        assert_eq!(info.kind, SessionKind::Shell);
+        assert_eq!(info.identity.pid, Some(5000));
+        assert_eq!(info.identity.peer_name.as_deref(), Some("typed-claude"));
+    }
+
+    #[test]
+    fn a_session_whose_job_has_no_session_file_lists_no_identity() {
+        let mut app = app_with_tabs(1);
+        let session = app.workspace.focused_session().expect("focused");
+        app.apply(Event::ForegroundJobChanged {
+            session,
+            job: Some(job(5000)),
+        });
+
         let info = &list_sessions(&app, &BTreeMap::new())[0];
         assert_eq!(info.identity, ClaudeIdentity::default());
     }

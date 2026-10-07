@@ -16,6 +16,11 @@ pub struct SessionFile {
     pub name: Option<String>,
     /// The Claude session id (`sessionId`), the one `--resume` takes.
     pub session_id: Option<String>,
+    /// When the process that wrote the file started (`procStart`), in `ps`'s
+    /// `lstart` form and UTC, e.g. `Wed Oct  7 06:48:07 2026`. A file outlives
+    /// a Claude that crashed, and its pid is then free for any process to
+    /// reuse: this stamp is what tells the writer from its successor.
+    pub proc_start: Option<String>,
 }
 
 /// Decode the session file read from `<pid>.json`.
@@ -41,6 +46,7 @@ pub fn parse(json: &str, pid: u32) -> Option<SessionFile> {
         pid,
         name: text("name"),
         session_id: text("sessionId"),
+        proc_start: text("procStart"),
     })
 }
 
@@ -59,6 +65,8 @@ mod tests {
             "cwd": "/work/knowledge-hub",
             "name": "knowledge-hub-35",
             "messagingSocketPath": "/tmp/cc-socks/65524.sock",
+            "procStart": "Wed Oct  7 06:48:07 2026",
+            "procStart": "Wed Oct  7 06:48:07 2026",
             "status": "idle",
         })
         .to_string()
@@ -72,6 +80,7 @@ mod tests {
                 pid: 65524,
                 name: Some("knowledge-hub-35".to_owned()),
                 session_id: Some("7eff318b-ee38-49ad-9a44-75d81c946c02".to_owned()),
+                proc_start: Some("Wed Oct  7 06:48:07 2026".to_owned()),
             })
         );
     }
@@ -85,6 +94,7 @@ mod tests {
                 pid: 4242,
                 name: None,
                 session_id: Some("abc".to_owned()),
+                proc_start: None,
             })
         );
     }
@@ -98,6 +108,7 @@ mod tests {
                 pid: 7,
                 name: None,
                 session_id: None,
+                proc_start: None,
             })
         );
     }

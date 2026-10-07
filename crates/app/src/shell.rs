@@ -399,7 +399,7 @@ enum Message {
     /// The job in front of a session's shell changed (its pid, or none).
     PtyForegroundJob {
         session: SessionId,
-        pid: Option<u32>,
+        job: Option<termherd_core::ForegroundJob>,
     },
     /// A session fired an OSC 9 notification; forward it to the OS.
     PtyNotify {
@@ -928,10 +928,10 @@ impl Shell {
                     .apply(termherd_core::Event::SessionCwdChanged { session, cwd });
                 self.perform(effects)
             }
-            Message::PtyForegroundJob { session, pid } => {
+            Message::PtyForegroundJob { session, job } => {
                 let effects = self
                     .core
-                    .apply(termherd_core::Event::ForegroundJobChanged { session, pid });
+                    .apply(termherd_core::Event::ForegroundJobChanged { session, job });
                 self.perform(effects)
             }
             Message::PtyNotify { session, body } => {
@@ -1701,7 +1701,7 @@ mod key_routing {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             dir.path().join("4399.json"),
-            r#"{"pid":4399,"name":"proj-35","sessionId":"7eff"}"#,
+            r#"{"pid":4399,"name":"proj-35","sessionId":"7eff","procStart":"Wed Oct  7 06:48:07 2026"}"#,
         )
         .expect("write session file");
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
@@ -1718,7 +1718,10 @@ mod key_routing {
         let session = shell.core.workspace.focused_session().expect("focused");
         let _ = shell.update(Message::PtyForegroundJob {
             session,
-            pid: Some(4399),
+            job: Some(termherd_core::ForegroundJob {
+                pid: 4399,
+                started: Some("Wed Oct  7 06:48:07 2026".to_owned()),
+            }),
         });
 
         let listed = shell.snapshot_inputs(&BridgeRequest::ListSessions);

@@ -34,13 +34,17 @@ a `snapshot` pane, also carries `pid`, `peer_name` and `session_id`.
 three are read from Claude Code's own `~/.claude/sessions/<pid>.json` for the
 job in front of the pane, on every call. That file is the proof a Claude runs
 there, whatever the pane's `kind`: a `claude` typed into a shell pane is
-identified, and a `vim` left running after Claude quit is not. All three are
-`null` together:
+identified, and a `vim` left running after Claude quit is not. The file must
+also be that process's own: its `procStart` has to match when the process in
+front started, so a file a crashed Claude left behind is never pinned on a
+program that later reuses its pid. All three are `null` together, and are
+always present:
 
 - when no Claude is in front (a shell prompt, any other program);
+- when the file in place belongs to an earlier process with the same pid;
 - on Windows, which reports no foreground process to take the `pid` from;
-- while Claude Code has written no session file (an older CLI, a session still
-  starting).
+- while Claude Code has written no session file, or one without `procStart`
+  (an older CLI, a session still starting).
 
 `session_id` is Claude's own id, which changes on a fork or a plan-accept;
 address a session by `handle`, never by it.
