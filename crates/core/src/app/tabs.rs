@@ -2,6 +2,7 @@
 //! status / record read models.
 
 use crate::browser::{SessionRecord, project_label};
+use crate::snapshot::SessionKind;
 
 use super::*;
 
@@ -93,31 +94,18 @@ impl App {
     /// resumed Claude session — current Claude renders status in-band and
     /// reports only its own product name as an OSC title, which the decoder
     /// discards as naming the program rather than the session, so without this
-    /// every resumed tab in a repo would read alike — else the kind label
-    /// `{project} {glyph}`. A fresh or unscanned
-    /// session keeps the kind label; an OSC title still wins later. The kind
-    /// glyphs are the caller's (view-side constants), so core carries no
-    /// presentation literals.
+    /// every resumed tab in a repo would read alike — else the project label.
+    /// A fresh or unscanned session keeps the project label; an OSC title
+    /// still wins later. The kind is not part of the title: the tab chip shows
+    /// it from [`App::tab_kind`], so no retitle or rename can lose it.
     #[must_use]
-    pub fn tab_title(
-        &self,
-        cwd: &str,
-        launch: &Launch,
-        shell_glyph: &str,
-        claude_glyph: &str,
-    ) -> String {
-        let label = project_label(cwd);
-        match launch {
-            Launch::Shell => format!("{label} {shell_glyph}"),
-            Launch::Claude {
-                resume: Some(claude_id),
-            } => self
-                .record_for(claude_id)
-                .map(|record| self.session_title(record))
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| format!("{label} {claude_glyph}")),
-            Launch::Claude { resume: None } => format!("{label} {claude_glyph}"),
-        }
+    pub fn tab_title(&self, cwd: &str, launch: &Launch) -> String {
+        launch
+            .resume_id()
+            .and_then(|claude_id| self.record_for(claude_id))
+            .map(|record| self.session_title(record))
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| project_label(cwd).to_owned())
     }
 
     /// The browsed record for the tab at `index` — the sidebar entry its first
@@ -144,6 +132,14 @@ impl App {
             .max_by_key(|status| status.urgency())
     }
 
+    /// The kind of program the tab at `index` runs, read from its focused
+    /// pane's launch so a split mixing kinds shows the one being worked in.
+    #[must_use]
+    pub fn tab_kind(&self, index: usize) -> Option<SessionKind> {
+        let focused = self.workspace.tabs.get(index)?.focused_session()?;
+        self.sessions.get(&focused).map(|s| s.launch.kind())
+    }
+
     /// Count of sessions whose PTY is still running — the ones a quit would
     /// hard-kill. Exited sessions linger in the registry but cost nothing to
     /// drop; the count behind the quit-confirmation modal's summary line.
@@ -160,6 +156,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::app::testsupport::*;
+    use crate::workspace::SplitDir;
 
     #[test]
     fn activate_tab_brings_an_earlier_session_to_focus() {
@@ -214,7 +211,7 @@ mod tests {
             launch: Launch::Claude {
                 resume: Some("abc".into()),
             },
-            title: "repo 🤖".into(),
+            title: "repo".into(),
         }));
         let original = app.workspace.focused_session().expect("focused");
         app.apply(Event::CloseTab(0));
@@ -234,7 +231,7 @@ mod tests {
             }
         );
         assert_eq!(app.workspace.tabs.len(), 1);
-        assert_eq!(app.workspace.tabs[0].title, "repo 🤖");
+        assert_eq!(app.workspace.tabs[0].title, "repo");
     }
 
     #[test]
@@ -317,23 +314,29 @@ mod tests {
     }
 
     #[test]
-    fn tab_title_prefers_the_scanned_digest_name() {
-        // Glyphs are the caller's (view-side constants), passed in; core owns
-        // the digest-name-else-kind-label policy.
+    fn tab_kind_follows_the_focused_pane() {
         let mut app = App::new();
-        // A shell gets the project label with the shell glyph.
+        launch_claude(&mut app);
+        // A split opens a shell beside the Claude pane and focuses it.
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        assert_eq!(app.tab_kind(0), Some(SessionKind::Shell));
+        app.apply(Event::FocusPrevPane);
+        assert_eq!(app.tab_kind(0), Some(SessionKind::Claude));
+        assert_eq!(app.tab_kind(1), None, "no such tab");
+    }
+
+    #[test]
+    fn tab_title_prefers_the_scanned_digest_name() {
+        // The kind is shown beside the title, never written into it, so a
+        // shell and a fresh Claude session in one project share the label.
+        let mut app = App::new();
+        assert_eq!(app.tab_title("/home/me/proj", &Launch::Shell), "proj");
         assert_eq!(
-            app.tab_title("/home/me/proj", &Launch::Shell, "$", "🤖"),
-            "proj $"
+            app.tab_title("/home/me/proj", &Launch::Claude { resume: None }),
+            "proj"
         );
 
-        // A fresh Claude session (no resume) gets the Claude glyph.
-        assert_eq!(
-            app.tab_title("/home/me/proj", &Launch::Claude { resume: None }, "$", "🤖"),
-            "proj 🤖"
-        );
-
-        // Resuming a *scanned* session takes its digest name (no glyph), so two
+        // Resuming a *scanned* session takes its digest name, so two
         // resumed tabs in one repo don't read alike.
         app.apply(Event::ScanCompleted(vec![record(
             "abc-123",
@@ -346,23 +349,19 @@ mod tests {
                 &Launch::Claude {
                     resume: Some("abc-123".into())
                 },
-                "$",
-                "🤖",
             ),
             "fix the login bug"
         );
 
-        // Resuming an *unscanned* session falls back to the kind label.
+        // Resuming an *unscanned* session falls back to the project label.
         assert_eq!(
             app.tab_title(
                 "/home/me/proj",
                 &Launch::Claude {
                     resume: Some("not-scanned".into())
                 },
-                "$",
-                "🤖",
             ),
-            "proj 🤖"
+            "proj"
         );
     }
 
@@ -382,13 +381,13 @@ mod tests {
             launch: Launch::Claude {
                 resume: Some("abc-123".into()),
             },
-            title: "proj 🤖".into(),
+            title: "proj".into(),
         }));
         // Tab 1: a plain shell — no resume id, so no record.
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
-            title: "proj $".into(),
+            title: "proj".into(),
         }));
         assert_eq!(
             app.tab_record(0).map(|r| r.session_id.as_str()),

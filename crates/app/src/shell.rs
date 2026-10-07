@@ -362,9 +362,9 @@ enum Message {
     RepoPicked(Option<PathBuf>),
     /// Drop a hand-added repo's declaration (`F-repo-add`).
     ForgetRepo(String),
-    /// Open a fresh shell in the given project directory (FR4a, `$` button).
+    /// Open a fresh shell in the given project directory (FR4a, `❯` button).
     LaunchProject(String),
-    /// Start a fresh Claude session in the given project directory (FR4a, 🤖
+    /// Start a fresh Claude session in the given project directory (FR4a, `✳`
     /// button) — distinct from resuming an existing one.
     LaunchClaude(String),
     /// Resume a Claude session in its project directory (FR4).
@@ -1453,7 +1453,8 @@ mod key_routing {
     use std::sync::Mutex as StdMutex;
     use termherd_core::ports::{PtyError, ScanError};
     use termherd_core::{
-        Action, PointerEvent, PointerKind, PointerRoute, SelectSide, SnapshotFilter, SpawnSpec,
+        Action, PointerEvent, PointerKind, PointerRoute, SelectSide, SessionKind, SnapshotFilter,
+        SpawnSpec,
     };
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
@@ -3073,21 +3074,26 @@ mod key_routing {
     }
 
     #[test]
-    fn launch_buttons_title_tabs_by_kind() {
-        // The initial tab label distinguishes a shell ($) from a Claude (🤖)
-        // tab for the same repo; OSC retitling takes over later.
+    fn launch_buttons_title_tabs_by_project_and_tell_their_kind_apart() {
+        // The kind is the chip's icon, read from the launch; the title is the
+        // project alone, so a rename opens on a clean name.
         let (mut shell, _pty) = shell_with_terminal();
+        let active_tab = |shell: &Shell| {
+            let active = shell.core.workspace.active;
+            (
+                shell.core.workspace.tabs[active].display_title().to_owned(),
+                shell.core.tab_kind(active),
+            )
+        };
         let _ = shell.update(Message::LaunchProject("/tmp/faceto".to_string()));
-        let shell_tab = shell.core.workspace.focused_session().expect("focused");
         assert_eq!(
-            shell.core.workspace.session_title(shell_tab),
-            Some("faceto $")
+            active_tab(&shell),
+            ("faceto".to_owned(), Some(SessionKind::Shell))
         );
         let _ = shell.update(Message::LaunchClaude("/tmp/faceto".to_string()));
-        let claude_tab = shell.core.workspace.focused_session().expect("focused");
         assert_eq!(
-            shell.core.workspace.session_title(claude_tab),
-            Some("faceto 🤖")
+            active_tab(&shell),
+            ("faceto".to_owned(), Some(SessionKind::Claude))
         );
     }
 
@@ -3187,7 +3193,7 @@ mod key_routing {
         // has something session-specific to say, and the decoder discards that
         // as naming the program rather than the session — so the live-title
         // override never fires here, and the tab must take the session's name
-        // from the scanned digest instead of the generic `project 🤖` label.
+        // from the scanned digest instead of the generic `project` label.
         let (mut shell, _pty) = shell_with_terminal();
         browse_named(
             &mut shell,
@@ -3204,7 +3210,7 @@ mod key_routing {
         assert_eq!(
             shell.core.workspace.session_title(tab),
             Some("Fix the login bug"),
-            "a resumed tab shows the session name, not the kind label"
+            "a resumed tab shows the session name, not the project label"
         );
     }
 
@@ -3260,9 +3266,9 @@ mod key_routing {
     }
 
     #[test]
-    fn resuming_a_session_with_a_blank_name_keeps_the_kind_label() {
+    fn resuming_a_session_with_a_blank_name_keeps_the_project_label() {
         // A scanned record whose digest yields an empty title must not blank the
-        // tab — fall back to the kind label.
+        // tab — fall back to the project label.
         let (mut shell, _pty) = shell_with_terminal();
         browse_named(&mut shell, "sess", "/tmp/project", "", None);
         let _ = shell.update(Message::LaunchSession {
@@ -3270,13 +3276,13 @@ mod key_routing {
             resume: "sess".to_string(),
         });
         let tab = shell.core.workspace.focused_session().expect("focused");
-        assert_eq!(shell.core.workspace.session_title(tab), Some("project 🤖"));
+        assert_eq!(shell.core.workspace.session_title(tab), Some("project"));
     }
 
     #[test]
-    fn resuming_an_unknown_session_keeps_the_kind_label() {
+    fn resuming_an_unknown_session_keeps_the_project_label() {
         // No scanned record (a session the last scan missed) → the tab keeps the
-        // cwd-derived kind label rather than an empty or wrong name. Green today;
+        // cwd-derived project label rather than an empty or wrong name. Green today;
         // guards the fix's fallback so it never regresses.
         let (mut shell, _pty) = shell_with_terminal();
         let _ = shell.update(Message::LaunchSession {
@@ -3284,7 +3290,7 @@ mod key_routing {
             resume: "missing".to_string(),
         });
         let tab = shell.core.workspace.focused_session().expect("focused");
-        assert_eq!(shell.core.workspace.session_title(tab), Some("ghost 🤖"));
+        assert_eq!(shell.core.workspace.session_title(tab), Some("ghost"));
     }
 
     #[test]
@@ -3429,7 +3435,7 @@ mod key_routing {
                 .expect("valid json");
         assert_eq!(json["focus"]["tab"], 0);
         assert_eq!(json["focus"]["session"], session.0.get().to_string());
-        assert_eq!(json["tabs"][0]["title"], "project $");
+        assert_eq!(json["tabs"][0]["title"], "project");
         assert_eq!(
             json["tabs"][0]["panes"][0]["handle"],
             session.0.get().to_string()

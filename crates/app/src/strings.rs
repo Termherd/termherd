@@ -23,7 +23,7 @@ pub const SIDEBAR_ADD_REPO_HINT: &str = "Pick a folder, or drop one on the windo
 pub const SIDEBAR_FORGET_REPO: &str = "Remove this repo from the sidebar";
 pub const SIDEBAR_SETTINGS: &str = "⚙";
 pub const SIDEBAR_SETTINGS_HINT: &str = "Settings";
-pub const SIDEBAR_REPO_NO_SESSIONS: &str = "No sessions yet — start one with $ or 🤖";
+pub const SIDEBAR_REPO_NO_SESSIONS: &str = "No sessions yet — start one with ❯ or ✳";
 
 /// Expander under a truncated session list: how many more are folded.
 #[must_use]
@@ -38,7 +38,7 @@ pub fn scan_failed(error: &str) -> String {
 }
 
 // --- Welcome pane (no session open) ---
-pub const WELCOME_HINT_OPEN: &str = "Use $ for a shell or 🤖 for Claude beside a project,";
+pub const WELCOME_HINT_OPEN: &str = "Use ❯ for a shell or ✳ for Claude beside a project,";
 pub const WELCOME_HINT_RESUME: &str = "or click a session to resume it.";
 
 /// The "N session(s) in M project(s)" summary on the welcome pane.

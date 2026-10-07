@@ -14,9 +14,9 @@ use iced::widget::{
 };
 use iced::{Element, Fill};
 use termherd_core::browser::{ProjectGroup, project_label, relative_age};
-use termherd_core::{SessionRecord, SessionStatus, SidebarFold};
+use termherd_core::{SessionKind, SessionRecord, SessionStatus, SidebarFold};
 
-use super::{clip, session_card, sidebar_secondary_text, status_dot};
+use super::{clip, kind_glyph, session_card, sidebar_secondary_text, status_dot};
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
 use crate::strings;
 
@@ -306,7 +306,7 @@ impl Shell {
             .sidebar_row_collapsed(&group.path, group.sessions.len());
         // The disclosure triangle and the name both fold the session list —
         // a tree header should fold, not launch. Launching moved
-        // to two explicit buttons beside it: `$` opens a plain shell, 🤖 a
+        // to two explicit buttons beside it: `❯` opens a plain shell, `✳` a
         // fresh Claude session, both in the repo dir (FR4a).
         let fold: Element<'_, Message> = if empty {
             // Aligned with the triangles above and below it, so an empty row
@@ -333,12 +333,12 @@ impl Shell {
             name = name.on_press(Message::ToggleCollapsed(group.path.clone()));
         }
         let launch_shell = launch_button(
-            "$",
+            kind_glyph(SessionKind::Shell),
             strings::SIDEBAR_LAUNCH_SHELL,
             Message::LaunchProject(group.path.clone()),
         );
         let launch_claude = launch_button(
-            "🤖",
+            kind_glyph(SessionKind::Claude),
             strings::SIDEBAR_LAUNCH_CLAUDE,
             Message::LaunchClaude(group.path.clone()),
         );
@@ -575,7 +575,7 @@ fn section_header(key: &str, collapsed: bool, label: &str) -> Element<'static, M
 
 /// An icon button beside a project header that launches a session in the repo
 /// dir (FR4a): the glyph is the affordance, the tooltip spells it out.
-/// Built once so the `$` (shell) and 🤖 (Claude) buttons can't drift in style.
+/// Built once so the shell and Claude buttons can't drift in style.
 fn launch_button(
     icon: &'static str,
     tip: &'static str,

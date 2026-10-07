@@ -4,8 +4,8 @@ Every session you open is a **tab**. Every tab holds a **pane tree** — one
 terminal, or many, split vertically and horizontally.
 
 ```text
-┌ my-app ●busy ┬ tests ○idle ┬ notes ────────────────┐
-├──────────────┴─────────────┴───────────────────────┤
+┌ ●busy ✳ my-app ┬ ○idle ❯ tests ┬ ○idle ❯ notes ────┐
+├────────────────┴───────────────┴───────────────────┤
 │                        │                           │
 │   claude (my-app)      │   $ cargo test            │
 │                        │                           │
@@ -34,9 +34,12 @@ key produces. On AZERTY and QWERTZ, where the number row produces `&`, `é`, …
 without Shift, <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>1</kbd> still lands on tab 1.
 
 Each tab carries its own **activity dot** (see
-[Status and attention](./status.md)), a title derived from its session, and a
-`×` to close it. Hovering a tab shows the session's fuller description — the
-same card the sidebar shows.
+[Status and attention](./status.md)), a **kind mark** — `✳` for a Claude
+session, `❯` for a shell — a title derived from its session, and a `×` to close
+it. In a split tab, the mark follows the focused pane. The kind is never part
+of the title, so renaming a tab or a retitle from Claude cannot lose it: a
+fresh tab is titled after its project alone. Hovering a tab shows the
+session's fuller description — the same card the sidebar shows.
 
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on

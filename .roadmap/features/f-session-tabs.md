@@ -17,15 +17,17 @@ name from the scanned digest (#109/#118) — current Claude (2.1.220) *does* emi
 an OSC-0 title, but reports its own product name (`✳ Claude Code`) until it has
 something session-specific to say, and #236 filters that as no title at all, so
 the OSC-0 override (#24) still does not fire there; a fresh/unscanned session
-keeps the `<repo>` kind label. The OSC plumbing stays in place and still wins
-where a Claude does emit a real title: the `osc` decoder carries the title
-text, the `pty` reader forwards a change as `PtyEvent::Title`, and
+keeps the `<repo>` label, its kind shown beside the title rather than in it
+([F-tab-kind-icon](#f-tab-kind-icon)). The OSC plumbing stays in place and
+still wins where a Claude does emit a real title: the `osc` decoder carries the
+title text, the `pty` reader forwards a change as `PtyEvent::Title`, and
 `Workspace::set_session_title` relabels the hosting tab — which also lets a
 sidebar rename retitle the open tab live. Reflecting Claude's *own* `/rename`
 and live task name is tracked as #119. Hovering a tab shows the session's
 fuller description — the same hover card the sidebar uses for a resumed
 session, a title + cwd card otherwise (#76, `App::tab_record` resolves the
-record so the two surfaces stay single-sourced). Drag-reorder (FR5) and
+record so the two surfaces stay single-sourced). Drag-reorder (FR5) — whose
+release is heard window-wide, so a drag survives leaving the strip (#348) — and
 keyboard switching (`Ctrl+Tab`, via `F-keyboard-shortcuts`) both ship.
 Double-clicking a chip renames the tab inline (#145): a durable
 `Tab.custom_title` overlays the derived title (`Tab::display_title` resolves

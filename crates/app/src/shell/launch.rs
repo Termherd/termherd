@@ -8,19 +8,11 @@ use termherd_core::{Launch, LaunchSpec};
 
 use super::{Focus, Message, Shell, home_dir};
 
-/// Tab-title kind suffixes (presentation): a shell tab shows `$`, a Claude tab
-/// 🤖, so the two kinds stay distinguishable at a glance. Kept app-side and
-/// handed to the core title policy, so `core` carries no glyph literals.
-const SHELL_GLYPH: &str = "$";
-const CLAUDE_GLYPH: &str = "🤖";
-
 impl Shell {
     /// Launch a terminal: register it in `core`, perform the spawn, focus it,
     /// and size its PTY to the current pane (FR4).
     pub(super) fn launch(&mut self, cwd: String, launch: Launch) -> Task<Message> {
-        let title = self
-            .core
-            .tab_title(&cwd, &launch, SHELL_GLYPH, CLAUDE_GLYPH);
+        let title = self.core.tab_title(&cwd, &launch);
         let effects = self
             .core
             .apply(termherd_core::Event::LaunchSession(LaunchSpec {

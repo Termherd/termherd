@@ -210,7 +210,7 @@ mod tests {
     fn the_clis_product_name_is_a_status_but_not_a_title() {
         // What a freshly launched Claude reports until it has something of its
         // own to say. The glyph is real activity; the text would rename the
-        // hosting tab from `<repo> 🤖` to the program's name, which tells the
+        // hosting tab from `<repo>` to the program's name, which tells the
         // user strictly less than what it replaced.
         assert_eq!(
             decode_chunk("\u{1b}]0;\u{2733} Claude Code\u{07}"),
