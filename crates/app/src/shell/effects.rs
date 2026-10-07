@@ -18,6 +18,9 @@ use termherd_core::{
     SpawnSpec, TerminalScope, WorkspaceSnapshot, ports::PtyError,
 };
 
+use termherd_claude::session_file::SessionFile;
+use termherd_scan::read_session_file;
+
 use super::bridge::Request;
 use super::{Message, Shell};
 use os::{notify, open_path, open_url, spawn_editor};
@@ -154,13 +157,18 @@ impl Shell {
     /// Gather the adapter-owned inputs for a bridge request: the config summary
     /// and the scoped terminal text a `snapshot` needs, which the pure `core`
     /// cannot read (settings live here, the grid in the `pty` adapter). Only the
-    /// filter's scope is read, so an unscoped call gathers nothing. Any other
-    /// request needs no injection, so it gets the empty default.
+    /// filter's scope is read, so an unscoped call gathers nothing.
+    /// `list_sessions` needs only the session files; any other request needs
+    /// no injection, so it gets the empty default.
     pub(super) fn snapshot_inputs(&self, request: &Request) -> SnapshotInputs {
-        let Request::Snapshot(filter) = request else {
-            return SnapshotInputs::default();
-        };
-        self.snapshot_inputs_for(filter)
+        match request {
+            Request::Snapshot(filter) => self.snapshot_inputs_for(filter),
+            Request::ListSessions => SnapshotInputs {
+                session_files: self.session_files(),
+                ..SnapshotInputs::default()
+            },
+            _ => SnapshotInputs::default(),
+        }
     }
 
     /// The adapter-owned inputs a given filter needs. Shared by the bridge
@@ -172,8 +180,30 @@ impl Shell {
                 .includes(Section::Config)
                 .then(|| self.config.clone()),
             terminals: self.scoped_terminal_text(filter),
-            session_files: BTreeMap::new(),
+            session_files: if filter.includes(Section::Tabs) {
+                self.session_files()
+            } else {
+                BTreeMap::new()
+            },
         }
+    }
+
+    /// Claude's session file for each pid a pane has in front of its shell,
+    /// keyed by that pid; a pid with no readable file is simply absent. Read
+    /// afresh on every call, since Claude rewrites its name and session id in
+    /// place. Which pane the file then describes is `core`'s call.
+    // ponytail: one small read per pane on the GUI thread, per snapshot or
+    // list_sessions; move it to the terminal thread if a caller polls hard.
+    fn session_files(&self) -> BTreeMap<u32, SessionFile> {
+        let Some(dir) = &self.claude_sessions else {
+            return BTreeMap::new();
+        };
+        self.core
+            .sessions
+            .values()
+            .filter_map(|session| session.foreground_pid)
+            .filter_map(|pid| read_session_file(dir, pid).map(|file| (pid, file)))
+            .collect()
     }
 
     /// The full visible text of the sessions the filter scopes in, keyed by

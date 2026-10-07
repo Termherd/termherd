@@ -39,7 +39,7 @@ use crate::shell::bridge::{
     Action, ActionDetail, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo,
     TerminalRead,
 };
-use crate::snapshot_dto::{SnapshotDto, kind_str, status_str};
+use crate::snapshot_dto::{IdentityDto, SnapshotDto, kind_str, status_str};
 
 /// How long a tool waits for the shell to answer before failing the caller.
 /// Bounds the whole round-trip (enqueue + reply) via [`BridgeHandle::call`], so
@@ -155,7 +155,10 @@ impl TermherdMcp {
         description = "List the live terminal sessions termherd is hosting. Each \
                        row carries a stable `handle` (address it in later calls), \
                        the tab title, working directory, kind (shell or claude), \
-                       the resumed Claude id if any, and current activity status."
+                       the resumed Claude id if any, current activity status, and \
+                       when a Claude runs in it its `pid`, `peer_name` (the name \
+                       other Claude sessions address it by) and `session_id` — \
+                       each null when unknown."
     )]
     async fn list_sessions(&self) -> Result<CallToolResult, ErrorData> {
         let reply = self
@@ -180,7 +183,9 @@ impl TermherdMcp {
         name = "snapshot",
         description = "A filterable snapshot of termherd's whole state: config, \
                        the session-browser sidebar, and the open tabs with their \
-                       panes (each pane's stable handle, kind, cwd, status). Light \
+                       panes (each pane's stable handle, kind, cwd, status, and \
+                       for a pane running Claude its pid, peer_name and \
+                       session_id). Light \
                        by default — no terminal text. Args (all optional): \
                        `sections` (any of \"config\", \"sidebar\", \"tabs\"; omit \
                        for all), `terminals` (session handles to include screen \
@@ -909,6 +914,8 @@ struct SessionDto {
     resume_id: Option<String>,
     /// `"starting"`, `"busy"`, `"idle"`, `"attention"`, or `"exited"`.
     status: &'static str,
+    #[serde(flatten)]
+    identity: IdentityDto,
 }
 
 impl From<&SessionInfo> for SessionDto {
@@ -920,6 +927,7 @@ impl From<&SessionInfo> for SessionDto {
             kind: kind_str(info.kind),
             resume_id: info.resume_id.clone(),
             status: status_str(info.status),
+            identity: IdentityDto::from(&info.identity),
         }
     }
 }
@@ -1381,6 +1389,19 @@ mod tests {
         App, ClaudeIdentity, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs,
     };
 
+    /// A `list_sessions` row for an idle shell, the bridge's plainest answer.
+    fn idle_shell(handle: &str, title: &str, cwd: &str) -> SessionInfo {
+        SessionInfo {
+            handle: handle.into(),
+            title: title.into(),
+            cwd: Some(cwd.into()),
+            kind: SessionKind::Shell,
+            resume_id: None,
+            status: SessionStatus::Idle,
+            identity: ClaudeIdentity::default(),
+        }
+    }
+
     #[tokio::test]
     async fn list_sessions_tool_shapes_the_bridge_reply_into_structured_json() {
         let (handle, requests) = channel();
@@ -1580,15 +1601,7 @@ mod tests {
             ),
             "prompt_in_session" => (
                 vec![
-                    Reply::Sessions(vec![SessionInfo {
-                        handle: "1".into(),
-                        title: "tab 0".into(),
-                        cwd: Some("/proj".into()),
-                        kind: SessionKind::Shell,
-                        resume_id: None,
-                        status: SessionStatus::Idle,
-                        identity: ClaudeIdentity::default(),
-                    }]),
+                    Reply::Sessions(vec![idle_shell("1", "tab 0", "/proj")]),
                     acted(),
                     Reply::Waited(WaitOutcome {
                         status: Some(SessionStatus::Idle),
@@ -2569,15 +2582,7 @@ mod tests {
         let shell = spawn_test_shell_seq(
             requests,
             vec![
-                Some(Reply::Sessions(vec![SessionInfo {
-                    handle: "7".into(),
-                    title: "shell".into(),
-                    cwd: Some("/tmp".into()),
-                    kind: SessionKind::Shell,
-                    resume_id: None,
-                    status: SessionStatus::Idle,
-                    identity: ClaudeIdentity::default(),
-                }])),
+                Some(Reply::Sessions(vec![idle_shell("7", "shell", "/tmp")])),
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Waited(WaitOutcome {
                     status: Some(SessionStatus::Idle),

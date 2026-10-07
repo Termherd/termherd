@@ -15,7 +15,7 @@ session is torn down.
 
 | Tool | Args | Returns |
 | --- | --- | --- |
-| `list_sessions` | — | `{ sessions: [...] }` — each row a live session: stable `handle`, tab title, cwd, kind (`shell` / `claude`), resumed Claude id, status |
+| `list_sessions` | — | `{ sessions: [...] }` — each row a live session: stable `handle`, tab title, cwd, kind (`shell` / `claude`), resumed Claude id, status, and Claude's `pid`, `peer_name`, `session_id` |
 | `snapshot` | `sections`, `terminals`, `focused_terminal`, `text_lines` | the whole state: config, sidebar, tabs and panes |
 | `read_terminal` | `session`, `lines` | `{ text, rendered }` |
 | `screenshot` | `max_width` | the window as a PNG |
@@ -26,6 +26,24 @@ rather than answering the array itself.
 
 A tab title carries no kind marker: a fresh tab is titled after its project
 alone (`my-app`). Read what a session runs from its `kind` field.
+
+**Which Claude is which.** A session running Claude, in `list_sessions` and in
+a `snapshot` pane, also carries `pid`, `peer_name` and `session_id`.
+`peer_name` is the name other Claude sessions address it by (`ListAgents` /
+`SendMessage`), so two Claude panes in the same directory stay told apart. All
+three are read from Claude Code's own `~/.claude/sessions/<pid>.json` for the
+job in front of the pane, on every call. That file is the proof a Claude runs
+there, whatever the pane's `kind`: a `claude` typed into a shell pane is
+identified, and a `vim` left running after Claude quit is not. All three are
+`null` together:
+
+- when no Claude is in front (a shell prompt, any other program);
+- on Windows, which reports no foreground process to take the `pid` from;
+- while Claude Code has written no session file (an older CLI, a session still
+  starting).
+
+`session_id` is Claude's own id, which changes on a fork or a plan-accept;
+address a session by `handle`, never by it.
 
 **`snapshot` is light by default**: structure only, no terminal text. Scope
 text to named handles with `terminals` (or set `focused_terminal: true` for the

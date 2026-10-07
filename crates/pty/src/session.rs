@@ -26,7 +26,7 @@ use crate::grid::{Palette, apply_pointer, apply_select, indexed_rgb, snapshot};
 use crate::input::{mouse_bytes, wheel_bytes};
 use crate::mode::mouse_reporting;
 use crate::prompt::decode_marks;
-use crate::status::{Activity, foreground_leader, foreground_status};
+use crate::status::{Activity, foreground_job, foreground_leader, foreground_status};
 use crate::workdir::decode_cwd;
 
 /// Read buffer for the per-session reader thread.
@@ -122,10 +122,15 @@ pub(crate) enum TermCmd {
     Pointer(PointerEvent),
     /// Copy the current selection to the clipboard via a `SelectionCopied` event.
     CopySelection,
-    /// What the PTY's foreground process group implies about the session's
-    /// activity, or `None` when the platform cannot say. The stand-in source
-    /// for a shell whose integration did not take (see [`crate::status`]).
-    Foreground(Option<SessionStatus>),
+    /// One reading of the PTY's foreground process group. `status` is what it
+    /// implies about the session's activity — the stand-in source for a shell
+    /// whose integration did not take (see [`crate::status`]) — and `job` the
+    /// pid of the job in front of the shell. Both `None` when the platform
+    /// cannot say.
+    Foreground {
+        status: Option<SessionStatus>,
+        job: Option<u32>,
+    },
     /// The shared palette changed: emit a fresh screen in the new colours.
     Repaint,
     /// The PTY reached end of file; the process is gone. `clean` carries the
@@ -320,10 +325,11 @@ pub(crate) fn spawn_watcher(
                     // the stand-in is optional, so end quietly.
                     Err(_) => break,
                 };
-                if ctrl
-                    .send(TermCmd::Foreground(foreground_status(leader, shell)))
-                    .is_err()
-                {
+                let reading = TermCmd::Foreground {
+                    status: foreground_status(leader, shell),
+                    job: foreground_job(leader, shell),
+                };
+                if ctrl.send(reading).is_err() {
                     break;
                 }
             }
@@ -372,6 +378,7 @@ pub(crate) fn spawn_term(
             let mut activity = Activity::starting();
             let mut title: Option<String> = None;
             let mut cwd: Option<String> = None;
+            let mut job: Option<u32> = None;
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
             let mut clean = false;
@@ -454,10 +461,14 @@ pub(crate) fn spawn_term(
                             term_sink(PtyEvent::SelectionCopied { session, text });
                         }
                     }
-                    TermCmd::Foreground(status) => {
+                    TermCmd::Foreground { status, job: now } => {
                         let before = activity.status;
                         if activity.poll(status) {
                             report_status(session, before, &activity, &term_sink);
+                        }
+                        if now != job {
+                            job = now;
+                            term_sink(PtyEvent::ForegroundJob { session, pid: now });
                         }
                         // A poll changes no pixels; falling through to the
                         // snapshot below would redraw every session four times

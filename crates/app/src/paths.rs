@@ -29,3 +29,13 @@ pub fn termherd_dir() -> Option<PathBuf> {
 pub fn claude_dir() -> Option<PathBuf> {
     home_dir().map(|home| home.join(".claude"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claude_dir_is_the_dot_claude_folder_in_home() {
+        assert_eq!(claude_dir(), home_dir().map(|home| home.join(".claude")));
+    }
+}

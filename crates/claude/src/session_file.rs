@@ -24,8 +24,24 @@ pub struct SessionFile {
 /// not `pid`: a file whose content contradicts its name describes some other
 /// process, and attributing its name to this one would be worse than none.
 pub fn parse(json: &str, pid: u32) -> Option<SessionFile> {
-    let _ = (json, pid);
-    None
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let object = value.as_object()?;
+    let stated = object.get("pid")?.as_u64()?;
+    if stated != u64::from(pid) {
+        return None;
+    }
+    let text = |key: &str| {
+        object
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+            .map(str::to_owned)
+    };
+    Some(SessionFile {
+        pid,
+        name: text("name"),
+        session_id: text("sessionId"),
+    })
 }
 
 #[cfg(test)]

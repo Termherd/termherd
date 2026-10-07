@@ -162,8 +162,8 @@ pub(crate) fn foreground_status(leader: Option<i32>, shell: Option<u32>) -> Opti
 /// launched at the prompt this is Claude's own pid — the one naming its
 /// session file.
 pub(crate) fn foreground_job(leader: Option<i32>, shell: Option<u32>) -> Option<u32> {
-    let _ = (leader, shell);
-    None
+    let (leader, shell) = (u32::try_from(leader?).ok()?, shell?);
+    (leader != shell).then_some(leader)
 }
 
 #[cfg(test)]

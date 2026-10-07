@@ -152,6 +152,8 @@ pub fn run(
                     pty: pty.clone(),
                     pty_output: pty_output.clone(),
                     settings: Arc::new(live_settings::LiveSettings(pty.clone())),
+                    claude_sessions: crate::paths::claude_dir()
+                        .map(|claude| claude.join("sessions")),
                 },
                 live_bridge.clone(),
                 startup.clone(),
@@ -210,6 +212,8 @@ struct Shell {
     watch_root: Option<PathBuf>,
     /// The `settings.json` the live-reload watch follows; resolved once.
     settings_file: Option<PathBuf>,
+    /// Claude Code's session-file directory, read for each pane's identity.
+    claude_sessions: Option<PathBuf>,
     scan_error: Option<String>,
     /// Checks whether a path-shaped run of terminal text names a real file.
     /// The one thing that tells `src/main.rs` from `and/or`.
@@ -682,6 +686,9 @@ pub(crate) struct Ports {
     /// Where a setting goes beyond the shell: the live terminal palette, the
     /// next session's shell, and `settings.json`.
     pub(crate) settings: Arc<dyn live_settings::SettingsSink>,
+    /// Where Claude Code writes its per-process session files
+    /// (`~/.claude/sessions`), when there is a home to find it in.
+    pub(crate) claude_sessions: Option<PathBuf>,
 }
 
 impl Shell {
@@ -693,6 +700,7 @@ impl Shell {
             pty,
             pty_output,
             settings: settings_sink,
+            claude_sessions,
         } = ports;
         let LiveBridge {
             requests: bridge_requests,
@@ -709,6 +717,7 @@ impl Shell {
             bounds,
             scanner,
             watch_root,
+            claude_sessions,
             settings_file: crate::settings::path(),
             scan_error: None,
             path_resolver,
@@ -1609,6 +1618,7 @@ mod key_routing {
             pty,
             pty_output: PtyOutput::new(rx),
             settings: Arc::new(()),
+            claude_sessions: None,
         }
     }
 
@@ -1686,6 +1696,62 @@ mod key_routing {
         (shell, pty)
     }
 
+    #[test]
+    fn the_session_files_of_the_panes_reach_list_sessions_and_a_tabs_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("4399.json"),
+            r#"{"pid":4399,"name":"proj-35","sessionId":"7eff"}"#,
+        )
+        .expect("write session file");
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let mut shell = Shell::new(
+            WindowConfig::default(),
+            Ports {
+                claude_sessions: Some(dir.path().to_path_buf()),
+                ..test_ports(Arc::new(RecordingPty::default()), rx)
+            },
+            test_live_bridge(),
+            test_startup(),
+        );
+        let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyForegroundJob {
+            session,
+            pid: Some(4399),
+        });
+
+        let listed = shell.snapshot_inputs(&BridgeRequest::ListSessions);
+        assert_eq!(
+            listed
+                .session_files
+                .get(&4399)
+                .and_then(|file| file.name.as_deref()),
+            Some("proj-35")
+        );
+        let tabs = SnapshotFilter {
+            sections: vec![termherd_core::Section::Tabs],
+            ..SnapshotFilter::default()
+        };
+        assert!(
+            shell
+                .snapshot_inputs_for(&tabs)
+                .session_files
+                .contains_key(&4399)
+        );
+        let config_only = SnapshotFilter {
+            sections: vec![termherd_core::Section::Config],
+            ..SnapshotFilter::default()
+        };
+        assert!(
+            shell
+                .snapshot_inputs_for(&config_only)
+                .session_files
+                .is_empty(),
+            "a snapshot with no panes reads no files"
+        );
+    }
+
     /// A shell whose one terminal is actively working, so a close request arms
     /// the confirmation bar rather than closing outright — the setup for tests
     /// about the confirmation machinery itself, now that an idle shell
@@ -1703,7 +1769,7 @@ mod key_routing {
     #[test]
     fn snapshot_inputs_gather_config_when_asked_and_scope_terminal_text() {
         use super::bridge::Request;
-        use termherd_core::{Section, SnapshotFilter, TerminalScope};
+        use termherd_core::{SnapshotFilter, TerminalScope};
 
         let (mut shell, _pty) = shell_with_terminal();
         let session = shell.core.workspace.focused_session().expect("focused");
@@ -1712,7 +1778,7 @@ mod key_routing {
 
         // Config section on, and the focused handle's terminal text requested.
         let inputs = shell.snapshot_inputs(&Request::Snapshot(SnapshotFilter {
-            sections: vec![Section::Config],
+            sections: vec![termherd_core::Section::Config],
             terminals: TerminalScope::Only(vec![handle]),
             text_lines: 40,
         }));
@@ -1727,7 +1793,7 @@ mod key_routing {
 
         // Config section off and no terminal scope: nothing gathered.
         let bare = shell.snapshot_inputs(&Request::Snapshot(SnapshotFilter {
-            sections: vec![Section::Tabs],
+            sections: vec![termherd_core::Section::Tabs],
             terminals: TerminalScope::None,
             text_lines: 40,
         }));

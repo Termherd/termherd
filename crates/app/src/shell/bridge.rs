@@ -22,7 +22,7 @@ use std::time::Duration;
 use iced::futures::{SinkExt, Stream};
 use termherd_core::{
     Action as KeymapAction, App, ClaudeIdentity, KeyChord, LiveSession, PointerEvent, PointerRoute,
-    SessionKind, SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot,
+    SessionKind, SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot, claude_identity,
     workspace::SplitDir,
 };
 use tokio::sync::{mpsc, oneshot};
@@ -527,7 +527,6 @@ pub fn channel() -> (BridgeHandle, Requests) {
 /// so the external surface is deterministic. Pure read of the registry `core`
 /// already owns.
 pub fn list_sessions(core: &App, session_files: &BTreeMap<u32, SessionFile>) -> Vec<SessionInfo> {
-    let _ = session_files;
     let mut live: Vec<&LiveSession> = core.sessions.values().collect();
     // Deterministic ascending-handle order — the registry map is unordered, and
     // an external API must not shuffle its rows between calls.
@@ -545,7 +544,7 @@ pub fn list_sessions(core: &App, session_files: &BTreeMap<u32, SessionFile>) -> 
             kind: s.launch.kind(),
             resume_id: s.launch.resume_id().map(str::to_owned),
             status: s.status,
-            identity: ClaudeIdentity::default(),
+            identity: claude_identity(s, session_files),
         })
         .collect()
 }
@@ -557,7 +556,7 @@ pub fn list_sessions(core: &App, session_files: &BTreeMap<u32, SessionFile>) -> 
 pub fn respond(core: &App, request: &Request, inputs: &SnapshotInputs) -> Reply {
     match request {
         Request::Snapshot(filter) => Reply::Snapshot(core.snapshot(filter, inputs)),
-        Request::ListSessions => Reply::Sessions(list_sessions(core, &BTreeMap::new())),
+        Request::ListSessions => Reply::Sessions(list_sessions(core, &inputs.session_files)),
         // Actions mutate, so they can't answer off a `&App`; the shell branches
         // them to `perform_action` before reaching here. This arm is the
         // defensive default should that routing ever be bypassed.
@@ -724,6 +723,33 @@ mod tests {
                 session_id: Some("7eff".to_owned()),
             }
         );
+    }
+
+    #[test]
+    fn respond_lists_sessions_with_the_injected_session_files() {
+        let mut app = App::new();
+        launch_claude(&mut app, "/proj", "work", None);
+        let session = app.workspace.focused_session().expect("focused");
+        app.apply(Event::ForegroundJobChanged {
+            session,
+            pid: Some(4399),
+        });
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(
+                4399,
+                SessionFile {
+                    pid: 4399,
+                    name: Some("proj-35".to_owned()),
+                    session_id: None,
+                },
+            )]),
+            ..SnapshotInputs::default()
+        };
+
+        let Reply::Sessions(rows) = respond(&app, &Request::ListSessions, &inputs) else {
+            panic!("list_sessions answers with sessions");
+        };
+        assert_eq!(rows[0].identity.peer_name.as_deref(), Some("proj-35"));
     }
 
     #[test]

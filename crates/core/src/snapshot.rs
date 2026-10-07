@@ -113,8 +113,8 @@ pub struct SnapshotInputs {
     pub terminals: BTreeMap<u64, String>,
     /// Claude's per-process session files, keyed by the pid that names them,
     /// read by the adapter for the pids the panes report. A pid with no entry
-    /// had no readable file, which is not an error: an older CLI, or a
-    /// session still starting, writes none.
+    /// had no readable file, which is not an error: a job other than Claude, an
+    /// older CLI, or a session still starting writes none.
     pub session_files: BTreeMap<u32, SessionFile>,
 }
 
@@ -240,20 +240,21 @@ pub struct PaneSnapshot {
     pub cwd: Option<String>,
     /// Current activity.
     pub status: SessionStatus,
-    /// Who the Claude in this pane is; all `None` for a shell pane.
+    /// Who the Claude in front of this pane is; all `None` when none is.
     pub identity: ClaudeIdentity,
 }
 
 /// What identifies the Claude process a pane runs, to a peer that wants to
-/// address it. Every field is `None` for a shell pane, and wherever the
-/// platform or Claude Code itself does not say.
+/// address it. Every field is `None` unless the job in front of the pane has a
+/// session file, whatever kind the pane was launched as.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ClaudeIdentity {
     /// The Claude process id — the job in front of the pane's shell. `None`
-    /// on Windows, where ConPTY reports no foreground process group.
+    /// on Windows, where ConPTY reports no foreground process group, and for a
+    /// job with no session file, which is no Claude this can vouch for.
     pub pid: Option<u32>,
     /// The name other Claude sessions address this one by, from its session
-    /// file. `None` when the file is absent or names none.
+    /// file. `None` when the file names none.
     pub peer_name: Option<String>,
     /// The Claude session id, from the same file. `None` likewise.
     pub session_id: Option<String>,

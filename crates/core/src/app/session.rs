@@ -323,6 +323,19 @@ impl App {
         })]
     }
 
+    /// Record the job now in front of `session`'s shell. Unknown sessions are
+    /// ignored, like every other adapter report about one.
+    pub(super) fn foreground_job_changed(
+        &mut self,
+        session: SessionId,
+        pid: Option<u32>,
+    ) -> Vec<Effect> {
+        if let Some(live) = self.sessions.get_mut(&session) {
+            live.foreground_pid = pid;
+        }
+        Vec::new()
+    }
+
     /// A session's PTY ended. A *clean* exit — the user typed `exit` at a
     /// prompt — leaves nothing worth reading, so its pane closes on its own;
     /// an unclean exit keeps the dead terminal visible: a failure's last
@@ -333,17 +346,6 @@ impl App {
     /// exit on a Claude tab is that same shell `exit`, closed like any other.
     /// If launching ever `exec`s Claude directly, revisit: the CLI quitting
     /// would then end the PTY cleanly and auto-close a tab worth reviewing.
-    /// Record the job now in front of `session`'s shell. Unknown sessions are
-    /// ignored, like every other adapter report about one.
-    pub(super) fn foreground_job_changed(
-        &mut self,
-        session: SessionId,
-        pid: Option<u32>,
-    ) -> Vec<Effect> {
-        let _ = (session, pid);
-        Vec::new()
-    }
-
     pub(super) fn pty_exited(&mut self, session: SessionId, clean: bool) -> Vec<Effect> {
         if clean
             && self.sessions.contains_key(&session)
@@ -353,6 +355,9 @@ impl App {
         }
         if let Some(s) = self.sessions.get_mut(&session) {
             s.status = SessionStatus::Exited;
+            // The watcher ends with the PTY and never reports the job gone,
+            // and a dead job's pid may be reused by another Claude.
+            s.foreground_pid = None;
         }
         Vec::new()
     }
