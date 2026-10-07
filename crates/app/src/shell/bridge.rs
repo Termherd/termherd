@@ -14,19 +14,22 @@
 //! `timeout`); the receiver side is driven by iced's own executor, so the two
 //! runtimes meet only at the runtime-agnostic channels.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
 use termherd_core::{
-    Action as KeymapAction, App, KeyChord, Launch, LiveSession, PointerEvent, PointerRoute,
-    SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot, workspace::SplitDir,
+    Action as KeymapAction, App, ClaudeIdentity, KeyChord, LiveSession, PointerEvent, PointerRoute,
+    SessionKind, SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot, claude_identity,
+    workspace::SplitDir,
 };
 use tokio::sync::{mpsc, oneshot};
 
 use super::Message;
 use super::streams::TakeOnceSource;
+use termherd_claude::session_file::SessionFile;
 
 /// Depth of the transport→shell request channel. Bounded so a burst of requests
 /// applies backpressure to the caller instead of growing memory without limit —
@@ -115,7 +118,7 @@ pub enum Press {
 /// What the routing ladder did with one [`Press`].
 ///
 /// The wire-side twin of the shell's internal `KeyVerdict`, kept separate for
-/// the reason [`SessionKind`] is: the external surface stays plain and owned,
+/// the reason [`Action`] is: the external surface stays plain and owned,
 /// with no shell-internal type leaking through it. The mapping between them is
 /// one exhaustive `match`, so a new verdict is a compile error here rather than
 /// a case that quietly reports as something else.
@@ -378,15 +381,6 @@ pub enum Reply {
     Pressed(PressOutcome),
 }
 
-/// The kind of program a session runs, as an MCP client sees it. Distinct from
-/// `core::Launch` (which also carries the resume id) so the external surface
-/// stays a plain tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionKind {
-    Shell,
-    Claude,
-}
-
 /// One live session as an external MCP client sees it.
 ///
 /// `handle` is the **stable external id** — the runtime `SessionId`, minted once
@@ -409,6 +403,9 @@ pub struct SessionInfo {
     pub resume_id: Option<String>,
     /// Current activity (FR8).
     pub status: SessionStatus,
+    /// Who the Claude in front of this session is, whatever its `kind`; all
+    /// `None` when no Claude is.
+    pub identity: ClaudeIdentity,
 }
 
 /// Why a bridge call returned no reply. Kept distinct so a caller can tell a
@@ -530,7 +527,7 @@ pub fn channel() -> (BridgeHandle, Requests) {
 /// Every live session as a stable-handle [`SessionInfo`] list, sorted by handle
 /// so the external surface is deterministic. Pure read of the registry `core`
 /// already owns.
-pub fn list_sessions(core: &App) -> Vec<SessionInfo> {
+pub fn list_sessions(core: &App, session_files: &BTreeMap<u32, SessionFile>) -> Vec<SessionInfo> {
     let mut live: Vec<&LiveSession> = core.sessions.values().collect();
     // Deterministic ascending-handle order — the registry map is unordered, and
     // an external API must not shuffle its rows between calls.
@@ -545,12 +542,10 @@ pub fn list_sessions(core: &App) -> Vec<SessionInfo> {
                 .map(|tab| tab.title.clone())
                 .unwrap_or_default(),
             cwd: s.cwd.clone(),
-            kind: match s.launch {
-                Launch::Shell => SessionKind::Shell,
-                Launch::Claude { .. } => SessionKind::Claude,
-            },
+            kind: s.launch.kind(),
             resume_id: s.launch.resume_id().map(str::to_owned),
             status: s.status,
+            identity: claude_identity(s, session_files),
         })
         .collect()
 }
@@ -562,7 +557,7 @@ pub fn list_sessions(core: &App) -> Vec<SessionInfo> {
 pub fn respond(core: &App, request: &Request, inputs: &SnapshotInputs) -> Reply {
     match request {
         Request::Snapshot(filter) => Reply::Snapshot(core.snapshot(filter, inputs)),
-        Request::ListSessions => Reply::Sessions(list_sessions(core)),
+        Request::ListSessions => Reply::Sessions(list_sessions(core, &inputs.session_files)),
         // Actions mutate, so they can't answer off a `&App`; the shell branches
         // them to `perform_action` before reaching here. This arm is the
         // defensive default should that routing ever be bypassed.
@@ -685,7 +680,9 @@ impl FirstRequest for tokio::task::JoinHandle<Vec<Request>> {
 mod tests {
     use super::*;
     use std::time::Duration;
-    use termherd_core::{Event, Launch, LaunchSpec, SessionStatus, SnapshotFilter, SnapshotInputs};
+    use termherd_core::{
+        Event, ForegroundJob, Launch, LaunchSpec, SessionStatus, SnapshotFilter, SnapshotInputs,
+    };
 
     /// Open `n` shell tabs in a fresh `App`, so a snapshot has real workspace
     /// state to read.
@@ -699,6 +696,114 @@ mod tests {
             }));
         }
         app
+    }
+
+    #[test]
+    fn a_claude_session_lists_the_identity_its_session_file_names() {
+        let mut app = App::new();
+        let handle = launch_claude(&mut app, "/proj", "work", None);
+        let session = app.workspace.focused_session().expect("focused");
+        app.apply(Event::ForegroundJobChanged {
+            session,
+            job: Some(job(4399)),
+        });
+        let files = BTreeMap::from([(
+            4399,
+            SessionFile {
+                pid: 4399,
+                name: Some("proj-35".to_owned()),
+                session_id: Some("7eff".to_owned()),
+                proc_start: Some(STARTED.to_owned()),
+            },
+        )]);
+
+        let info = &list_sessions(&app, &files)[0];
+        assert_eq!(info.handle, handle);
+        assert_eq!(
+            info.identity,
+            ClaudeIdentity {
+                pid: Some(4399),
+                peer_name: Some("proj-35".to_owned()),
+                session_id: Some("7eff".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn respond_lists_sessions_with_the_injected_session_files() {
+        let mut app = App::new();
+        launch_claude(&mut app, "/proj", "work", None);
+        let session = app.workspace.focused_session().expect("focused");
+        app.apply(Event::ForegroundJobChanged {
+            session,
+            job: Some(job(4399)),
+        });
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(
+                4399,
+                SessionFile {
+                    pid: 4399,
+                    name: Some("proj-35".to_owned()),
+                    session_id: None,
+                    proc_start: Some(STARTED.to_owned()),
+                },
+            )]),
+            ..SnapshotInputs::default()
+        };
+
+        let Reply::Sessions(rows) = respond(&app, &Request::ListSessions, &inputs) else {
+            panic!("list_sessions answers with sessions");
+        };
+        assert_eq!(rows[0].identity.peer_name.as_deref(), Some("proj-35"));
+    }
+
+    const STARTED: &str = "Wed Oct  7 06:48:07 2026";
+
+    /// The job a session file stamped with [`STARTED`] describes.
+    fn job(pid: u32) -> ForegroundJob {
+        ForegroundJob {
+            pid,
+            started: Some(STARTED.to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_shell_session_running_claude_lists_the_identity_its_file_names() {
+        // The file is the proof, not the kind: a `claude` typed at a shell
+        // prompt is as much a peer as one the pane was launched with.
+        let mut app = app_with_tabs(1);
+        let session = app.workspace.focused_session().expect("focused");
+        app.apply(Event::ForegroundJobChanged {
+            session,
+            job: Some(job(5000)),
+        });
+        let files = BTreeMap::from([(
+            5000,
+            SessionFile {
+                pid: 5000,
+                name: Some("typed-claude".to_owned()),
+                session_id: None,
+                proc_start: Some(STARTED.to_owned()),
+            },
+        )]);
+
+        let info = &list_sessions(&app, &files)[0];
+        assert_eq!(info.kind, SessionKind::Shell);
+        assert_eq!(info.identity.pid, Some(5000));
+        assert_eq!(info.identity.peer_name.as_deref(), Some("typed-claude"));
+    }
+
+    #[test]
+    fn a_session_whose_job_has_no_session_file_lists_no_identity() {
+        let mut app = app_with_tabs(1);
+        let session = app.workspace.focused_session().expect("focused");
+        app.apply(Event::ForegroundJobChanged {
+            session,
+            job: Some(job(5000)),
+        });
+
+        let info = &list_sessions(&app, &BTreeMap::new())[0];
+        assert_eq!(info.identity, ClaudeIdentity::default());
     }
 
     /// Launch one Claude session (fresh or resumed) in `app`, returning its
@@ -717,13 +822,13 @@ mod tests {
 
     #[test]
     fn list_sessions_is_empty_for_a_fresh_app() {
-        assert!(list_sessions(&App::new()).is_empty());
+        assert!(list_sessions(&App::new(), &BTreeMap::new()).is_empty());
     }
 
     #[test]
     fn list_sessions_reports_each_live_session_sorted_by_handle() {
         let app = app_with_tabs(3);
-        let sessions = list_sessions(&app);
+        let sessions = list_sessions(&app, &BTreeMap::new());
         assert_eq!(sessions.len(), 3, "three sessions were launched");
         let handles: Vec<&str> = sessions.iter().map(|s| s.handle.as_str()).collect();
         assert_eq!(
@@ -739,7 +844,7 @@ mod tests {
     #[test]
     fn a_shell_session_has_kind_shell_and_no_resume_id() {
         let app = app_with_tabs(1);
-        let info = &list_sessions(&app)[0];
+        let info = &list_sessions(&app, &BTreeMap::new())[0];
         assert_eq!(info.kind, SessionKind::Shell);
         assert_eq!(info.resume_id, None);
     }
@@ -748,7 +853,7 @@ mod tests {
     fn a_sessions_handle_is_its_runtime_id_not_the_claude_resume_id() {
         let mut app = App::new();
         let handle = launch_claude(&mut app, "/proj", "proj", Some("claude-abc-123"));
-        let info = &list_sessions(&app)[0];
+        let info = &list_sessions(&app, &BTreeMap::new())[0];
         assert_eq!(info.kind, SessionKind::Claude);
         assert_eq!(info.handle, handle, "the handle is the runtime id");
         assert_eq!(
@@ -769,13 +874,13 @@ mod tests {
         // changing must never move the handle an MCP client addresses (Q6).
         let mut app = App::new();
         launch_claude(&mut app, "/proj", "proj", Some("claude-abc-123"));
-        let before = list_sessions(&app)[0].handle.clone();
+        let before = list_sessions(&app, &BTreeMap::new())[0].handle.clone();
         let id = app.workspace.focused_session().expect("a focused session");
         app.apply(Event::StatusChanged {
             session: id,
             status: SessionStatus::Busy,
         });
-        let after = &list_sessions(&app)[0];
+        let after = &list_sessions(&app, &BTreeMap::new())[0];
         assert_eq!(after.handle, before, "the handle survives a status change");
         assert_eq!(after.status, SessionStatus::Busy, "but the status updates");
     }
@@ -785,7 +890,7 @@ mod tests {
         let app = app_with_tabs(2);
         assert_eq!(
             respond(&app, &Request::ListSessions, &SnapshotInputs::default()),
-            Reply::Sessions(list_sessions(&app)),
+            Reply::Sessions(list_sessions(&app, &BTreeMap::new())),
             "respond forwards the live-session list unchanged"
         );
     }

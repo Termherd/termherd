@@ -19,14 +19,18 @@ use portable_pty::{Child, ChildKiller, MasterPty};
 use termherd_claude::osc::{OscSignal, decode_chunk};
 
 use termherd_core::workspace::SessionId;
-use termherd_core::{PointerEvent, PointerRoute, ScrollTarget, SelectOp, SessionStatus};
+use termherd_core::{
+    ForegroundJob, PointerEvent, PointerRoute, ScrollTarget, SelectOp, SessionStatus,
+};
 
 use crate::events::{EventSink, PtyEvent};
 use crate::grid::{Palette, apply_pointer, apply_select, indexed_rgb, snapshot};
 use crate::input::{mouse_bytes, wheel_bytes};
 use crate::mode::mouse_reporting;
 use crate::prompt::decode_marks;
-use crate::status::{Activity, foreground_leader, foreground_status};
+use crate::status::{
+    Activity, foreground_job, foreground_leader, foreground_status, process_start,
+};
 use crate::workdir::decode_cwd;
 
 /// Read buffer for the per-session reader thread.
@@ -122,10 +126,14 @@ pub(crate) enum TermCmd {
     Pointer(PointerEvent),
     /// Copy the current selection to the clipboard via a `SelectionCopied` event.
     CopySelection,
-    /// What the PTY's foreground process group implies about the session's
-    /// activity, or `None` when the platform cannot say. The stand-in source
-    /// for a shell whose integration did not take (see [`crate::status`]).
-    Foreground(Option<SessionStatus>),
+    /// One reading of the PTY's foreground process group. `status` is what it
+    /// implies about the session's activity — the stand-in source for a shell
+    /// whose integration did not take (see [`crate::status`]) — and `job` the
+    /// job in front of the shell. Both `None` when the platform cannot say.
+    Foreground {
+        status: Option<SessionStatus>,
+        job: Option<ForegroundJob>,
+    },
     /// The shared palette changed: emit a fresh screen in the new colours.
     Repaint,
     /// The PTY reached end of file; the process is gone. `clean` carries the
@@ -312,6 +320,7 @@ pub(crate) fn spawn_watcher(
             if !cfg!(unix) {
                 return;
             }
+            let mut job: Option<ForegroundJob> = None;
             loop {
                 std::thread::sleep(FOREGROUND_POLL);
                 let leader = match master.lock() {
@@ -320,10 +329,12 @@ pub(crate) fn spawn_watcher(
                     // the stand-in is optional, so end quietly.
                     Err(_) => break,
                 };
-                if ctrl
-                    .send(TermCmd::Foreground(foreground_status(leader, shell)))
-                    .is_err()
-                {
+                job = next_job(job, foreground_job(leader, shell), process_start);
+                let reading = TermCmd::Foreground {
+                    status: foreground_status(leader, shell),
+                    job: job.clone(),
+                };
+                if ctrl.send(reading).is_err() {
                     break;
                 }
             }
@@ -338,6 +349,24 @@ pub(crate) fn spawn_watcher(
             );
             std::thread::spawn(|| {})
         })
+}
+
+/// The job now in front, given the one before it. `ps` runs once per new job
+/// rather than on every poll, and again while a stamp is missing, since a
+/// lookup can lose the race with a process that is only just starting.
+fn next_job(
+    before: Option<ForegroundJob>,
+    pid: Option<u32>,
+    start_of: impl FnOnce(u32) -> Option<String>,
+) -> Option<ForegroundJob> {
+    let pid = pid?;
+    match before {
+        Some(job) if job.pid == pid && job.started.is_some() => Some(job),
+        _ => Some(ForegroundJob {
+            pid,
+            started: start_of(pid),
+        }),
+    }
 }
 
 /// The terminal thread: owns the `alacritty_terminal` grid and applies every
@@ -372,6 +401,7 @@ pub(crate) fn spawn_term(
             let mut activity = Activity::starting();
             let mut title: Option<String> = None;
             let mut cwd: Option<String> = None;
+            let mut job: Option<ForegroundJob> = None;
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
             let mut clean = false;
@@ -454,10 +484,14 @@ pub(crate) fn spawn_term(
                             term_sink(PtyEvent::SelectionCopied { session, text });
                         }
                     }
-                    TermCmd::Foreground(status) => {
+                    TermCmd::Foreground { status, job: now } => {
                         let before = activity.status;
                         if activity.poll(status) {
                             report_status(session, before, &activity, &term_sink);
+                        }
+                        if now != job {
+                            job.clone_from(&now);
+                            term_sink(PtyEvent::ForegroundJob { session, job: now });
                         }
                         // A poll changes no pixels; falling through to the
                         // snapshot below would redraw every session four times
@@ -510,6 +544,49 @@ pub(crate) fn spawn_term(
 
 #[cfg(test)]
 mod tests {
+    mod next_job {
+        use super::super::*;
+
+        fn job(pid: u32, started: Option<&str>) -> Option<ForegroundJob> {
+            Some(ForegroundJob {
+                pid,
+                started: started.map(str::to_owned),
+            })
+        }
+
+        fn never(_: u32) -> Option<String> {
+            panic!("a job already stamped must not be looked up again")
+        }
+
+        #[test]
+        fn the_same_stamped_job_is_kept_without_a_lookup() {
+            let before = job(4399, Some("Wed Oct  7 06:48:07 2026"));
+            assert_eq!(next_job(before.clone(), Some(4399), never), before);
+        }
+
+        #[test]
+        fn a_new_job_is_looked_up() {
+            let before = job(4399, Some("Wed Oct  7 06:48:07 2026"));
+            assert_eq!(
+                next_job(before, Some(5000), |pid| Some(format!("start of {pid}"))),
+                job(5000, Some("start of 5000"))
+            );
+        }
+
+        #[test]
+        fn a_job_whose_lookup_failed_is_looked_up_again() {
+            assert_eq!(
+                next_job(job(4399, None), Some(4399), |_| Some("late".to_owned())),
+                job(4399, Some("late"))
+            );
+        }
+
+        #[test]
+        fn the_shell_back_in_front_is_no_job() {
+            assert_eq!(next_job(job(4399, Some("x")), None, never), None);
+        }
+    }
+
     use super::*;
 
     #[test]

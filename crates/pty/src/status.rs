@@ -156,6 +156,40 @@ pub(crate) fn foreground_status(leader: Option<i32>, shell: Option<u32>) -> Opti
     })
 }
 
+/// The process id of the job a PTY's shell is running in the foreground, or
+/// `None` while the shell itself is in front, or where the platform cannot
+/// say. A job's process-group leader is its first process, so for a Claude
+/// launched at the prompt this is Claude's own pid — the one naming its
+/// session file.
+pub(crate) fn foreground_job(leader: Option<i32>, shell: Option<u32>) -> Option<u32> {
+    let (leader, shell) = (u32::try_from(leader?).ok()?, shell?);
+    (leader != shell).then_some(leader)
+}
+
+/// When process `pid` started, in the form Claude Code stamps its session
+/// file with (`procStart`): `ps`'s `lstart` column, in UTC and the C locale.
+/// `None` when `ps` cannot say: the process is gone, or there is no `ps`.
+pub(crate) fn process_start(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .env("TZ", "UTC")
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    lstart(&output.stdout)
+}
+
+/// The stamp in `ps -o lstart=` output, which pads it with trailing blanks.
+fn lstart(stdout: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(stdout).ok()?.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +317,53 @@ mod tests {
         // waiting on it.
         assert_eq!(foreground_status(None, Some(4321)), None);
         assert_eq!(foreground_status(Some(4321), None), None);
+    }
+
+    #[test]
+    fn a_job_in_front_of_the_shell_is_reported_by_its_pid() {
+        assert_eq!(foreground_job(Some(4399), Some(4321)), Some(4399));
+    }
+
+    #[test]
+    fn the_shell_in_front_means_no_job() {
+        assert_eq!(foreground_job(Some(4321), Some(4321)), None);
+    }
+
+    #[test]
+    fn no_job_is_invented_where_the_platform_cannot_report_one() {
+        assert_eq!(foreground_job(None, Some(4321)), None);
+        // Without the shell's own pid there is nothing to tell a job from the
+        // shell by.
+        assert_eq!(foreground_job(Some(4399), None), None);
+        // A leader is a pid, and no pid is negative.
+        assert_eq!(foreground_job(Some(-1), Some(4321)), None);
+    }
+
+    #[test]
+    fn the_lstart_column_is_read_without_its_padding() {
+        assert_eq!(
+            lstart(b"Wed Oct  7 06:48:07 2026    \n").as_deref(),
+            Some("Wed Oct  7 06:48:07 2026")
+        );
+        assert_eq!(lstart(b"   \n"), None);
+        assert_eq!(lstart(&[0xff, 0xfe]), None);
+    }
+
+    #[test]
+    fn a_live_process_has_a_start_stamp_and_a_missing_one_has_none() {
+        if cfg!(windows) {
+            return;
+        }
+        let stamp = process_start(std::process::id()).expect("this test's own process");
+        let year = stamp
+            .rsplit(' ')
+            .next()
+            .and_then(|year| year.parse::<u32>().ok());
+        assert!(
+            year.is_some_and(|year| year >= 2024),
+            "an lstart stamp, got {stamp:?}"
+        );
+        assert_eq!(process_start(u32::MAX), None);
     }
 
     #[test]

@@ -98,8 +98,8 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use termherd_core::{
-        ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, SessionKind, SessionStatus,
-        SidebarSnapshot, TabSnapshot,
+        ClaudeIdentity, ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, SessionKind,
+        SessionStatus, SidebarSnapshot, TabSnapshot,
     };
 
     #[test]
@@ -168,6 +168,7 @@ mod tests {
             kind: SessionKind::Shell,
             cwd: Some("/proj".to_owned()),
             status,
+            identity: ClaudeIdentity::default(),
         }
     }
 

@@ -6,10 +6,12 @@
 
 use crate::browser::{SessionRecord, session_matches};
 use crate::snapshot::{
-    ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section, SidebarSnapshot,
-    SnapshotFilter, SnapshotInputs, TabSnapshot, TerminalScope, WorkspaceSnapshot, tail_lines,
+    ClaudeIdentity, ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section,
+    SidebarSnapshot, SnapshotFilter, SnapshotInputs, TabSnapshot, TerminalScope, WorkspaceSnapshot,
+    tail_lines,
 };
 use std::collections::BTreeMap;
+use termherd_claude::session_file::SessionFile;
 
 use super::*;
 
@@ -42,7 +44,7 @@ impl App {
                 .then(|| self.sidebar_snapshot()),
             tabs: filter
                 .includes(Section::Tabs)
-                .then(|| self.tab_snapshots(focus.tab)),
+                .then(|| self.tab_snapshots(focus.tab, inputs)),
             terminals: self.scoped_terminals(filter, inputs, focus.session),
             focus,
         }
@@ -124,7 +126,11 @@ impl App {
     /// Each open tab with its panes (in pane order), addressed by stable handle.
     /// `active_tab` is the already-resolved focus pointer, so the active-tab
     /// invariant lives in one place ([`Self::snapshot`]).
-    fn tab_snapshots(&self, active_tab: Option<usize>) -> Vec<TabSnapshot> {
+    fn tab_snapshots(
+        &self,
+        active_tab: Option<usize>,
+        inputs: &SnapshotInputs,
+    ) -> Vec<TabSnapshot> {
         self.workspace
             .tabs
             .iter()
@@ -138,7 +144,11 @@ impl App {
                     .iter()
                     // A pane always hosts a registered session (the workspace
                     // invariant); a stray id is dropped rather than panicked on.
-                    .filter_map(|id| self.sessions.get(id).map(pane_snapshot))
+                    .filter_map(|id| {
+                        self.sessions
+                            .get(id)
+                            .map(|session| pane_snapshot(session, &inputs.session_files))
+                    })
                     .collect(),
             })
             .collect()
@@ -171,12 +181,45 @@ impl App {
 
 /// One live session as a snapshot pane. Free function (not a method) — it reads
 /// only the session, so it needs no `App`.
-fn pane_snapshot(session: &LiveSession) -> PaneSnapshot {
+fn pane_snapshot(
+    session: &LiveSession,
+    session_files: &BTreeMap<u32, SessionFile>,
+) -> PaneSnapshot {
     PaneSnapshot {
         handle: session.id.0.get(),
         kind: session.launch.kind(),
         cwd: session.cwd.clone(),
         status: session.status,
+        identity: claude_identity(session, session_files),
+    }
+}
+
+/// Who the Claude in `session` is, if the job in front of its shell is one.
+/// The session file is the proof, not the kind the pane was launched as: a
+/// Claude pane outlives its Claude (a `vim` after it is no Claude), and a
+/// shell pane can run one typed by hand. The one place that decides it, so
+/// the snapshot and `list_sessions` cannot disagree.
+#[must_use]
+pub fn claude_identity(
+    session: &LiveSession,
+    session_files: &BTreeMap<u32, SessionFile>,
+) -> ClaudeIdentity {
+    let Some((job, file)) = session
+        .foreground
+        .as_ref()
+        .and_then(|job| session_files.get(&job.pid).map(|file| (job, file)))
+    else {
+        return ClaudeIdentity::default();
+    };
+    // A crashed Claude leaves its file behind, and its pid free for whatever
+    // the OS starts next: only the writer's own start time tells them apart.
+    if job.started.is_none() || job.started != file.proc_start {
+        return ClaudeIdentity::default();
+    }
+    ClaudeIdentity {
+        pid: Some(job.pid),
+        peer_name: file.name.clone(),
+        session_id: file.session_id.clone(),
     }
 }
 
@@ -185,9 +228,11 @@ mod tests {
     use super::*;
     use crate::app::testsupport::*;
     use crate::snapshot::{
-        ConfigInput, Section, SessionKind, SnapshotFilter, SnapshotInputs, TerminalScope,
+        ConfigInput, PaneSnapshot, Section, SessionKind, SnapshotFilter, SnapshotInputs,
+        TerminalScope,
     };
     use crate::workspace::SplitDir;
+    use termherd_claude::session_file::SessionFile;
 
     /// A filter for exactly the sections named, otherwise light (no terminal
     /// text).
@@ -498,6 +543,232 @@ mod tests {
             Some("/proj/crates/pty"),
             "the snapshot must follow the shell, not the launch"
         );
+    }
+
+    fn session(handle: u64) -> SessionId {
+        SessionId(std::num::NonZeroU64::new(handle).expect("nonzero"))
+    }
+
+    const STARTED: &str = "Wed Oct  7 06:48:07 2026";
+
+    fn session_file(pid: u32, name: &str, session_id: &str) -> SessionFile {
+        SessionFile {
+            pid,
+            name: Some(name.to_owned()),
+            session_id: Some(session_id.to_owned()),
+            proc_start: Some(STARTED.to_owned()),
+        }
+    }
+
+    /// The job a file written by `session_file(pid, ..)` describes.
+    fn job(pid: u32) -> ForegroundJob {
+        ForegroundJob {
+            pid,
+            started: Some(STARTED.to_owned()),
+        }
+    }
+
+    fn panes(app: &App, inputs: &SnapshotInputs) -> Vec<PaneSnapshot> {
+        let snap = app.snapshot(&only_sections(&[Section::Tabs]), inputs);
+        snap.tabs
+            .expect("tabs were requested")
+            .into_iter()
+            .flat_map(|tab| tab.panes)
+            .collect()
+    }
+
+    #[test]
+    fn a_claude_pane_reports_its_pid_and_the_identity_its_session_file_names() {
+        let mut app = App::new();
+        let handle = launch_claude_in(&mut app, "/proj", "work");
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            job: Some(job(4399)),
+        });
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(4399, session_file(4399, "proj-35", "7eff"))]),
+            ..SnapshotInputs::default()
+        };
+
+        let pane = &panes(&app, &inputs)[0];
+        assert_eq!(pane.identity.pid, Some(4399));
+        assert_eq!(pane.identity.peer_name.as_deref(), Some("proj-35"));
+        assert_eq!(pane.identity.session_id.as_deref(), Some("7eff"));
+    }
+
+    #[test]
+    fn a_job_with_no_session_file_is_not_reported_as_claude() {
+        // A Claude pane whose Claude quit, now running `vim`: its kind still
+        // says Claude, the pid in front is not one.
+        let mut app = App::new();
+        let handle = launch_claude_in(&mut app, "/proj", "work");
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            job: Some(job(4399)),
+        });
+
+        let pane = &panes(&app, &SnapshotInputs::default())[0];
+        assert_eq!(pane.identity, ClaudeIdentity::default());
+    }
+
+    #[test]
+    fn the_shell_back_in_front_clears_the_pid_and_the_identity() {
+        let mut app = App::new();
+        let handle = launch_claude_in(&mut app, "/proj", "work");
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            job: Some(job(4399)),
+        });
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            job: None,
+        });
+        // A stale file for the old pid must not resurface once Claude left.
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(4399, session_file(4399, "proj-35", "7eff"))]),
+            ..SnapshotInputs::default()
+        };
+
+        let pane = &panes(&app, &inputs)[0];
+        assert_eq!(
+            (pane.identity.pid, pane.identity.peer_name.as_deref()),
+            (None, None),
+            "no job in front means no Claude to name"
+        );
+    }
+
+    #[test]
+    fn a_claude_typed_into_a_shell_pane_is_identified_by_its_session_file() {
+        let mut app = App::new();
+        let handle = launch(&mut app, "a").0.get();
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            job: Some(job(5000)),
+        });
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(5000, session_file(5000, "typed-claude", "s"))]),
+            ..SnapshotInputs::default()
+        };
+
+        let pane = &panes(&app, &inputs)[0];
+        assert_eq!(pane.kind, SessionKind::Shell);
+        assert_eq!(
+            (
+                pane.identity.pid,
+                pane.identity.peer_name.as_deref(),
+                pane.identity.session_id.as_deref()
+            ),
+            (Some(5000), Some("typed-claude"), Some("s")),
+        );
+    }
+
+    #[test]
+    fn two_claude_panes_in_one_directory_keep_their_own_identities() {
+        // Same cwd, so nothing a pane already reported told them apart: the
+        // case that sent a peer message to the wrong session.
+        let mut app = App::new();
+        let first = launch_claude_in(&mut app, "/proj", "one");
+        let second = launch_claude_in(&mut app, "/proj", "two");
+        for (handle, pid) in [(first, 4001), (second, 4002)] {
+            app.apply(Event::ForegroundJobChanged {
+                session: session(handle),
+                job: Some(job(pid)),
+            });
+        }
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([
+                (4001, session_file(4001, "proj-1", "aaaa")),
+                (4002, session_file(4002, "proj-2", "bbbb")),
+            ]),
+            ..SnapshotInputs::default()
+        };
+
+        let by_handle: BTreeMap<u64, Option<String>> = panes(&app, &inputs)
+            .into_iter()
+            .map(|pane| (pane.handle, pane.identity.peer_name))
+            .collect();
+        assert_eq!(by_handle[&first].as_deref(), Some("proj-1"));
+        assert_eq!(by_handle[&second].as_deref(), Some("proj-2"));
+    }
+
+    #[test]
+    fn a_pane_whose_pty_died_keeps_no_identity() {
+        let mut app = App::new();
+        let handle = launch_claude_in(&mut app, "/proj", "work");
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            job: Some(job(4399)),
+        });
+        app.apply(Event::PtyExited {
+            session: session(handle),
+            clean: false,
+        });
+        // The pid is free to be reused, by another Claude among others.
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(4399, session_file(4399, "someone-else", "x"))]),
+            ..SnapshotInputs::default()
+        };
+
+        let pane = &panes(&app, &inputs)[0];
+        assert_eq!(
+            pane.status,
+            SessionStatus::Exited,
+            "an unclean exit keeps the pane"
+        );
+        assert_eq!(pane.identity, ClaudeIdentity::default());
+    }
+
+    #[test]
+    fn a_file_left_by_a_dead_claude_names_no_process_that_reuses_its_pid() {
+        let mut app = App::new();
+        let handle = launch(&mut app, "a").0.get();
+        // `vim`, handed the pid a crashed Claude held, under that Claude's file.
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            job: Some(ForegroundJob {
+                pid: 4399,
+                started: Some("Thu Oct  8 09:12:44 2026".to_owned()),
+            }),
+        });
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(4399, session_file(4399, "proj-35", "7eff"))]),
+            ..SnapshotInputs::default()
+        };
+
+        assert_eq!(panes(&app, &inputs)[0].identity, ClaudeIdentity::default());
+    }
+
+    #[test]
+    fn a_job_whose_start_is_unknown_is_not_vouched_for() {
+        let mut app = App::new();
+        let handle = launch(&mut app, "a").0.get();
+        app.apply(Event::ForegroundJobChanged {
+            session: session(handle),
+            job: Some(ForegroundJob {
+                pid: 4399,
+                started: None,
+            }),
+        });
+        // A file with no stamp either: two absences are not a match.
+        let mut file = session_file(4399, "proj-35", "7eff");
+        file.proc_start = None;
+        let inputs = SnapshotInputs {
+            session_files: BTreeMap::from([(4399, file)]),
+            ..SnapshotInputs::default()
+        };
+
+        assert_eq!(panes(&app, &inputs)[0].identity, ClaudeIdentity::default());
+    }
+
+    #[test]
+    fn a_job_change_for_an_unknown_session_is_ignored() {
+        let mut app = App::new();
+        let effects = app.apply(Event::ForegroundJobChanged {
+            session: session(99),
+            job: Some(job(1)),
+        });
+        assert!(effects.is_empty());
+        assert!(panes(&app, &SnapshotInputs::default()).is_empty());
     }
 
     #[test]

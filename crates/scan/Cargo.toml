@@ -13,6 +13,9 @@ termherd-claude = { path = "../claude" }
 tracing = "0.1"
 notify = "8.2.0"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 

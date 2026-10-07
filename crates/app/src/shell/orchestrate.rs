@@ -13,10 +13,10 @@ use std::num::NonZeroU64;
 
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
-use termherd_core::{Event, Launch, PointerEvent};
+use termherd_core::{Event, Launch, PointerEvent, SessionKind};
 
 use super::bridge::{
-    Action, ActionDetail, ActionOutcome, Press, PressOutcome, PressStep, RepoOutcome, SessionKind,
+    Action, ActionDetail, ActionOutcome, Press, PressOutcome, PressStep, RepoOutcome,
 };
 use super::input::event_of;
 use super::repos::RepoGesture;

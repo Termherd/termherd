@@ -32,8 +32,10 @@
 
 mod cache;
 mod derive;
+mod open_file;
 mod paths;
 mod repo;
+mod session_file;
 mod walk;
 mod watch;
 
@@ -49,6 +51,7 @@ use walk::scan_root;
 
 pub use paths::FsPathResolver;
 pub use repo::{normalize_repo_path, repo_root, sidebar_key};
+pub use session_file::{MAX_SESSION_FILE_BYTES, read_session_file};
 pub use watch::{WatchHandle, watch_changes, watch_file};
 
 /// Scanner over a projects root (normally `~/.claude/projects`).

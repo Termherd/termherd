@@ -12,8 +12,8 @@ use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
 
 use super::{
-    LaunchSpec, PathRequest, PointerEvent, ResolvedPath, ScrollTarget, SelectOp, SessionStatus,
-    TargetProbe, Zoom,
+    ForegroundJob, LaunchSpec, PathRequest, PointerEvent, ResolvedPath, ScrollTarget, SelectOp,
+    SessionStatus, TargetProbe, Zoom,
 };
 
 #[derive(Debug, Clone)]
@@ -88,6 +88,14 @@ pub enum Event {
     SessionCwdChanged {
         session: SessionId,
         cwd: String,
+    },
+    /// The process in front of the session's shell changed: `Some(pid)` while a
+    /// job runs there (for a Claude pane, Claude itself), `None` once the
+    /// shell is back in front or the platform cannot say. The pid is what
+    /// names Claude's own session file, the only record of its peer name.
+    ForegroundJobChanged {
+        session: SessionId,
+        job: Option<ForegroundJob>,
     },
     /// The user clicked a tab to bring it to the front (FR5).
     ActivateTab(usize),

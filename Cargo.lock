@@ -3965,6 +3965,7 @@ dependencies = [
 name = "termherd-scan"
 version = "0.0.0"
 dependencies = [
+ "libc",
  "notify",
  "tempfile",
  "termherd-claude",

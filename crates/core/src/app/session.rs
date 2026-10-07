@@ -36,6 +36,20 @@ pub struct LiveSession {
     pub launch: Launch,
     /// Activity derived from the OSC stream (FR8).
     pub status: SessionStatus,
+    /// The job in front of the shell, as the PTY adapter last reported it
+    /// ([`Event::ForegroundJobChanged`]). `None` at the prompt and wherever the
+    /// platform has no foreground process group (ConPTY).
+    pub foreground: Option<ForegroundJob>,
+}
+
+/// The job in front of a session's shell, as the PTY adapter reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForegroundJob {
+    /// Its process id, the one a Claude session file is named after.
+    pub pid: u32,
+    /// When that process started, in the form Claude Code stamps its session
+    /// file with (`procStart`). `None` when the adapter could not tell.
+    pub started: Option<String>,
 }
 
 impl LiveSession {
@@ -272,6 +286,7 @@ impl App {
             launch_cwd: spec.cwd.clone(),
             launch: spec.launch.clone(),
             status: SessionStatus::Starting,
+            foreground: None,
         });
         self.workspace.open(id, spec.title);
         vec![Effect::Spawn(SpawnSpec {
@@ -306,6 +321,7 @@ impl App {
             launch_cwd: cwd.clone(),
             launch: Launch::Shell,
             status: SessionStatus::Starting,
+            foreground: None,
         });
         vec![Effect::Spawn(SpawnSpec {
             session: id,
@@ -315,6 +331,19 @@ impl App {
             rows: DEFAULT_ROWS,
             mcp: None,
         })]
+    }
+
+    /// Record the job now in front of `session`'s shell. Unknown sessions are
+    /// ignored, like every other adapter report about one.
+    pub(super) fn foreground_job_changed(
+        &mut self,
+        session: SessionId,
+        job: Option<ForegroundJob>,
+    ) -> Vec<Effect> {
+        if let Some(live) = self.sessions.get_mut(&session) {
+            live.foreground = job;
+        }
+        Vec::new()
     }
 
     /// A session's PTY ended. A *clean* exit — the user typed `exit` at a
@@ -336,6 +365,9 @@ impl App {
         }
         if let Some(s) = self.sessions.get_mut(&session) {
             s.status = SessionStatus::Exited;
+            // The watcher ends with the PTY and never reports the job gone,
+            // and a dead job's pid may be reused by another Claude.
+            s.foreground = None;
         }
         Vec::new()
     }

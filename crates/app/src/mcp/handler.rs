@@ -31,15 +31,15 @@ use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
 use termherd_core::{
     Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, PointerRoute,
-    Section, SessionStatus, SnapshotFilter, TerminalScope,
+    Section, SessionKind, SessionStatus, SnapshotFilter, TerminalScope,
 };
 use termherd_mcp::file::SetAtError;
 
 use crate::shell::bridge::{
     Action, ActionDetail, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo,
-    SessionKind, TerminalRead,
+    TerminalRead,
 };
-use crate::snapshot_dto::{SnapshotDto, status_str};
+use crate::snapshot_dto::{IdentityDto, SnapshotDto, kind_str, status_str};
 
 /// How long a tool waits for the shell to answer before failing the caller.
 /// Bounds the whole round-trip (enqueue + reply) via [`BridgeHandle::call`], so
@@ -155,7 +155,10 @@ impl TermherdMcp {
         description = "List the live terminal sessions termherd is hosting. Each \
                        row carries a stable `handle` (address it in later calls), \
                        the tab title, working directory, kind (shell or claude), \
-                       the resumed Claude id if any, and current activity status."
+                       the resumed Claude id if any, current activity status, and \
+                       when a Claude runs in it its `pid`, `peer_name` (the name \
+                       other Claude sessions address it by) and `session_id` — \
+                       each null when unknown."
     )]
     async fn list_sessions(&self) -> Result<CallToolResult, ErrorData> {
         let reply = self
@@ -180,7 +183,9 @@ impl TermherdMcp {
         name = "snapshot",
         description = "A filterable snapshot of termherd's whole state: config, \
                        the session-browser sidebar, and the open tabs with their \
-                       panes (each pane's stable handle, kind, cwd, status). Light \
+                       panes (each pane's stable handle, kind, cwd, status, and \
+                       for a pane running Claude its pid, peer_name and \
+                       session_id). Light \
                        by default — no terminal text. Args (all optional): \
                        `sections` (any of \"config\", \"sidebar\", \"tabs\"; omit \
                        for all), `terminals` (session handles to include screen \
@@ -909,6 +914,8 @@ struct SessionDto {
     resume_id: Option<String>,
     /// `"starting"`, `"busy"`, `"idle"`, `"attention"`, or `"exited"`.
     status: &'static str,
+    #[serde(flatten)]
+    identity: IdentityDto,
 }
 
 impl From<&SessionInfo> for SessionDto {
@@ -917,12 +924,10 @@ impl From<&SessionInfo> for SessionDto {
             handle: info.handle.clone(),
             title: info.title.clone(),
             cwd: info.cwd.clone(),
-            kind: match info.kind {
-                SessionKind::Shell => "shell",
-                SessionKind::Claude => "claude",
-            },
+            kind: kind_str(info.kind),
             resume_id: info.resume_id.clone(),
             status: status_str(info.status),
+            identity: IdentityDto::from(&info.identity),
         }
     }
 }
@@ -1380,7 +1385,22 @@ fn check_claude_nesting(
 mod tests {
     use super::*;
     use crate::shell::bridge::{Reply, Request, ShotResult, channel, spawn_test_shell};
-    use termherd_core::{App, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs};
+    use termherd_core::{
+        App, ClaudeIdentity, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs,
+    };
+
+    /// A `list_sessions` row for an idle shell, the bridge's plainest answer.
+    fn idle_shell(handle: &str, title: &str, cwd: &str) -> SessionInfo {
+        SessionInfo {
+            handle: handle.into(),
+            title: title.into(),
+            cwd: Some(cwd.into()),
+            kind: SessionKind::Shell,
+            resume_id: None,
+            status: SessionStatus::Idle,
+            identity: ClaudeIdentity::default(),
+        }
+    }
 
     #[tokio::test]
     async fn list_sessions_tool_shapes_the_bridge_reply_into_structured_json() {
@@ -1395,6 +1415,7 @@ mod tests {
                 kind: SessionKind::Claude,
                 resume_id: Some("claude-xyz".into()),
                 status: SessionStatus::Busy,
+                identity: ClaudeIdentity::default(),
             }]),
         );
 
@@ -1421,6 +1442,53 @@ mod tests {
             rows[0]["resume_id"], "claude-xyz",
             "the Claude id rides alongside the handle, not as it"
         );
+    }
+
+    #[tokio::test]
+    async fn list_sessions_carries_each_claude_identity_flat_and_null_when_unknown() {
+        let (handle, requests) = channel();
+        let row = |handle: &str, kind, identity| SessionInfo {
+            handle: handle.into(),
+            title: "proj".into(),
+            cwd: Some("/proj".into()),
+            kind,
+            resume_id: None,
+            status: SessionStatus::Idle,
+            identity,
+        };
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Sessions(vec![
+                row(
+                    "7",
+                    SessionKind::Claude,
+                    ClaudeIdentity {
+                        pid: Some(4399),
+                        peer_name: Some("proj-35".into()),
+                        session_id: Some("7eff".into()),
+                    },
+                ),
+                row("8", SessionKind::Shell, ClaudeIdentity::default()),
+            ]),
+        );
+
+        let result = TermherdMcp::new(handle)
+            .list_sessions()
+            .await
+            .expect("the tool returns a result");
+
+        let value = result.structured_content.expect("structured json content");
+        let rows = value["sessions"].as_array().cloned().expect("rows");
+        assert_eq!(rows[0]["pid"], 4399);
+        assert_eq!(rows[0]["peer_name"], "proj-35");
+        assert_eq!(rows[0]["session_id"], "7eff");
+        for key in ["pid", "peer_name", "session_id"] {
+            assert_eq!(
+                rows[1].get(key),
+                Some(&serde_json::Value::Null),
+                "{key} must be present and null on a shell row"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1533,14 +1601,7 @@ mod tests {
             ),
             "prompt_in_session" => (
                 vec![
-                    Reply::Sessions(vec![SessionInfo {
-                        handle: "1".into(),
-                        title: "tab 0".into(),
-                        cwd: Some("/proj".into()),
-                        kind: SessionKind::Shell,
-                        resume_id: None,
-                        status: SessionStatus::Idle,
-                    }]),
+                    Reply::Sessions(vec![idle_shell("1", "tab 0", "/proj")]),
                     acted(),
                     Reply::Waited(WaitOutcome {
                         status: Some(SessionStatus::Idle),
@@ -2353,6 +2414,7 @@ mod tests {
                     kind: SessionKind::Shell,
                     resume_id: None,
                     status: SessionStatus::Busy,
+                    identity: ClaudeIdentity::default(),
                 }])),
             ],
         );
@@ -2520,14 +2582,7 @@ mod tests {
         let shell = spawn_test_shell_seq(
             requests,
             vec![
-                Some(Reply::Sessions(vec![SessionInfo {
-                    handle: "7".into(),
-                    title: "shell".into(),
-                    cwd: Some("/tmp".into()),
-                    kind: SessionKind::Shell,
-                    resume_id: None,
-                    status: SessionStatus::Idle,
-                }])),
+                Some(Reply::Sessions(vec![idle_shell("7", "shell", "/tmp")])),
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Waited(WaitOutcome {
                     status: Some(SessionStatus::Idle),
@@ -2568,6 +2623,7 @@ mod tests {
                 kind: SessionKind::Claude,
                 resume_id: Some("id1".into()),
                 status: SessionStatus::Idle,
+                identity: ClaudeIdentity::default(),
             }]))],
         );
         let error = TermherdMcp::new(handle)
@@ -2602,6 +2658,7 @@ mod tests {
                     kind: SessionKind::Claude,
                     resume_id: Some("id1".into()),
                     status: SessionStatus::Idle,
+                    identity: ClaudeIdentity::default(),
                 }])),
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Waited(WaitOutcome {
