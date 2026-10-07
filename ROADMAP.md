@@ -68,6 +68,7 @@ issues #18–#29.
 | [F-auto-update](#f-auto-update) | feature | packaging | ☐ | Check for a new release from inside the app and apply it. |
 | [F-fork-detection](#f-fork-detection) | feature | sessions | ☐ | Detect a forked or plan-accepted session — blocked, the signals do not exist. |
 | [F-jsonl-viewer](#f-jsonl-viewer) | feature | sessions | ☐ | Render a Claude session's JSONL transcript as readable messages, not raw lines. |
+| [F-notification-focus-tab](#f-notification-focus-tab) | feature | workspace, sessions | ☐ | Clicking a tab's desktop notification brings termherd forward on that tab. |
 | [F-session-id-at-launch](#f-session-id-at-launch) | feature | sessions | ☐ | A fresh Claude tab knows its session id from the first keystroke. |
 | [F-store-cache](#f-store-cache) | feature | sessions | ☐ | A SQLite digest cache with an FTS5 index, replacing the in-memory scan. |
 | [F-terminal-images](#f-terminal-images) | feature | terminal | ☐ | Render images inline in the terminal — parked, no demand and no cheap slice. |
@@ -104,6 +105,7 @@ issues #18–#29.
 | [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
 | [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ☐ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
 | [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ☐ | The tab hover card shows agent name, model, effort, version and elapsed time. |
+| [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
 | [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ☐ | A Claude tab's title follows the session name Claude holds. |
 | [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
@@ -515,6 +517,20 @@ Never scoped beyond the name. Sibling to
 [F-terminal-images](#f-terminal-images) and
 [F-file-diff-panel](#f-file-diff-panel) in the rendering family — the same
 question of what termherd draws itself rather than letting the PTY draw.
+
+<a id="f-notification-focus-tab"></a>
+
+### F-notification-focus-tab
+
+Clicking a tab's desktop notification brings termherd forward on that tab.
+
+The click reveals the pane by its `SessionId`, through the path the MCP
+`focus_pane` tool already takes, then raises the window (#352). No new
+dependency: `notify-rust` already answers a click on all three OSes. Each OS
+still needs a real click to confirm the window comes forward, and Windows
+attributes the toast to PowerShell until termherd registers an application id.
+Builds on [F-status-notifications](#f-status-notifications). Torture report:
+`.personal/feature-torture/reports/F-notification-focus-tab.md`.
 
 <a id="f-session-id-at-launch"></a>
 
@@ -1252,6 +1268,19 @@ transcript and in its session file (#344). Needs
 [F-session-id-at-launch](#f-session-id-at-launch) and
 [F-copy-agent-name](#f-copy-agent-name). Torture report:
 `.personal/feature-torture/reports/F-tab-hover-details.md`.
+
+<a id="f-tab-park"></a>
+
+### F-tab-park
+
+Park a tab: a compact chip at the strip's end, out of the tab cycle.
+
+Presentational only: the session keeps running and its status still flows
+(#353). Active tabs come first and parked tabs after, an order every
+`Workspace` mutator keeps. Selecting a parked tab, dragging it out, or its
+session asking for attention reactivates it; dragging a tab into the parked
+zone parks it. A natural entry for [F-tab-context-menu](#f-tab-context-menu).
+Torture report: `.personal/feature-torture/reports/F-tab-park.md`.
 
 <a id="f-tab-title-sync"></a>
 
