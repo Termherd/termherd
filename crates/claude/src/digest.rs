@@ -9,8 +9,10 @@
 //! Malformed lines are skipped, not fatal — the policy (a deliberate
 //! deviation from upstream) lives in [`crate::jsonl`].
 
+use crate::color::ClaudeColor;
+
 /// What the browser and the FTS index need from one session JSONL.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionDigest {
     /// First real user prompt, truncated to 120 UTF-16 units.
     pub summary: String,
@@ -29,6 +31,21 @@ pub struct SessionDigest {
     /// separate from [`Self::text_content`] so it captures the true *tail* even
     /// when the indexed text hit its size cap mid-session.
     pub tail: Vec<String>,
+    /// The Claude Code version (`version`) of the last user, assistant or
+    /// system entry that records one.
+    pub version: Option<String>,
+    /// The model (`message.model`) of the last assistant reply that names one.
+    /// Sidechain and synthetic replies are skipped: neither is the model the
+    /// session talks to.
+    pub model: Option<String>,
+    /// The reasoning effort of the last assistant reply that records one:
+    /// `effort`, else `perTurnEffort`. Neither is documented, and older
+    /// Claude Code versions write neither.
+    pub effort: Option<String>,
+    /// The colour `/color` last set (`agent-color` entry); the last one wins.
+    /// Never [`ClaudeColor::Default`]: resetting leaves the session with no
+    /// colour of its own, which is `None`.
+    pub agent_color: Option<ClaudeColor>,
 }
 
 impl SessionDigest {
@@ -83,6 +100,8 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
     let mut custom_title: Option<String> = None;
     let mut ai_title: Option<String> = None;
     let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut run = RunFacts::default();
+    let mut agent_color: Option<ClaudeColor> = None;
 
     for entry in crate::jsonl::entries(content) {
         if slug.is_none()
@@ -104,6 +123,9 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         {
             ai_title = Some(t.to_owned());
         }
+        if entry_type == Some("agent-color") {
+            agent_color = agent_color_of(&entry);
+        }
 
         let is_user =
             entry_type == Some("user") || (entry_type == Some("message") && role == Some("user"));
@@ -112,6 +134,11 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         if is_user || is_assistant {
             message_count = message_count.saturating_add(1);
         }
+        run.observe(
+            &entry,
+            is_user || is_assistant || entry_type == Some("system"),
+            is_assistant,
+        );
 
         let text = message_text(&entry);
 
@@ -153,7 +180,69 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         custom_title,
         ai_title,
         tail: tail.into(),
+        version: run.version,
+        model: run.model,
+        effort: run.effort,
+        agent_color,
     })
+}
+
+/// What a transcript says about the Claude that wrote it, each field the last
+/// value an entry recorded.
+#[derive(Default)]
+struct RunFacts {
+    version: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+/// The model Claude Code names on a reply it made up itself (an interrupted
+/// or failed turn), which no API call answered.
+const SYNTHETIC_MODEL: &str = "<synthetic>";
+
+impl RunFacts {
+    fn observe(&mut self, entry: &serde_json::Value, carries_version: bool, is_assistant: bool) {
+        if carries_version {
+            keep_latest(&mut self.version, non_empty_str(entry, "version"));
+        }
+        let sidechain = entry
+            .get("isSidechain")
+            .and_then(serde_json::Value::as_bool);
+        if !is_assistant || sidechain == Some(true) {
+            return;
+        }
+        let model = entry.get("message").and_then(|m| non_empty_str(m, "model"));
+        if model == Some(SYNTHETIC_MODEL) {
+            return;
+        }
+        keep_latest(&mut self.model, model);
+        keep_latest(
+            &mut self.effort,
+            non_empty_str(entry, "effort").or_else(|| non_empty_str(entry, "perTurnEffort")),
+        );
+    }
+}
+
+/// Replace `slot` with `seen` when an entry recorded one. The value rarely
+/// changes from one line to the next, so it is copied only when it does.
+fn keep_latest(slot: &mut Option<String>, seen: Option<&str>) {
+    if let Some(seen) = seen
+        && slot.as_deref() != Some(seen)
+    {
+        *slot = Some(seen.to_owned());
+    }
+}
+
+/// The colour an `agent-color` entry sets. The key is undocumented, so a
+/// value that cannot be read — renamed key, non-string, a word outside the
+/// palette — reads as no colour: the entry says the colour changed, and
+/// keeping the previous one would claim a colour the session no longer has.
+fn agent_color_of(entry: &serde_json::Value) -> Option<ClaudeColor> {
+    entry
+        .get("agentColor")
+        .and_then(serde_json::Value::as_str)
+        .and_then(ClaudeColor::from_name)
+        .filter(|color| *color != ClaudeColor::Default)
 }
 
 /// First line of `text` with surrounding whitespace stripped, skipping leading
@@ -418,7 +507,111 @@ mod tests {
         );
     }
 
+    fn color_line(value: &serde_json::Value) -> String {
+        serde_json::json!({"type": "agent-color", "agentColor": value, "sessionId": "s"})
+            .to_string()
+    }
+
+    fn color_after(lines: &[String]) -> Option<ClaudeColor> {
+        let mut all = vec![user_line("prompt")];
+        all.extend_from_slice(lines);
+        digest_session(&all.join("\n")).unwrap().agent_color
+    }
+
+    #[test]
+    fn a_session_nobody_coloured_has_no_colour() {
+        assert_eq!(color_after(&[]), None);
+    }
+
+    #[test]
+    fn the_last_agent_color_entry_wins() {
+        let lines = [
+            color_line(&"red".into()),
+            user_line("more"),
+            color_line(&"green".into()),
+            color_line(&"cyan".into()),
+        ];
+        assert_eq!(color_after(&lines), Some(ClaudeColor::Cyan));
+    }
+
+    #[test]
+    fn default_clears_an_earlier_colour() {
+        let lines = [color_line(&"purple".into()), color_line(&"default".into())];
+        assert_eq!(color_after(&lines), None);
+    }
+
+    #[test]
+    fn a_colour_set_before_the_first_prompt_still_counts() {
+        let jsonl = [color_line(&"pink".into()), user_line("prompt")].join("\n");
+        assert_eq!(
+            digest_session(&jsonl).unwrap().agent_color,
+            Some(ClaudeColor::Pink)
+        );
+    }
+
+    #[test]
+    fn a_name_outside_the_palette_leaves_no_colour_rather_than_a_stale_one() {
+        // The session has a colour termherd cannot draw; showing the one
+        // before it would claim a colour the session no longer has.
+        let lines = [color_line(&"blue".into()), color_line(&"magenta".into())];
+        assert_eq!(color_after(&lines), None);
+    }
+
+    #[test]
+    fn an_entry_whose_value_cannot_be_read_leaves_no_colour() {
+        // A renamed key or a non-string value: the entry still says the colour
+        // changed, only not to what, so no colour is the honest reading.
+        for garbled in [
+            serde_json::json!({"type": "agent-color", "color": "red"}).to_string(),
+            color_line(&serde_json::json!(3)),
+            color_line(&serde_json::Value::Null),
+        ] {
+            let lines = [color_line(&"blue".into()), garbled.clone()];
+            assert_eq!(color_after(&lines), None, "{garbled}");
+        }
+    }
+
+    #[test]
+    fn a_torn_line_is_skipped_and_the_colour_before_it_stands() {
+        let lines = [
+            color_line(&"orange".into()),
+            r#"{"type":"agent-col"#.to_owned(),
+        ];
+        assert_eq!(color_after(&lines), Some(ClaudeColor::Orange));
+    }
+
+    #[test]
+    fn agent_color_on_another_entry_type_is_not_a_colour_change() {
+        let stray = serde_json::json!({"type": "user", "agentColor": "red", "message": "x"});
+        assert_eq!(color_after(&[stray.to_string()]), None);
+    }
+
+    /// One `/color` transcript entry as the proptest draws it: a palette name
+    /// (`default` included), an unknown word, or an unreadable value.
+    fn color_entry() -> impl Strategy<Value = serde_json::Value> {
+        prop_oneof![
+            proptest::sample::select(ClaudeColor::ALL.map(ClaudeColor::name).to_vec())
+                .prop_map(serde_json::Value::from),
+            "[a-z]{1,8}".prop_map(serde_json::Value::from),
+            Just(serde_json::Value::Null),
+            any::<i64>().prop_map(serde_json::Value::from),
+        ]
+    }
+
     proptest! {
+        #[test]
+        fn the_colour_is_whatever_the_last_entry_says(
+            entries in proptest::collection::vec(color_entry(), 0..8),
+        ) {
+            let lines: Vec<String> = entries.iter().map(color_line).collect();
+            let expected = entries
+                .last()
+                .and_then(serde_json::Value::as_str)
+                .and_then(ClaudeColor::from_name)
+                .filter(|color| *color != ClaudeColor::Default);
+            prop_assert_eq!(color_after(&lines), expected);
+        }
+
         #[test]
         fn digest_never_panics(input in any::<String>()) {
             let _ = digest_session(&input);
@@ -429,5 +622,144 @@ mod tests {
             let d = digest_session(&user_line(&text)).unwrap();
             prop_assert_eq!(d.summary, text);
         }
+
+        #[test]
+        fn the_last_reply_names_the_model(
+            models in prop::collection::vec("[a-z0-9-]{1,20}", 1..8),
+        ) {
+            let mut lines = vec![user_line("prompt")];
+            lines.extend(models.iter().map(|m| reply(serde_json::json!({ "model": m }))));
+            let d = digest_session(&lines.join("\n")).unwrap();
+            prop_assert_eq!(d.model.as_deref(), models.last().map(String::as_str));
+        }
+    }
+
+    /// An assistant entry as Claude Code 2.1 writes it: a text reply with the
+    /// keys of `message` merged into its `message`, and the keys of `extra`
+    /// into the entry itself.
+    fn assistant_line(message: serde_json::Value, extra: serde_json::Value) -> String {
+        let mut entry = serde_json::json!({
+            "type": "assistant",
+            "message": { "role": "assistant", "content": [{ "type": "text", "text": "ok" }] },
+        });
+        if let (Some(target), Some(fields)) =
+            (entry["message"].as_object_mut(), message.as_object())
+        {
+            target.extend(fields.clone());
+        }
+        if let (Some(target), Some(fields)) = (entry.as_object_mut(), extra.as_object()) {
+            target.extend(fields.clone());
+        }
+        entry.to_string()
+    }
+
+    fn reply(message: serde_json::Value) -> String {
+        assistant_line(message, serde_json::json!({}))
+    }
+
+    #[test]
+    fn version_model_and_effort_come_from_the_last_entries_carrying_them() {
+        let jsonl = [
+            serde_json::json!({"type":"user","message":"hi","version":"2.1.290"}).to_string(),
+            assistant_line(
+                serde_json::json!({"model":"claude-sonnet-5"}),
+                serde_json::json!({"version":"2.1.290","effort":"low","perTurnEffort":"low"}),
+            ),
+            assistant_line(
+                serde_json::json!({"model":"claude-opus-5-5"}),
+                serde_json::json!({"version":"2.1.291","effort":"medium","perTurnEffort":"high"}),
+            ),
+            serde_json::json!({"type":"system","subtype":"x","version":"2.1.294"}).to_string(),
+        ]
+        .join("\n");
+        let d = digest_session(&jsonl).unwrap();
+        assert_eq!(d.version.as_deref(), Some("2.1.294"));
+        assert_eq!(d.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(d.effort.as_deref(), Some("medium"));
+    }
+
+    #[test]
+    fn a_transcript_recording_no_effort_has_none() {
+        let jsonl = [
+            user_line("hi"),
+            assistant_line(
+                serde_json::json!({"model":"claude-opus-5"}),
+                serde_json::json!({"version":"2.1.284"}),
+            ),
+        ]
+        .join("\n");
+        let d = digest_session(&jsonl).unwrap();
+        assert_eq!(d.effort, None);
+        assert_eq!(d.model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(d.version.as_deref(), Some("2.1.284"));
+    }
+
+    #[test]
+    fn effort_falls_back_to_the_per_turn_effort() {
+        let jsonl = [
+            user_line("hi"),
+            assistant_line(
+                serde_json::json!({}),
+                serde_json::json!({"perTurnEffort":"high"}),
+            ),
+        ]
+        .join("\n");
+        assert_eq!(
+            digest_session(&jsonl).unwrap().effort.as_deref(),
+            Some("high")
+        );
+    }
+
+    #[test]
+    fn a_later_reply_without_effort_keeps_the_earlier_one() {
+        let jsonl = [
+            user_line("hi"),
+            assistant_line(
+                serde_json::json!({}),
+                serde_json::json!({"effort":"medium"}),
+            ),
+            reply(serde_json::json!({"model":"claude-opus-5-5"})),
+        ]
+        .join("\n");
+        assert_eq!(
+            digest_session(&jsonl).unwrap().effort.as_deref(),
+            Some("medium")
+        );
+    }
+
+    #[test]
+    fn sidechain_and_synthetic_replies_do_not_name_the_model() {
+        let jsonl = [
+            user_line("hi"),
+            reply(serde_json::json!({"model":"claude-opus-5-5"})),
+            assistant_line(
+                serde_json::json!({"model":"claude-haiku-5"}),
+                serde_json::json!({"isSidechain":true,"effort":"low"}),
+            ),
+            reply(serde_json::json!({"model":"<synthetic>"})),
+        ]
+        .join("\n");
+        let d = digest_session(&jsonl).unwrap();
+        assert_eq!(d.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(d.effort, None);
+    }
+
+    #[test]
+    fn a_transcript_recording_none_of_them_has_none() {
+        let d = digest_session(&user_line("hi")).unwrap();
+        assert_eq!((d.version, d.model, d.effort), (None, None, None));
+    }
+
+    #[test]
+    fn a_version_on_an_entry_that_is_no_message_is_ignored() {
+        let jsonl = [
+            serde_json::json!({"type":"user","message":"hi","version":"2.1.290"}).to_string(),
+            serde_json::json!({"type":"summary","version":"9.9.9"}).to_string(),
+        ]
+        .join("\n");
+        assert_eq!(
+            digest_session(&jsonl).unwrap().version.as_deref(),
+            Some("2.1.290")
+        );
     }
 }

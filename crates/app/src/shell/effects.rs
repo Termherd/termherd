@@ -22,8 +22,9 @@ use termherd_claude::session_file::SessionFile;
 use termherd_scan::read_session_file;
 
 use super::bridge::Request;
+use super::notify_click::Posting;
 use super::{Message, Shell};
-use os::{notify, open_path, open_url, spawn_editor};
+use os::{notify, notify_clickable, notify_replacing, open_path, open_url, spawn_editor};
 
 /// Open a resolved file. The configured command fails *visibly* — a click
 /// that opens nothing is indistinguishable from a click that missed, and
@@ -64,7 +65,12 @@ impl Shell {
         let outcome = match effect {
             Effect::Spawn(mut spec) => {
                 self.attach_mcp(&mut spec);
-                self.pty.spawn(spec)
+                let session = spec.session;
+                let spawned = self.pty.spawn(spec);
+                if spawned.is_ok() {
+                    self.stamp_spawn(session);
+                }
+                spawned
             }
             Effect::Write { session, bytes } => self.pty.write(session, &bytes),
             Effect::Resize {
@@ -109,7 +115,18 @@ impl Shell {
                     |(request, resolved)| Message::PathResolved { request, resolved },
                 );
             }
-            Effect::Notify { title, body } => notify(&title, &body),
+            Effect::Notify {
+                session,
+                title,
+                body,
+            } => match self.notification_clicks.posting(session) {
+                Posting::Wait(slot) => notify_clickable(&title, &body, slot),
+                Posting::Replace(id) => notify_replacing(&title, &body, id),
+                Posting::Plain => {
+                    tracing::debug!("too many notifications awaiting a click; posting unclickable");
+                    notify(&title, &body)
+                }
+            },
             // Capture writes the dump and schedules the PNG; record drives the
             // encoder thread. Both return a task the loop above batches in.
             Effect::Capture(dump) => return self.capture_dump(dump),
@@ -122,6 +139,22 @@ impl Shell {
             tracing::warn!(%error, "pty effect failed");
         }
         Task::none()
+    }
+
+    /// Tell `core` when `session`'s PTY started, by the wall clock it has no
+    /// access to, so a hover card can say how long the session has run.
+    fn stamp_spawn(&mut self, session: SessionId) {
+        let effects = self.core.apply(termherd_core::Event::SessionSpawned {
+            session,
+            at: SystemTime::now(),
+        });
+        // Mid-`perform_one` there is no `Task` to carry an effect out with, so
+        // an effect this event starts emitting must fail the tests rather than
+        // vanish.
+        debug_assert!(
+            effects.is_empty(),
+            "SessionSpawned now emits effects: route them through `perform`"
+        );
     }
 
     /// Enrich a Claude spawn with the live-bridge endpoint: mint a per-session

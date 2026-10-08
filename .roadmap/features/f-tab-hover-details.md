@@ -2,7 +2,7 @@
 id = "F-tab-hover-details"
 type = "feature"
 area = ["workspace", "sessions"]
-status = "todo"
+status = "done"
 target = ["Could"]
 +++
 
@@ -16,4 +16,8 @@ transcript and in its session file (#344). Needs
 
 The agent name shipped with [F-copy-agent-name](#f-copy-agent-name) (#339): an
 `Agent:` line the tab card carries and the sidebar's does not. Model, effort,
-version and elapsed time remain.
+version and elapsed time shipped in #344: the transcript digest records the
+last reply's model and effort and the last recorded version, the live session
+file's version outranks the transcript's, and the shell stamps each PTY spawn
+so the card can say how long a tab has run. The MCP pane snapshot is
+unchanged.

@@ -21,11 +21,7 @@ pub(crate) fn record(id: &str, path: &str, summary: &str) -> SessionRecord {
         digest: SessionDigest {
             summary: summary.into(),
             message_count: 1,
-            text_content: String::new(),
-            slug: None,
-            custom_title: None,
-            ai_title: None,
-            tail: Vec::new(),
+            ..SessionDigest::default()
         },
         modified: None,
     }
@@ -84,7 +80,7 @@ pub(crate) fn launch_claude(app: &mut App) -> SessionId {
 pub(crate) fn notify_effect(effects: &[Effect]) -> Option<(&str, &str)> {
     match effects {
         [] => None,
-        [Effect::Notify { title, body }] => Some((title, body)),
+        [Effect::Notify { title, body, .. }] => Some((title, body)),
         other => panic!("expected at most one Notify, got {other:?}"),
     }
 }

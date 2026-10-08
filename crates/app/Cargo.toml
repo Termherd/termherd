@@ -152,6 +152,11 @@ objc2-app-kit = { version = "0.2.2", features = [
     "NSWindow",
 ] }
 objc2-foundation = { version = "0.2.2", features = ["NSArray"] }
+# Already in the tree as notify-rust's macOS backend. Called directly for the
+# one thing notify-rust 4.18 cannot ask it: to block until a notification is
+# clicked. Its `wait_for_response` sends with no button and no `wait_for_click`,
+# which the backend reads as "nothing to wait for", so a click never arrived.
+mac-notification-sys = "0.6"
 
 # Monitor geometry for the off-screen window guard. Limited to non-Linux: the
 # Linux backend hard-links libxcb, which cuts against the project's

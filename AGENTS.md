@@ -127,9 +127,9 @@ press writes a timestamped pair to `~/.termherd/captures/`:
 
 - `capture-<ts>.json` — a diffable state dump of the whole workspace: focus,
   resolved config, the sidebar, every tab with its panes (each pane's stable
-  handle, kind, cwd, status, and the pid, peer name and session id of the
-  Claude running in it, null when none is), and the focused terminal's
-  visible text. No vision
+  handle, kind, cwd, status, the pid, peer name and session id of the
+  Claude running in it, null when none is, and the colour its `/color` set,
+  null when none), and the focused terminal's visible text. No vision
   needed.
 - `capture-<ts>.png` — the real window pixels (iced `window::screenshot`), for
   render / colour / glyph bugs the text dump can't show.
@@ -237,11 +237,11 @@ got.
 responses: `no-surface` means the action is wired to nothing, so retrying is
 pointless (`open-new-session` is the one), while `no-context` means a
 precondition was absent — nothing focused to derive a repo from, no closed tab
-to reopen, no tab to rename, nothing to scroll, nothing selected to copy, no
-Claude agent name to copy — which the caller can go and *create* before trying
-again (except the agent name on Windows, where none is ever found). Every
-handler that can refuse that way says so at its own refusal (they return
-`Option`), so no predicate here has to re-derive the list.
+to reopen, no tab to rename or open a menu on, nothing to scroll, nothing
+selected to copy, no Claude agent name to copy — which the caller can go and
+*create* before trying again (except the agent name on Windows, where none is
+ever found). Every handler that can refuse that way says so at its own refusal
+(they return `Option`), so no predicate here has to re-derive the list.
 
 The line is whether the shell refused, **not** whether the effect was
 interesting: `activate-tab-9` on a single-tab workspace reports `ran`, because

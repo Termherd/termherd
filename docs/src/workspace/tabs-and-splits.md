@@ -29,6 +29,7 @@ terminal, or many, split vertically and horizontally.
 | Reopen the tab you closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 | Close focused pane | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>W</kbd> |
 | Rename the focused tab | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> |
+| Open the focused tab's menu | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> |
 
 **Jump-to-tab is matched by physical key position**, not by the character the
 key produces. On AZERTY and QWERTZ, where the number row produces `&`, `é`, …
@@ -51,12 +52,34 @@ resumes the conversation it held last, once the sidebar lists it; a fresh
 tab closed before then comes back as a new conversation. When a Claude
 runs in it, the card also names its agent (`Agent: termherd-b0`), the peer
 name other Claude sessions address it by; the `copy-agent-name` action puts
-it on the clipboard. In a split tab, the card names the first pane's agent.
+it on the clipboard. The card also says how long the tab has run, counted from
+the moment termherd started its terminal (`Running for 1h 12m`), and which
+Claude Code version runs in it: the one the running Claude reports, else the
+one its transcript last recorded. Model and effort come from the transcript,
+as in the sidebar card. A plain shell tab, with no Claude running in it,
+shows only its running time beside its working directory; a shell tab in
+which `claude` was typed by hand also shows its agent and version while that
+Claude runs. In a split tab, the card describes the first pane.
+
+**A Claude tab wears the colour its `/color` set.** Run `/color green` in a
+Claude session and its tab is outlined in green, and its sidebar row gets a
+green bar, within about half a second — the time the sidebar takes to notice
+the transcript changed. `/color default` takes the colour away again. The
+colour is Claude's, read from the session's transcript: there is no setting
+for it and no way to override it from TermHerd. In a split tab the focused
+pane decides, as it does for the kind mark, so a shell focused beside a
+coloured Claude leaves the tab uncoloured.
+
+The eight colours are tuned for each theme, but red and green are both among
+them, so the colour is never the only cue: the hover card names it
+(`Colour: green`) — in a split, the colour the outline shows, the focused
+pane's. A shell tab wears the colour picked for it, below.
 
 **TermHerd asks Claude rather than overriding it.** Where a change belongs to
-Claude — today, handing a session to the desktop app with `send-to-desktop` —
-TermHerd types Claude's own slash command for you, behind a prompt that shows
-the exact line first. <kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops it.
+Claude — handing a session to the desktop app with `send-to-desktop`, or a
+Claude tab's colour from the colour list below — TermHerd types Claude's own
+slash command for you, behind a prompt that shows the exact line first.
+<kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops it.
 It is offered only while that Claude is idle with nothing typed in its prompt; a
 draft that appears meanwhile keeps the prompt open and says so.
 
@@ -94,6 +117,69 @@ silently: a notice under the tab strip says why, until you dismiss it with
 `✕`. A blank name, or the name the tab already shows, asks nothing. Once the
 Claude in a tab has exited and its shell is back in front, the tab is
 renamed like a shell tab.
+
+**Right-click a tab for its menu**, or press `open-tab-menu` for the focused
+one. A right-click focuses the tab first, because every entry acts on the
+focused tab:
+
+| Entry | Runs | Shown on |
+| --- | --- | --- |
+| Rename tab | `rename-tab` | every tab |
+| Tab colour… | `pick-tab-color` | a tab a colour can be picked for now (below) |
+| Copy agent name | `copy-agent-name` | a tab whose focused pane has a named Claude in front |
+| New shell here | `new-shell-here` | every tab |
+| New Claude session here | `new-claude-session-here` | every tab |
+| Split right | `split-vertical` | every tab |
+| Split down | `split-horizontal` | every tab |
+| Close pane | `close-focused` | every tab |
+
+Each entry is the keyboard action of the same name, so it does exactly what
+that action's chord does — *Rename tab* opens the field above, which on a
+Claude tab asks Claude to `/rename`; *Close pane* closes the focused pane of a
+split and the whole tab otherwise, asking first as the chord does.
+<kbd>↑</kbd> and <kbd>↓</kbd> move the selection, <kbd>Enter</kbd> runs it,
+<kbd>Escape</kbd> or a click outside the menu closes it without running
+anything.
+
+*Copy agent name* is listed when the action would find a name at the moment
+the menu opens: a Claude runs in front of the focused pane and has written its
+session file, whether the pane was opened as a Claude session or as a shell.
+It never appears on Windows, where no Claude is ever named. The menu belongs
+to the pane it opened over: if that pane closes or loses focus, the menu goes
+with it.
+
+The menu opens in
+the middle of the window rather than beside the tab, and screen readers do not
+see it: it is drawn by termherd, not by the operating system.
+
+**Pick a tab's colour** from the menu's *Tab colour…*, or with the
+`pick-tab-color` action. A list of the eight colours `/color` offers, and
+*None*, opens over the tab on the colour it wears — *None* when it wears
+none; <kbd>↑</kbd>,
+<kbd>↓</kbd>, <kbd>Enter</kbd> and <kbd>Escape</kbd> drive it, as they drive
+the menu, and a click picks too. Where the pick goes depends on the focused
+pane:
+
+| Focused pane | A pick | Shows |
+| --- | --- | --- |
+| Claude, still running | types `/color <name>` (`/color default` for *None*), behind the prompt below | once Claude records it, about half a second later |
+| Shell — or a Claude tab whose Claude has exited | is kept on the tab by TermHerd | at once |
+
+A Claude tab's colour is Claude's: TermHerd keeps no copy of it, so it never
+disagrees with Claude's own prompt bar, and a `/color` typed by hand changes
+it just the same. The list is not offered for a Claude that is busy, or
+waiting on an answer, or has something typed in its prompt — the action does
+nothing then, and the menu leaves *Tab colour…* out — and if that Claude gets
+busy while the list is open, the pick is refused and the list stays, saying
+why. Once the Claude in a tab has exited, the tab is back at the shell it ran
+in, and TermHerd colours it as a shell: `/color` is never typed into a shell.
+That needs the operating system to report what runs in front of the shell,
+which Windows does not, so there a Claude tab stays Claude's.
+
+A shell tab's colour lasts as long as the tab: it moves with the tab and is
+gone once the tab closes, and a tab reopened with `reopen-closed-tab` comes
+back uncoloured. It also wins over the colour of a Claude you start by hand
+in that shell, and *None* hides that colour too.
 
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on

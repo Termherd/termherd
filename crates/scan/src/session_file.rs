@@ -72,6 +72,7 @@ mod tests {
                 name: Some("knowledge-hub-35".to_owned()),
                 session_id: Some("abc".to_owned()),
                 proc_start: None,
+                version: None,
             })
         );
     }

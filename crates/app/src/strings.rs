@@ -5,6 +5,8 @@
 //! user-facing literal should live in the view/shell code. Static labels are
 //! `const`s; strings built from runtime values are functions.
 
+use termherd_core::ClaudeColor;
+
 // --- Sidebar ---
 pub const SEARCH_PLACEHOLDER: &str = "Search…";
 pub const TITLES_ONLY: &str = "Titles only";
@@ -74,6 +76,68 @@ pub fn session_meta(age: Option<&str>, count: u32) -> String {
 #[must_use]
 pub fn agent_name(name: &str) -> String {
     format!("Agent: {name}")
+}
+
+/// The card line naming the model a Claude session talks to and the
+/// reasoning effort it runs at; `None` when the transcript records neither.
+#[must_use]
+pub fn model_and_effort(model: Option<&str>, effort: Option<&str>) -> Option<String> {
+    match (model, effort) {
+        (Some(model), Some(effort)) => Some(format!("Model: {model}  ·  {effort} effort")),
+        (Some(model), None) => Some(format!("Model: {model}")),
+        (None, Some(effort)) => Some(format!("Effort: {effort}")),
+        (None, None) => None,
+    }
+}
+
+/// The card line naming the Claude Code version a session runs.
+#[must_use]
+pub fn claude_version(version: &str) -> String {
+    format!("Claude Code {version}")
+}
+
+/// The card line saying how long a session has run, from a compact span
+/// such as `1h 12m`.
+#[must_use]
+pub fn running_for(span: &str) -> String {
+    format!("Running for {span}")
+}
+
+/// The card line naming the colour `/color` gave a session — the cue that
+/// does not depend on telling the colours apart.
+#[must_use]
+pub fn session_color(name: &str) -> String {
+    format!("Colour: {name}")
+}
+
+// --- Tab context menu ---
+pub const TAB_MENU_RENAME: &str = "Rename tab";
+pub const TAB_MENU_COLOR: &str = "Tab colour…";
+pub const TAB_MENU_COPY_AGENT_NAME: &str = "Copy agent name";
+pub const TAB_MENU_NEW_SHELL: &str = "New shell here";
+pub const TAB_MENU_NEW_CLAUDE: &str = "New Claude session here";
+pub const TAB_MENU_SPLIT_RIGHT: &str = "Split right";
+pub const TAB_MENU_SPLIT_DOWN: &str = "Split down";
+pub const TAB_MENU_CLOSE: &str = "Close pane";
+
+// --- Tab colour picker ---
+/// A colour as the picker lists it. `default` is listed as the absence of a
+/// colour it gives the tab, not as a colour of its own.
+#[must_use]
+pub fn color_choice(color: ClaudeColor) -> String {
+    if color == ClaudeColor::Default {
+        return "None".to_owned();
+    }
+    let mut chars = color.name().chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
+/// The picker's line after a pick for a Claude pane could not be asked of it.
+#[must_use]
+pub fn color_pick_refused(reason: &str) -> String {
+    format!("Not asked: {reason}.")
 }
 
 // --- Confirmations ---
@@ -164,5 +228,22 @@ mod tests {
         // The card's line is the only place a human reads the name, so a label
         // that dropped it would leave a bare "Agent:" nothing else catches.
         assert!(agent_name("termherd-b0").ends_with("termherd-b0"));
+    }
+
+    #[test]
+    fn the_model_line_names_whichever_of_model_and_effort_is_known() {
+        let both = model_and_effort(Some("claude-opus-5-5"), Some("medium")).expect("a line");
+        assert!(both.contains("claude-opus-5-5") && both.contains("medium"));
+        let model = model_and_effort(Some("claude-opus-5-5"), None).expect("a line");
+        assert!(model.contains("claude-opus-5-5") && !model.to_lowercase().contains("effort"));
+        let effort = model_and_effort(None, Some("high")).expect("a line");
+        assert!(effort.contains("high"));
+        assert_eq!(model_and_effort(None, None), None);
+    }
+
+    #[test]
+    fn the_version_and_running_lines_carry_their_value() {
+        assert!(claude_version("2.1.294").ends_with("2.1.294"));
+        assert!(running_for("1h 12m").ends_with("1h 12m"));
     }
 }

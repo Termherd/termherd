@@ -57,6 +57,7 @@ pub use session::{
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
 pub use snapshot::claude_identity;
+pub use tabs::ColorKeeper;
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -223,6 +224,7 @@ impl App {
                 self.foreground_job_changed(session, job)
             }
             Event::SessionFileRead { session, file } => self.session_file_read(session, file),
+            Event::SessionSpawned { session, at } => self.session_spawned(session, at),
             Event::ActivateTab(index) => {
                 self.workspace.activate(index);
                 Vec::new()
@@ -234,6 +236,7 @@ impl App {
             }
             Event::ReopenClosedTab { fresh_claude_id } => self.reopen_closed_tab(fresh_claude_id),
             Event::RenameTab { index, title } => self.rename_tab(index, &title),
+            Event::SetTabColor { index, color } => self.set_tab_color(index, color),
             Event::SplitFocused(dir) => self.split_focused(dir),
             Event::ClosePane(session) => self.close_pane_of(session).unwrap_or_default(),
             Event::CloseFocusedPane => self
@@ -359,6 +362,10 @@ mod tests {
             Event::RenameTab {
                 index: 0,
                 title: "t".into(),
+            },
+            Event::SetTabColor {
+                index: 0,
+                color: termherd_claude::color::ClaudeColor::Red,
             },
         ];
         for event in effect_free {

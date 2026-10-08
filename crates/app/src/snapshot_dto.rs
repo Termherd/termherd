@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use termherd_core::{ClaudeIdentity, SessionKind, SessionStatus, WorkspaceSnapshot};
+use termherd_core::{ClaudeColor, ClaudeIdentity, SessionKind, SessionStatus, WorkspaceSnapshot};
 
 /// The on-the-wire snapshot.
 #[derive(Serialize)]
@@ -81,6 +81,10 @@ struct PaneDto {
     status: &'static str,
     #[serde(flatten)]
     identity: IdentityDto,
+    /// The colour the pane wears — Claude's `/color` for a Claude pane, the
+    /// tab's picked colour for a shell — by its `/color` name; `null` when it
+    /// wears none.
+    color: Option<&'static str>,
 }
 
 /// Who the Claude in a pane is, as three flat fields shared by a snapshot pane
@@ -175,6 +179,7 @@ fn pane_dto(pane: &termherd_core::PaneSnapshot) -> PaneDto {
         cwd: pane.cwd.clone(),
         status: status_str(pane.status),
         identity: IdentityDto::from(&pane.identity),
+        color: pane.color.map(ClaudeColor::name),
     }
 }
 
@@ -184,14 +189,33 @@ mod tests {
     use termherd_core::PaneSnapshot;
 
     fn pane(kind: SessionKind, identity: ClaudeIdentity) -> serde_json::Value {
+        coloured_pane(kind, identity, None)
+    }
+
+    fn coloured_pane(
+        kind: SessionKind,
+        identity: ClaudeIdentity,
+        color: Option<ClaudeColor>,
+    ) -> serde_json::Value {
         serde_json::to_value(pane_dto(&PaneSnapshot {
             handle: 7,
             kind,
             cwd: Some("/proj".to_owned()),
             status: SessionStatus::Idle,
             identity,
+            color,
         }))
         .expect("encode")
+    }
+
+    #[test]
+    fn a_coloured_pane_names_its_colour_as_slash_color_spells_it() {
+        let json = coloured_pane(
+            SessionKind::Claude,
+            ClaudeIdentity::default(),
+            Some(ClaudeColor::Purple),
+        );
+        assert_eq!(json["color"], "purple");
     }
 
     #[test]
@@ -214,7 +238,7 @@ mod tests {
         // A reader tells "termherd does not know" from "this termherd predates
         // the field" by the key being there.
         let json = pane(SessionKind::Shell, ClaudeIdentity::default());
-        for key in ["pid", "peer_name", "session_id"] {
+        for key in ["pid", "peer_name", "session_id", "color"] {
             assert_eq!(
                 json.get(key),
                 Some(&serde_json::Value::Null),

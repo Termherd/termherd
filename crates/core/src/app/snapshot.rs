@@ -11,6 +11,7 @@ use crate::snapshot::{
     tail_lines,
 };
 use std::collections::BTreeMap;
+use termherd_claude::color::ClaudeColor;
 use termherd_claude::session_file::SessionFile;
 
 use super::*;
@@ -145,9 +146,13 @@ impl App {
                     // A pane always hosts a registered session (the workspace
                     // invariant); a stray id is dropped rather than panicked on.
                     .filter_map(|id| {
-                        self.sessions
-                            .get(id)
-                            .map(|session| pane_snapshot(session, &inputs.session_files))
+                        self.sessions.get(id).map(|session| {
+                            pane_snapshot(
+                                session,
+                                &inputs.session_files,
+                                self.session_color(session.id),
+                            )
+                        })
                     })
                     .collect(),
             })
@@ -184,6 +189,7 @@ impl App {
 fn pane_snapshot(
     session: &LiveSession,
     session_files: &BTreeMap<u32, SessionFile>,
+    color: Option<ClaudeColor>,
 ) -> PaneSnapshot {
     PaneSnapshot {
         handle: session.id.0.get(),
@@ -191,6 +197,7 @@ fn pane_snapshot(
         cwd: session.cwd.clone(),
         status: session.status,
         identity: claude_identity(session, session_files),
+        color,
     }
 }
 
@@ -215,24 +222,27 @@ pub(super) fn identity_of(
     job: Option<&ForegroundJob>,
     file: Option<&SessionFile>,
 ) -> ClaudeIdentity {
-    let (Some(job), Some(file)) = (job, file) else {
+    let Some(file) = proven(job, file) else {
         return ClaudeIdentity::default();
     };
-    if !proves(job, file) {
-        return ClaudeIdentity::default();
-    }
     ClaudeIdentity {
-        pid: Some(job.pid),
+        pid: Some(file.pid),
         peer_name: file.name.clone(),
         session_id: file.session_id.clone(),
     }
 }
 
-/// Whether `file` was written by `job`, the process in front of a pane.
-pub(super) fn proves(job: &ForegroundJob, file: &SessionFile) -> bool {
+/// `file`, only when it was written by `job`, the process in front of a pane.
+/// The one place that proof is decided.
+pub(super) fn proven<'a>(
+    job: Option<&ForegroundJob>,
+    file: Option<&'a SessionFile>,
+) -> Option<&'a SessionFile> {
+    let (job, file) = (job?, file?);
     // A crashed Claude leaves its file behind, and its pid free for whatever
     // the OS starts next: only the writer's own start time tells them apart.
-    file.pid == job.pid && job.started.is_some() && job.started == file.proc_start
+    let proves = file.pid == job.pid && job.started.is_some() && job.started == file.proc_start;
+    proves.then_some(file)
 }
 
 #[cfg(test)]
@@ -570,6 +580,7 @@ mod tests {
             name: Some(name.to_owned()),
             session_id: Some(session_id.to_owned()),
             proc_start: Some(STARTED.to_owned()),
+            version: None,
         }
     }
 
@@ -607,6 +618,36 @@ mod tests {
         assert_eq!(pane.identity.pid, Some(4399));
         assert_eq!(pane.identity.peer_name.as_deref(), Some("proj-35"));
         assert_eq!(pane.identity.session_id.as_deref(), Some("7eff"));
+    }
+
+    #[test]
+    fn a_pane_reports_the_colour_its_transcript_set_and_a_shell_none() {
+        let minted = "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f9012";
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
+            title: "work".into(),
+            placement: Placement::Foreground,
+        }));
+        launch(&mut app, "shell");
+        let mut coloured = record(minted, "/proj", "prompt");
+        coloured.digest.agent_color = Some(ClaudeColor::Yellow);
+        app.apply(Event::ScanCompleted(vec![coloured]));
+
+        let panes_now = panes(&app, &SnapshotInputs::default());
+        assert_eq!(panes_now[0].color, Some(ClaudeColor::Yellow));
+        assert_eq!(panes_now[1].color, None);
+
+        // A shell wears the colour picked for its tab, as its chip does.
+        app.apply(Event::SetTabColor {
+            index: 1,
+            color: ClaudeColor::Pink,
+        });
+        assert_eq!(
+            panes(&app, &SnapshotInputs::default())[1].color,
+            Some(ClaudeColor::Pink)
+        );
     }
 
     #[test]

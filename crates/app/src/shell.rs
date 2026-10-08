@@ -37,6 +37,7 @@ use crate::window_config::WindowConfig;
 mod appearance;
 pub(crate) mod bridge;
 mod claude_command;
+mod color_picker;
 mod docs;
 mod effects;
 mod geometry;
@@ -44,6 +45,7 @@ mod ime;
 mod input;
 mod launch;
 mod live_settings;
+mod notify_click;
 mod orchestrate;
 mod record;
 mod repos;
@@ -51,6 +53,7 @@ mod routing;
 mod serve;
 mod session_ops;
 mod streams;
+mod tab_menu;
 mod terminal;
 mod view;
 
@@ -226,6 +229,10 @@ struct Shell {
     /// Drains async-bridge transport requests into the subscription (taken
     /// once), so an off-thread caller can read `core` state and get a reply.
     bridge_requests: BridgeRequests,
+    /// Where a clicked desktop notification sends its session, and the source
+    /// the subscription drains it from (taken once).
+    notification_clicks: notify_click::NotificationClicks,
+    notification_clicked: notify_click::ClickSource,
     /// The loopback MCP server's endpoint, if it bound. A Claude launch injects
     /// this url (plus a fresh token) into its `mcpServers` config. `None` when
     /// the substrate runtime or the listener failed — the browser still runs.
@@ -267,6 +274,14 @@ struct Shell {
     /// than a positional index, so a reorder or a sibling close can't retarget
     /// the pending edit at the wrong tab.
     tab_rename: Option<(SessionId, String)>,
+    /// The open tab context menu, if any. It holds no tab of its own: it is
+    /// always the focused tab's, because every entry acts on focus.
+    tab_menu: Option<tab_menu::TabMenu>,
+    /// The open tab colour picker, if any — the focused tab's, like the menu.
+    color_picker: Option<color_picker::ColorPicker>,
+    /// Set only while an MCP call is being served, so a prompt armed then is
+    /// marked as one the user has not read (see `for_a_remote_caller`).
+    serving_remote_caller: bool,
     /// Browsable plan / memory docs (F-plans-memory), refreshed on scan.
     docs: Vec<DocEntry>,
     /// Whether a scan is currently in flight. At most one runs at a time;
@@ -415,6 +430,8 @@ enum Message {
         session: SessionId,
         body: String,
     },
+    /// The user clicked the desktop notification `SessionId` posted.
+    NotificationClicked(SessionId),
     /// A session's process exited; `clean` mirrors [`PtyEvent::Exited`].
     PtyExited {
         session: SessionId,
@@ -504,6 +521,20 @@ enum Message {
     CommitTabRename,
     /// Abandon the tab rename (Escape), keeping the previous display title.
     CancelTabRename,
+    /// Right-click on the tab at this index: focus it, then open its menu.
+    OpenTabMenu(usize),
+    /// The pointer entered the menu entry at this position.
+    HoverTabMenuEntry(usize),
+    /// Run the menu entry at this position (a click on it).
+    RunTabMenuEntry(usize),
+    /// Close the menu without running anything (a click off it).
+    CloseTabMenu,
+    /// The pointer entered the colour picker's line at this position.
+    HoverColorPickerEntry(usize),
+    /// Pick the colour at this position (a click on it).
+    PickColorPickerEntry(usize),
+    /// Close the colour picker without picking (a click off it).
+    CloseColorPicker,
     /// Confirm quitting TermHerd, closing the window (and hard-killing every
     /// live session). Reached only after the quit modal is accepted.
     ConfirmCloseWindow,
@@ -643,10 +674,12 @@ impl Message {
                 | Self::LaunchSession { .. }
                 | Self::FocusSearch
                 | Self::FocusPane(_)
+                | Self::NotificationClicked(_)
                 | Self::TermScroll { .. }
                 | Self::Paste(_)
                 | Self::RequestPaste { .. }
                 | Self::TabDragStart(_)
+                | Self::OpenTabMenu(_)
                 | Self::RequestCloseTab(_)
                 | Self::CloseTab(_)
                 | Self::ToggleStar(_)
@@ -719,6 +752,7 @@ impl Shell {
             mcp_endpoint,
             mcp_tokens,
         } = live_bridge;
+        let (notification_clicks, notification_clicked) = notify_click::channel();
         let mut core = termherd_core::App::new();
         core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
         core.apply(termherd_core::Event::CollapsedLoaded(startup.collapsed));
@@ -736,6 +770,8 @@ impl Shell {
             pty,
             pty_output,
             bridge_requests,
+            notification_clicks,
+            notification_clicked,
             mcp_endpoint,
             mcp_tokens,
             mcp_session_tokens: HashMap::new(),
@@ -749,6 +785,9 @@ impl Shell {
             keymap: Keymap::defaults(),
             renaming: None,
             tab_rename: None,
+            tab_menu: None,
+            color_picker: None,
+            serving_remote_caller: false,
             // Populated by the first scan's `refresh_docs` — `discover` does
             // blocking fs I/O, which must stay off the UI thread.
             docs: Vec::new(),
@@ -835,6 +874,7 @@ impl Shell {
     // deferred cleanup.
     #[allow(clippy::too_many_lines)]
     fn update(&mut self, message: Message) -> Task<Message> {
+        self.drop_stale_lists();
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
         // is open discards it — the blur-cancels-edit convention. Only genuine
         // user interactions dismiss it; background traffic (PTY output,
@@ -956,6 +996,7 @@ impl Shell {
                     .apply(termherd_core::Event::SessionNotified { session, body });
                 self.perform(effects)
             }
+            Message::NotificationClicked(session) => self.on_notification_clicked(session),
             Message::PtyExited { session, clean } => {
                 let vanishing = self.vanishing_pane(session);
                 let effects = self
@@ -1107,6 +1148,25 @@ impl Shell {
             }
             Message::CommitTabRename => {
                 self.commit_tab_rename();
+                Task::none()
+            }
+            Message::OpenTabMenu(index) => self.open_tab_menu_at(index),
+            Message::HoverTabMenuEntry(position) => {
+                self.select_tab_menu_entry(position);
+                Task::none()
+            }
+            Message::RunTabMenuEntry(position) => self.run_tab_menu_entry(position).1,
+            Message::CloseTabMenu => {
+                self.tab_menu = None;
+                Task::none()
+            }
+            Message::HoverColorPickerEntry(position) => {
+                self.select_color(position);
+                Task::none()
+            }
+            Message::PickColorPickerEntry(position) => self.pick_color(position).1,
+            Message::CloseColorPicker => {
+                self.color_picker = None;
                 Task::none()
             }
             Message::CancelTabRename => {
@@ -1548,6 +1608,10 @@ impl Shell {
             self.bridge_requests.clone(),
             bridge::request_stream,
         ));
+        subs.push(Subscription::run_with(
+            self.notification_clicked.clone(),
+            notify_click::click_stream,
+        ));
         // The screencast is driven by the window's present clock while recording:
         // `window::frames()` yields one tick per present (self-sustaining,
         // since each tick requests the next redraw), which keeps an idle window
@@ -1795,6 +1859,21 @@ mod key_routing {
             "a launched terminal should be focused"
         );
         (shell, pty)
+    }
+
+    #[test]
+    fn every_spawned_pane_is_stamped_with_the_shells_clock() {
+        let before = SystemTime::now();
+        let (mut shell, _pty) = shell_with_terminal();
+        let first = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.run_action(Action::SplitVertical);
+        let second = shell.core.workspace.focused_session().expect("focused");
+        assert_ne!(first, second, "the split focuses its new pane");
+        let after = SystemTime::now();
+        for session in [first, second] {
+            let stamped = shell.core.running_since(session).expect("stamped");
+            assert!(before <= stamped && stamped <= after, "{session:?}");
+        }
     }
 
     /// The id a fresh Claude launch was minted, when `launch` is one and the id
@@ -2425,11 +2504,7 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "hello".to_owned(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         }
@@ -2754,6 +2829,55 @@ mod key_routing {
     }
 
     #[test]
+    fn a_background_close_elsewhere_leaves_the_tab_menu_open() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let _ = shell.update(Message::OpenTabMenu(1));
+        close_in_background(&mut shell, first);
+        assert!(
+            shell.live_tab_menu().is_some(),
+            "its pane still holds focus"
+        );
+    }
+
+    #[test]
+    fn a_background_close_of_the_menu_pane_forgets_the_menu() {
+        let (mut shell, _pty, _first) = shell_with_two_tabs();
+        let _ = shell.update(Message::OpenTabMenu(1));
+        let anchor = shell.core.workspace.tabs[1].first_session();
+        close_in_background(&mut shell, anchor.0.get());
+        assert_eq!(shell.tab_menu, None, "forgotten, not merely hidden");
+    }
+
+    /// Open the colour list over the focused tab, as the keyboard does.
+    fn open_color_picker(shell: &mut Shell) {
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("pick-tab-color".to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_background_close_elsewhere_leaves_the_colour_picker_open() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        open_color_picker(&mut shell);
+        close_in_background(&mut shell, first);
+        assert!(
+            shell.live_color_picker().is_some(),
+            "its pane still holds focus"
+        );
+    }
+
+    #[test]
+    fn a_background_close_of_the_picker_pane_forgets_the_picker() {
+        let (mut shell, _pty, _first) = shell_with_two_tabs();
+        open_color_picker(&mut shell);
+        let anchor = shell.core.workspace.tabs[1].first_session();
+        close_in_background(&mut shell, anchor.0.get());
+        assert!(shell.color_picker.is_none(), "forgotten, not merely hidden");
+    }
+
+    #[test]
     fn a_background_close_shifts_a_tab_drag_with_the_strip() {
         let (mut shell, _pty, first) = shell_with_two_tabs();
         shell.tab_drag = Some(TabDrag { from: 1, over: 1 });
@@ -2899,6 +3023,80 @@ mod key_routing {
             "the reported focus is the pane that was asked for"
         );
         assert_eq!(focused(&shell), Some(first.to_string()));
+    }
+
+    #[test]
+    fn a_clicked_notification_reveals_its_background_tab() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        shell.focus = Focus::Search;
+        let session = session_id(first);
+
+        // The whole seam the OS thread uses: a slot reserved by the effect
+        // executor, clicked, drained by the subscription, then dispatched.
+        match shell.notification_clicks.posting(session) {
+            notify_click::Posting::Wait(slot) => slot.clicked(),
+            _ => panic!("a fresh shell has a free waiter"),
+        }
+        let mut stream = Box::pin(notify_click::click_stream(&shell.notification_clicked));
+        let message =
+            iced::futures::executor::block_on(iced::futures::StreamExt::next(&mut stream))
+                .expect("the click arrives");
+        let _ = shell.update(message);
+
+        assert_eq!(shell.core.workspace.active, 0, "its tab was activated");
+        assert_eq!(focused(&shell), Some(first.to_string()));
+        assert_eq!(shell.focus, Focus::Terminal, "the terminal has the keys");
+    }
+
+    #[test]
+    fn a_click_on_a_closed_sessions_notification_changes_nothing() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: false,
+        });
+        assert_eq!(outcome.error, None);
+        shell.focus = Focus::Search;
+        let (tabs, active, before) = (
+            shell.core.workspace.tabs.len(),
+            shell.core.workspace.active,
+            focused(&shell),
+        );
+
+        let session = session_id(first);
+        let _ = shell.update(Message::NotificationClicked(session));
+
+        assert_eq!(shell.core.workspace.tabs.len(), tabs);
+        assert_eq!(shell.core.workspace.active, active);
+        assert_eq!(focused(&shell), before);
+        assert_eq!(shell.focus, Focus::Search, "keyboard focus is untouched");
+    }
+
+    #[test]
+    fn a_notification_click_reveals_past_a_rename_but_not_past_a_prompt() {
+        for owner in KeyboardOwner::ALL {
+            let (mut shell, _pty, first) = shell_with_two_tabs();
+            arm_overlay(&mut shell, owner);
+            assert_eq!(shell.keyboard_owner(), Some(owner), "{owner:?} armed");
+
+            let session = session_id(first);
+            let _ = shell.update(Message::NotificationClicked(session));
+
+            // A rename is dismissed by any click elsewhere, this one included,
+            // so nothing is left editing a tab the click may switch away from.
+            // A prompt keeps the screen it is about.
+            let renames = matches!(
+                owner,
+                KeyboardOwner::TabRename | KeyboardOwner::SessionRename
+            );
+            if renames {
+                assert_eq!(shell.keyboard_owner(), None, "{owner:?} was dismissed");
+                assert_eq!(shell.core.workspace.active, 0, "{owner:?}: revealed");
+            } else {
+                assert_eq!(shell.keyboard_owner(), Some(owner), "{owner:?} stays open");
+                assert_eq!(shell.core.workspace.active, 1, "{owner:?}: not revealed");
+            }
+        }
     }
 
     #[test]
@@ -3197,8 +3395,12 @@ mod key_routing {
             (Action::CopyAgentName, "copy-agent-name"),
             // No tab, so no title to edit.
             (Action::RenameTab, "rename-tab"),
+            // No tab, so no menu of one.
+            (Action::OpenTabMenu, "open-tab-menu"),
             // No pane, so no idle Claude to type `/desktop` into.
             (Action::SendToDesktop, "send-to-desktop"),
+            // No tab, so nothing to colour.
+            (Action::PickTabColor, "pick-tab-color"),
         ] {
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
@@ -3791,11 +3993,8 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: summary.to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
                 custom_title: custom.map(str::to_string),
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
@@ -3818,11 +4017,7 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "shared title".to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
@@ -4860,10 +5055,17 @@ mod key_routing {
         let escape = press(Key::Named(Named::Escape), Modifiers::default(), None);
 
         let (mut local, _pty, _session) = shell_with_idle_claude();
-        let _ = local.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        let _ = local.dispatch_action(Action::SendToDesktop);
         assert!(
             !local.enter_too_soon(&enter, Instant::now()),
             "the user read it"
+        );
+
+        let (mut pressed, _pty, _session) = shell_with_idle_claude();
+        let _ = pressed.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert!(
+            pressed.enter_too_soon(&enter, Instant::now()),
+            "an agent's press arms it as remotely as the tool does"
         );
 
         let (mut remote, _pty, session) = shell_with_idle_claude();
@@ -5056,6 +5258,24 @@ mod key_routing {
     }
 
     #[test]
+    fn the_tab_menu_rename_on_a_claude_tab_asks_claude_too() {
+        let (mut shell, _pty, _session) = shell_with_idle_claude();
+        let _ = shell.update(Message::OpenTabMenu(0));
+        assert_eq!(
+            press_chord(&mut shell, "enter"),
+            PressStep::Ran("rename-tab".to_owned())
+        );
+        let _ = shell.update(Message::TabRenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitTabRename);
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+    }
+
+    #[test]
     fn a_claude_tab_rename_claude_cannot_take_is_reported_not_dropped() {
         let (mut shell, _pty, session) = shell_with_idle_claude();
         let _ = shell.update(Message::PtyStatus {
@@ -5237,6 +5457,12 @@ mod key_routing {
             KeyboardOwner::Quit => shell.closing_window = Some(window::Id::unique()),
             KeyboardOwner::TabClose(index) => shell.closing = Some(index),
             KeyboardOwner::Archive => shell.archiving = Some("sess".to_string()),
+            KeyboardOwner::TabMenu => {
+                // Over the active tab: a right-click focuses its tab first, so a
+                // menu on another one would move focus before the sweep looks.
+                let active = shell.core.workspace.active;
+                let _ = shell.update(Message::OpenTabMenu(active));
+            }
             KeyboardOwner::ClaudeCommand => {
                 let session = shell.core.workspace.focused_session().expect("focused");
                 shell.claude_command = Some(claude_command::PendingCommand {
@@ -5245,6 +5471,14 @@ mod key_routing {
                     enter_ignored_until: None,
                     refused: None,
                 });
+            }
+            KeyboardOwner::ColorPicker => {
+                let (outcome, _task) =
+                    shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+                assert_eq!(
+                    outcome.steps,
+                    vec![PressStep::Ran("pick-tab-color".to_owned())]
+                );
             }
             KeyboardOwner::Settings => {
                 let _ = shell.update(Message::ToggleSettings);
@@ -6437,11 +6671,7 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "a session".to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
@@ -7023,5 +7253,624 @@ mod key_routing {
             read.error.is_some(),
             "an unknown handle is an error, not empty text"
         );
+    }
+
+    mod tab_menu {
+        use super::*;
+        use crate::shell::tab_menu::{ENTRIES, Offers, TabMenu, entries, step};
+
+        /// Move the open menu's selection onto `action` with arrow presses, as
+        /// a caller with no pointer would.
+        fn select(shell: &mut Shell, action: Action) -> Vec<PressStep> {
+            let at = position_of(shell, action);
+            press_all(shell, &vec!["down"; at])
+        }
+
+        fn listed(shell: &Shell) -> Vec<Action> {
+            shell
+                .live_tab_menu()
+                .expect("a menu is open")
+                .entries()
+                .map(|entry| entry.action)
+                .collect()
+        }
+
+        fn position_of(shell: &Shell, action: Action) -> usize {
+            listed(shell)
+                .iter()
+                .position(|listed| *listed == action)
+                .expect("the menu lists the entry")
+        }
+
+        fn menu_steps(count: usize) -> Vec<PressStep> {
+            vec![PressStep::Overlay("tab-menu".to_owned()); count]
+        }
+
+        fn selected(shell: &Shell) -> Option<usize> {
+            shell.live_tab_menu().map(TabMenu::selected)
+        }
+
+        #[test]
+        fn the_open_tab_menu_chord_opens_the_menu_of_the_focused_tab() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.activate_tab(1);
+
+            let step = press_chord(&mut shell, &mod_spec("shift+m"));
+
+            assert_eq!(step, PressStep::Ran("open-tab-menu".to_owned()));
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+            assert_eq!(shell.core.workspace.active, 1, "the menu acts on focus");
+        }
+
+        #[test]
+        fn right_clicking_a_tab_focuses_it_before_opening_its_menu() {
+            // Every entry acts on the focused tab, so a menu opened over a tab
+            // that is not focused would run its entries somewhere else.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.activate_tab(0);
+
+            let _ = shell.update(Message::OpenTabMenu(2));
+
+            assert_eq!(shell.core.workspace.active, 2);
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+        }
+
+        #[test]
+        fn enter_runs_the_selected_entry_through_the_chords_own_dispatch() {
+            // Rename is the entry whose effect is easiest to read back: the
+            // field it opens takes the keyboard the menu let go of.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(1));
+            let shown = shell.core.workspace.tabs[1].display_title().to_owned();
+
+            let moves = select(&mut shell, Action::RenameTab);
+            let enter = press_chord(&mut shell, "enter");
+
+            assert_eq!(moves, menu_steps(moves.len()), "the arrows are the menu's");
+            assert_eq!(
+                enter,
+                PressStep::Ran("rename-tab".to_owned()),
+                "enter answers with the entry it ran"
+            );
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabRename));
+            let (anchor, buffer) = shell.tab_rename.clone().expect("renaming");
+            assert_eq!(shell.core.workspace.tab_of(anchor), Some(1));
+            assert_eq!(buffer, shown);
+        }
+
+        #[test]
+        fn an_entry_that_opens_a_tab_runs_from_the_menu() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            let _ = select(&mut shell, Action::NewShellHere);
+            let _ = press_all(&mut shell, &["enter"]);
+
+            assert_eq!(shell.core.workspace.tabs.len(), 4);
+            assert!(shell.keyboard_owner().is_none(), "the menu closed");
+        }
+
+        #[test]
+        fn clicking_an_entry_runs_it_and_closes_the_menu() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let at = position_of(&shell, Action::SplitVertical);
+
+            let _ = shell.update(Message::RunTabMenuEntry(at));
+
+            assert!(shell.tab_menu.is_none());
+            assert_eq!(shell.core.workspace.tabs[0].sessions().len(), 2, "split");
+        }
+
+        #[test]
+        fn an_entry_that_refuses_reports_its_refusal_through_enter() {
+            // A caller must learn that the entry it picked did nothing; a bare
+            // `overlay` would read as success.
+            // The Claude exits while its menu is open, taking its name along.
+            let dir = tempfile::tempdir().expect("tempdir");
+            write_session_file(dir.path(), 4399, "termherd-b0");
+            let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let _ = select(&mut shell, Action::CopyAgentName);
+            std::fs::remove_file(dir.path().join("4399.json")).expect("remove");
+
+            let enter = press_chord(&mut shell, "enter");
+
+            assert_eq!(enter, inert("copy-agent-name", "no-context"));
+            assert!(shell.keyboard_owner().is_none(), "the menu closed");
+        }
+
+        #[test]
+        fn a_position_past_the_list_runs_nothing_and_closes_the_menu() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            let _ = shell.update(Message::RunTabMenuEntry(ENTRIES.len()));
+
+            assert!(shell.tab_menu.is_none());
+            assert_eq!(shell.core.workspace.tabs.len(), 3);
+            assert!(shell.tab_rename.is_none());
+        }
+
+        #[test]
+        fn the_pointer_moves_the_selection_the_keys_move() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            let _ = shell.update(Message::HoverTabMenuEntry(2));
+            let _ = press_all(&mut shell, &["up"]);
+
+            assert_eq!(selected(&shell), Some(1));
+        }
+
+        #[test]
+        fn a_click_off_the_menu_closes_it_without_running_anything() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+
+            let _ = shell.update(Message::CloseTabMenu);
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.workspace.tabs.len(), 3);
+        }
+
+        #[test]
+        fn the_arrows_wrap_at_both_ends() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let len = listed(&shell).len();
+
+            let _ = press_all(&mut shell, &["up"]);
+            assert_eq!(selected(&shell), Some(len - 1));
+            let _ = press_all(&mut shell, &["down"]);
+            assert_eq!(selected(&shell), Some(0));
+        }
+
+        #[test]
+        fn a_key_the_menu_does_not_use_reaches_neither_the_keymap_nor_the_pane() {
+            let (mut shell, pty) = shell_with_terminal();
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            let steps = press_all(&mut shell, &["x", &mod_spec("d")]);
+
+            assert_eq!(steps, menu_steps(2));
+            assert!(pty.writes().is_empty(), "nothing typed beneath the menu");
+            assert_eq!(shell.core.workspace.tabs[0].sessions().len(), 1, "no split");
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+        }
+
+        #[test]
+        fn run_action_and_press_keys_drive_the_menu_end_to_end() {
+            // The sequence an agent runs with no pointer: open it by name, find a
+            // second open answered by the menu, move, and leave with escape.
+            let mut shell = shell_with_three_tabs();
+            let chord = |spec| Press::Chord(KeyChord::parse(spec).expect("parses"));
+
+            let (outcome, _task) = shell.perform_presses(vec![
+                Press::Command(Action::OpenTabMenu),
+                Press::Command(Action::OpenTabMenu),
+                chord("down"),
+                chord("up"),
+                chord("escape"),
+            ]);
+
+            let mut expected = vec![PressStep::Ran("open-tab-menu".to_owned())];
+            expected.extend(menu_steps(4));
+            assert_eq!(outcome.steps, expected);
+            assert!(shell.keyboard_owner().is_none(), "escape left the menu");
+        }
+
+        #[test]
+        fn right_clicking_another_tab_commits_a_pending_tab_rename() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::StartTabRename(1));
+            let _ = shell.update(Message::TabRenameInput("Renamed".to_string()));
+
+            let _ = shell.update(Message::OpenTabMenu(2));
+
+            assert!(shell.tab_rename.is_none());
+            assert_eq!(shell.core.workspace.tabs[1].display_title(), "Renamed");
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+        }
+
+        #[test]
+        fn copy_agent_name_is_offered_exactly_when_the_action_would_find_a_name() {
+            // The same reading the action makes — a Claude job in front of the
+            // pane with a session file — whatever the pane was launched as:
+            // this pane is a shell.
+            let dir = tempfile::tempdir().expect("tempdir");
+            let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+            let offered = |shell: &Shell| listed(shell).contains(&Action::CopyAgentName);
+
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert!(!offered(&shell), "no session file, no name to copy");
+            let _ = shell.update(Message::CloseTabMenu);
+
+            write_session_file(dir.path(), 4399, "termherd-b0");
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert!(offered(&shell), "a named Claude in front of a shell pane");
+        }
+
+        const NOTHING: Offers = Offers {
+            agent_named: false,
+            color_pickable: false,
+        };
+
+        /// The entries that `offers` adds over a pane that allows nothing.
+        fn added_by(offers: Offers) -> Vec<Action> {
+            let bare: Vec<Action> = entries(NOTHING).map(|entry| entry.action).collect();
+            entries(offers)
+                .map(|entry| entry.action)
+                .filter(|action| !bare.contains(action))
+                .collect()
+        }
+
+        #[test]
+        fn each_entry_that_depends_on_the_pane_depends_on_its_own_condition() {
+            let everything = Offers {
+                agent_named: true,
+                color_pickable: true,
+            };
+            assert_eq!(entries(everything).count(), ENTRIES.len());
+            let named = Offers {
+                agent_named: true,
+                ..NOTHING
+            };
+            assert_eq!(added_by(named), vec![Action::CopyAgentName]);
+            let pickable = Offers {
+                color_pickable: true,
+                ..NOTHING
+            };
+            assert_eq!(added_by(pickable), vec![Action::PickTabColor]);
+        }
+
+        #[test]
+        fn the_menu_closes_when_its_pane_loses_focus() {
+            // An MCP caller can move focus under an open menu; its entries
+            // would otherwise run on a tab the menu was never opened for.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            let _ = shell.activate_tab(2);
+
+            assert!(shell.keyboard_owner().is_none());
+            assert!(shell.tab_menu_card().is_none(), "nor is it drawn");
+            let _ = shell.update(Message::RunTabMenuEntry(0));
+            assert!(shell.tab_rename.is_none(), "a stale click runs nothing");
+        }
+
+        #[test]
+        fn a_menu_that_lost_its_pane_stays_closed_when_focus_comes_back() {
+            // Nobody reopened it: returning to the pane must not hand the
+            // keyboard back to a menu that was already left behind.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let _ = shell.activate_tab(2);
+
+            let (outcome, _task) =
+                shell.perform_presses(vec![Press::Command(Action::ActivateTab(0))]);
+
+            assert_eq!(
+                outcome.steps,
+                vec![PressStep::Ran("activate-tab-1".to_owned())]
+            );
+            assert_eq!(shell.core.workspace.active, 0);
+            assert!(shell.keyboard_owner().is_none());
+        }
+
+        #[test]
+        fn the_menu_closes_when_its_tab_closes() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(2));
+
+            let _ = shell.close_tab(2);
+
+            assert!(shell.keyboard_owner().is_none());
+        }
+
+        #[test]
+        fn a_right_click_on_a_tab_that_is_gone_opens_nothing() {
+            // The tab closed between the render and the click.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.activate_tab(1);
+
+            let _ = shell.update(Message::OpenTabMenu(3));
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.workspace.active, 1);
+        }
+
+        #[test]
+        fn every_entry_is_a_named_keymap_action_other_than_the_menu_itself() {
+            // An entry is a keymap action so a chord, `run_action` and the menu
+            // reach one behaviour; a name is what makes it reachable by the
+            // other two.
+            assert!(!ENTRIES.is_empty(), "a sweep over nothing proves nothing");
+            for entry in ENTRIES {
+                assert!(
+                    entry.action.config_name().is_some(),
+                    "{:?} has no keymap name",
+                    entry.action
+                );
+                assert_ne!(entry.action, Action::OpenTabMenu);
+            }
+        }
+
+        proptest::proptest! {
+            #[test]
+            fn the_selection_never_leaves_the_entries(
+                moves in proptest::collection::vec(proptest::bool::ANY, 0..40),
+                len in 1usize..12,
+            ) {
+                let mut selected = 0;
+                for down in moves {
+                    selected = step(selected, len, down);
+                    proptest::prop_assert!(selected < len);
+                }
+            }
+        }
+
+        #[test]
+        fn no_tab_is_offered_an_empty_menu() {
+            // The precondition `step` relies on: it never wraps a list of none.
+            assert!(entries(NOTHING).count() > 0);
+        }
+    }
+
+    mod color_picker {
+        use super::*;
+        use crate::shell::color_picker::ColorPicker;
+        use crate::shell::routing::KeyVerdict;
+
+        fn picker_steps(count: usize) -> Vec<PressStep> {
+            vec![PressStep::Overlay("tab-color-picker".to_owned()); count]
+        }
+
+        /// Open the focused tab's picker by name and move onto `color`, then
+        /// pick it, as an agent with no pointer would.
+        fn pick_by_keys(shell: &mut Shell, color: ClaudeColor) -> Vec<PressStep> {
+            let _ = shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+            let from = shell.live_color_picker().map_or(0, ColorPicker::selected);
+            let palette = ClaudeColor::ALL;
+            let at = palette
+                .iter()
+                .position(|listed| *listed == color)
+                .expect("in the palette");
+            let moves = (at + palette.len() - from) % palette.len();
+            let mut presses = Vec::new();
+            presses.extend(
+                std::iter::repeat_n("down", moves)
+                    .chain(["enter"])
+                    .map(|spec| Press::Chord(KeyChord::parse(spec).expect("parses"))),
+            );
+            shell.perform_presses(presses).0.steps
+        }
+
+        #[test]
+        fn the_picker_offers_the_palette_of_color_in_its_order() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+            let picker = shell.live_color_picker().expect("open");
+            assert_eq!(
+                ClaudeColor::ALL[picker.selected()],
+                ClaudeColor::Default,
+                "an uncoloured tab opens on None, so Enter changes nothing"
+            );
+        }
+
+        #[test]
+        fn a_colour_picked_for_a_shell_tab_is_stored_on_it_and_types_nothing() {
+            let (mut shell, pty) = shell_with_terminal();
+
+            let steps = pick_by_keys(&mut shell, ClaudeColor::Green);
+
+            assert_eq!(steps, picker_steps(steps.len()));
+            assert_eq!(shell.core.tab_color(0), Some(ClaudeColor::Green));
+            assert!(shell.keyboard_owner().is_none(), "the picker closed");
+            assert!(pty.writes().is_empty(), "a shell is told nothing");
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Default);
+            assert_eq!(shell.core.tab_color(0), None, "\"none\" clears it");
+        }
+
+        #[test]
+        fn a_colour_picked_for_a_claude_tab_asks_claude_through_the_confirmation() {
+            let (mut shell, pty, session) = shell_with_idle_claude();
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Cyan);
+
+            assert_eq!(
+                shell
+                    .claude_command
+                    .as_ref()
+                    .map(|p| (p.session, p.command.clone())),
+                Some((session, ClaudeCommand::Color(ClaudeColor::Cyan)))
+            );
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+            assert!(
+                pty.writes().is_empty(),
+                "nothing typed before the confirmation"
+            );
+            assert_eq!(shell.core.workspace.tabs[0].color, None, "no local copy");
+
+            let _ = press_all(&mut shell, &["enter"]);
+            assert_eq!(pty.writes()[0], b"\x15/color cyan");
+        }
+
+        #[test]
+        fn an_agents_pick_holds_back_a_physical_enter_on_the_confirmation() {
+            let (mut shell, _pty, _session) = shell_with_idle_claude();
+            let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Red);
+
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+            assert!(shell.enter_too_soon(&enter, Instant::now()));
+        }
+
+        #[test]
+        fn a_busy_claude_is_offered_no_picker_from_the_keymap_or_the_menu() {
+            // The line would queue behind its work.
+            let (mut shell, _pty, session) = shell_with_idle_claude();
+            let _ = shell.update(Message::PtyStatus {
+                session,
+                status: SessionStatus::Busy,
+            });
+
+            let (outcome, _task) =
+                shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+
+            assert_eq!(outcome.steps, vec![inert("pick-tab-color", "no-context")]);
+            assert!(shell.keyboard_owner().is_none());
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert!(
+                shell
+                    .live_tab_menu()
+                    .expect("open")
+                    .entries()
+                    .all(|entry| entry.action != Action::PickTabColor),
+                "the menu does not offer a list that cannot work"
+            );
+        }
+
+        #[test]
+        fn a_claude_tab_whose_claude_exited_is_coloured_as_a_shell_not_typed_into() {
+            // Its shell idles at a prompt and Claude's last frame is still on
+            // screen, reading as an empty prompt: only the foreground says
+            // Claude has gone, and `/color` must not reach zsh.
+            let (mut shell, pty, session) = shell_with_idle_claude();
+            let job = |pid| termherd_core::ForegroundJob { pid, started: None };
+            let _ = shell
+                .core
+                .apply(termherd_core::Event::ForegroundJobChanged {
+                    session,
+                    job: Some(job(42)),
+                });
+            let _ = shell
+                .core
+                .apply(termherd_core::Event::ForegroundJobChanged { session, job: None });
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Orange);
+
+            assert!(shell.claude_command.is_none(), "no command armed");
+            assert!(pty.writes().is_empty(), "nothing typed into the shell");
+            assert_eq!(shell.core.tab_color(0), Some(ClaudeColor::Orange));
+        }
+
+        #[test]
+        fn a_claude_that_went_busy_under_the_picker_refuses_the_pick_and_keeps_it_open() {
+            let (mut shell, pty, session) = shell_with_idle_claude();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+            let _ = shell.update(Message::PtyStatus {
+                session,
+                status: SessionStatus::Busy,
+            });
+
+            let steps = press_all(&mut shell, &["enter"]);
+
+            assert_eq!(
+                steps,
+                vec![PressStep::Refused {
+                    overlay: "tab-color-picker".to_owned(),
+                    reason: "the session is busy, not idle at its prompt".to_owned(),
+                }]
+            );
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ColorPicker));
+            assert!(shell.claude_command.is_none());
+            assert!(pty.writes().is_empty());
+            assert!(
+                shell
+                    .live_color_picker()
+                    .is_some_and(|p| p.refused().is_some()),
+                "the picker says why"
+            );
+        }
+
+        #[test]
+        fn the_tab_menu_leads_to_the_picker() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let at = shell
+                .live_tab_menu()
+                .expect("open")
+                .entries()
+                .position(|entry| entry.action == Action::PickTabColor)
+                .expect("listed");
+
+            let (verdict, _task) = shell.run_tab_menu_entry(at);
+
+            assert_eq!(verdict, Some(KeyVerdict::Ran("pick-tab-color".to_owned())));
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ColorPicker));
+        }
+
+        #[test]
+        fn a_click_picks_the_colour_under_it_and_hovering_selects_it() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.update(Message::HoverColorPickerEntry(3));
+            assert_eq!(
+                shell.live_color_picker().map(ColorPicker::selected),
+                Some(3)
+            );
+            let _ = shell.update(Message::PickColorPickerEntry(1));
+
+            assert_eq!(shell.core.tab_color(0), Some(ClaudeColor::ALL[1]));
+            assert!(shell.keyboard_owner().is_none());
+        }
+
+        #[test]
+        fn a_position_past_the_palette_picks_nothing_and_closes_the_picker() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.update(Message::PickColorPickerEntry(ClaudeColor::ALL.len()));
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.tab_color(0), None);
+        }
+
+        #[test]
+        fn a_click_off_the_picker_closes_it_without_picking() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.update(Message::CloseColorPicker);
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.tab_color(0), None);
+        }
+
+        #[test]
+        fn the_picker_closes_when_its_pane_loses_focus() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.activate_tab(0);
+            assert!(shell.keyboard_owner().is_none());
+            let _ = shell.update(Message::PickColorPickerEntry(0));
+            assert!(
+                (0..3).all(|index| shell.core.tab_color(index).is_none()),
+                "a stale click colours nothing"
+            );
+
+            let _ = shell.activate_tab(2);
+            assert!(shell.keyboard_owner().is_none(), "nor does it come back");
+        }
+
+        #[test]
+        fn the_picker_draws_and_opens_on_the_colour_in_force() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Blue);
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            assert!(shell.color_picker_card().is_some());
+            assert_eq!(
+                shell.live_color_picker().map(ColorPicker::selected),
+                Some(1),
+                "it opens on the colour the tab wears"
+            );
+        }
     }
 }

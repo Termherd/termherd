@@ -31,6 +31,10 @@ impl Shell {
     /// resize). A handle that resolves to no live session — or an out-of-range
     /// tab — is rejected before any state is touched.
     pub(super) fn perform_action(&mut self, action: Action) -> (ActionOutcome, Task<Message>) {
+        self.for_a_remote_caller(|shell| shell.act(action))
+    }
+
+    fn act(&mut self, action: Action) -> (ActionOutcome, Task<Message>) {
         match action {
             Action::Open {
                 project,
@@ -63,11 +67,10 @@ impl Shell {
         }
     }
 
-    /// The outcome of a prompt a remote caller just armed, showing `line`.
-    /// Every remote arm goes through here, so none skips the moment a physical
-    /// Enter is ignored for: the user at the keyboard has not read it yet.
-    fn armed_remotely(&mut self, line: String) -> ActionOutcome {
-        self.hold_enter_after_remote_arm();
+    /// The outcome of a prompt a remote caller just armed, showing `line`. The
+    /// moment a physical Enter is ignored for was set when it armed, since
+    /// every remote caller is served through `for_a_remote_caller`.
+    fn armed_remotely(&self, line: String) -> ActionOutcome {
         self.applied().with_detail(ActionDetail::ClaudeCommand {
             line,
             overlay: KeyboardOwner::ClaudeCommand.label(),
@@ -170,16 +173,22 @@ impl Shell {
     /// lives in another one — and hand the keyboard to the terminal. Rejects a
     /// handle no open pane hosts.
     fn act_focus(&mut self, session: u64) -> (ActionOutcome, Task<Message>) {
-        let id = match self.resolve_pane(session) {
-            Ok(id) => id,
-            Err(outcome) => return (outcome, Task::none()),
-        };
+        match NonZeroU64::new(session).and_then(|id| self.reveal_session(SessionId(id))) {
+            Some(task) => (self.applied(), task),
+            None => (unhosted_handle(session), Task::none()),
+        }
+    }
+
+    /// Bring a session's pane into view and hand it the keyboard — the one
+    /// reveal both `focus_pane` and a clicked notification run. `None`, with
+    /// nothing touched, when no open pane hosts the session.
+    pub(super) fn reveal_session(&mut self, id: SessionId) -> Option<Task<Message>> {
+        self.core.workspace.tab_of(id)?;
         self.focus = Focus::Terminal;
         let effects = self.core.apply(Event::RevealPane(id));
         // A reveal may activate another tab, whose panes were last sized for a
         // different layout — resize like `activate_tab` does.
-        let task = Task::batch([self.perform(effects), self.resize_panes()]);
-        (self.applied(), task)
+        Some(Task::batch([self.perform(effects), self.resize_panes()]))
     }
 
     /// Rename the tab at `tab`. A blank title reverts to the derived name
@@ -358,11 +367,13 @@ impl Shell {
     pub(super) fn perform_presses(&mut self, presses: Vec<Press>) -> (PressOutcome, Task<Message>) {
         let mut steps = Vec::with_capacity(presses.len());
         let mut tasks = Vec::with_capacity(presses.len());
-        for press in presses {
-            let (step, task) = self.press(press);
-            steps.push(step);
-            tasks.push(task);
-        }
+        self.for_a_remote_caller(|shell| {
+            for press in presses {
+                let (step, task) = shell.press(press);
+                steps.push(step);
+                tasks.push(task);
+            }
+        });
         let outcome = PressOutcome {
             steps,
             focused: self.focused_handle(),
@@ -379,6 +390,7 @@ impl Shell {
     /// but is still gated on the ladder, so neither tool can reach a state the
     /// keyboard cannot.
     fn press(&mut self, press: Press) -> (PressStep, Task<Message>) {
+        self.drop_stale_lists();
         match press {
             Press::Chord(chord) => match event_of(&chord) {
                 Some(event) => {

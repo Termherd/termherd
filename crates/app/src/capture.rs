@@ -169,6 +169,7 @@ mod tests {
             cwd: Some("/proj".to_owned()),
             status,
             identity: ClaudeIdentity::default(),
+            color: None,
         }
     }
 

@@ -91,17 +91,15 @@ issues #18–#29.
 | [F-mcp-ide-bridge](#f-mcp-ide-bridge) | feature | mcp | ☐ | A live MCP/IDE bridge to Claude — termherd as the client, not the server. |
 | [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) | feature | mcp, workspace | ☐ | The pointer rung, chrome half: click and drag termherd's own interface. |
 | [F-multi-window](#f-multi-window) | feature | workspace | ☐ | More than one termherd window, and tabs that travel between them. |
+| [F-pane-accent-border](#f-pane-accent-border) | feature | workspace | ☐ | A session's colour on its pane border inside a split tab. |
 | [F-prompt-history](#f-prompt-history) | feature | sessions | ☐ | A read-only panel of the prompts typed in a session, with copy. |
 | [F-repo-prune](#f-repo-prune) | feature | sidebar | ☐ | Sweep the sidebar for projects whose directory no longer exists. |
 | [F-repo-remove](#f-repo-remove) | feature | sidebar | ☐ | Take a project or repository out of the sidebar, durably and explicitly. |
 | [F-repo-view](#f-repo-view) | feature | sidebar, sessions | ☐ | A per-repository surface to browse and manage one repo's sessions. |
 | [F-scheduled-tasks](#f-scheduled-tasks) | feature | sessions | ☐ | Launch a session on a schedule rather than on a click. |
-| [F-session-accent-colors](#f-session-accent-colors) | feature | workspace, sidebar | ☐ | A per-session accent on its tab, sidebar row and pane border. |
 | [F-session-grid](#f-session-grid) | feature | workspace | ☐ | A layout preset over the pane model. |
 | [F-session-reveal](#f-session-reveal) | feature | sessions, workspace | ☐ | Reveal a session's directory and transcript in the OS file manager. |
 | [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
-| [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ☐ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
-| [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ☐ | The tab hover card shows agent name, model, effort, version and elapsed time. |
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
@@ -118,6 +116,9 @@ issues #18–#29.
 | [F-mcp-snapshot](#f-mcp-snapshot) | feature | mcp, workspace | ✅ | The perception rung: a filterable, light-by-default view of the whole app. |
 | [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) | feature | mcp, workspace | ✅ | One model, two readers: the capture dump is now the MCP snapshot. |
 | [F-mcp-terminal-sync](#f-mcp-terminal-sync) | feature | mcp, terminal | ✅ | The wait rung: block until a session's status settles, then read its text. |
+| [F-session-accent-colors](#f-session-accent-colors) | feature | workspace, sidebar | ✅ | A per-session accent on its tab and sidebar row. |
+| [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ✅ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
+| [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ✅ | The tab hover card shows agent name, model, effort, version and elapsed time. |
 | [F-tab-kind-icon](#f-tab-kind-icon) | feature | workspace | ✅ | A kind mark beside each tab's status dot, instead of a glyph in its title. |
 | [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ✅ | A Claude tab's title follows the session name Claude holds. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
@@ -525,12 +526,24 @@ question of what termherd draws itself rather than letting the PTY draw.
 
 Clicking a tab's desktop notification brings termherd forward on that tab.
 
-The click reveals the pane by its `SessionId`, through the path the MCP
-`focus_pane` tool already takes, then raises the window (#352). No new
-dependency: `notify-rust` already answers a click on all three OSes. Each OS
-still needs a real click to confirm the window comes forward, and Windows
-attributes the toast to PowerShell until termherd registers an application id.
-Builds on [F-status-notifications](#f-status-notifications). Torture report:
+Built in #352, **not yet confirmed by a real click on any OS** — flip to done
+once one is. `Effect::Notify` carries the `SessionId`; the `os-notify` thread
+that posts the notification waits for the OS's answer, and a body click sends
+the session to the shell over a channel an iced subscription drains. The shell
+reveals the pane through the path the MCP `focus_pane` tool takes — unless a
+prompt is open, which keeps its screen — then restores and raises the window. A
+session closed in the meantime reveals nothing but still raises the window.
+
+Per OS, from the sources rather than from a click: macOS waits through
+`mac-notification-sys` directly, since notify-rust 4.18's `wait_for_response`
+there returns "expired" at once and never sees the click; XDG needs the
+`"default"` action declared and replaces a session's notification in place,
+so one waiter per session; Windows answers `Expired` when a toast times out
+into the action centre, so a click from there is lost, and the toast is
+attributed to PowerShell until termherd registers an application id. A waiting
+thread cannot be cancelled from outside the backend, so at most 16 wait at
+once; past that a notification posts without a click. Builds on
+[F-status-notifications](#f-status-notifications). Torture report:
 `.personal/feature-torture/reports/F-notification-focus-tab.md`.
 
 <a id="f-store-cache"></a>
@@ -1060,6 +1073,21 @@ in-window `TabDrag` plumbing that already reorders tabs. The gate is #149's
 conversion: `core::Workspace` is one tree today, so "which window owns this
 tab" has no representation yet
 
+<a id="f-pane-accent-border"></a>
+
+### F-pane-accent-border
+
+A session's colour on its pane border inside a split tab.
+
+[F-session-accent-colors](#f-session-accent-colors) colours the tab chip and
+the sidebar row, and a split tab shows its focused pane's colour. In a split
+of two coloured panes the chip can only name one; outlining each pane in its
+own colour would tell them apart where the chip cannot. Spawned by the
+torture report on the accent feature
+(`.personal/feature-torture/reports/F-session-accent-colors.md`), which
+accepted "no pane border in v1"; revisit when split tabs with several
+coloured sessions are common enough to ask for it. Design-first: no issue yet.
+
 <a id="f-prompt-history"></a>
 
 ### F-prompt-history
@@ -1171,26 +1199,6 @@ Never scoped beyond the name. Adjacent to
 [F-mcp-agent-loop](#f-mcp-agent-loop), which drives a session without a human;
 this one would decide *when*.
 
-<a id="f-session-accent-colors"></a>
-
-### F-session-accent-colors
-
-A per-session accent on its tab, sidebar row and pane border.
-
-Per-session visual accents: a colour on a session's tab chip, sidebar row and
-pane border, so parallel sessions are distinguishable at a glance. Chrome
-accents, not grid colours — sibling of, but separate from,
-`F-terminal-palette`. The kind is shown by
-[F-tab-kind-icon](#f-tab-kind-icon), so colour stays free for the session.
-
-Scoped into two slices. For a Claude tab the colour is the one Claude Code's
-`/color` set — the last `agent-color` entry in the transcript — with no local
-copy (#342). Picking a colour sends `/color` to a Claude tab through
-[F-claude-command](#f-claude-command) and stores it on a shell tab, which
-Claude knows nothing of (#343). Both use the same eight-colour palette as
-`/color`. Torture report:
-`.personal/feature-torture/reports/F-session-accent-colors.md`.
-
 <a id="f-session-grid"></a>
 
 ### F-session-grid
@@ -1221,37 +1229,6 @@ the [F-tab-context-menu](#f-tab-context-menu) (#347). The tab stays open on
 its shell afterwards, since success is not observable. macOS and Windows x64
 only. Torture report:
 `.personal/feature-torture/reports/F-session-send-desktop.md`.
-
-<a id="f-tab-context-menu"></a>
-
-### F-tab-context-menu
-
-A per-tab action menu, from a right-click or an `open-tab-menu` action.
-
-An in-app overlay rather than a native OS menu, so `press_keys` / `run_action`
-can drive it (#340). Every entry is an existing keymap action; the entries
-arrive with their own features — [F-keymap-rename-tab](#f-keymap-rename-tab),
-[F-session-accent-colors](#f-session-accent-colors),
-[F-session-reveal](#f-session-reveal), [F-prompt-history](#f-prompt-history),
-[F-copy-agent-name](#f-copy-agent-name),
-[F-session-send-desktop](#f-session-send-desktop). Torture report:
-`.personal/feature-torture/reports/F-tab-context-menu.md`.
-
-<a id="f-tab-hover-details"></a>
-
-### F-tab-hover-details
-
-The tab hover card shows agent name, model, effort, version and elapsed time.
-
-Extends the single-sourced session card (#76) with what Claude records in the
-transcript and in its session file (#344). Needs
-[F-session-id-at-launch](#f-session-id-at-launch) and
-[F-copy-agent-name](#f-copy-agent-name). Torture report:
-`.personal/feature-torture/reports/F-tab-hover-details.md`.
-
-The agent name shipped with [F-copy-agent-name](#f-copy-agent-name) (#339): an
-`Agent:` line the tab card carries and the sidebar's does not. Model, effort,
-version and elapsed time remain.
 
 <a id="f-tab-park"></a>
 
@@ -1679,6 +1656,91 @@ is not an error — the tool reports `{ status, timed_out: true }` with the
 session's current status, so an agent can choose between waiting again and
 giving up. Bounds are the caller's: `timeout_ms` (default 30 s) capped at 5 min
 (Q7). Depends on #193; unblocks #196
+
+<a id="f-session-accent-colors"></a>
+
+### F-session-accent-colors
+
+A per-session accent on its tab and sidebar row.
+
+Per-session visual accents: a colour on a session's tab chip and sidebar row,
+so parallel sessions are distinguishable at a glance. The pane border inside a
+split tab is [F-pane-accent-border](#f-pane-accent-border). Chrome
+accents, not grid colours — sibling of, but separate from,
+`F-terminal-palette`. The kind is shown by
+[F-tab-kind-icon](#f-tab-kind-icon), so colour stays free for the session.
+
+Scoped into two slices. For a Claude tab the colour is the one Claude Code's
+`/color` set — the last `agent-color` entry in the transcript — with no local
+copy (#342). Picking a colour sends `/color` to a Claude tab through
+[F-claude-command](#f-claude-command) and stores it on a shell tab, which
+Claude knows nothing of (#343). Both use the same eight-colour palette as
+`/color`.
+
+Slice 1 shipped (#342): the digest keeps the last `agent-color` value, an
+open tab follows it at the next rescan, and the focused pane decides a split
+tab. A Claude tab is outlined and its sidebar row barred in the colour, and
+the hover card names it — the cue for anyone who cannot tell red from green.
+The MCP `snapshot` reports it per pane.
+
+Slice 2 shipped (#343): the tab menu's *Tab colour…* and a `pick-tab-color`
+action open the palette, plus *None*, over the focused tab. Who keeps a
+pane's colour is decided by its launch, the rule the slash-command check
+uses: a pick for a Claude pane is typed as `/color` behind the confirmation,
+and a shell tab stores it in `core` until the tab closes. A Claude launch
+whose Claude has exited counts as a shell, so `/color` is never typed into
+one. Torture report:
+`.personal/feature-torture/reports/F-session-accent-colors.md`.
+
+<a id="f-tab-context-menu"></a>
+
+### F-tab-context-menu
+
+A per-tab action menu, from a right-click or an `open-tab-menu` action.
+
+An in-app overlay rather than a native OS menu, so `press_keys` / `run_action`
+can drive it (#340). Every entry is an existing keymap action; the entries
+arrive with their own features — [F-keymap-rename-tab](#f-keymap-rename-tab),
+[F-session-accent-colors](#f-session-accent-colors),
+[F-session-reveal](#f-session-reveal), [F-prompt-history](#f-prompt-history),
+[F-copy-agent-name](#f-copy-agent-name),
+[F-session-send-desktop](#f-session-send-desktop). Torture report:
+`.personal/feature-torture/reports/F-tab-context-menu.md`.
+
+Shipped (#340): the menu, bound to `mod+shift+m`. A first `mod+.` binding
+never fired on French AZERTY: a chord is named from the key without Shift,
+so `.` (Shift+`;` there) arrives as `;`; a letter is reachable on every
+layout. A
+right-click focuses the tab first, since every entry acts on focus, and the
+menu is anchored on that pane: it closes when the pane loses focus. It is a
+`tab-menu` rung on the keyboard ladder that answers the arrows, `enter` and
+`escape` itself, so MCP can drive it end to end; `enter` reports the verdict
+of the entry it ran. Entries today: rename tab, copy agent name (only when the
+action would find a name), new shell / new Claude session here, split right /
+down, close pane. The list is data in
+`shell::tab_menu`: each later entry (colour, reveal, history, send to Claude
+Desktop) is one line there once its action exists. Not yet: the menu opens
+centred rather than beside the tab, and a screen reader cannot see it.
+
+<a id="f-tab-hover-details"></a>
+
+### F-tab-hover-details
+
+The tab hover card shows agent name, model, effort, version and elapsed time.
+
+Extends the single-sourced session card (#76) with what Claude records in the
+transcript and in its session file (#344). Needs
+[F-session-id-at-launch](#f-session-id-at-launch) and
+[F-copy-agent-name](#f-copy-agent-name). Torture report:
+`.personal/feature-torture/reports/F-tab-hover-details.md`.
+
+The agent name shipped with [F-copy-agent-name](#f-copy-agent-name) (#339): an
+`Agent:` line the tab card carries and the sidebar's does not. Model, effort,
+version and elapsed time shipped in #344: the transcript digest records the
+last reply's model and effort and the last recorded version, the live session
+file's version outranks the transcript's, and the shell stamps each PTY spawn
+so the card can say how long a tab has run. The MCP pane snapshot is
+unchanged.
 
 <a id="f-tab-kind-icon"></a>
 

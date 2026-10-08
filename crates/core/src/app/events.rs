@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 
 use crate::browser::SessionRecord;
-use crate::claude_command::{ClaudeCommand, PromptInput};
+use crate::claude_command::{ClaudeColor, ClaudeCommand, PromptInput};
 use crate::metadata::Overlay;
 use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
@@ -105,6 +105,12 @@ pub enum Event {
         session: SessionId,
         file: Option<SessionFile>,
     },
+    /// The shell spawned `session`'s PTY at `at`, by its own clock: the
+    /// moment a hover card counts the session's running time from.
+    SessionSpawned {
+        session: SessionId,
+        at: std::time::SystemTime,
+    },
     /// The user clicked a tab to bring it to the front (FR5).
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.
@@ -134,6 +140,14 @@ pub enum Event {
     RenameTab {
         index: usize,
         title: String,
+    },
+    /// Give the tab at `index` a colour of termherd's own — only when its
+    /// focused pane is one Claude does not colour (see
+    /// [`App::color_keeper`](crate::App::color_keeper)); a Claude pane is
+    /// recoloured by typing `/color` into it instead. `Default` clears it.
+    SetTabColor {
+        index: usize,
+        color: ClaudeColor,
     },
     /// Split the focused pane, opening a fresh session beside it (FR6).
     SplitFocused(SplitDir),

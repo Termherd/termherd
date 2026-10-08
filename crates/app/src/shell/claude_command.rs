@@ -2,10 +2,10 @@
 //! into — the one write path for every edit termherd asks Claude to make.
 //!
 //! Every surface arms the same prompt through [`Shell::arm_claude_command`]:
-//! the keymap, the MCP tool, and the rename and colour menus to come. Nothing
-//! is typed until the prompt is confirmed, and the confirmation asks `core`
-//! again, against the screen as it is then: the session may have started work,
-//! or a draft may have appeared, while the prompt was up.
+//! the keymap, the MCP tool, the tab colour picker, and the rename to come.
+//! Nothing is typed until the prompt is confirmed, and the confirmation asks
+//! `core` again, against the screen as it is then: the session may have
+//! started work, or a draft may have appeared, while the prompt was up.
 
 use std::fmt;
 use std::time::{Duration, Instant};
@@ -74,21 +74,26 @@ impl Shell {
             .map_err(ArmRefusal::Session)?;
         let line = command.line();
         tracing::info!(session = session.0.get(), %line, "claude command armed");
+        let enter_ignored_until = self
+            .serving_remote_caller
+            .then(|| Instant::now() + REMOTE_ARM_GRACE);
         self.claude_command = Some(PendingCommand {
             session,
             command,
-            enter_ignored_until: None,
+            enter_ignored_until,
             refused: None,
         });
         Ok(line)
     }
 
-    /// Mark the armed prompt as armed by a remote caller, so a physical Enter
-    /// is ignored for a moment: the user has not read it yet.
-    pub(super) fn hold_enter_after_remote_arm(&mut self) {
-        if let Some(pending) = self.claude_command.as_mut() {
-            pending.enter_ignored_until = Some(Instant::now() + REMOTE_ARM_GRACE);
-        }
+    /// Run `serve` on behalf of an MCP caller, so any prompt it arms — by the
+    /// tool, an action, a menu entry or a colour pick — holds a physical Enter
+    /// back: the user beside the agent has not read it yet.
+    pub(super) fn for_a_remote_caller<T>(&mut self, serve: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = std::mem::replace(&mut self.serving_remote_caller, true);
+        let served = serve(self);
+        self.serving_remote_caller = outer;
+        served
     }
 
     /// Arm `command` for the focused pane. `None` when nothing is focused or
@@ -105,7 +110,7 @@ impl Shell {
 
     /// What `session`'s screen shows of Claude's prompt. A session that has
     /// not drawn, or whose view is scrolled back, shows none.
-    fn prompt_input(&self, session: SessionId) -> PromptInput {
+    pub(super) fn prompt_input(&self, session: SessionId) -> PromptInput {
         match self.screens.get(&session) {
             Some(screen) if !screen.scrolled => read_prompt(&screen.text()),
             _ => PromptInput::NotVisible,

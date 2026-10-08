@@ -7,6 +7,61 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (pick a tab's colour)
+
+- The tab menu's *Tab colour…*, or a `pick-tab-color` action (unbound by
+  default), opens a list of the eight colours Claude's `/color` takes, and
+  *None*, over the focused tab. On a Claude tab the pick is typed as
+  `/color <name>` behind the slash-command prompt, so Claude keeps the colour
+  and the tab shows it once its transcript records it; the list is offered
+  only while that Claude is idle with an empty prompt. A shell tab keeps the
+  colour itself, until it closes — and so does a Claude tab whose Claude has
+  exited, which is no longer typed into as Claude (outside Windows, where
+  that cannot be told). The arrows, Enter and Escape drive the list,
+  so MCP `press_keys` / `run_action` can too (#343).
+
+### Changed (an agent's key press holds a physical Enter back)
+
+- A slash-command prompt armed through MCP `press_keys` or `run_action` —
+  `send-to-desktop`, or a colour picked for a Claude tab — now ignores a
+  physical Enter for 600 ms, as one armed by the `claude_command` tool already
+  did (#343).
+
+### Added (a context menu on each tab)
+
+- Right-click a tab, or press `open-tab-menu` (⌘⇧M on macOS, Ctrl+Shift+M on
+  Windows and Linux), for a menu of what can be done to it: rename, copy its agent
+  name (when a named Claude runs in it), a new shell or Claude session beside
+  it, split it, close its pane. Each entry runs the keyboard action of the
+  same name on the focused tab, which a right-click focuses first. The arrows,
+  Enter and Escape drive it, so MCP `press_keys` / `run_action` can too, and
+  Enter reports the verdict of the entry it ran (#340).
+- A shortcut with Cmd, Ctrl or Alt that is bound to nothing is now logged at
+  debug level (`RUST_LOG=termherd=debug`) with the key and modifiers it
+  arrived as, so a binding that never fires can be told apart from one that
+  never reached termherd.
+
+### Fixed (slash commands refused with Claude's prompt on screen)
+
+- termherd did not find Claude's input prompt on screen, for two reasons:
+  Claude Code draws a no-break space after its `❯` prompt marker, where
+  termherd expected an ASCII one, and once a session is renamed it writes the
+  name into the rule above the prompt, which termherd no longer read as a
+  rule. Every slash command termherd types into Claude — the rename, `/color`
+  and `send-to-desktop` — was refused with "Claude's input prompt is not on
+  screen", and the tab menu left out *Tab colour…* right after a rename
+  (#374).
+
+### Fixed (a working Claude read as idle)
+
+- Claude Code 2.1 marks a working session's title with `◐` / `◑` rather than
+  a Braille spinner, which termherd did not recognise. A Claude session read
+  as idle while it worked, and once Claude's "waiting for your input" ping
+  arrived it read as needing attention for good, since only work clears that.
+  Every reader of the status was affected: the status dot, `wait_for_status`,
+  the close confirmation, and the slash commands offered only to an idle
+  Claude, `send-to-desktop` and the rename (#371).
+
 ### Added (rename a tab from the keyboard)
 
 - A `rename-tab` action, bound to ⌘⇧I on macOS and Ctrl+Shift+I on Windows

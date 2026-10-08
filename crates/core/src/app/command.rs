@@ -211,6 +211,28 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_launch_whose_claude_exited_is_refused_as_a_shell() {
+        // Its shell's own prompt marks make it idle, and Claude's last frame
+        // can still read as an empty prompt: only the foreground tells.
+        let mut app = App::new();
+        let session = launch_claude(&mut app);
+        let job = ForegroundJob {
+            pid: 7,
+            started: None,
+        };
+        app.apply(Event::ForegroundJobChanged {
+            session,
+            job: Some(job),
+        });
+        set_status(&mut app, session, SessionStatus::Idle);
+        assert_eq!(check(&app, session), Ok(()));
+
+        app.apply(Event::ForegroundJobChanged { session, job: None });
+        assert_eq!(check(&app, session), Err(CommandRefusal::NotClaude));
+        assert!(send(&mut app, session).is_empty());
+    }
+
+    #[test]
     fn an_unknown_session_is_refused() {
         let mut app = App::new();
         assert_eq!(check(&app, sid(42)), Err(CommandRefusal::UnknownSession));

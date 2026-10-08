@@ -5,8 +5,9 @@
 //! Electron app's `main.js` (`doctly/switchboard`). Claude CLI announces its
 //! state through the terminal title and iTerm2-style sequences:
 //!
-//! - **OSC 0** (title): a Braille spinner char (U+2800–U+28FF) as the first
-//!   title char means *busy*; `✳` (U+2733) means *idle, waiting for input*.
+//! - **OSC 0** (title): a Braille spinner char (U+2800–U+28FF), or the `◐`
+//!   / `◑` pair Claude Code 2.1 alternates, as the first title char means
+//!   *busy*; `✳` (U+2733) means *idle, waiting for input*.
 //! - **OSC 9;4** (progress): levels 1/2/3 mean *busy*. Level 0 also fires
 //!   on clears, so upstream deliberately ignores it as an idle signal.
 //! - **OSC 9** (other): a notification ("needs your attention", permission
@@ -58,7 +59,7 @@ pub fn decode_chunk(chunk: &str) -> Vec<OscSignal> {
                 continue;
             }
             let status = match payload.chars().next() {
-                Some(c) if ('\u{2800}'..='\u{28FF}').contains(&c) => Some(OscSignal::Busy),
+                Some(c) if is_busy_glyph(c) => Some(OscSignal::Busy),
                 Some('\u{2733}') => Some(OscSignal::Idle),
                 _ => None,
             };
@@ -100,6 +101,13 @@ pub fn decode_chunk(chunk: &str) -> Vec<OscSignal> {
     signals
 }
 
+/// Whether `glyph` leads a title Claude writes while it works. Older CLIs spin
+/// a Braille pattern; Claude Code 2.1 alternates `◐` and `◑`. Missing either
+/// leaves a working session reading as idle, and a pending ping never cleared.
+fn is_busy_glyph(glyph: char) -> bool {
+    ('\u{2800}'..='\u{28FF}').contains(&glyph) || matches!(glyph, '\u{25D0}' | '\u{25D1}')
+}
+
 /// The CLI's own product name, which it reports as the title until it has
 /// something session-specific to say. It identifies the *program*, not the
 /// session, so it is no more of a title than a bare glyph is — and a tab
@@ -107,7 +115,7 @@ pub fn decode_chunk(chunk: &str) -> Vec<OscSignal> {
 const PRODUCT_NAME: &str = "Claude Code";
 
 /// The human title carried by an OSC 0 payload whose first char is a status
-/// glyph (Braille spinner or `✳`): the text after that glyph, trimmed.
+/// glyph (a busy frame or `✳`): the text after that glyph, trimmed.
 /// `None` when nothing meaningful remains — Claude's bare-glyph titles, and its
 /// bare [`PRODUCT_NAME`].
 fn title_after_glyph(payload: &str) -> Option<&str> {
@@ -182,6 +190,23 @@ mod tests {
             decode_chunk(chunk),
             vec![OscSignal::Busy, OscSignal::Title("Thinking…".into())]
         );
+    }
+
+    #[test]
+    fn a_half_circle_title_is_busy_and_carries_its_text() {
+        // What Claude Code 2.1 animates its title with while it works: the two
+        // frames alternate about once a second, through tool calls included.
+        for glyph in ['\u{25D0}', '\u{25D1}'] {
+            let chunk = format!("\u{1b}]0;{glyph} Sleep command test\u{07}");
+            assert_eq!(
+                decode_chunk(&chunk),
+                vec![
+                    OscSignal::Busy,
+                    OscSignal::Title("Sleep command test".into())
+                ],
+                "{glyph}"
+            );
+        }
     }
 
     #[test]

@@ -46,15 +46,16 @@ pub fn last_activity(sessions: &[SessionRecord]) -> Option<SystemTime> {
     sessions.iter().filter_map(|s| s.modified).max()
 }
 
+const MINUTE: u64 = 60;
+const HOUR: u64 = 60 * MINUTE;
+const DAY: u64 = 24 * HOUR;
+
 /// A compact, language-neutral relative age — `now`, `5m`, `3h`, `2d`, `4w`,
 /// `1y` — used to disambiguate sidebar rows whose titles collide within a
 /// project. The caller supplies the elapsed `Duration`: core stays pure
 /// (no clock), the adapter owns the wall clock.
 #[must_use]
 pub fn relative_age(elapsed: Duration) -> String {
-    const MINUTE: u64 = 60;
-    const HOUR: u64 = 60 * MINUTE;
-    const DAY: u64 = 24 * HOUR;
     const WEEK: u64 = 7 * DAY;
     const YEAR: u64 = 365 * DAY;
 
@@ -71,6 +72,31 @@ pub fn relative_age(elapsed: Duration) -> String {
         format!("{}w", secs / WEEK)
     } else {
         format!("{}y", secs / YEAR)
+    }
+}
+
+/// How long a session has run, compact and language-neutral: `<1m`, `3m`,
+/// `1h 12m`, `2d 3h`. Two units at most, the smaller one dropped when it is
+/// zero. Unlike [`relative_age`], an hour is not rounded away: a running time
+/// is read for its minutes.
+#[must_use]
+pub fn compact_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < MINUTE {
+        return "<1m".to_owned();
+    }
+    if secs < HOUR {
+        return format!("{}m", secs / MINUTE);
+    }
+    let (big, big_unit, small, small_unit) = if secs < DAY {
+        (secs / HOUR, "h", secs % HOUR / MINUTE, "m")
+    } else {
+        (secs / DAY, "d", secs % DAY / HOUR, "h")
+    };
+    if small == 0 {
+        format!("{big}{big_unit}")
+    } else {
+        format!("{big}{big_unit} {small}{small_unit}")
     }
 }
 
@@ -274,11 +300,7 @@ mod tests {
             digest: SessionDigest {
                 summary: format!("prompt {id}"),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..SessionDigest::default()
             },
             modified: Some(UNIX_EPOCH + Duration::from_secs(age_secs)),
         }
@@ -375,6 +397,22 @@ mod tests {
         assert_eq!(relative_age(Duration::from_secs(25 * 3600)), "1d");
         assert_eq!(relative_age(Duration::from_secs(8 * 86_400)), "1w");
         assert_eq!(relative_age(Duration::from_secs(400 * 86_400)), "1y");
+    }
+
+    #[test]
+    fn compact_elapsed_shows_two_units_at_each_boundary() {
+        let at = |secs| compact_elapsed(Duration::from_secs(secs));
+        assert_eq!(at(0), "<1m");
+        assert_eq!(at(59), "<1m");
+        assert_eq!(at(60), "1m");
+        assert_eq!(at(3 * 60 + 59), "3m");
+        assert_eq!(at(3599), "59m");
+        assert_eq!(at(3600), "1h");
+        assert_eq!(at(3600 + 12 * 60), "1h 12m");
+        assert_eq!(at(86_399), "23h 59m");
+        assert_eq!(at(86_400), "1d");
+        assert_eq!(at(2 * 86_400 + 3 * 3600 + 59 * 60), "2d 3h");
+        assert_eq!(at(400 * 86_400), "400d");
     }
 
     #[test]
