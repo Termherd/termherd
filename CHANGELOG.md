@@ -15,7 +15,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `/color <name>` behind the slash-command prompt, so Claude keeps the colour
   and the tab shows it once its transcript records it; the list is offered
   only while that Claude is idle with an empty prompt. A shell tab keeps the
-  colour itself, until it closes. The arrows, Enter and Escape drive the list,
+  colour itself, until it closes — and so does a Claude tab whose Claude has
+  exited, which is no longer typed into as Claude (outside Windows, where
+  that cannot be told). The arrows, Enter and Escape drive the list,
   so MCP `press_keys` / `run_action` can too (#343).
 
 ### Changed (an agent's key press holds a physical Enter back)

@@ -91,6 +91,7 @@ issues #18–#29.
 | [F-mcp-ide-bridge](#f-mcp-ide-bridge) | feature | mcp | ☐ | A live MCP/IDE bridge to Claude — termherd as the client, not the server. |
 | [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) | feature | mcp, workspace | ☐ | The pointer rung, chrome half: click and drag termherd's own interface. |
 | [F-multi-window](#f-multi-window) | feature | workspace | ☐ | More than one termherd window, and tabs that travel between them. |
+| [F-pane-accent-border](#f-pane-accent-border) | feature | workspace | ☐ | A session's colour on its pane border inside a split tab. |
 | [F-prompt-history](#f-prompt-history) | feature | sessions | ☐ | A read-only panel of the prompts typed in a session, with copy. |
 | [F-repo-prune](#f-repo-prune) | feature | sidebar | ☐ | Sweep the sidebar for projects whose directory no longer exists. |
 | [F-repo-remove](#f-repo-remove) | feature | sidebar | ☐ | Take a project or repository out of the sidebar, durably and explicitly. |
@@ -116,7 +117,7 @@ issues #18–#29.
 | [F-mcp-snapshot](#f-mcp-snapshot) | feature | mcp, workspace | ✅ | The perception rung: a filterable, light-by-default view of the whole app. |
 | [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) | feature | mcp, workspace | ✅ | One model, two readers: the capture dump is now the MCP snapshot. |
 | [F-mcp-terminal-sync](#f-mcp-terminal-sync) | feature | mcp, terminal | ✅ | The wait rung: block until a session's status settles, then read its text. |
-| [F-session-accent-colors](#f-session-accent-colors) | feature | workspace, sidebar | ✅ | A per-session accent on its tab, sidebar row and pane border. |
+| [F-session-accent-colors](#f-session-accent-colors) | feature | workspace, sidebar | ✅ | A per-session accent on its tab and sidebar row. |
 | [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ✅ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
 | [F-tab-kind-icon](#f-tab-kind-icon) | feature | workspace | ✅ | A kind mark beside each tab's status dot, instead of a glyph in its title. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
@@ -1059,6 +1060,21 @@ in-window `TabDrag` plumbing that already reorders tabs. The gate is #149's
 conversion: `core::Workspace` is one tree today, so "which window owns this
 tab" has no representation yet
 
+<a id="f-pane-accent-border"></a>
+
+### F-pane-accent-border
+
+A session's colour on its pane border inside a split tab.
+
+[F-session-accent-colors](#f-session-accent-colors) colours the tab chip and
+the sidebar row, and a split tab shows its focused pane's colour. In a split
+of two coloured panes the chip can only name one; outlining each pane in its
+own colour would tell them apart where the chip cannot. Spawned by the
+torture report on the accent feature
+(`.personal/feature-torture/reports/F-session-accent-colors.md`), which
+accepted "no pane border in v1"; revisit when split tabs with several
+coloured sessions are common enough to ask for it. Design-first: no issue yet.
+
 <a id="f-prompt-history"></a>
 
 ### F-prompt-history
@@ -1633,10 +1649,11 @@ giving up. Bounds are the caller's: `timeout_ms` (default 30 s) capped at 5 min
 
 ### F-session-accent-colors
 
-A per-session accent on its tab, sidebar row and pane border.
+A per-session accent on its tab and sidebar row.
 
-Per-session visual accents: a colour on a session's tab chip, sidebar row and
-pane border, so parallel sessions are distinguishable at a glance. Chrome
+Per-session visual accents: a colour on a session's tab chip and sidebar row,
+so parallel sessions are distinguishable at a glance. The pane border inside a
+split tab is [F-pane-accent-border](#f-pane-accent-border). Chrome
 accents, not grid colours — sibling of, but separate from,
 `F-terminal-palette`. The kind is shown by
 [F-tab-kind-icon](#f-tab-kind-icon), so colour stays free for the session.
@@ -1658,8 +1675,9 @@ Slice 2 shipped (#343): the tab menu's *Tab colour…* and a `pick-tab-color`
 action open the palette, plus *None*, over the focused tab. Who keeps a
 pane's colour is decided by its launch, the rule the slash-command check
 uses: a pick for a Claude pane is typed as `/color` behind the confirmation,
-and a shell tab stores it in `core` until the tab closes. The pane border is
-still not coloured. Torture report:
+and a shell tab stores it in `core` until the tab closes. A Claude launch
+whose Claude has exited counts as a shell, so `/color` is never typed into
+one. Torture report:
 `.personal/feature-torture/reports/F-session-accent-colors.md`.
 
 <a id="f-tab-context-menu"></a>
