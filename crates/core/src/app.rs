@@ -19,6 +19,7 @@ use crate::record::Recording;
 use crate::workspace::{SessionId, Workspace};
 
 mod capture;
+mod command;
 mod effects;
 mod events;
 mod hover;
@@ -37,6 +38,7 @@ mod testsupport;
 
 use settings::FontState;
 
+pub use command::CommandRefusal;
 pub use effects::Effect;
 pub use events::Event;
 pub use hover::{
@@ -307,6 +309,11 @@ impl App {
                 self.window_focused = focused;
                 Vec::new()
             }
+            Event::SendClaudeCommand {
+                session,
+                command,
+                prompt,
+            } => self.send_claude_command(session, &command, &prompt),
         }
     }
 

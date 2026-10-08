@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 
 use crate::browser::SessionRecord;
+use crate::claude_command::{ClaudeCommand, PromptInput};
 use crate::metadata::Overlay;
 use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
@@ -240,4 +241,14 @@ pub enum Event {
     /// (skip the OS banner — the per-window suppression the OS itself applies
     /// when unfocused already covers that case).
     WindowFocusChanged(bool),
+    /// The user confirmed typing a Claude slash command into a session. Sent
+    /// only if the session can still take it — see
+    /// [`App::claude_command_check`](super::App::claude_command_check).
+    SendClaudeCommand {
+        session: SessionId,
+        command: ClaudeCommand,
+        /// The session's prompt as its screen shows it now — read again at
+        /// the confirmation, not carried over from the arming.
+        prompt: PromptInput,
+    },
 }

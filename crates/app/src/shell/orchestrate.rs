@@ -13,14 +13,14 @@ use std::num::NonZeroU64;
 
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
-use termherd_core::{ClaudeLaunch, Event, Launch, PointerEvent, SessionKind};
+use termherd_core::{ClaudeCommand, ClaudeLaunch, Event, Launch, PointerEvent, SessionKind};
 
 use super::bridge::{
     Action, ActionDetail, ActionOutcome, Press, PressOutcome, PressStep, RepoOutcome,
 };
 use super::input::event_of;
 use super::repos::RepoGesture;
-use super::routing::KeyVerdict;
+use super::routing::{KeyVerdict, KeyboardOwner};
 use super::{Focus, Message, Shell, home_dir};
 
 impl Shell {
@@ -39,6 +39,27 @@ impl Shell {
             Action::Pointer { session, pointer } => self.act_pointer(session, pointer),
             Action::DeclareRepo { path } => self.act_declare_repo(&path),
             Action::ForgetRepo { path } => self.act_forget_repo(&path),
+            Action::ClaudeCommand { session, command } => {
+                (self.act_claude_command(session, command), Task::none())
+            }
+        }
+    }
+
+    /// Arm the Claude command confirmation for `session`. The caller is told
+    /// the line and the overlay; typing waits on the prompt being answered.
+    fn act_claude_command(&mut self, session: u64, command: ClaudeCommand) -> ActionOutcome {
+        let Some(id) = self.resolve(session) else {
+            return unknown_handle(session);
+        };
+        match self.arm_claude_command(id, command) {
+            Ok(line) => {
+                self.hold_enter_after_remote_arm();
+                self.applied().with_detail(ActionDetail::ClaudeCommand {
+                    line,
+                    overlay: KeyboardOwner::ClaudeCommand.label(),
+                })
+            }
+            Err(refusal) => ActionOutcome::rejected(refusal.to_string()),
         }
     }
 
@@ -346,6 +367,10 @@ impl Shell {
 fn step_of(verdict: KeyVerdict) -> PressStep {
     match verdict {
         KeyVerdict::Overlay(name) => PressStep::Overlay(name.to_owned()),
+        KeyVerdict::Refused(name, reason) => PressStep::Refused {
+            overlay: name.to_owned(),
+            reason,
+        },
         KeyVerdict::Ran(name) => PressStep::Ran(name),
         KeyVerdict::Inert(name, inertia) => PressStep::Inert {
             action: name,
