@@ -112,8 +112,9 @@ impl App {
     /// every resumed tab in a repo would read alike — else the project label.
     /// A fresh or unscanned session keeps the project label. This is only the
     /// label the tab opens with: the tab then follows its conversation's
-    /// scanned and live titles, as [`crate::title`] ranks them. The kind is not part of the title: the tab chip shows
-    /// it from [`App::tab_kind`], so no retitle or rename can lose it.
+    /// scanned and live titles, as [`crate::title`] ranks them. The kind is
+    /// not part of the title: the tab chip shows it from [`App::tab_kind`], so
+    /// no retitle or rename can lose it.
     #[must_use]
     pub fn tab_title(&self, cwd: &str, launch: &Launch) -> String {
         launch

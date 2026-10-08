@@ -450,6 +450,7 @@ impl App {
             live.foreground = job;
             live.remember_proven_id();
         }
+        self.retitle_tabs();
         Vec::new()
     }
 
@@ -833,6 +834,27 @@ mod tests {
             file: None,
         });
         assert_eq!(app.claude_session_id(id), Some("re-keyed"));
+    }
+
+    #[test]
+    fn a_re_key_retitles_the_tab_after_the_new_conversation() {
+        let mut app = App::new();
+        let mut renamed = record("re-keyed", "/proj", "after the clear");
+        renamed.digest.custom_title = Some("second act".into());
+        app.apply(Event::ScanCompleted(vec![renamed]));
+        app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
+        let id = app.workspace.focused_session().expect("a focused session");
+        assert_eq!(app.workspace.tabs[0].title, "proj");
+
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: Some(claude_job(42)),
+        });
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: Some(file_naming(42, "re-keyed")),
+        });
+        assert_eq!(app.workspace.tabs[0].title, "second act");
     }
 
     #[test]
