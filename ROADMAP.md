@@ -405,7 +405,8 @@ still wins where a Claude does emit a real title: the `osc` decoder carries the
 title text, the `pty` reader forwards a change as `PtyEvent::Title`, and
 `Workspace::set_session_title` relabels the hosting tab — which also lets a
 sidebar rename retitle the open tab live. Reflecting Claude's *own* `/rename`
-and live task name is tracked as #119. Hovering a tab shows the session's
+and live task name shipped in #119, see
+[F-tab-title-sync](#f-tab-title-sync). Hovering a tab shows the session's
 fuller description — the same hover card the sidebar uses for a resumed
 session, a title + cwd card otherwise (#76, `App::tab_record` resolves the
 record so the two surfaces stay single-sourced). Drag-reorder (FR5) — whose
@@ -994,7 +995,7 @@ shippable:
   mutating tools, each over an existing `core::App` event.
 - [x] [F-mcp-terminal-sync](#f-mcp-terminal-sync) — The wait rung: block until
   a session's status settles, then read its text.
-- [ ] [F-mcp-agent-loop](#f-mcp-agent-loop) — The composed prompt→wait→read
+- [x] [F-mcp-agent-loop](#f-mcp-agent-loop) — The composed prompt→wait→read
   over any session, shell or Claude.
 - [x] [F-mcp-keys](#f-mcp-keys) — The keyboard rung: drive the app by key
   chords through the real keymap.
@@ -1273,10 +1274,12 @@ line, then Enter on its own. A prompt the MCP tool arms ignores a physical Enter
 for 600 ms.
 
 Checked against a live Claude Code: the shape of the empty prompt (its `Try "…"`
-hint) and of a two-line draft. Not checked: whether the line and its Enter,
-written back to back, always submit rather than read as a paste, and whether an
-`@` in a name opens the file autocomplete. The rename and colour surfaces that
-use this path are #119 and #343.
+hint) and of a two-line draft. That check missed two shapes Claude Code 2.1 also
+draws, a no-break space after `❯` and the session name inside the rule above the
+prompt; both read as "prompt not on screen" until #374. Not checked: whether the
+line and its Enter, written back to back, always submit rather than read as a
+paste, and whether an `@` in a name opens the file autocomplete. The rename and
+colour surfaces that use this path are #119 and #343.
 
 <a id="f-copy-agent-name"></a>
 
@@ -1293,8 +1296,8 @@ Shipped (#339): a `copy-agent-name` action, unbound by default and reachable
 through `run_action`, which re-reads the file on every press and is inert
 (`no-context`) when no Claude in front has written one; and an `Agent:` line
 in the tab hover card, read from a cache refreshed when the foreground job
-changes and when the pointer enters the tab. The tab menu entry waits
-for #340.
+changes and when the pointer enters the tab. The tab menu entry shipped
+with #340.
 
 Not shipped: Windows. ConPTY reports no foreground process, so no pid leads to
 a session file and nothing is ever named there; finding the Claude pid another
@@ -1718,11 +1721,11 @@ right-click focuses the tab first, since every entry acts on focus, and the
 menu is anchored on that pane: it closes when the pane loses focus. It is a
 `tab-menu` rung on the keyboard ladder that answers the arrows, `enter` and
 `escape` itself, so MCP can drive it end to end; `enter` reports the verdict
-of the entry it ran. Entries today: rename tab, copy agent name (only when the
-action would find a name), new shell / new Claude session here, split right /
-down, close pane. The list is data in
-`shell::tab_menu`: each later entry (colour, reveal, history, send to Claude
-Desktop) is one line there once its action exists. Not yet: the menu opens
+of the entry it ran. Entries today: rename tab, tab colour… (only where a pick
+can apply, added by #343), copy agent name (only when the action would find a
+name), new shell / new Claude session here, split right / down, close pane.
+The list is data in `shell::tab_menu`: each later entry (reveal, history, send
+to Claude Desktop) is one line there once its action exists. Not yet: the menu opens
 centred rather than beside the tab, and a screen reader cannot see it.
 
 <a id="f-tab-hover-details"></a>

@@ -43,7 +43,7 @@ shippable:
   mutating tools, each over an existing `core::App` event.
 - [x] [F-mcp-terminal-sync](#f-mcp-terminal-sync) — The wait rung: block until
   a session's status settles, then read its text.
-- [ ] [F-mcp-agent-loop](#f-mcp-agent-loop) — The composed prompt→wait→read
+- [x] [F-mcp-agent-loop](#f-mcp-agent-loop) — The composed prompt→wait→read
   over any session, shell or Claude.
 - [x] [F-mcp-keys](#f-mcp-keys) — The keyboard rung: drive the app by key
   chords through the real keymap.
