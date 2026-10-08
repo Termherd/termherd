@@ -56,7 +56,7 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing yet (`open-new-session` is the one) | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to | **create it**, then retry |
 
 Each handler that can refuse this way says so at its own refusal site.
 
@@ -78,7 +78,8 @@ selection, and `copy` runs on it.
   connection you are speaking over.
 - **`session-rename`** (the sidebar's inline ✎ field) does not commit on
   `enter`, and neither does **`tab-rename`**: both commit through the widget's
-  own submit, which a synthesised key event never reaches. `escape` abandons
+  own submit, which a synthesised key event never reaches. `rename-tab` opens
+  the tab's field from MCP, but only a human can commit it. `escape` abandons
   either — so you can always back out and start over — but committing a rename
   over MCP
   is a missing capability, tracked as

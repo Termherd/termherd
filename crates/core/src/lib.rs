@@ -29,7 +29,9 @@ pub use browser::{ProjectGroup, SessionRecord};
 pub use claude_command::{
     ClaudeColor, ClaudeCommand, CommandArgument, CommandError, PromptInput, read_prompt,
 };
-pub use keymap::{Action, ActionBinding, ChordError, KeyChord, Keymap, action_catalog};
+pub use keymap::{
+    Action, ActionBinding, ChordError, KeyChord, Keymap, Platform, action_catalog, default_bindings,
+};
 pub use metadata::{Overlay, RepoMeta, SessionMeta};
 pub use open::{OpenCommand, OpenCommandError, OpenTarget};
 pub use record::Recording;
