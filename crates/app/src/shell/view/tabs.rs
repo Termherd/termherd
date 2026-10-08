@@ -137,29 +137,25 @@ impl Shell {
     /// entry, the selected one filled. `None` when no menu is open.
     pub(in crate::shell) fn tab_menu_card(&self) -> Option<Element<'_, Message>> {
         let menu = self.live_tab_menu()?;
-        let title = self
-            .core
+        let lines = menu
+            .entries()
+            .map(|entry| text(entry.label).size(12).into());
+        Some(list_card(
+            self.active_tab_title(),
+            lines,
+            menu.selected(),
+            Message::RunTabMenuEntry,
+            Message::HoverTabMenuEntry,
+        ))
+    }
+
+    /// The focused tab's shown title, the heading of a list drawn over it.
+    fn active_tab_title(&self) -> &str {
+        self.core
             .workspace
             .tabs
             .get(self.core.workspace.active)
-            .map_or("", Tab::display_title);
-        let mut card = column![text(clip(title, 32)).size(11)]
-            .spacing(2)
-            .width(240);
-        for (position, entry) in menu.entries().enumerate() {
-            let style = if position == menu.selected() {
-                button::primary
-            } else {
-                button::text
-            };
-            let line = button(text(entry.label).size(12))
-                .on_press(Message::RunTabMenuEntry(position))
-                .style(style)
-                .width(Fill)
-                .padding([4, 8]);
-            card = card.push(mouse_area(line).on_enter(Message::HoverTabMenuEntry(position)));
-        }
-        Some(modal_card(card))
+            .map_or("", Tab::display_title)
     }
 
     /// The hover card for a tab. A tab that resumes a browsed session
@@ -192,6 +188,35 @@ impl Shell {
             }
         }
     }
+}
+
+/// A list drawn over the window for the focused tab: its title, then one
+/// line per entry, the `selected` one filled. A click on a line runs it and
+/// hovering selects it, so the pointer moves the selection the arrows move.
+fn list_card<'a>(
+    title: &str,
+    lines: impl Iterator<Item = Element<'a, Message>>,
+    selected: usize,
+    on_run: fn(usize) -> Message,
+    on_hover: fn(usize) -> Message,
+) -> Element<'a, Message> {
+    let mut card = column![text(clip(title, 32)).size(11)]
+        .spacing(2)
+        .width(240);
+    for (position, label) in lines.enumerate() {
+        let style = if position == selected {
+            button::primary
+        } else {
+            button::text
+        };
+        let line = button(label)
+            .on_press(on_run(position))
+            .style(style)
+            .width(Fill)
+            .padding([4, 8]);
+        card = card.push(mouse_area(line).on_enter(on_hover(position)));
+    }
+    modal_card(card)
 }
 
 /// A tab chip's text colour: the primary tier on the active (filled) chip, the
