@@ -52,7 +52,14 @@ resumes the conversation it held last, once the sidebar lists it; a fresh
 tab closed before then comes back as a new conversation. When a Claude
 runs in it, the card also names its agent (`Agent: termherd-b0`), the peer
 name other Claude sessions address it by; the `copy-agent-name` action puts
-it on the clipboard. In a split tab, the card names the first pane's agent.
+it on the clipboard. The card also says how long the tab has run, counted from
+the moment termherd started its terminal (`Running for 1h 12m`), and which
+Claude Code version runs in it: the one the running Claude reports, else the
+one its transcript last recorded. Model and effort come from the transcript,
+as in the sidebar card. A plain shell tab, with no Claude running in it,
+shows only its running time beside its working directory; a shell tab in
+which `claude` was typed by hand also shows its agent and version while that
+Claude runs. In a split tab, the card describes the first pane.
 
 **A Claude tab wears the colour its `/color` set.** Run `/color green` in a
 Claude session and its tab is outlined in green, and its sidebar row gets a

@@ -16,7 +16,9 @@ use iced::{Element, Fill};
 use termherd_core::browser::{ProjectGroup, project_label, relative_age};
 use termherd_core::{SessionKind, SessionRecord, SessionStatus, SidebarFold};
 
-use super::{clip, color_bar, kind_glyph, session_card, sidebar_secondary_text, status_dot};
+use super::{
+    CardFacts, clip, color_bar, kind_glyph, session_card, sidebar_secondary_text, status_dot,
+};
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
 use crate::strings;
 
@@ -475,7 +477,15 @@ impl Shell {
             // without opening it.
             tooltip(
                 launch,
-                session_card(title.clone(), None, s.digest.agent_color, s, now),
+                session_card(
+                    title.clone(),
+                    &CardFacts {
+                        color: s.digest.agent_color,
+                        ..CardFacts::default()
+                    },
+                    s,
+                    now,
+                ),
                 tooltip::Position::Right,
             )
             .into()

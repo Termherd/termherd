@@ -76,6 +76,31 @@ pub fn agent_name(name: &str) -> String {
     format!("Agent: {name}")
 }
 
+/// The card line naming the model a Claude session talks to and the
+/// reasoning effort it runs at; `None` when the transcript records neither.
+#[must_use]
+pub fn model_and_effort(model: Option<&str>, effort: Option<&str>) -> Option<String> {
+    match (model, effort) {
+        (Some(model), Some(effort)) => Some(format!("Model: {model}  ·  {effort} effort")),
+        (Some(model), None) => Some(format!("Model: {model}")),
+        (None, Some(effort)) => Some(format!("Effort: {effort}")),
+        (None, None) => None,
+    }
+}
+
+/// The card line naming the Claude Code version a session runs.
+#[must_use]
+pub fn claude_version(version: &str) -> String {
+    format!("Claude Code {version}")
+}
+
+/// The card line saying how long a session has run, from a compact span
+/// such as `1h 12m`.
+#[must_use]
+pub fn running_for(span: &str) -> String {
+    format!("Running for {span}")
+}
+
 /// The card line naming the colour `/color` gave a session — the cue that
 /// does not depend on telling the colours apart.
 #[must_use]
@@ -180,5 +205,22 @@ mod tests {
         // The card's line is the only place a human reads the name, so a label
         // that dropped it would leave a bare "Agent:" nothing else catches.
         assert!(agent_name("termherd-b0").ends_with("termherd-b0"));
+    }
+
+    #[test]
+    fn the_model_line_names_whichever_of_model_and_effort_is_known() {
+        let both = model_and_effort(Some("claude-opus-5-5"), Some("medium")).expect("a line");
+        assert!(both.contains("claude-opus-5-5") && both.contains("medium"));
+        let model = model_and_effort(Some("claude-opus-5-5"), None).expect("a line");
+        assert!(model.contains("claude-opus-5-5") && !model.to_lowercase().contains("effort"));
+        let effort = model_and_effort(None, Some("high")).expect("a line");
+        assert!(effort.contains("high"));
+        assert_eq!(model_and_effort(None, None), None);
+    }
+
+    #[test]
+    fn the_version_and_running_lines_carry_their_value() {
+        assert!(claude_version("2.1.294").ends_with("2.1.294"));
+        assert!(running_for("1h 12m").ends_with("1h 12m"));
     }
 }

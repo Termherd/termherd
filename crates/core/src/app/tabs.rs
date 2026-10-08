@@ -505,6 +505,7 @@ mod tests {
                 name: None,
                 session_id: Some("after".into()),
                 proc_start: started,
+                version: None,
             }),
         });
         app.apply(Event::ScanCompleted(vec![record("after", "/repo", "x")]));

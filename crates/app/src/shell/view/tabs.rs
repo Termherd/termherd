@@ -14,7 +14,8 @@ use termherd_core::ClaudeColor;
 
 use super::modals::modal_card;
 use super::{
-    COLOR_MARK_WIDTH, card_style, claude_color, clip, kind_icon, session_card, status_dot,
+    COLOR_MARK_WIDTH, CardFacts, card_frame, card_secondary_line, claude_color, clip, detail_lines,
+    kind_icon, session_card, status_dot,
 };
 use crate::shell::{Message, Shell, tab_rename_id};
 
@@ -116,7 +117,7 @@ impl Shell {
                     .on_double_click(Message::StartTabRename(index))
                     .on_right_press(Message::OpenTabMenu(index));
                 // The chip clips the title; hovering reveals the fuller
-                // description — the sidebar's session card, plus the agent line,
+                // description — the sidebar's session card, plus the live pane facts,
                 // when the tab resumes a browsed session, else a minimal title +
                 // cwd card.
                 tooltip(
@@ -169,12 +170,13 @@ impl Shell {
         Some(modal_card(card))
     }
 
-    /// The hover card for a tab. A tab that resumes a browsed session
-    /// shows the [`session_card`] the sidebar does, plus its agent — one derive (the core
-    /// resolves the record via [`termherd_core::App::tab_record`]), no divergent
-    /// formatting. A shell or a fresh, not-yet-scanned session has no record, so
-    /// it falls back to a minimal card with the full title and the working
-    /// directory it runs in.
+    /// The hover card for a tab. A tab that resumes a browsed session shows the
+    /// [`session_card`] the sidebar does, with the live [`CardFacts`] of its first
+    /// pane — one derive (the core resolves the record via
+    /// [`termherd_core::App::tab_record`]), no divergent formatting. A shell or a
+    /// fresh, not-yet-scanned session has no record, so it falls back to a minimal
+    /// card with the full title and the working directory it runs in, under the
+    /// same live facts.
     fn tab_hover_card(
         &self,
         index: usize,
@@ -186,14 +188,20 @@ impl Shell {
         now: SystemTime,
     ) -> Element<'static, Message> {
         let first = tab.first_session();
-        let agent = self.core.peer_name(first);
+        let facts = CardFacts {
+            agent: self.core.peer_name(first),
+            color,
+            version: self.core.live_claude_version(first).map(str::to_owned),
+            running_for: self
+                .core
+                .running_since(first)
+                .and_then(|spawned| now.duration_since(spawned).ok()),
+        };
         match self.core.tab_record(index) {
-            Some(record) => {
-                session_card(self.core.session_title(record), agent, color, record, now)
-            }
+            Some(record) => session_card(self.core.session_title(record), &facts, record, now),
             None => {
                 let cwd = self.core.sessions.get(&first).and_then(|s| s.cwd.clone());
-                tab_card(tab.display_title().to_owned(), agent, color, cwd)
+                tab_card(tab.display_title().to_owned(), &facts, cwd)
             }
         }
     }
@@ -261,27 +269,16 @@ fn insertion_caret<'a>() -> Element<'a, Message> {
 }
 
 /// The minimal hover card for a tab with no browsed record — a shell or a fresh
-/// session: the full, untruncated title and the working directory it runs
-/// in. Styled like [`session_card`] so the two hover surfaces read alike.
-fn tab_card(
-    title: String,
-    agent: Option<String>,
-    color: Option<ClaudeColor>,
-    cwd: Option<String>,
-) -> Element<'static, Message> {
+/// session: the full, untruncated title, the live [`CardFacts`] and the
+/// working directory it runs in. Styled like [`session_card`] so the two
+/// hover surfaces read alike.
+fn tab_card(title: String, facts: &CardFacts, cwd: Option<String>) -> Element<'static, Message> {
     let mut card = column![text(title).size(12)].spacing(4);
-    if let Some(agent) = agent {
-        card = card.push(super::agent_line(&agent));
-    }
-    if let Some(color) = color {
-        card = card.push(super::color_line(color));
+    for line in detail_lines(facts, None) {
+        card = card.push(card_secondary_line(line));
     }
     if let Some(cwd) = cwd {
-        card = card.push(super::card_secondary_line(cwd));
+        card = card.push(card_secondary_line(cwd));
     }
-    container(card)
-        .padding(8)
-        .max_width(360.0)
-        .style(card_style)
-        .into()
+    card_frame(card)
 }

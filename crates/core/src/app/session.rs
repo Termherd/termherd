@@ -5,8 +5,9 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
+use std::time::SystemTime;
 
-use super::snapshot::{identity_of, proves};
+use super::snapshot::{identity_of, proven};
 use crate::snapshot::SessionKind;
 use crate::workspace::SplitDir;
 use termherd_claude::session_file::SessionFile;
@@ -50,6 +51,9 @@ pub struct LiveSession {
     /// Outlives the Claude that wrote it, so a conversation re-keyed by
     /// `/clear` is still known by its new id once that Claude has exited.
     pub proven_session_id: Option<String>,
+    /// When the shell spawned this pane's PTY ([`Event::SessionSpawned`]).
+    /// The shell's clock, not core's: core only keeps the stamp.
+    pub spawned_at: Option<SystemTime>,
     /// Whether the adapter has ever reported a job in front of this pane's
     /// shell. Until it has, an empty [`Self::foreground`] proves nothing —
     /// ConPTY never reports one — so only after it does can an empty one mean
@@ -87,14 +91,26 @@ impl LiveSession {
     /// front of this pane is the Claude that wrote it. Called whenever either
     /// side of the proof changes.
     fn remember_proven_id(&mut self) {
-        let (Some(job), Some(file)) = (&self.foreground, &self.session_file) else {
-            return;
-        };
-        if let Some(id) = file.session_id.as_deref().filter(|_| proves(job, file))
+        let proven = self
+            .proven_session_file()
+            .and_then(|f| f.session_id.as_deref());
+        if let Some(id) = proven
             && self.proven_session_id.as_deref() != Some(id)
         {
             self.proven_session_id = Some(id.to_owned());
         }
+    }
+
+    /// The Claude Code version the cached session file states, if it proves
+    /// the job in front of this pane is the Claude that wrote it.
+    fn live_version(&self) -> Option<&str> {
+        self.proven_session_file()?.version.as_deref()
+    }
+
+    /// The cached session file, only when it proves the job in front of this
+    /// pane is the Claude that wrote it.
+    fn proven_session_file(&self) -> Option<&SessionFile> {
+        proven(self.foreground.as_ref(), self.session_file.as_ref())
     }
 
     /// Whether this pane was launched to run Claude — the panes whose name and
@@ -402,6 +418,7 @@ impl App {
             foreground: None,
             session_file: None,
             proven_session_id: None,
+            spawned_at: None,
             foreground_reported: false,
         });
         match spec.placement {
@@ -446,6 +463,7 @@ impl App {
             foreground: None,
             session_file: None,
             proven_session_id: None,
+            spawned_at: None,
             foreground_reported: false,
         });
         vec![Effect::Spawn(SpawnSpec {
@@ -518,6 +536,33 @@ impl App {
     pub fn peer_name(&self, session: SessionId) -> Option<String> {
         let live = self.sessions.get(&session)?;
         identity_of(live.foreground.as_ref(), live.session_file.as_ref()).peer_name
+    }
+
+    /// Stamp `session` with the moment the shell spawned its PTY. Unknown
+    /// sessions are ignored.
+    pub(super) fn session_spawned(&mut self, session: SessionId, at: SystemTime) -> Vec<Effect> {
+        if let Some(live) = self.sessions.get_mut(&session) {
+            live.spawned_at = Some(at);
+        }
+        Vec::new()
+    }
+
+    /// When `session`'s PTY was spawned, while it still runs: `None` for an
+    /// unknown or exited session, or one the shell never stamped.
+    #[must_use]
+    pub fn running_since(&self, session: SessionId) -> Option<SystemTime> {
+        let live = self.sessions.get(&session)?;
+        if live.status == SessionStatus::Exited {
+            return None;
+        }
+        live.spawned_at
+    }
+
+    /// The Claude Code version the Claude in front of `session` reports in its
+    /// session file, when the file proves that Claude wrote it.
+    #[must_use]
+    pub fn live_claude_version(&self, session: SessionId) -> Option<&str> {
+        self.sessions.get(&session)?.live_version()
     }
 
     /// A session's PTY ended. A *clean* exit — the user typed `exit` at a
@@ -772,6 +817,7 @@ mod tests {
             name: None,
             session_id: Some(session_id.to_owned()),
             proc_start: Some(STARTED.to_owned()),
+            version: None,
         }
     }
 
@@ -954,6 +1000,7 @@ mod tests {
                 name: None,
                 session_id: file_id.clone(),
                 proc_start: Some(if same_start { STARTED.into() } else { "other".into() }),
+                version: None,
             };
             // An earlier Claude in the pane, pid 9, proved `last_proven`.
             let earlier = last_proven.as_deref().map(|id| file_naming(9, id));
@@ -1494,6 +1541,58 @@ mod tests {
             status: SessionStatus::Idle,
         });
         assert_eq!(app.sessions[&id].status, SessionStatus::Exited);
+    }
+
+    #[test]
+    fn a_spawn_stamp_counts_while_the_session_runs_and_not_after() {
+        let mut app = App::new();
+        let id = launch(&mut app, "sh");
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+        assert_eq!(app.running_since(id), None, "nothing stamped yet");
+        assert!(
+            app.apply(Event::SessionSpawned { session: id, at })
+                .is_empty()
+        );
+        assert_eq!(app.running_since(id), Some(at));
+        app.apply(Event::PtyExited {
+            session: id,
+            clean: false,
+        });
+        assert_eq!(app.running_since(id), None, "a dead terminal runs no more");
+    }
+
+    /// A fresh Claude pane under `MINTED` whose session file, written by a
+    /// process started at `started`, reports Claude Code `version`.
+    fn pane_reading(started: &str, version: &str) -> (App, SessionId) {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
+        let id = app.workspace.focused_session().expect("a focused session");
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: Some(claude_job(4399)),
+        });
+        let file = SessionFile {
+            proc_start: Some(started.to_owned()),
+            version: Some(version.to_owned()),
+            ..file_naming(4399, MINTED)
+        };
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: Some(file),
+        });
+        (app, id)
+    }
+
+    #[test]
+    fn the_live_version_is_the_one_a_proven_session_file_reports() {
+        let (app, id) = pane_reading(STARTED, "2.1.294");
+        assert_eq!(app.live_claude_version(id), Some("2.1.294"));
+    }
+
+    #[test]
+    fn a_session_file_the_job_in_front_did_not_write_reports_no_version() {
+        let (app, id) = pane_reading("a later process", "9.9.9");
+        assert_eq!(app.live_claude_version(id), None);
     }
 
     /// Launch a shell at `placement` and return its id.

@@ -105,6 +105,12 @@ pub enum Event {
         session: SessionId,
         file: Option<SessionFile>,
     },
+    /// The shell spawned `session`'s PTY at `at`, by its own clock: the
+    /// moment a hover card counts the session's running time from.
+    SessionSpawned {
+        session: SessionId,
+        at: std::time::SystemTime,
+    },
     /// The user clicked a tab to bring it to the front (FR5).
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.

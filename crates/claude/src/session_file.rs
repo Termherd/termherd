@@ -5,9 +5,10 @@
 //! (`ListAgents` / `SendMessage`) is written down. Reading the file is the
 //! scan adapter's job; this module only decodes it.
 
-/// What termherd takes from a session file: the process it describes, and the
-/// two identities a peer needs. A field Claude Code did not write is `None`,
-/// since an older CLI or a session still starting writes fewer of them.
+/// What termherd takes from a session file: the process it describes, the two
+/// identities a peer needs, and the Claude Code version it runs. A field Claude
+/// Code did not write is `None`, since an older CLI or a session still starting
+/// writes fewer of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionFile {
     /// The Claude process id, as the file itself states it.
@@ -21,6 +22,8 @@ pub struct SessionFile {
     /// a Claude that crashed, and its pid is then free for any process to
     /// reuse: this stamp is what tells the writer from its successor.
     pub proc_start: Option<String>,
+    /// The Claude Code version the process runs (`version`), e.g. `2.1.294`.
+    pub version: Option<String>,
 }
 
 /// Decode the session file read from `<pid>.json`.
@@ -47,6 +50,7 @@ pub fn parse(json: &str, pid: u32) -> Option<SessionFile> {
         name: text("name"),
         session_id: text("sessionId"),
         proc_start: text("procStart"),
+        version: text("version"),
     })
 }
 
@@ -66,14 +70,14 @@ mod tests {
             "name": "knowledge-hub-35",
             "messagingSocketPath": "/tmp/cc-socks/65524.sock",
             "procStart": "Wed Oct  7 06:48:07 2026",
-            "procStart": "Wed Oct  7 06:48:07 2026",
+            "version": "2.1.294",
             "status": "idle",
         })
         .to_string()
     }
 
     #[test]
-    fn a_full_file_yields_the_peer_name_and_the_session_id() {
+    fn a_full_file_yields_the_peer_name_the_session_id_and_the_version() {
         assert_eq!(
             parse(&file(65524), 65524),
             Some(SessionFile {
@@ -81,6 +85,7 @@ mod tests {
                 name: Some("knowledge-hub-35".to_owned()),
                 session_id: Some("7eff318b-ee38-49ad-9a44-75d81c946c02".to_owned()),
                 proc_start: Some("Wed Oct  7 06:48:07 2026".to_owned()),
+                version: Some("2.1.294".to_owned()),
             })
         );
     }
@@ -95,6 +100,7 @@ mod tests {
                 name: None,
                 session_id: Some("abc".to_owned()),
                 proc_start: None,
+                version: None,
             })
         );
     }
@@ -109,6 +115,7 @@ mod tests {
                 name: None,
                 session_id: None,
                 proc_start: None,
+                version: None,
             })
         );
     }

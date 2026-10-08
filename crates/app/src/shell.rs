@@ -1822,6 +1822,21 @@ mod key_routing {
         (shell, pty)
     }
 
+    #[test]
+    fn every_spawned_pane_is_stamped_with_the_shells_clock() {
+        let before = SystemTime::now();
+        let (mut shell, _pty) = shell_with_terminal();
+        let first = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.run_action(Action::SplitVertical);
+        let second = shell.core.workspace.focused_session().expect("focused");
+        assert_ne!(first, second, "the split focuses its new pane");
+        let after = SystemTime::now();
+        for session in [first, second] {
+            let stamped = shell.core.running_since(session).expect("stamped");
+            assert!(before <= stamped && stamped <= after, "{session:?}");
+        }
+    }
+
     /// The id a fresh Claude launch was minted, when `launch` is one and the id
     /// is a UUID — the shape `--session-id` takes.
     fn minted_fresh_claude(launch: Option<&Launch>) -> Option<&str> {
@@ -2450,12 +2465,7 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "hello".to_owned(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                agent_color: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         }
@@ -3839,12 +3849,8 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: summary.to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
                 custom_title: custom.map(str::to_string),
-                ai_title: None,
-                agent_color: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
@@ -3867,12 +3873,7 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "shared title".to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                agent_color: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
@@ -6474,12 +6475,7 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "a session".to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                agent_color: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
