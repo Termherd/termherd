@@ -249,6 +249,7 @@ nothing to configure. It exposes the running workspace:
 | `press_keys` · `run_action` | drive termherd's own interface — chords through the live keymap, or actions by name |
 | `mouse_in_session` | a mouse event at a cell of a terminal — forwarded to a program reading the mouse, else the terminal's own selection |
 | `add_repo` · `forget_repo` | put a repository in the sidebar before it has any session, and drop that addition |
+| `claude_command` | ask to type `/rename`, `/color` or `/desktop` into an idle Claude session — behind a confirmation the caller or the user answers |
 | `prompt_in_session` | type, wait and read in one round trip — prompting another Claude session is opt-in |
 | `list_options` · `set_option` | read and change `settings.json` — the same catalogue as the stdio server; a running TermHerd applies a change at once |
 

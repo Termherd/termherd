@@ -82,6 +82,18 @@ pub const CANCEL: &str = "Cancel";
 pub const CLOSE: &str = "Close";
 pub const ARCHIVE: &str = "Archive";
 pub const QUIT: &str = "Quit";
+pub const SEND: &str = "Send";
+
+/// Confirmation before termherd types a slash command into a Claude session.
+/// Quotes the exact line, so what the user approves is what is typed.
+#[must_use]
+pub fn claude_command_prompt(line: &str, title: &str) -> String {
+    if title.is_empty() {
+        format!("Type “{line}” into Claude?")
+    } else {
+        format!("Type “{line}” into “{title}”?")
+    }
+}
 
 /// Close-a-tab confirmation prompt.
 #[must_use]

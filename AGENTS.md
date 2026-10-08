@@ -161,9 +161,11 @@ into its `mcpServers` at spawn (loopback, per-session token) — so it can read
 and drive the workspace it runs in. This is the richer sibling of the capture
 dump above: same `WorkspaceSnapshot` model, live instead of a file.
 
-**Settled.** Nineteen tools: `list_sessions` + `snapshot`
+**Settled.** Twenty tools: `list_sessions` + `snapshot`
 (perception), `open_session` / `split_pane` / `focus_pane` / `rename_tab` /
 `close_pane` / `run_in_session` / `mouse_in_session` (action),
+`claude_command` (arms the confirmation for a slash command typed into an
+idle Claude — the one write path for edits Claude owns),
 `wait_for_status` + `read_terminal` (synchronisation), `screenshot` (pixels),
 `press_keys` + `run_action` (the app's own keyboard), `add_repo` +
 `forget_repo` (membership — what the sidebar *contains*, as against what the

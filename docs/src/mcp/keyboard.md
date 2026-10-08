@@ -55,7 +55,7 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing yet (`open-new-session` is the one) | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, nothing to scroll, nothing selected to copy, no Claude agent name to copy | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to | **create it**, then retry |
 
 Each handler that can refuse this way says so at its own refusal site.
 
@@ -82,6 +82,9 @@ selection, and `copy` runs on it.
   over MCP
   is a missing capability, tracked as
   [#246](https://github.com/Termherd/termherd/issues/246).
+- On **`claude-command-confirm`**, `enter` types the slash command the
+  prompt names into its Claude session; see
+  [`claude_command`](./live-bridge.md#a-claude-slash-command-confirmed).
 - Every other overlay is exitable from the keyboard, and a test sweep derived
   from the overlay enumeration — not a hand-written list — is what keeps it
   that way. A new overlay added without an exit fails there.

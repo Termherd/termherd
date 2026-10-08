@@ -84,7 +84,6 @@ issues #18–#29.
 | --- | --- | --- | --- | --- |
 | [F-activity-stats](#f-activity-stats) | feature | sessions | ☐ | Aggregate what the sessions have been doing — counts, durations, activity. |
 | [F-capture](#f-capture) | feature | workspace | ☐ | Capture termherd along a fidelity ladder: debug dumps, promo, bug repros. |
-| [F-claude-command](#f-claude-command) | feature | sessions, keymap | ☐ | Send a confirmed slash command into an idle Claude session. |
 | [F-file-browser](#f-file-browser) | feature | workspace, sidebar | ☐ | A file tree for the focused repository, floating or as a right pane. |
 | [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ☐ | A `rename-tab` keymap action opening the focused tab's inline rename. |
 | [F-launch-profiles](#f-launch-profiles) | feature | sessions | ☐ | Persistent per-project `--add-dir`, applied to fresh and resumed launches. |
@@ -106,6 +105,7 @@ issues #18–#29.
 | [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ☐ | The tab hover card shows agent name, model, effort, version and elapsed time. |
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
 | [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ☐ | A Claude tab's title follows the session name Claude holds. |
+| [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
 | [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
@@ -835,18 +835,6 @@ tightening. Ladder:
   sessions) is the cheap workaround for the same problem; this is the durable
   one, because it is the only version that regenerates in CI.
 
-<a id="f-claude-command"></a>
-
-### F-claude-command
-
-Send a confirmed slash command into an idle Claude session.
-
-One write path for every edit termherd makes to a Claude session (#337): a
-closed catalogue (`/rename`, `/color`, `/desktop`), sent only when the session
-is idle, behind a confirmation overlay that names the exact line typed. The
-overlay is a `KeyboardOwner` rung, so `escape` leaves it. Claude drives the
-information termherd shows; termherd sends actions.
-
 <a id="f-file-browser"></a>
 
 ### F-file-browser
@@ -1289,6 +1277,36 @@ session name and resumes following (#119). Renaming a Claude tab sends
 local copy that disagrees with Claude. Needs
 [F-session-id-at-launch](#f-session-id-at-launch) for fresh tabs. Torture
 report: `.personal/feature-torture/reports/F-tab-title-sync.md`.
+
+<a id="f-claude-command"></a>
+
+### F-claude-command
+
+Send a confirmed slash command into an idle Claude session.
+
+One write path for every edit termherd makes to a Claude session (#337): a
+closed catalogue (`/rename`, `/color`, `/desktop`), sent only when the session
+is idle, behind a confirmation overlay that names the exact line typed. The
+overlay is a `KeyboardOwner` rung, so `escape` leaves it. Claude drives the
+information termherd shows; termherd sends actions.
+
+Shipped (#337): `core::ClaudeCommand` renders the line, and makes a name safe
+to type — control characters and line breaks become spaces, invisible
+formatting is dropped, a trailing backslash goes, an empty name is refused.
+The colour is the closed `ClaudeColor` palette, kept in the `claude` codec so
+the transcript reader can share it. `App::claude_command_check` refuses
+anything but a Claude launch idle at its prompt, and is asked again at the
+send. The confirmation answers `enter` and `escape` itself, so a synthesised
+key event reaches both. Two surfaces arm it: a `send-to-desktop` action,
+unbound by default, and an MCP `claude_command` tool, which arms the same
+prompt instead of typing. Confirming sends Ctrl+U, then the line, then Enter
+on its own.
+
+Not verified against a live Claude: whether Ctrl+U clears every draft (it
+clears the line the cursor is on, so a multi-line draft keeps its other
+lines), and whether the line and its Enter, written back to back, always
+submit rather than read as a paste. The rename and colour surfaces that use
+this path are #119 and #343.
 
 <a id="f-copy-agent-name"></a>
 

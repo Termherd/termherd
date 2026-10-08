@@ -21,9 +21,9 @@ use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
 use termherd_core::{
-    Action as KeymapAction, App, ClaudeIdentity, KeyChord, LiveSession, PointerEvent, PointerRoute,
-    SessionKind, SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot, claude_identity,
-    workspace::SplitDir,
+    Action as KeymapAction, App, ClaudeCommand, ClaudeIdentity, KeyChord, LiveSession,
+    PointerEvent, PointerRoute, SessionKind, SessionStatus, SnapshotFilter, SnapshotInputs,
+    WorkspaceSnapshot, claude_identity, workspace::SplitDir,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -277,6 +277,15 @@ pub enum Action {
     /// Drop a repo's declaration. The row survives on its sessions, if it has
     /// any. → `Event::ForgetRepo`.
     ForgetRepo { path: String },
+    /// Arm the confirmation for typing a Claude slash command into a session —
+    /// the same prompt a keypress arms, so nothing is typed until it is
+    /// answered. Refused before anything applies when the session is not an
+    /// idle Claude, or another prompt is open. → `Event::SendClaudeCommand`,
+    /// once confirmed.
+    ClaudeCommand {
+        session: u64,
+        command: ClaudeCommand,
+    },
 }
 
 /// The result of an [`Action`]. `error` is `Some` only when the action was
@@ -308,6 +317,13 @@ pub enum ActionDetail {
     /// `Nothing` the gesture drove nothing and retrying it changes nothing.
     /// `core`'s own route, as read off the session's last rendered screen.
     Pointer(PointerRoute),
+    /// The confirmation a Claude command armed: the exact line it will type,
+    /// and the overlay now holding the keyboard, which `enter` confirms and
+    /// `escape` cancels.
+    ClaudeCommand {
+        line: String,
+        overlay: &'static str,
+    },
 }
 
 /// What a repo action did, for a caller that cannot see the sidebar. `path` is

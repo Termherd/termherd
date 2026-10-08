@@ -44,6 +44,12 @@ runs in it, the card also names its agent (`Agent: termherd-b0`), the peer
 name other Claude sessions address it by; the `copy-agent-name` action puts
 it on the clipboard. In a split tab, the card names the first pane's agent.
 
+**TermHerd asks Claude rather than overriding it.** Where a change belongs to
+Claude — today, handing a session to the desktop app with `send-to-desktop` —
+TermHerd types Claude's own slash command for you, behind a prompt that shows
+the exact line first. <kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops
+it. It is offered only while that Claude is idle at its prompt.
+
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on
 release. The drag survives the pointer leaving the strip: releasing anywhere
