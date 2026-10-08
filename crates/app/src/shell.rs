@@ -2943,7 +2943,10 @@ mod key_routing {
     #[test]
     fn a_click_on_a_closed_sessions_notification_changes_nothing() {
         let (mut shell, _pty, first) = shell_with_two_tabs();
-        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: Some(first) });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: false,
+        });
         assert_eq!(outcome.error, None);
         shell.focus = Focus::Search;
         let (tabs, active, before) = (
