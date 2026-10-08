@@ -303,6 +303,10 @@ struct Shell {
     /// The prompt names the exact line, so nothing is typed into Claude that
     /// the user has not read first.
     claude_command: Option<claude_command::PendingCommand>,
+    /// A one-line notice of something the user asked for that did not happen —
+    /// a rename Claude could not take — shown under the tab strip until
+    /// dismissed or replaced. Not a prompt: it holds no keyboard.
+    notice: Option<String>,
     /// Whether Ctrl (or Cmd) is currently held — the link-open modifier.
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
@@ -526,6 +530,8 @@ enum Message {
     ConfirmClaudeCommand,
     /// Dismiss the Claude command confirmation without typing anything.
     CancelClaudeCommand,
+    /// Hide the notice under the tab strip.
+    DismissNotice,
     /// Show or hide archived sessions in the browser (F-session-metadata).
     ShowArchived(bool),
     /// Fold or unfold a project's session list in the sidebar, by path.
@@ -757,6 +763,7 @@ impl Shell {
             gestures: ClipboardGestures::default(),
             archiving: None,
             claude_command: None,
+            notice: None,
             closing_window: None,
             link_modifier: false,
             shift_modifier: false,
@@ -1108,7 +1115,7 @@ impl Shell {
                     .workspace
                     .tabs
                     .get(index)
-                    .and_then(|tab| tab.sessions().first().copied())
+                    .map(termherd_core::workspace::Tab::first_session)
                 {
                     self.tab_rename = Some((anchor, current));
                     return operate(focusable::focus(tab_rename_id()));
@@ -1189,6 +1196,10 @@ impl Shell {
                 .confirm_claude_command()
                 .unwrap_or_else(|_| Task::none()),
             Message::CancelClaudeCommand => self.cancel_claude_command(),
+            Message::DismissNotice => {
+                self.notice = None;
+                Task::none()
+            }
             Message::ShowArchived(show) => {
                 let effects = self
                     .core
@@ -1237,6 +1248,10 @@ impl Shell {
             }
             Message::CommitRename => match self.renaming.take() {
                 Some((session, title)) => {
+                    if let Some((live, current)) = self.open_claude_to_rename(&session, &title) {
+                        self.rename_through_claude(live, &title, &current);
+                        return Task::none();
+                    }
                     let effects = self
                         .core
                         .apply(termherd_core::Event::RenameSession { session, title });
@@ -1486,10 +1501,37 @@ impl Shell {
         let Some(index) = self.core.workspace.tab_of(anchor) else {
             return;
         };
+        if let Some((session, current)) = self.claude_named_tab(index) {
+            self.rename_through_claude(session, &title, &current);
+            return;
+        }
         let effects = self
             .core
             .apply(termherd_core::Event::RenameTab { index, title });
         debug_assert!(effects.is_empty());
+    }
+
+    /// The first pane of the tab at `index` and the name the tab shows, when
+    /// renaming that tab is Claude's to do — see
+    /// [`termherd_core::App::tab_names_through_claude`].
+    fn claude_named_tab(&self, index: usize) -> Option<(SessionId, String)> {
+        let session = self.core.tab_claude_namer(index)?;
+        let tab = self.core.workspace.tabs.get(index)?;
+        Some((session, tab.display_title().to_owned()))
+    }
+
+    /// The open tab a sidebar rename of conversation `claude_id` is asked of
+    /// Claude through, as [`Self::claude_named_tab`] answers it. A blank
+    /// rename stays local whatever is open: it only clears the name termherd
+    /// keeps, which is not Claude's to give back.
+    fn open_claude_to_rename(&self, claude_id: &str, title: &str) -> Option<(SessionId, String)> {
+        if title.trim().is_empty() {
+            return None;
+        }
+        let live = self.core.open_session_for(claude_id)?;
+        let index = self.core.workspace.tab_of(live)?;
+        self.claude_named_tab(index)
+            .filter(|(session, _)| *session == live)
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -4494,6 +4536,22 @@ mod key_routing {
     }
 
     #[test]
+    fn a_physical_enter_right_after_a_remote_rename_is_ignored() {
+        // The rename tool arms the same prompt as `claude_command` and owes the
+        // user the same moment to read it.
+        let (mut shell, pty, _session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
+        assert_eq!(outcome.error, None);
+        let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+        let _ = shell.update(Message::Key(enter));
+        assert!(pty.writes().is_empty(), "swallowed during the grace");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+    }
+
+    #[test]
     fn only_a_remote_arm_holds_enter_back_and_never_escape() {
         let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
         let escape = press(Key::Named(Named::Escape), Modifiers::default(), None);
@@ -4643,6 +4701,175 @@ mod key_routing {
             Some("another prompt is open (archive-confirm); answer it first")
         );
         assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Archive));
+    }
+
+    // ---- Renaming a Claude session asks Claude ----------------------------
+
+    /// The command armed for confirmation, if any.
+    fn armed(shell: &Shell) -> Option<&ClaudeCommand> {
+        shell
+            .claude_command
+            .as_ref()
+            .map(|pending| &pending.command)
+    }
+
+    /// Double-click the tab at `index`, type `name`, and press Enter.
+    fn rename_tab_by_hand(shell: &mut Shell, index: usize, name: &str) {
+        let current = shell.core.workspace.tabs[index].display_title().to_owned();
+        let _ = shell.update(Message::StartTabRename { index, current });
+        let _ = shell.update(Message::TabRenameInput(name.to_owned()));
+        let _ = shell.update(Message::CommitTabRename);
+    }
+
+    #[test]
+    fn renaming_a_claude_tab_arms_rename_instead_of_a_local_name() {
+        let (mut shell, pty, _session) = shell_with_idle_claude();
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+        assert_eq!(shell.notice, None);
+        assert!(pty.writes().is_empty(), "nothing typed before the confirm");
+    }
+
+    #[test]
+    fn a_claude_tab_rename_claude_cannot_take_is_reported_not_dropped() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(armed(&shell), None);
+        let notice = shell.notice.clone().expect("the refusal is shown");
+        assert!(notice.contains("busy"), "it says why: {notice}");
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+
+        let _ = shell.update(Message::DismissNotice);
+        assert_eq!(shell.notice, None);
+    }
+
+    #[test]
+    fn a_claude_tab_rename_over_a_draft_is_reported_with_the_draft() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        shell
+            .screens
+            .insert(session, screen_rows(&[RULE, "❯ half a thought", RULE]));
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(armed(&shell), None);
+        let notice = shell.notice.clone().expect("the refusal is shown");
+        assert!(
+            notice.contains("half a thought"),
+            "it names the draft: {notice}"
+        );
+    }
+
+    #[test]
+    fn a_claude_tab_rename_to_its_current_name_or_to_nothing_arms_nothing() {
+        let (mut shell, _pty, _session) = shell_with_idle_claude();
+        let current = shell.core.workspace.tabs[0].display_title().to_owned();
+        rename_tab_by_hand(&mut shell, 0, &format!("  {current} "));
+        assert_eq!(armed(&shell), None);
+        rename_tab_by_hand(&mut shell, 0, "   ");
+        assert_eq!(armed(&shell), None);
+        assert_eq!(shell.notice, None, "neither is a refusal");
+    }
+
+    const OPEN_ID: &str = "0b6a3c1e-1111-4222-8333-444455556666";
+
+    /// A shell with one idle Claude tab resuming conversation [`OPEN_ID`].
+    fn shell_with_idle_resumed_claude() -> (Shell, SessionId) {
+        let (mut shell, _pty) = empty_shell();
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(termherd_core::ClaudeLaunch::Resume(OPEN_ID.into())),
+        );
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Idle,
+        });
+        shell.screens.insert(session, empty_prompt());
+        (shell, session)
+    }
+
+    #[test]
+    fn renaming_an_open_claude_session_from_the_sidebar_arms_rename() {
+        let (mut shell, _session) = shell_with_idle_resumed_claude();
+        let _ = shell.update(Message::StartRename {
+            session: OPEN_ID.to_owned(),
+            current: "old".to_owned(),
+        });
+        let _ = shell.update(Message::RenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitRename);
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(
+            shell.core.metadata.get(OPEN_ID),
+            None,
+            "no local name is kept for it"
+        );
+    }
+
+    #[test]
+    fn renaming_a_closed_session_from_the_sidebar_stays_local() {
+        let (mut shell, _pty) = empty_shell();
+        let _ = shell.update(Message::StartRename {
+            session: OPEN_ID.to_owned(),
+            current: "old".to_owned(),
+        });
+        let _ = shell.update(Message::RenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitRename);
+
+        assert_eq!(armed(&shell), None);
+        assert_eq!(
+            shell
+                .core
+                .metadata
+                .get(OPEN_ID)
+                .and_then(|meta| meta.title.as_deref()),
+            Some("api work")
+        );
+    }
+
+    #[test]
+    fn the_rename_action_on_a_claude_tab_arms_rename_and_says_so() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(
+            outcome.detail,
+            Some(super::bridge::ActionDetail::ClaudeCommand {
+                line: "/rename api work".to_owned(),
+                overlay: "claude-command-confirm",
+            })
+        );
+
+        let _ = shell.update(Message::CancelClaudeCommand);
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        let (busy, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
+        assert_eq!(
+            busy.error.as_deref(),
+            Some("the session is busy, not idle at its prompt")
+        );
     }
 
     #[test]

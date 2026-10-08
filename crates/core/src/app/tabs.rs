@@ -47,10 +47,7 @@ impl App {
         };
         let title = tab.title.clone();
         let custom_title = tab.custom_title.clone();
-        let Some(first) = tab.sessions().first().copied() else {
-            return;
-        };
-        let Some(session) = self.sessions.get(&first) else {
+        let Some(session) = self.sessions.get(&tab.first_session()) else {
             return;
         };
         let launch = self.reopen_launch(session);
@@ -110,9 +107,11 @@ impl App {
     /// reports only its own product name as an OSC title, which the decoder
     /// discards as naming the program rather than the session, so without this
     /// every resumed tab in a repo would read alike — else the project label.
-    /// A fresh or unscanned session keeps the project label; an OSC title
-    /// still wins later. The kind is not part of the title: the tab chip shows
-    /// it from [`App::tab_kind`], so no retitle or rename can lose it.
+    /// A fresh or unscanned session keeps the project label. This is only the
+    /// label the tab opens with: the tab then follows its conversation's
+    /// scanned and live titles, as [`crate::title`] ranks them. The kind is
+    /// not part of the title: the tab chip shows it from [`App::tab_kind`], so
+    /// no retitle or rename can lose it.
     #[must_use]
     pub fn tab_title(&self, cwd: &str, launch: &Launch) -> String {
         launch
@@ -137,9 +136,7 @@ impl App {
     /// first pane, so that pane's conversation is the one the tab stands for.
     #[must_use]
     pub fn tab_claude_session_id(&self, index: usize) -> Option<&str> {
-        let tab = self.workspace.tabs.get(index)?;
-        let first = tab.sessions().first().copied()?;
-        self.claude_session_id(first)
+        self.claude_session_id(self.workspace.tabs.get(index)?.first_session())
     }
 
     /// The activity status to badge on the tab at `index` (FR8): the most

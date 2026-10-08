@@ -117,6 +117,9 @@ impl Shell {
         if let Some(bar) = self.tab_bar() {
             pane = pane.push(bar);
         }
+        if let Some(notice) = self.notice_bar() {
+            pane = pane.push(notice);
+        }
         if let Some(indicator) = self.recording_indicator() {
             pane = pane.push(indicator);
         }
@@ -239,6 +242,22 @@ impl Shell {
                 }
             })
             .into()
+    }
+
+    /// The notice of a request that did not happen, with its dismiss button.
+    /// `None` when there is nothing to report.
+    fn notice_bar(&self) -> Option<Element<'_, Message>> {
+        let notice = self.notice.as_deref()?;
+        let dismiss = button(text(strings::DISMISS).size(11))
+            .on_press(Message::DismissNotice)
+            .style(button::text)
+            .padding(0);
+        Some(
+            container(row![text(notice).size(12).width(Fill), dismiss].spacing(6))
+                .padding([4, 8])
+                .style(container::bordered_box)
+                .into(),
+        )
     }
 
     /// The `● REC n/cap` indicator shown while a GIF screencast records,

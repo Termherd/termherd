@@ -15,6 +15,7 @@ pub mod paths;
 pub mod ports;
 pub mod record;
 pub mod snapshot;
+pub mod title;
 pub mod workspace;
 
 pub use app::{
