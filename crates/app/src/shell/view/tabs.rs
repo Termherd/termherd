@@ -161,7 +161,7 @@ impl Shell {
         if let Some(reason) = picker.refused() {
             heading.push(card_secondary_line(strings::color_pick_refused(reason)));
         }
-        let lines = ColorPicker::colors().map(|color| {
+        let lines = ColorPicker::colors().iter().map(|&color| {
             row![
                 color_swatch(color),
                 text(strings::color_choice(color)).size(12)

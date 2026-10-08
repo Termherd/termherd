@@ -29,6 +29,10 @@ impl Shell {
     /// resize). A handle that resolves to no live session — or an out-of-range
     /// tab — is rejected before any state is touched.
     pub(super) fn perform_action(&mut self, action: Action) -> (ActionOutcome, Task<Message>) {
+        self.for_a_remote_caller(|shell| shell.perform_action_unguarded(action))
+    }
+
+    fn perform_action_unguarded(&mut self, action: Action) -> (ActionOutcome, Task<Message>) {
         match action {
             Action::Open { project, kind } => self.act_open(project, kind),
             Action::Split { pane, dir } => self.act_split(pane, dir),
@@ -52,13 +56,10 @@ impl Shell {
             return unknown_handle(session);
         };
         match self.arm_claude_command(id, command) {
-            Ok(line) => {
-                self.hold_enter_after_remote_arm();
-                self.applied().with_detail(ActionDetail::ClaudeCommand {
-                    line,
-                    overlay: KeyboardOwner::ClaudeCommand.label(),
-                })
-            }
+            Ok(line) => self.applied().with_detail(ActionDetail::ClaudeCommand {
+                line,
+                overlay: KeyboardOwner::ClaudeCommand.label(),
+            }),
             Err(refusal) => ActionOutcome::rejected(refusal.to_string()),
         }
     }
@@ -327,14 +328,7 @@ impl Shell {
     /// keyboard cannot.
     fn press(&mut self, press: Press) -> (PressStep, Task<Message>) {
         self.drop_stale_lists();
-        let armed_before = self.claude_command.is_some();
-        let pressed = self.press_unguarded(press);
-        // Whatever path armed it — an action, a menu entry, a colour pick —
-        // an agent armed it, and the user beside it has not read it yet.
-        if !armed_before && self.claude_command.is_some() {
-            self.hold_enter_after_remote_arm();
-        }
-        pressed
+        self.for_a_remote_caller(|shell| shell.press_unguarded(press))
     }
 
     fn press_unguarded(&mut self, press: Press) -> (PressStep, Task<Message>) {
