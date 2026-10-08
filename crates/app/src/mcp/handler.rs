@@ -289,7 +289,9 @@ impl TermherdMcp {
                        derived title. A Claude tab's name is Claude's: it arms \
                        `/rename <title>` for confirmation instead, as \
                        `claude_command` does, and is refused when that Claude \
-                       is not idle. Returns the current `focused_handle`."
+                       is not idle; there a blank `title`, or the name the tab \
+                       already shows, arms nothing and changes nothing. \
+                       Returns the current `focused_handle`."
     )]
     async fn rename_tab(
         &self,
@@ -1060,7 +1062,8 @@ struct FocusArgs {
 struct RenameArgs {
     /// 0-based tab index, as `snapshot` reports tab order.
     tab: usize,
-    /// The new manual title; blank reverts to the derived title.
+    /// The new manual title; blank reverts a shell tab to its derived title
+    /// and leaves a Claude tab as it is.
     title: String,
 }
 

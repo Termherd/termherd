@@ -429,7 +429,9 @@ impl Shell {
         // clickable title that resumes the session.
         let middle: Element<'_, Message> = if renaming_this {
             let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
-            text_input(&title, buffer)
+            // The hint is what a blank commit leaves: it clears only the
+            // sidebar's own name.
+            text_input(&self.core.session_title_unnamed_here(s), buffer)
                 .id(rename_id())
                 .on_input(Message::RenameInput)
                 .on_submit(Message::CommitRename)

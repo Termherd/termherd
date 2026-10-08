@@ -97,6 +97,19 @@ impl Tab {
         out
     }
 
+    /// The session in this tab's first (leftmost) pane — the one the tab is
+    /// named after, and whose conversation it stands for.
+    #[must_use]
+    pub fn first_session(&self) -> SessionId {
+        let mut pane = &self.root;
+        loop {
+            match pane {
+                Pane::Leaf(session) => return *session,
+                Pane::Split { a, .. } => pane = a,
+            }
+        }
+    }
+
     /// The session in this tab's focused pane, `None` if the focus path no
     /// longer lands on a leaf.
     #[must_use]
@@ -117,11 +130,9 @@ impl Tab {
     /// conversation: the name it was given, and what it is about. `None` for
     /// either when there is none, which re-exposes the sources beneath it.
     pub fn set_recorded_titles(&mut self, named: Option<&str>, described: Option<&str>) {
-        let named = named.map(str::to_owned);
-        let described = described.map(str::to_owned);
-        if self.titles.named != named || self.titles.described != described {
-            self.titles.named = named;
-            self.titles.described = described;
+        if self.titles.named.as_deref() != named || self.titles.described.as_deref() != described {
+            self.titles.named = named.map(str::to_owned);
+            self.titles.described = described.map(str::to_owned);
             self.resolve_title();
         }
     }
@@ -221,15 +232,19 @@ impl Workspace {
         Some(())
     }
 
-    /// Record the OSC title `session` reported on the tab hosting it — any
-    /// pane of a split speaks for its tab. Returns `None` if no tab hosts the
-    /// session, leaving every title unchanged.
+    /// Record the OSC title `session` reported on the tab hosting it. Only the
+    /// tab's first pane — the one it is named after — speaks for it: a shell
+    /// split beside a Claude would otherwise retitle the Claude's tab with its
+    /// prompt. Returns `None` if no tab hosts the session; a pane that is not
+    /// first is hosted, so it answers `Some` and changes nothing.
     pub fn set_live_title(&mut self, session: SessionId, title: impl Into<String>) -> Option<()> {
         let tab = self
             .tabs
             .iter_mut()
             .find(|tab| tab.sessions().contains(&session))?;
-        tab.set_live_title(title);
+        if tab.first_session() == session {
+            tab.set_live_title(title);
+        }
         Some(())
     }
 
@@ -631,8 +646,11 @@ mod tests {
 
         assert_eq!(ws.set_live_title(sid(1), "renamed"), Some(()));
         assert_eq!(ws.tabs[0].title, "renamed");
-        // Any session in a split tab relabels that tab.
-        assert_eq!(ws.set_live_title(sid(3), "split title"), Some(()));
+        // A tab is named after its first pane: a pane split beside it — a
+        // shell whose prompt sets a title — does not speak for the tab.
+        assert_eq!(ws.set_live_title(sid(3), "zsh"), Some(()));
+        assert_eq!(ws.tabs[1].title, "second");
+        assert_eq!(ws.set_live_title(sid(2), "split title"), Some(()));
         assert_eq!(ws.tabs[1].title, "split title");
         // The untouched tab keeps its title.
         assert_eq!(ws.tabs[0].title, "renamed");

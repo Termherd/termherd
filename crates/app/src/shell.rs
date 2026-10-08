@@ -1115,7 +1115,7 @@ impl Shell {
                     .workspace
                     .tabs
                     .get(index)
-                    .and_then(|tab| tab.sessions().first().copied())
+                    .map(termherd_core::workspace::Tab::first_session)
                 {
                     self.tab_rename = Some((anchor, current));
                     return operate(focusable::focus(tab_rename_id()));
@@ -1248,13 +1248,7 @@ impl Shell {
             }
             Message::CommitRename => match self.renaming.take() {
                 Some((session, title)) => {
-                    if let Some(live) = self.open_claude_to_rename(&session, &title) {
-                        let current = self
-                            .core
-                            .workspace
-                            .session_title(live)
-                            .unwrap_or_default()
-                            .to_owned();
+                    if let Some((live, current)) = self.open_claude_to_rename(&session, &title) {
                         self.rename_through_claude(live, &title, &current);
                         return Task::none();
                     }
@@ -1521,28 +1515,23 @@ impl Shell {
     /// renaming that tab is Claude's to do — see
     /// [`termherd_core::App::tab_names_through_claude`].
     fn claude_named_tab(&self, index: usize) -> Option<(SessionId, String)> {
-        if !self.core.tab_names_through_claude(index) {
-            return None;
-        }
+        let session = self.core.tab_claude_namer(index)?;
         let tab = self.core.workspace.tabs.get(index)?;
-        Some((
-            tab.sessions().first().copied()?,
-            tab.display_title().to_owned(),
-        ))
+        Some((session, tab.display_title().to_owned()))
     }
 
     /// The open tab a sidebar rename of conversation `claude_id` is asked of
-    /// Claude through. A blank rename stays local whatever is open: it only
-    /// clears the name termherd keeps, which is not Claude's to give back.
-    fn open_claude_to_rename(&self, claude_id: &str, title: &str) -> Option<SessionId> {
+    /// Claude through, as [`Self::claude_named_tab`] answers it. A blank
+    /// rename stays local whatever is open: it only clears the name termherd
+    /// keeps, which is not Claude's to give back.
+    fn open_claude_to_rename(&self, claude_id: &str, title: &str) -> Option<(SessionId, String)> {
         if title.trim().is_empty() {
             return None;
         }
         let live = self.core.open_session_for(claude_id)?;
         let index = self.core.workspace.tab_of(live)?;
         self.claude_named_tab(index)
-            .map(|(session, _)| session)
-            .filter(|session| *session == live)
+            .filter(|(session, _)| *session == live)
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -4544,6 +4533,22 @@ mod key_routing {
         }
         let _ = shell.update(Message::Key(enter));
         assert_eq!(pty.writes().len(), 2, "after it, enter confirms");
+    }
+
+    #[test]
+    fn a_physical_enter_right_after_a_remote_rename_is_ignored() {
+        // The rename tool arms the same prompt as `claude_command` and owes the
+        // user the same moment to read it.
+        let (mut shell, pty, _session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
+        assert_eq!(outcome.error, None);
+        let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+        let _ = shell.update(Message::Key(enter));
+        assert!(pty.writes().is_empty(), "swallowed during the grace");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
     }
 
     #[test]

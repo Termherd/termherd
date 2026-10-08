@@ -3,6 +3,8 @@
 
 use crate::browser::SessionRecord;
 use crate::metadata::Overlay;
+use termherd_claude::digest::SessionDigest;
+
 use crate::title::{TitleSources, first_present};
 
 use super::*;
@@ -13,8 +15,12 @@ impl App {
     /// sidebar: the tab re-resolves its title from the same sources.
     pub(super) fn rename_session(&mut self, session: String, title: String) -> Vec<Effect> {
         let trimmed = title.trim().to_owned();
+        let claudes = self
+            .record_for(&session)
+            .and_then(|record| record.digest.custom_title.clone());
         let effects = self.update_meta(session, |meta| {
             meta.title = (!trimmed.is_empty()).then_some(trimmed);
+            meta.title_over = meta.title.is_some().then_some(claudes).flatten();
         });
         self.retitle_tabs();
         effects
@@ -25,32 +31,44 @@ impl App {
     #[must_use]
     pub fn session_title(&self, record: &SessionRecord) -> String {
         let (named, described) = self.recorded_titles(&record.session_id, Some(record));
-        crate::title::resolve(&TitleSources {
-            named,
-            described,
-            ..TitleSources::default()
-        })
-        .to_owned()
+        recorded_title(named, described)
+    }
+
+    /// The title a session would show without termherd's own name for it —
+    /// what clearing that name leaves.
+    #[must_use]
+    pub fn session_title_unnamed_here(&self, record: &SessionRecord) -> String {
+        recorded_title(
+            record.digest.custom_title.as_deref(),
+            described(&record.digest),
+        )
     }
 
     /// The two tiers of [`TitleSources`] a scan and the metadata overlay
-    /// supply for the Claude conversation `claude_id`: the name it was given
-    /// (termherd's own title for it, else Claude's `/rename`), and what its
-    /// transcript says it is about (Claude's AI title, else its first prompt).
+    /// supply for the Claude conversation `claude_id`: the name it was given,
+    /// and what its transcript says it is about (Claude's AI title, else its
+    /// first prompt).
+    ///
+    /// Of the two names — Claude's `/rename` and termherd's own title — the
+    /// one given later wins. termherd's title stands while Claude's name is
+    /// still the one it was given over (see [`SessionMeta::title_over`]),
+    /// and fills in while Claude has none.
     pub(super) fn recorded_titles<'a>(
         &'a self,
         claude_id: &str,
         record: Option<&'a SessionRecord>,
     ) -> (Option<&'a str>, Option<&'a str>) {
-        let local = self
-            .metadata
-            .get(claude_id)
-            .and_then(|meta| meta.title.as_deref());
+        let meta = self.metadata.get(claude_id);
         let digest = record.map(|record| &record.digest);
-        let named = first_present([local, digest.and_then(|d| d.custom_title.as_deref())]);
-        let described =
-            digest.and_then(|d| first_present([d.ai_title.as_deref(), Some(d.summary.as_str())]));
-        (named, described)
+        let claudes = digest.and_then(|d| d.custom_title.as_deref());
+        let local = meta.and_then(|meta| meta.title.as_deref());
+        let local_is_later = meta.is_some_and(|meta| meta.title_over.as_deref() == claudes);
+        let named = if local_is_later {
+            first_present([local, claudes])
+        } else {
+            first_present([claudes, local])
+        };
+        (named, digest.and_then(described))
     }
 
     /// Whether a session (by Claude id) is starred / archived.
@@ -162,6 +180,22 @@ impl App {
         }
         vec![Effect::SaveMetadata(self.overlay())]
     }
+}
+
+/// What a transcript says its conversation is about: Claude's AI title, else
+/// its first prompt.
+fn described(digest: &SessionDigest) -> Option<&str> {
+    first_present([digest.ai_title.as_deref(), Some(digest.summary.as_str())])
+}
+
+/// The sidebar title of the two recorded tiers, with no live or launch tier.
+fn recorded_title(named: Option<&str>, described: Option<&str>) -> String {
+    crate::title::resolve(&TitleSources {
+        named,
+        described,
+        ..TitleSources::default()
+    })
+    .to_owned()
 }
 
 #[cfg(test)]
@@ -417,5 +451,25 @@ mod tests {
             Some("derived summary"),
             "clearing the rename restores the digest name on the open tab"
         );
+    }
+
+    #[test]
+    fn the_title_unnamed_here_is_what_clearing_the_sidebar_name_leaves() {
+        let mut app = App::new();
+        let mut r = record("abc", "/repo", "the first prompt");
+        r.digest.custom_title = Some("claude's".into());
+        app.apply(Event::ScanCompleted(vec![r.clone()]));
+        app.apply(Event::RenameSession {
+            session: "abc".into(),
+            title: "mine".into(),
+        });
+        assert_eq!(app.session_title(&r), "mine");
+        assert_eq!(app.session_title_unnamed_here(&r), "claude's");
+
+        app.apply(Event::RenameSession {
+            session: "abc".into(),
+            title: String::new(),
+        });
+        assert_eq!(app.session_title(&r), "claude's");
     }
 }

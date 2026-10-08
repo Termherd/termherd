@@ -27,25 +27,6 @@ impl App {
         (named.map(str::to_owned), described.map(str::to_owned))
     }
 
-    /// Drop the name termherd keeps locally for `session`'s conversation once
-    /// a `/rename` has been typed into it: the local name outranks Claude's,
-    /// so keeping it would hide the very rename just asked for.
-    pub(super) fn yield_name_to_claude(&mut self, session: SessionId) -> Vec<Effect> {
-        let Some(claude_id) = self.claude_session_id(session).map(str::to_owned) else {
-            return Vec::new();
-        };
-        if self
-            .metadata
-            .get(&claude_id)
-            .is_none_or(|meta| meta.title.is_none())
-        {
-            return Vec::new();
-        }
-        let effects = self.update_meta(claude_id, |meta| meta.title = None);
-        self.retitle_tabs();
-        effects
-    }
-
     /// Give the tab at `index` a local name, unless naming it is Claude's to
     /// do — see [`Self::tab_names_through_claude`].
     pub(super) fn rename_tab(&mut self, index: usize, title: &str) -> Vec<Effect> {
@@ -55,17 +36,24 @@ impl App {
         Vec::new()
     }
 
-    /// Whether renaming the tab at `index` is Claude's to do: its first pane —
-    /// the one a tab is named after — was launched to run Claude. Such a tab
-    /// takes no local name; a rename is asked of Claude with `/rename`.
+    /// Whether renaming the tab at `index` is Claude's to do — see
+    /// [`Self::tab_claude_namer`].
     #[must_use]
     pub fn tab_names_through_claude(&self, index: usize) -> bool {
-        self.workspace
-            .tabs
-            .get(index)
-            .and_then(|tab| tab.sessions().first().copied())
-            .and_then(|first| self.sessions.get(&first))
-            .is_some_and(LiveSession::is_claude_launch)
+        self.tab_claude_namer(index).is_some()
+    }
+
+    /// The pane a rename of the tab at `index` is asked of, with `/rename`:
+    /// its first pane — the one a tab is named after — when that pane runs
+    /// Claude (see [`LiveSession::runs_claude`]). Such a tab takes no local
+    /// name.
+    #[must_use]
+    pub fn tab_claude_namer(&self, index: usize) -> Option<SessionId> {
+        let first = self.workspace.tabs.get(index)?.first_session();
+        self.sessions
+            .get(&first)
+            .is_some_and(LiveSession::runs_claude)
+            .then_some(first)
     }
 }
 
@@ -218,14 +206,71 @@ mod tests {
     }
 
     #[test]
-    fn a_rename_sent_to_claude_drops_the_local_name_that_would_hide_it() {
+    fn claudes_rename_outranks_a_name_kept_in_the_sidebar() {
+        let mut app = App::new();
+        open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
+        app.apply(Event::RenameSession {
+            session: "abc".into(),
+            title: "local".into(),
+        });
+        assert_eq!(title(&app), "local", "until Claude names the session");
+
+        app.apply(Event::ScanCompleted(vec![scanned(
+            "abc",
+            Some("from claude"),
+            None,
+        )]));
+        assert_eq!(title(&app), "from claude");
+        let record = app.record_for("abc").expect("scanned").clone();
+        assert_eq!(app.session_title(&record), "from claude", "and the sidebar");
+    }
+
+    #[test]
+    fn a_sidebar_name_given_over_claudes_stands_until_claude_renames_again() {
+        // The later naming wins: a local name given while Claude already had
+        // one is a deliberate override (two sessions /clear left with the same
+        // title), and a /rename typed after it is too.
+        let mut app = App::new();
+        open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
+        app.apply(Event::ScanCompleted(vec![scanned(
+            "abc",
+            Some("shared"),
+            None,
+        )]));
+        app.apply(Event::RenameSession {
+            session: "abc".into(),
+            title: "mine".into(),
+        });
+        assert_eq!(title(&app), "mine");
+        app.apply(Event::ScanCompleted(vec![scanned(
+            "abc",
+            Some("shared"),
+            None,
+        )]));
+        assert_eq!(
+            title(&app),
+            "mine",
+            "a rescan of the same name changes nothing"
+        );
+
+        app.apply(Event::ScanCompleted(vec![scanned(
+            "abc",
+            Some("renamed"),
+            None,
+        )]));
+        assert_eq!(title(&app), "renamed");
+    }
+
+    #[test]
+    fn typing_a_rename_into_claude_leaves_the_local_name_alone() {
+        // Claude has recorded nothing yet: the local name stands until it
+        // does, and is outranked from then on.
         let mut app = App::new();
         let session = open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
         app.apply(Event::RenameSession {
             session: "abc".into(),
             title: "local".into(),
         });
-        assert_eq!(title(&app), "local");
         app.apply(Event::StatusChanged {
             session,
             status: SessionStatus::Idle,
@@ -237,61 +282,60 @@ mod tests {
             prompt: PromptInput::Empty,
         });
         assert!(
-            effects
-                .iter()
-                .any(|e| matches!(e, Effect::SaveMetadata(overlay) if !overlay.sessions.contains_key("abc"))),
-            "the local name is dropped and the overlay saved: {effects:?}"
+            effects.iter().all(|e| matches!(e, Effect::Write { .. })),
+            "only the keystrokes: {effects:?}"
         );
-        assert_eq!(app.metadata.get("abc"), None);
-        assert_eq!(title(&app), "repo", "until Claude's name is scanned");
-
-        app.apply(Event::ScanCompleted(vec![scanned(
-            "abc",
-            Some("from claude"),
-            None,
-        )]));
-        assert_eq!(title(&app), "from claude");
-    }
-
-    #[test]
-    fn a_rename_claude_refused_keeps_the_local_name() {
-        let mut app = App::new();
-        let session = open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
-        app.apply(Event::RenameSession {
-            session: "abc".into(),
-            title: "local".into(),
-        });
-        app.apply(Event::StatusChanged {
-            session,
-            status: SessionStatus::Busy,
-        });
-
-        let effects = app.apply(Event::SendClaudeCommand {
-            session,
-            command: ClaudeCommand::rename("from claude").expect("a name"),
-            prompt: PromptInput::Empty,
-        });
-        assert!(effects.is_empty());
         assert_eq!(title(&app), "local");
     }
 
+    /// Report `job` in front of `session`'s shell.
+    fn in_front(app: &mut App, session: SessionId, job: Option<ForegroundJob>) {
+        app.apply(Event::ForegroundJobChanged { session, job });
+    }
+
+    fn a_claude_job() -> Option<ForegroundJob> {
+        Some(ForegroundJob {
+            pid: 42,
+            started: None,
+        })
+    }
+
     #[test]
-    fn a_command_other_than_rename_leaves_the_local_name_alone() {
+    fn a_claude_tab_whose_claude_has_exited_is_named_like_a_shell() {
         let mut app = App::new();
-        let session = open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
-        app.apply(Event::RenameSession {
-            session: "abc".into(),
-            title: "local".into(),
-        });
+        let session = open_claude(&mut app, ClaudeLaunch::Fresh(None));
+        in_front(&mut app, session, a_claude_job());
+        assert!(app.tab_names_through_claude(0), "Claude in front");
+
+        in_front(&mut app, session, None);
         app.apply(Event::StatusChanged {
             session,
             status: SessionStatus::Idle,
         });
-        app.apply(Event::SendClaudeCommand {
-            session,
-            command: ClaudeCommand::Desktop,
-            prompt: PromptInput::Empty,
+        assert!(!app.tab_names_through_claude(0), "the shell is back");
+        assert_eq!(
+            app.claude_command_check(session, &PromptInput::Empty),
+            Err(CommandRefusal::NotClaude),
+            "nothing is typed into the shell left behind"
+        );
+        app.apply(Event::RenameTab {
+            index: 0,
+            title: "after claude".into(),
         });
-        assert_eq!(title(&app), "local");
+        assert_eq!(title(&app), "after claude");
+
+        in_front(&mut app, session, a_claude_job());
+        assert!(
+            app.tab_names_through_claude(0),
+            "and Claude's again once something is back in front"
+        );
+    }
+
+    #[test]
+    fn a_pane_that_never_reports_its_foreground_still_names_through_claude() {
+        // ConPTY reports no foreground at all, so the launch stands for it.
+        let mut app = App::new();
+        open_claude(&mut app, ClaudeLaunch::Fresh(None));
+        assert!(app.tab_names_through_claude(0));
     }
 }

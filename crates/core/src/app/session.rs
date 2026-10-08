@@ -50,6 +50,11 @@ pub struct LiveSession {
     /// Outlives the Claude that wrote it, so a conversation re-keyed by
     /// `/clear` is still known by its new id once that Claude has exited.
     pub proven_session_id: Option<String>,
+    /// Whether the adapter has ever reported a job in front of this pane's
+    /// shell. Until it has, an empty [`Self::foreground`] proves nothing —
+    /// ConPTY never reports one — so only after it does can an empty one mean
+    /// the program in front has exited.
+    pub foreground_reported: bool,
 }
 
 /// The job in front of a session's shell, as the PTY adapter reads it.
@@ -99,6 +104,15 @@ impl LiveSession {
     #[must_use]
     pub fn is_claude_launch(&self) -> bool {
         matches!(self.launch, Launch::Claude(_))
+    }
+
+    /// Whether Claude is still what this pane runs: a Claude launch whose
+    /// Claude has not been seen to leave. Once a reported foreground job has
+    /// gone, the pane is back at the shell `claude` was typed into, and a line
+    /// typed there would run as a command.
+    #[must_use]
+    pub fn runs_claude(&self) -> bool {
+        self.is_claude_launch() && (self.foreground.is_some() || !self.foreground_reported)
     }
 
     /// Whether this session still holds a **running foreground process** whose
@@ -375,6 +389,7 @@ impl App {
             foreground: None,
             session_file: None,
             proven_session_id: None,
+            foreground_reported: false,
         });
         self.workspace.open(id, spec.title);
         self.retitle_tabs();
@@ -413,6 +428,7 @@ impl App {
             foreground: None,
             session_file: None,
             proven_session_id: None,
+            foreground_reported: false,
         });
         vec![Effect::Spawn(SpawnSpec {
             session: id,
@@ -447,6 +463,7 @@ impl App {
         job: Option<ForegroundJob>,
     ) -> Vec<Effect> {
         if let Some(live) = self.sessions.get_mut(&session) {
+            live.foreground_reported |= job.is_some();
             live.foreground = job;
             live.remember_proven_id();
         }

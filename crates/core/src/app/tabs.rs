@@ -47,10 +47,7 @@ impl App {
         };
         let title = tab.title.clone();
         let custom_title = tab.custom_title.clone();
-        let Some(first) = tab.sessions().first().copied() else {
-            return;
-        };
-        let Some(session) = self.sessions.get(&first) else {
+        let Some(session) = self.sessions.get(&tab.first_session()) else {
             return;
         };
         let launch = self.reopen_launch(session);
@@ -139,9 +136,7 @@ impl App {
     /// first pane, so that pane's conversation is the one the tab stands for.
     #[must_use]
     pub fn tab_claude_session_id(&self, index: usize) -> Option<&str> {
-        let tab = self.workspace.tabs.get(index)?;
-        let first = tab.sessions().first().copied()?;
-        self.claude_session_id(first)
+        self.claude_session_id(self.workspace.tabs.get(index)?.first_session())
     }
 
     /// The activity status to badge on the tab at `index` (FR8): the most

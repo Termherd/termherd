@@ -75,7 +75,7 @@ impl App {
             .sessions
             .get(&session)
             .ok_or(CommandRefusal::UnknownSession)?;
-        if !live.is_claude_launch() {
+        if !live.runs_claude() {
             return Err(CommandRefusal::NotClaude);
         }
         if live.status != SessionStatus::Idle {
@@ -88,11 +88,9 @@ impl App {
         }
     }
 
-    /// Type `command` into `session` if it can take one now, else nothing. A
-    /// `/rename` typed also gives up the name termherd kept for the session,
-    /// which would otherwise hide Claude's.
+    /// Type `command` into `session` if it can take one now, else nothing.
     pub(super) fn send_claude_command(
-        &mut self,
+        &self,
         session: SessionId,
         command: &ClaudeCommand,
         prompt: &PromptInput,
@@ -100,15 +98,11 @@ impl App {
         if self.claude_command_check(session, prompt).is_err() {
             return Vec::new();
         }
-        let mut effects: Vec<Effect> = command
+        command
             .keystrokes()
             .into_iter()
             .map(|bytes| Effect::Write { session, bytes })
-            .collect();
-        if matches!(command, ClaudeCommand::Rename(_)) {
-            effects.extend(self.yield_name_to_claude(session));
-        }
-        effects
+            .collect()
     }
 }
 

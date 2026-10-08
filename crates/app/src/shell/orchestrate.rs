@@ -52,15 +52,20 @@ impl Shell {
             return unknown_handle(session);
         };
         match self.arm_claude_command(id, command) {
-            Ok(line) => {
-                self.hold_enter_after_remote_arm();
-                self.applied().with_detail(ActionDetail::ClaudeCommand {
-                    line,
-                    overlay: KeyboardOwner::ClaudeCommand.label(),
-                })
-            }
+            Ok(line) => self.armed_remotely(line),
             Err(refusal) => ActionOutcome::rejected(refusal.to_string()),
         }
+    }
+
+    /// The outcome of a prompt a remote caller just armed, showing `line`.
+    /// Every remote arm goes through here, so none skips the moment a physical
+    /// Enter is ignored for: the user at the keyboard has not read it yet.
+    fn armed_remotely(&mut self, line: String) -> ActionOutcome {
+        self.hold_enter_after_remote_arm();
+        self.applied().with_detail(ActionDetail::ClaudeCommand {
+            line,
+            overlay: KeyboardOwner::ClaudeCommand.label(),
+        })
     }
 
     /// Add a repo to the sidebar. The path is normalised first — the caller may
@@ -178,10 +183,7 @@ impl Shell {
         }
         if let Some((session, current)) = self.claude_named_tab(tab) {
             let outcome = match self.ask_claude_to_rename(session, &title, &current) {
-                Ok(Some(line)) => self.applied().with_detail(ActionDetail::ClaudeCommand {
-                    line,
-                    overlay: KeyboardOwner::ClaudeCommand.label(),
-                }),
+                Ok(Some(line)) => self.armed_remotely(line),
                 Ok(None) => self.applied(),
                 Err(why) => ActionOutcome::rejected(why),
             };

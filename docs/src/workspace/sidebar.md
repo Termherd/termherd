@@ -116,9 +116,11 @@ All three are an **overlay**: they are written to
 sidebar changes what the Claude CLI sees, with one exception: renaming a
 session that is **open in a Claude tab** asks Claude to rename it, with
 `/rename`, exactly as renaming its tab does (see
-[Tabs and splits](./tabs-and-splits.md)). Once that is typed, the name the
-sidebar kept for the session is dropped, so Claude's shows. Clearing the field
-still only removes the sidebar's own name.
+[Tabs and splits](./tabs-and-splits.md)). Clearing the field still only
+removes the sidebar's own name, and the greyed-out hint shows the title that
+leaves. Between a name given here and Claude's own `/rename`, the later one
+shows: a rename here outranks the name Claude had, until Claude is renamed
+again.
 
 ## Density
 
