@@ -66,11 +66,11 @@ and does nothing when no Claude runs there or it has not written one yet.
 Windows reports no foreground process to a terminal, so there it never finds
 one. Bind it yourself; it has no default.
 
-`send-to-desktop` asks to type `/desktop` into the Claude in the focused
-pane, which hands the session to the Claude desktop app. A prompt shows the
-exact line first: <kbd>Enter</kbd> types it, <kbd>Escape</kbd> drops it. It
-does nothing unless that Claude is idle at its prompt. Bind it yourself; it has
-no default.
+`send-to-desktop` asks to type `/desktop` into the Claude in the focused pane,
+which hands the session to the Claude desktop app. A prompt shows the exact line
+first: <kbd>Enter</kbd> types it, <kbd>Escape</kbd> drops it. It does nothing
+unless that Claude is idle with nothing typed in its prompt. Bind it yourself;
+it has no default.
 
 Zoom-in binds three chords because `=` is the unshifted face of the `+` key on
 QWERTY and the unshifted key on AZERTY; between them the same gesture works

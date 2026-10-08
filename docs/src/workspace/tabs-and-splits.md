@@ -68,8 +68,9 @@ them, so the colour is never the only cue: the hover card names it
 **TermHerd asks Claude rather than overriding it.** Where a change belongs to
 Claude — today, handing a session to the desktop app with `send-to-desktop` —
 TermHerd types Claude's own slash command for you, behind a prompt that shows
-the exact line first. <kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops
-it. It is offered only while that Claude is idle at its prompt.
+the exact line first. <kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops it.
+It is offered only while that Claude is idle with nothing typed in its prompt; a
+draft that appears meanwhile keeps the prompt open and says so.
 
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on

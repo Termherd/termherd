@@ -5,25 +5,32 @@
 //! its colour); when termherd wants to change one, it asks Claude by typing the
 //! command a user would. Everything that decides *what* gets typed lives here,
 //! pure: the catalogue, how an argument is made safe to type, and the exact
-//! bytes. *Whether* it may be typed now (the session is a Claude, and idle) is
+//! bytes. Reading Claude's prompt off the screen is the codec's
+//! ([`read_prompt`]).
+//! *Whether* it may be typed now is
 //! [`App::claude_command_check`](crate::App::claude_command_check).
 
 use std::fmt;
 
-pub use termherd_claude::color::ClaudeColor;
+use unicode_segmentation::UnicodeSegmentation;
 
-/// The longest argument typed, in characters. A name is a label, not a
-/// paragraph; past this the input is more likely a stray paste than a name.
-pub const MAX_ARGUMENT_CHARS: usize = 80;
+pub use termherd_claude::color::ClaudeColor;
+pub use termherd_claude::prompt::{PromptInput, read_prompt};
+
+/// The longest argument typed, in grapheme clusters — what a reader counts as
+/// characters. A name is a label, not a paragraph; past this the input is more
+/// likely a stray paste than a name.
+pub const MAX_ARGUMENT_GRAPHEMES: usize = 80;
 
 /// Ctrl+U: Claude Code's prompt deletes from the cursor to the start of the
-/// line. Sent first so a half-typed draft is not prefixed to the command.
+/// line.
 ///
-/// It clears the line the cursor is on, which is the whole draft when the draft
-/// is one line and the cursor sits at its end — the usual case. Escape and
-/// Ctrl+C were rejected: on an empty prompt a double Escape opens Claude's
-/// rewind menu and a double Ctrl+C exits it, so either could act on a state the
-/// user left a moment ago.
+/// Not what keeps a draft out of the command — that is refusing unless the
+/// screen shows the prompt empty ([`read_prompt`]), since Ctrl+U clears only
+/// the line the cursor is on. It stays as a guard against a keystroke landing
+/// between the screen read and the write. Escape and Ctrl+C were rejected: on
+/// an empty prompt a double Escape opens Claude's rewind menu and a double
+/// Ctrl+C exits it.
 pub const CLEAR_DRAFT: &[u8] = b"\x15";
 
 /// Enter, as a terminal sends it. Written on its own, after the line, so the
@@ -71,7 +78,8 @@ impl CommandArgument {
     /// - runs of whitespace collapse to one space, and the ends are trimmed;
     /// - a trailing backslash goes, since `\` then Enter is how Claude's prompt
     ///   inserts a newline instead of submitting;
-    /// - the result is cut to [`MAX_ARGUMENT_CHARS`].
+    /// - the result is cut to [`MAX_ARGUMENT_GRAPHEMES`], on a grapheme
+    ///   boundary, so no accent or flag is left half typed.
     ///
     /// # Errors
     ///
@@ -83,7 +91,10 @@ impl CommandArgument {
             .map(|c| if breaks_line(c) { ' ' } else { c })
             .collect();
         let collapsed = spaced.split_whitespace().collect::<Vec<_>>().join(" ");
-        let cut: String = collapsed.chars().take(MAX_ARGUMENT_CHARS).collect();
+        let cut: String = collapsed
+            .graphemes(true)
+            .take(MAX_ARGUMENT_GRAPHEMES)
+            .collect();
         let clean = cut.trim_end_matches(|c: char| c == '\\' || c.is_whitespace());
         if clean.is_empty() {
             return Err(CommandError::EmptyArgument);
@@ -105,10 +116,23 @@ fn breaks_line(c: char) -> bool {
 
 /// Whether `c` renders as nothing while still changing how the text reads —
 /// what would let the confirmation show one line and type another.
+///
+/// The joiners (ZWJ, ZWNJ) and variation selectors are kept: they are invisible
+/// too, but they are how an emoji sequence or a Persian or Indic name is
+/// spelled, and dropping them would rename the session to something else.
 fn is_invisible_format(c: char) -> bool {
     matches!(
         c,
-        '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+        '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'
+            | '\u{200E}'
+            | '\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2069}'
+            | '\u{FEFF}'
+            | '\u{E0000}'..='\u{E007F}'
     )
 }
 
@@ -192,6 +216,22 @@ mod tests {
     fn invisible_formatting_is_dropped_so_the_shown_line_is_the_typed_one() {
         assert_eq!(renamed("ab\u{202E}cd"), "/rename abcd");
         assert_eq!(renamed("a\u{200B}b\u{FEFF}"), "/rename ab");
+        assert_eq!(renamed("so\u{00AD}ft"), "/rename soft", "soft hyphen");
+        assert_eq!(renamed("a\u{061C}b"), "/rename ab", "Arabic letter mark");
+        assert_eq!(
+            renamed("tag\u{E0041}\u{E007F}"),
+            "/rename tag",
+            "tag characters"
+        );
+    }
+
+    #[test]
+    fn joiners_and_variation_selectors_are_part_of_a_name_and_stay() {
+        let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+        assert_eq!(renamed(family), format!("/rename {family}"));
+        let persian = "\u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0645}";
+        assert_eq!(renamed(persian), format!("/rename {persian}"));
+        assert_eq!(renamed("\u{2764}\u{FE0F}"), "/rename \u{2764}\u{FE0F}");
     }
 
     #[test]
@@ -215,13 +255,19 @@ mod tests {
     }
 
     #[test]
-    fn a_long_name_is_cut_on_a_character_not_a_byte() {
-        let long = "é".repeat(MAX_ARGUMENT_CHARS + 10);
-        let line = renamed(&long);
-        assert_eq!(
-            line.trim_start_matches("/rename ").chars().count(),
-            MAX_ARGUMENT_CHARS
-        );
+    fn a_long_name_is_cut_on_a_grapheme_not_inside_one() {
+        // `e` + combining acute: two chars, one grapheme. A char cut would
+        // leave the accent of the last one behind, or drop it.
+        let accented = "e\u{0301}";
+        let long = accented.repeat(MAX_ARGUMENT_GRAPHEMES + 10);
+        let name = renamed(&long).trim_start_matches("/rename ").to_owned();
+        assert_eq!(name, accented.repeat(MAX_ARGUMENT_GRAPHEMES));
+
+        // A flag is two regional indicators; a cut between them would type
+        // half a flag.
+        let flags = "\u{1F1EB}\u{1F1F7}".repeat(MAX_ARGUMENT_GRAPHEMES + 1);
+        let name = renamed(&flags).trim_start_matches("/rename ").to_owned();
+        assert_eq!(name.chars().count(), 2 * MAX_ARGUMENT_GRAPHEMES);
     }
 
     #[test]
@@ -244,7 +290,7 @@ mod tests {
             prop_assert!(!line.chars().any(is_invisible_format), "{line:?}");
             prop_assert!(!line.ends_with('\\') && !line.ends_with(' '), "{line:?}");
             prop_assert!(
-                line.chars().count() <= "/rename ".len() + MAX_ARGUMENT_CHARS
+                line.graphemes(true).count() <= "/rename ".len() + MAX_ARGUMENT_GRAPHEMES
             );
             let [typed, enter] = command.keystrokes();
             prop_assert!(!typed.contains(&b'\r') && !typed.contains(&b'\n'));

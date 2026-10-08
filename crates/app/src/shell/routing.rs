@@ -128,6 +128,10 @@ pub(super) enum KeyVerdict {
     /// An open overlay consumed it — acted on it or swallowed it. Carries
     /// [`KeyboardOwner::label`].
     Overlay(&'static str),
+    /// An overlay's confirmation was refused, so the prompt stays open and
+    /// nothing it promised happened. Carries the label and the reason — told
+    /// `overlay` instead, a caller would believe the confirmed action ran.
+    Refused(&'static str, String),
     /// A bound keymap action ran; carries its config name.
     Ran(String),
     /// A bound keymap action changed nothing, and why. Kept apart from
@@ -146,15 +150,23 @@ pub(super) enum KeyVerdict {
 /// swallowed so it can't reach the terminal beneath the prompt.
 fn classify_confirm(event: &keyboard::Event) -> ConfirmKey {
     if is_escape(event) {
-        return ConfirmKey::Cancel;
+        ConfirmKey::Cancel
+    } else if is_enter(event) {
+        ConfirmKey::Confirm
+    } else {
+        ConfirmKey::Swallow
     }
-    match event {
+}
+
+/// Enter, the key every confirmation answers yes to.
+pub(super) fn is_enter(event: &keyboard::Event) -> bool {
+    matches!(
+        event,
         keyboard::Event::KeyPressed {
             key: Key::Named(Named::Enter),
             ..
-        } => ConfirmKey::Confirm,
-        _ => ConfirmKey::Swallow,
-    }
+        }
+    )
 }
 
 /// Escape, the one key every overlay must answer: it is how a caller with no
@@ -308,10 +320,7 @@ impl Shell {
     /// alongside the work it produced — see [`KeyVerdict`].
     pub(super) fn on_key(&mut self, event: keyboard::Event) -> (KeyVerdict, Task<Message>) {
         match self.keyboard_owner() {
-            Some(owner) => (
-                KeyVerdict::Overlay(owner.label()),
-                self.overlay_key(owner, &event),
-            ),
+            Some(owner) => self.overlay_key(owner, &event),
             None => self.terminal_key(event),
         }
     }
@@ -349,17 +358,22 @@ impl Shell {
     /// Hand one key press to the overlay that owns the keyboard. The key is
     /// consumed either way — acted on or swallowed — and never leaks to the
     /// terminal beneath the prompt.
-    fn overlay_key(&mut self, owner: KeyboardOwner, event: &keyboard::Event) -> Task<Message> {
-        match owner {
+    fn overlay_key(
+        &mut self,
+        owner: KeyboardOwner,
+        event: &keyboard::Event,
+    ) -> (KeyVerdict, Task<Message>) {
+        let task = match owner {
             KeyboardOwner::TabRename => self.tab_rename_key(event),
             KeyboardOwner::SessionRename => self.session_rename_key(event),
             KeyboardOwner::Quit => self.quit_confirm_key(event),
             KeyboardOwner::TabClose(index) => self.tab_close_confirm_key(event, index),
             KeyboardOwner::Archive => self.archive_confirm_key(event),
-            KeyboardOwner::ClaudeCommand => self.claude_command_key(event),
+            KeyboardOwner::ClaudeCommand => return self.claude_command_key(event),
             KeyboardOwner::Settings => self.settings_key(event),
             KeyboardOwner::Doc => self.open_doc_key(event),
-        }
+        };
+        (KeyVerdict::Overlay(owner.label()), task)
     }
 
     /// Escape abandons a tab rename; Enter and a blur commit it elsewhere, so
@@ -416,12 +430,24 @@ impl Shell {
 
     /// Enter types the armed command and Escape drops it, both answered here
     /// rather than by a widget, so a synthesised key event reaches them too.
-    fn claude_command_key(&mut self, event: &keyboard::Event) -> Task<Message> {
-        match classify_confirm(event) {
-            ConfirmKey::Confirm => self.confirm_claude_command(),
+    /// A confirmation that typed nothing answers [`KeyVerdict::Refused`]; the
+    /// prompt stays open.
+    fn claude_command_key(&mut self, event: &keyboard::Event) -> (KeyVerdict, Task<Message>) {
+        let label = KeyboardOwner::ClaudeCommand.label();
+        let task = match classify_confirm(event) {
+            ConfirmKey::Confirm => match self.confirm_claude_command() {
+                Ok(task) => task,
+                Err(refusal) => {
+                    return (
+                        KeyVerdict::Refused(label, refusal.to_string()),
+                        Task::none(),
+                    );
+                }
+            },
             ConfirmKey::Cancel => self.cancel_claude_command(),
             ConfirmKey::Swallow => Task::none(),
-        }
+        };
+        (KeyVerdict::Overlay(label), task)
     }
 
     /// Escape closes the settings panel; it has no text field, so every other
