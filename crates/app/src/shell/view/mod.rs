@@ -262,11 +262,21 @@ impl Shell {
     }
 }
 
+/// The hover-card line naming a tab's Claude, dimmed like the other
+/// secondary lines.
+pub(super) fn agent_line(name: &str) -> Element<'static, Message> {
+    text(strings::agent_name(name))
+        .size(10)
+        .style(card_secondary_text)
+        .into()
+}
+
 /// The hover card for a session row: full title, a muted line with relative
 /// last activity and message count, then the last few transcript lines so a
 /// duplicate-looking session is recognisable without opening it.
 pub(super) fn session_card(
     title: String,
+    agent: Option<String>,
     session: &SessionRecord,
     now: SystemTime,
 ) -> Element<'static, Message> {
@@ -285,6 +295,9 @@ pub(super) fn session_card(
         text(meta).size(10).style(card_secondary_text)
     ]
     .spacing(4);
+    if let Some(agent) = agent {
+        card = card.push(agent_line(&agent));
+    }
     for line in &session.digest.tail {
         card = card.push(
             text(format!("› {line}"))

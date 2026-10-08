@@ -932,6 +932,7 @@ impl Shell {
                 let effects = self
                     .core
                     .apply(termherd_core::Event::ForegroundJobChanged { session, job });
+                self.refresh_session_file(session);
                 self.perform(effects)
             }
             Message::PtyNotify { session, body } => {
@@ -1069,6 +1070,9 @@ impl Shell {
                 {
                     drag.over = index;
                 }
+                // The pointer entering a chip is also the hover that opens its
+                // card: Claude may have written or renamed its file since.
+                self.refresh_tab_session_files(index);
                 Task::none()
             }
             Message::TabDragEnd => match self.tab_drag.take() {
@@ -1342,6 +1346,48 @@ impl Shell {
             Message::RecordFrame(screenshot) => self.record.on_frame(screenshot),
             Message::Bridge { request, reply } => self.serve(request, reply),
         }
+    }
+
+    /// The peer name of the Claude in front of the focused pane, its session
+    /// file read afresh.
+    pub(crate) fn focused_agent_name(&mut self) -> Option<String> {
+        let session = self.core.workspace.focused_session()?;
+        self.refresh_session_file(session);
+        self.core.peer_name(session)
+    }
+
+    /// Re-read the session file of every pane in the tab at `index`.
+    fn refresh_tab_session_files(&mut self, index: usize) {
+        let sessions = self
+            .core
+            .workspace
+            .tabs
+            .get(index)
+            .map(|tab| tab.sessions())
+            .unwrap_or_default();
+        for session in sessions {
+            self.refresh_session_file(session);
+        }
+    }
+
+    /// Re-read Claude's session file for the job in front of `session` into
+    /// `core`'s cache, which the hover card reads without touching the disk.
+    fn refresh_session_file(&mut self, session: SessionId) {
+        let file = self
+            .core
+            .sessions
+            .get(&session)
+            .and_then(|live| live.foreground.as_ref())
+            .and_then(|job| self.session_file(job.pid));
+        let effects = self
+            .core
+            .apply(termherd_core::Event::SessionFileRead { session, file });
+        // Callers here hold no `Task` to carry an effect out with, so an effect
+        // this event starts emitting must fail the tests rather than vanish.
+        debug_assert!(
+            effects.is_empty(),
+            "SessionFileRead now emits effects: route them through `perform`"
+        );
     }
 
     /// Put the terminal selection on the clipboard (FR4). `None` when there is
@@ -1694,6 +1740,137 @@ mod key_routing {
             "a launched terminal should be focused"
         );
         (shell, pty)
+    }
+
+    const STARTED: &str = "Wed Oct  7 06:48:07 2026";
+
+    /// Write Claude's session file for `pid` under `name` into `dir`.
+    fn write_session_file(dir: &std::path::Path, pid: u32, name: &str) {
+        std::fs::write(
+            dir.join(format!("{pid}.json")),
+            format!(r#"{{"pid":{pid},"name":"{name}","procStart":"{STARTED}"}}"#),
+        )
+        .expect("write session file");
+    }
+
+    /// A shell reading session files from `dir`, one shell tab open and
+    /// focused; `pid`, when given, is reported in front of it.
+    fn shell_reading_sessions_from(dir: &std::path::Path, pid: Option<u32>) -> (Shell, SessionId) {
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let mut shell = Shell::new(
+            WindowConfig::default(),
+            Ports {
+                claude_sessions: Some(dir.to_path_buf()),
+                ..test_ports(Arc::new(RecordingPty::default()), rx)
+            },
+            test_live_bridge(),
+            test_startup(),
+        );
+        let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
+        let session = shell.core.workspace.focused_session().expect("focused");
+        if let Some(pid) = pid {
+            let _ = shell.update(Message::PtyForegroundJob {
+                session,
+                job: Some(termherd_core::ForegroundJob {
+                    pid,
+                    started: Some(STARTED.to_owned()),
+                }),
+            });
+        }
+        (shell, session)
+    }
+
+    #[test]
+    fn copy_agent_name_runs_with_the_focused_claudes_name_and_refuses_without() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+
+        let (none, _task) = shell.perform_presses(vec![Press::Command(Action::CopyAgentName)]);
+        assert_eq!(
+            none.steps,
+            vec![inert("copy-agent-name", "no-context")],
+            "a job with no session file is no Claude to name"
+        );
+        assert_eq!(shell.focused_agent_name(), None);
+
+        write_session_file(dir.path(), 4399, "termherd-b0");
+        assert_eq!(shell.focused_agent_name().as_deref(), Some("termherd-b0"));
+        let (ran, _task) = shell.perform_presses(vec![Press::Command(Action::CopyAgentName)]);
+        assert_eq!(
+            ran.steps,
+            vec![PressStep::Ran("copy-agent-name".to_owned())]
+        );
+    }
+
+    #[test]
+    fn copy_agent_name_reads_the_file_afresh() {
+        // Claude rewrites its name in place, so a cached one may be stale.
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_session_file(dir.path(), 4399, "termherd-b0");
+        let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+        write_session_file(dir.path(), 4399, "knowledge-hub-35");
+
+        assert_eq!(
+            shell.focused_agent_name().as_deref(),
+            Some("knowledge-hub-35")
+        );
+    }
+
+    #[test]
+    fn a_new_job_in_front_is_named_from_its_session_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_session_file(dir.path(), 4399, "termherd-b0");
+        let (shell, session) = shell_reading_sessions_from(dir.path(), Some(4399));
+
+        assert_eq!(
+            shell.core.peer_name(session).as_deref(),
+            Some("termherd-b0")
+        );
+    }
+
+    #[test]
+    fn hovering_a_tab_rereads_its_session_file() {
+        // The file appears after the job does: Claude writes it once started.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut shell, session) = shell_reading_sessions_from(dir.path(), Some(4399));
+        write_session_file(dir.path(), 4399, "termherd-b0");
+        assert_eq!(shell.core.peer_name(session), None, "not read yet");
+
+        let _ = shell.update(Message::TabDragOver(0));
+        assert_eq!(
+            shell.core.peer_name(session).as_deref(),
+            Some("termherd-b0")
+        );
+        assert!(shell.tab_drag.is_none(), "a hover starts no drag");
+    }
+
+    #[test]
+    fn hovering_a_split_tab_rereads_every_pane_and_copy_names_the_focused_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut shell, first) = shell_reading_sessions_from(dir.path(), Some(4399));
+        let _ = shell.run_action(Action::SplitVertical);
+        let second = shell.core.workspace.focused_session().expect("focused");
+        assert_ne!(first, second, "the split focused a new pane");
+        let _ = shell.update(Message::PtyForegroundJob {
+            session: second,
+            job: Some(termherd_core::ForegroundJob {
+                pid: 4400,
+                started: Some(STARTED.to_owned()),
+            }),
+        });
+        write_session_file(dir.path(), 4399, "termherd-b0");
+        write_session_file(dir.path(), 4400, "knowledge-hub-35");
+
+        let _ = shell.update(Message::TabDragOver(0));
+        assert_eq!(shell.core.peer_name(first).as_deref(), Some("termherd-b0"));
+        assert_eq!(
+            shell.core.peer_name(second).as_deref(),
+            Some("knowledge-hub-35")
+        );
+        assert_eq!(
+            shell.focused_agent_name().as_deref(),
+            Some("knowledge-hub-35")
+        );
     }
 
     #[test]
@@ -2678,6 +2855,8 @@ mod key_routing {
             // Told `ran`, an agent would follow with `paste` and paste whatever
             // was on the clipboard before.
             (Action::Copy, "copy"),
+            // No pane, so no Claude whose name could be copied.
+            (Action::CopyAgentName, "copy-agent-name"),
         ] {
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(

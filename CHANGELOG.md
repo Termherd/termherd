@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (copy a session's agent name)
+
+- A `copy-agent-name` action, unbound by default, copies the peer name Claude
+  Code gives the focused session (`termherd-b0`, the name `/list-agents`
+  shows), read afresh from `~/.claude/sessions/<pid>.json`. With no Claude in
+  front it does nothing, and reports `inert` / `no-context` over MCP. The tab
+  hover card gains an `Agent:` line with the same name. Nothing is named on
+  Windows, where ConPTY reports no foreground process (#339).
+
 ## [0.1.0-prerelease.5] - 2026-09-26
 
 ### Fixed (the copy chord no longer overwrites a program's own copy)

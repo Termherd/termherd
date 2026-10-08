@@ -91,7 +91,7 @@ pub(super) enum Inertia {
     NoSurface,
     /// The action is wired, but refused before acting because a precondition was
     /// absent — no focused session to derive a repo from, no closed tab to
-    /// reopen, nothing to scroll.
+    /// reopen, nothing to scroll, nothing selected to copy, no agent name.
     ///
     /// Deliberately narrower than "had no visible effect": an action whose event
     /// `core` applies and absorbs (a tab index past the open tabs) *did* run, and
@@ -184,6 +184,10 @@ impl Shell {
     pub(super) fn run_action(&mut self, action: Action) -> Result<Task<Message>, Inertia> {
         Ok(match action {
             Action::Copy => self.copy_selection().ok_or(Inertia::NoContext)?,
+            Action::CopyAgentName => self
+                .focused_agent_name()
+                .map(iced::clipboard::write)
+                .ok_or(Inertia::NoContext)?,
             Action::Paste => iced::clipboard::read().map(Message::Paste),
             Action::NextTab => self.cycle_tab(1).ok_or(Inertia::NoContext)?,
             Action::PrevTab => self.cycle_tab(-1).ok_or(Inertia::NoContext)?,

@@ -202,14 +202,7 @@ impl App {
             Event::CopyTerminalSelection { session } => {
                 self.if_live(session, Effect::CopyTerminalSelection { session })
             }
-            Event::StatusChanged { session, status } => {
-                if let Some(s) = self.sessions.get_mut(&session)
-                    && s.status != SessionStatus::Exited
-                {
-                    s.status = status;
-                }
-                Vec::new()
-            }
+            Event::StatusChanged { session, status } => self.status_changed(session, status),
             Event::PtyExited { session, clean } => self.pty_exited(session, clean),
             Event::SessionTitleChanged { session, title } => {
                 self.workspace.set_session_title(session, title);
@@ -224,6 +217,7 @@ impl App {
             Event::ForegroundJobChanged { session, job } => {
                 self.foreground_job_changed(session, job)
             }
+            Event::SessionFileRead { session, file } => self.session_file_read(session, file),
             Event::ActivateTab(index) => {
                 self.workspace.activate(index);
                 Vec::new()

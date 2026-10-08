@@ -70,6 +70,13 @@ pub fn session_meta(age: Option<&str>, count: u32) -> String {
     }
 }
 
+/// The card line naming the Claude in a tab by the peer name other Claude
+/// sessions address it by.
+#[must_use]
+pub fn agent_name(name: &str) -> String {
+    format!("Agent: {name}")
+}
+
 // --- Confirmations ---
 pub const CANCEL: &str = "Cancel";
 pub const CLOSE: &str = "Close";
@@ -124,3 +131,15 @@ pub const SETTINGS_CLOSE: &str = "Close";
 pub const SETTINGS_SAVED_NOTE: &str = "Changes apply now and are saved to settings.json.";
 pub const SETTINGS_CLAUDE_NOTE: &str =
     "A running Claude session keeps its own light or dark look until it restarts.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_agent_line_carries_the_name_itself() {
+        // The card's line is the only place a human reads the name, so a label
+        // that dropped it would leave a bare "Agent:" nothing else catches.
+        assert!(agent_name("termherd-b0").ends_with("termherd-b0"));
+    }
+}

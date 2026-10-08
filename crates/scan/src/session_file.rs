@@ -11,7 +11,7 @@ use termherd_claude::session_file::{self, SessionFile};
 use tracing::debug;
 
 /// Far above the ~500 bytes Claude Code writes, far below what would stall the
-/// GUI thread that reads it on every `snapshot`.
+/// GUI thread that reads it on every `snapshot`, tab hover and agent-name copy.
 pub const MAX_SESSION_FILE_BYTES: u64 = 16 * 1024;
 
 /// The session file of process `pid` under `dir`, decoded.

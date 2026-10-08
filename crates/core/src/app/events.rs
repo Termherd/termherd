@@ -10,6 +10,7 @@ use crate::browser::SessionRecord;
 use crate::metadata::Overlay;
 use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
+use termherd_claude::session_file::SessionFile;
 
 use super::{
     ForegroundJob, LaunchSpec, PathRequest, PointerEvent, ResolvedPath, ScrollTarget, SelectOp,
@@ -96,6 +97,12 @@ pub enum Event {
     ForegroundJobChanged {
         session: SessionId,
         job: Option<ForegroundJob>,
+    },
+    /// The shell read Claude's session file for the job in front of
+    /// `session`: the file, or `None` when there was none to read.
+    SessionFileRead {
+        session: SessionId,
+        file: Option<SessionFile>,
     },
     /// The user clicked a tab to bring it to the front (FR5).
     ActivateTab(usize),

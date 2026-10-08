@@ -6,8 +6,10 @@
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
+use super::snapshot::identity_of;
 use crate::snapshot::SessionKind;
 use crate::workspace::SplitDir;
+use termherd_claude::session_file::SessionFile;
 
 use super::*;
 
@@ -40,6 +42,10 @@ pub struct LiveSession {
     /// ([`Event::ForegroundJobChanged`]). `None` at the prompt and wherever the
     /// platform has no foreground process group (ConPTY).
     pub foreground: Option<ForegroundJob>,
+    /// Claude's session file for the job in front, as the shell last read it
+    /// ([`Event::SessionFileRead`]). Only a cache: whether it names this job
+    /// is decided on every read, so a stale one names nobody.
+    pub session_file: Option<SessionFile>,
 }
 
 /// The job in front of a session's shell, as the PTY adapter reads it.
@@ -287,6 +293,7 @@ impl App {
             launch: spec.launch.clone(),
             status: SessionStatus::Starting,
             foreground: None,
+            session_file: None,
         });
         self.workspace.open(id, spec.title);
         vec![Effect::Spawn(SpawnSpec {
@@ -322,6 +329,7 @@ impl App {
             launch: Launch::Shell,
             status: SessionStatus::Starting,
             foreground: None,
+            session_file: None,
         });
         vec![Effect::Spawn(SpawnSpec {
             session: id,
@@ -331,6 +339,21 @@ impl App {
             rows: DEFAULT_ROWS,
             mcp: None,
         })]
+    }
+
+    /// Record `session`'s new activity. An exited session stays exited: a late
+    /// report from its dying terminal must not revive it.
+    pub(super) fn status_changed(
+        &mut self,
+        session: SessionId,
+        status: SessionStatus,
+    ) -> Vec<Effect> {
+        if let Some(s) = self.sessions.get_mut(&session)
+            && s.status != SessionStatus::Exited
+        {
+            s.status = status;
+        }
+        Vec::new()
     }
 
     /// Record the job now in front of `session`'s shell. Unknown sessions are
@@ -344,6 +367,27 @@ impl App {
             live.foreground = job;
         }
         Vec::new()
+    }
+
+    /// Cache the session file the shell just read for `session`'s job, or its
+    /// absence. Unknown sessions are ignored.
+    pub(super) fn session_file_read(
+        &mut self,
+        session: SessionId,
+        file: Option<SessionFile>,
+    ) -> Vec<Effect> {
+        if let Some(live) = self.sessions.get_mut(&session) {
+            live.session_file = file;
+        }
+        Vec::new()
+    }
+
+    /// The peer name of the Claude in front of `session`, from the cached
+    /// session file, by the same proof the snapshot applies.
+    #[must_use]
+    pub fn peer_name(&self, session: SessionId) -> Option<String> {
+        let live = self.sessions.get(&session)?;
+        identity_of(live.foreground.as_ref(), live.session_file.as_ref()).peer_name
     }
 
     /// A session's PTY ended. A *clean* exit — the user typed `exit` at a

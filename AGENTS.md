@@ -89,6 +89,16 @@ TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app   # second instance
 `temp_dir()` honours `$TMPDIR`, so both run. Launch detached when you need to
 keep interacting with the original window (e.g. to compare quit behaviour).
 
+**A build an agent launches is not a build a user launches.** The agent's shell
+carries its own Claude session's `CLAUDE*` variables (`CLAUDECODE`,
+`CLAUDE_CODE_CHILD_SESSION`, the session id and messaging socket), and termherd
+passes its whole environment on to every PTY. A Claude started in that build
+then wrote no `~/.claude/sessions/<pid>.json`, so nothing it hosted could be
+named: the agent-name copy read as broken in manual testing and worked at once
+from a plain terminal. Until termherd strips those variables (#356), verify
+anything that reads Claude's session files from a build the user starts in an
+ordinary terminal.
+
 **`cargo test` used to need `env -u ZDOTDIR` when run from inside a termherd
 shell — it no longer does.** That shell exports
 `ZDOTDIR=$TMPDIR/termherd-shell-<id>`, which a nested termherd read as the
@@ -224,10 +234,11 @@ got.
 responses: `no-surface` means the action is wired to nothing, so retrying is
 pointless (`open-new-session` is the one), while `no-context` means a
 precondition was absent — nothing focused to derive a repo from, no closed tab
-to reopen, nothing to scroll, nothing selected to copy — which the caller can go
-and *create* before trying again. Seven handlers can refuse that way, and each
-says so at its own refusal (they return `Option`), so no predicate here has to
-re-derive the list.
+to reopen, nothing to scroll, nothing selected to copy, no Claude agent name to
+copy — which the caller can go and *create* before trying again (except the
+agent name on Windows, where none is ever found). Every handler that can refuse
+that way says so at its own refusal (they return `Option`), so no predicate
+here has to re-derive the list.
 
 The line is whether the shell refused, **not** whether the effect was
 interesting: `activate-tab-9` on a single-tab workspace reports `ran`, because

@@ -55,9 +55,12 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing yet (`open-new-session` is the one) | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, nothing to scroll, nothing selected to copy | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, nothing to scroll, nothing selected to copy, no Claude agent name to copy | **create it**, then retry |
 
-Seven handlers can refuse this way, and each says so at its own refusal site.
+Each handler that can refuse this way says so at its own refusal site.
+
+`copy-agent-name` is the one `no-context` nothing can create on Windows:
+ConPTY reports no foreground process, so no Claude there is ever named.
 
 `copy` refuses on the terminal's own answer: it holds a selection or it does
 not, wherever that selection has scrolled to. An MCP drag in a `forwarded`

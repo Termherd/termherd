@@ -103,8 +103,9 @@ impl Shell {
                         current: tab.display_title().to_owned(),
                     });
                 // The chip clips the title; hovering reveals the fuller
-                // description — the very session card the sidebar shows when the
-                // tab resumes a browsed session, else a minimal title + cwd card.
+                // description — the sidebar's session card, plus the agent line,
+                // when the tab resumes a browsed session, else a minimal title +
+                // cwd card.
                 tooltip(
                     chip,
                     self.tab_hover_card(index, tab, now),
@@ -127,7 +128,7 @@ impl Shell {
     }
 
     /// The hover card for a tab. A tab that resumes a browsed session
-    /// shows the *same* [`session_card`] the sidebar does — one derive (the core
+    /// shows the [`session_card`] the sidebar does, plus its agent — one derive (the core
     /// resolves the record via [`termherd_core::App::tab_record`]), no divergent
     /// formatting. A shell or a fresh, not-yet-scanned session has no record, so
     /// it falls back to a minimal card with the full title and the working
@@ -138,15 +139,15 @@ impl Shell {
         tab: &Tab,
         now: SystemTime,
     ) -> Element<'static, Message> {
+        let first = tab.sessions().first().copied();
+        let agent = first.and_then(|id| self.core.peer_name(id));
         match self.core.tab_record(index) {
-            Some(record) => session_card(self.core.session_title(record), record, now),
+            Some(record) => session_card(self.core.session_title(record), agent, record, now),
             None => {
-                let cwd = tab
-                    .sessions()
-                    .first()
-                    .and_then(|id| self.core.sessions.get(id))
+                let cwd = first
+                    .and_then(|id| self.core.sessions.get(&id))
                     .and_then(|s| s.cwd.clone());
-                tab_card(tab.display_title().to_owned(), cwd)
+                tab_card(tab.display_title().to_owned(), agent, cwd)
             }
         }
     }
@@ -204,8 +205,15 @@ fn insertion_caret<'a>() -> Element<'a, Message> {
 /// The minimal hover card for a tab with no browsed record — a shell or a fresh
 /// session: the full, untruncated title and the working directory it runs
 /// in. Styled like [`session_card`] so the two hover surfaces read alike.
-fn tab_card(title: String, cwd: Option<String>) -> Element<'static, Message> {
+fn tab_card(
+    title: String,
+    agent: Option<String>,
+    cwd: Option<String>,
+) -> Element<'static, Message> {
     let mut card = column![text(title).size(12)].spacing(4);
+    if let Some(agent) = agent {
+        card = card.push(super::agent_line(&agent));
+    }
     if let Some(cwd) = cwd {
         card = card.push(text(cwd).size(10).style(card_secondary_text));
     }
