@@ -192,6 +192,9 @@ impl Shell {
             Action::NextTab => self.cycle_tab(1).ok_or(Inertia::NoContext)?,
             Action::PrevTab => self.cycle_tab(-1).ok_or(Inertia::NoContext)?,
             Action::CloseFocused => self.close_focused_pane().ok_or(Inertia::NoContext)?,
+            Action::RenameTab => self
+                .start_tab_rename(self.core.workspace.active)
+                .ok_or(Inertia::NoContext)?,
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))

@@ -22,7 +22,15 @@ Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 | `new-claude-session-here` | `mod+alt+t` | new Claude session in that directory |
 | `reopen-closed-tab` | `mod+shift+t` | reopen the tab you just closed |
 | `close-focused` | `mod+w` | close the focused pane; a lone pane closes its tab |
+| `rename-tab` | `mod+shift+i` | rename the focused tab, as a double-click does |
 | `open-new-session` | *(unbound)* | reserved — no surface yet |
+
+`rename-tab` opens the same inline field a double-click on the tab opens,
+filled with the tab's current name: <kbd>Enter</kbd> keeps the edit,
+<kbd>Escape</kbd> drops it. Its chord is Terminal.app's *Edit Title* on macOS;
+on Windows and Linux <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> reaches a
+program in the terminal as the same byte as <kbd>Ctrl</kbd>+<kbd>I</kbd>, which
+is <kbd>Tab</kbd>, so claiming it takes nothing away from that program.
 
 `activate-tab-N` is matched by **physical key position**, so it lands on the
 same keys on AZERTY and QWERTZ, where the number row produces `&`, `é`, …

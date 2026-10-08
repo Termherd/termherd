@@ -234,9 +234,10 @@ got.
 responses: `no-surface` means the action is wired to nothing, so retrying is
 pointless (`open-new-session` is the one), while `no-context` means a
 precondition was absent — nothing focused to derive a repo from, no closed tab
-to reopen, nothing to scroll, nothing selected to copy, no Claude agent name to
-copy — which the caller can go and *create* before trying again (except the
-agent name on Windows, where none is ever found). Every handler that can refuse
+to reopen, no tab to rename, nothing to scroll, nothing selected to copy, no
+Claude agent name to copy — which the caller can go and *create* before trying
+again (except the agent name on Windows, where none is ever found). Every
+handler that can refuse
 that way says so at its own refusal (they return `Option`), so no predicate
 here has to re-derive the list.
 

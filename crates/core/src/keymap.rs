@@ -25,11 +25,7 @@ pub const NUMBER_ROW_TABS: usize = 9;
 /// is the modifier the number-row tab jumps bind to by default.
 #[must_use]
 pub const fn primary_mod() -> u8 {
-    if cfg!(target_os = "macos") {
-        MOD_CMD
-    } else {
-        MOD_CTRL
-    }
+    Platform::current().primary_mod()
 }
 
 /// A key plus its modifiers — the left-hand side of a binding. `key` is a
@@ -127,6 +123,9 @@ pub enum Action {
     /// Copy the focused Claude's peer name, the one other Claude sessions
     /// address it by. Inert when no Claude in front of it has written one.
     CopyAgentName,
+    /// Open the inline rename of the focused tab, seeded with its shown title.
+    /// Inert when no tab is open.
+    RenameTab,
     /// Jump the focused terminal's viewport to the top of its scrollback.
     ScrollTop,
     /// Jump the focused terminal's viewport back to the live bottom.
@@ -283,6 +282,14 @@ const ACTIONS: &[ActionDef] = &[
         name: "new-shell-here",
         default_chords: &["mod+t"],
     },
+    // Terminal.app binds its "Edit Title" to ⌘⇧I. Elsewhere Ctrl+Shift+I
+    // reaches a legacy-encoded program as the same byte as Ctrl+I (Tab), so
+    // claiming it takes no key away from anything running in a pane.
+    ActionDef {
+        action: Action::RenameTab,
+        name: "rename-tab",
+        default_chords: &["mod+shift+i"],
+    },
     ActionDef {
         action: Action::NewClaudeSessionHere,
         name: "new-claude-session-here",
@@ -413,13 +420,39 @@ fn activate_tab_from_config_name(name: &str) -> Option<Action> {
 /// platform primary modifier so one spec serves both ⌘ and Ctrl. Returns `None`
 /// on a malformed spec; specs are authored in-tree and a test asserts they all
 /// parse, so `None` never reaches a real keymap (and `core` forbids panicking).
-fn default_chord(spec: &str) -> Option<KeyChord> {
-    let primary = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
+fn default_chord(spec: &str, platform: Platform) -> Option<KeyChord> {
+    let primary = match platform {
+        Platform::MacOs => "cmd",
+        Platform::Other => "ctrl",
     };
     KeyChord::parse(&spec.replace("mod", primary)).ok()
+}
+
+/// Which family of default bindings to build. A parameter rather than a
+/// `cfg!` read inside [`Keymap::defaults`], so a test on one OS can check the
+/// other's bindings too — a chord collision on Windows is otherwise invisible
+/// from a Mac.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Platform {
+    MacOs,
+    Other,
+}
+
+impl Platform {
+    const fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Other
+        }
+    }
+
+    const fn primary_mod(self) -> u8 {
+        match self {
+            Self::MacOs => MOD_CMD,
+            Self::Other => MOD_CTRL,
+        }
+    }
 }
 
 /// Resolves a [`KeyChord`] to its [`Action`]. Built from platform-aware
@@ -441,6 +474,10 @@ impl Keymap {
     /// platforms keep plain Ctrl+C/V as the terminal interrupt/literal and use
     /// Ctrl+Shift+C for copy — so they are bound explicitly here.
     pub fn defaults() -> Self {
+        Self::defaults_for(Platform::current())
+    }
+
+    fn defaults_for(platform: Platform) -> Self {
         let mut map = Keymap {
             bindings: HashMap::new(),
         };
@@ -450,14 +487,14 @@ impl Keymap {
                 .default_chords
                 .iter()
                 .copied()
-                .filter_map(default_chord)
+                .filter_map(|spec| default_chord(spec, platform))
                 .collect();
             if !chords.is_empty() {
                 map.set(def.action, chords);
             }
         }
         // Copy/paste are platform-irregular: see the note above.
-        if cfg!(target_os = "macos") {
+        if platform == Platform::MacOs {
             map.set(Action::Copy, [KeyChord::new("c", MOD_CMD)]);
             map.set(Action::Paste, [KeyChord::new("v", MOD_CMD)]);
         } else {
@@ -475,7 +512,7 @@ impl Keymap {
         for n in 1..=NUMBER_ROW_TABS {
             map.set(
                 Action::ActivateTab(n - 1),
-                [KeyChord::new(n.to_string(), primary_mod())],
+                [KeyChord::new(n.to_string(), platform.primary_mod())],
             );
         }
         map
@@ -650,7 +687,7 @@ mod tests {
         for def in ACTIONS {
             for spec in def.default_chords {
                 assert!(
-                    default_chord(spec).is_some(),
+                    default_chord(spec, Platform::current()).is_some(),
                     "default chord spec `{spec}` for {:?} must parse",
                     def.action
                 );
@@ -798,6 +835,44 @@ mod tests {
             Action::from_config_name("toggle-record"),
             Some(Action::ToggleRecord)
         );
+    }
+
+    #[test]
+    fn defaults_bind_rename_tab_to_the_primary_modifier_shift_i_on_every_platform() {
+        assert_eq!(
+            Keymap::defaults_for(Platform::MacOs).lookup(&KeyChord::new("i", MOD_CMD | MOD_SHIFT)),
+            Some(Action::RenameTab)
+        );
+        assert_eq!(
+            Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new("i", MOD_CTRL | MOD_SHIFT)),
+            Some(Action::RenameTab)
+        );
+        assert_eq!(
+            Action::from_config_name("rename-tab"),
+            Some(Action::RenameTab)
+        );
+    }
+
+    #[test]
+    fn no_default_chord_is_claimed_by_two_actions_on_either_platform() {
+        // `set` overwrites silently, so a collision shows only as one action
+        // losing its chord to whichever was bound later — the copy/paste and
+        // number-row bindings included, since they are set after the table.
+        // Both platforms, because a Ctrl-only collision is invisible from a Mac.
+        for platform in [Platform::MacOs, Platform::Other] {
+            let map = Keymap::defaults_for(platform);
+            for def in ACTIONS {
+                for spec in def.default_chords {
+                    let chord = default_chord(spec, platform).expect("specs parse");
+                    assert_eq!(
+                        map.lookup(&chord),
+                        Some(def.action),
+                        "`{spec}` of `{}` is taken by another action on {platform:?}",
+                        def.name
+                    );
+                }
+            }
+        }
     }
 
     #[test]

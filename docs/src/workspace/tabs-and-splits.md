@@ -28,6 +28,7 @@ terminal, or many, split vertically and horizontally.
 | New Claude session here | <kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> |
 | Reopen the tab you closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 | Close focused pane | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>W</kbd> |
+| Rename the focused tab | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> |
 
 **Jump-to-tab is matched by physical key position**, not by the character the
 key produces. On AZERTY and QWERTZ, where the number row produces `&`, `é`, …
@@ -43,6 +44,11 @@ session's fuller description — the card the sidebar shows. When a Claude
 runs in it, the card also names its agent (`Agent: termherd-b0`), the peer
 name other Claude sessions address it by; the `copy-agent-name` action puts
 it on the clipboard. In a split tab, the card names the first pane's agent.
+
+**Rename a tab** by double-clicking it, or with the `rename-tab` chord for the
+focused one. Either opens an inline field holding the tab's current name;
+<kbd>Enter</kbd> or a click elsewhere keeps the edit, <kbd>Escape</kbd> drops
+it, and an empty name gives the tab back its derived title.
 
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on

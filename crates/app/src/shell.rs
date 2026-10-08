@@ -486,12 +486,9 @@ enum Message {
     /// reorder at the last slot hovered, else it was a plain click that
     /// activates the pressed tab.
     TabDragEnd,
-    /// Begin renaming a tab inline (double-click its chip), seeded with the
-    /// title currently shown.
-    StartTabRename {
-        index: usize,
-        current: String,
-    },
+    /// Begin renaming the tab at this index inline (double-click its chip),
+    /// seeded with the title currently shown.
+    StartTabRename(usize),
     /// The inline tab-rename field's text changed.
     TabRenameInput(String),
     /// Commit the tab rename (Enter, or a blur onto another interaction).
@@ -1087,21 +1084,8 @@ impl Shell {
                 Some(TabDrag { from, .. }) => self.activate_tab(from),
                 None => Task::none(),
             },
-            Message::StartTabRename { index, current } => {
-                // Anchor on the tab's first session so the edit survives a
-                // reorder; every tab hosts at least one, so this is `Some` for a
-                // valid index.
-                if let Some(anchor) = self
-                    .core
-                    .workspace
-                    .tabs
-                    .get(index)
-                    .and_then(|tab| tab.sessions().first().copied())
-                {
-                    self.tab_rename = Some((anchor, current));
-                    return operate(focusable::focus(tab_rename_id()));
-                }
-                Task::none()
+            Message::StartTabRename(index) => {
+                self.start_tab_rename(index).unwrap_or_else(Task::none)
             }
             Message::TabRenameInput(value) => {
                 if let Some((_, buffer)) = &mut self.tab_rename {
@@ -1444,6 +1428,19 @@ impl Shell {
             bytes: termherd_pty::paste_bytes(&text, bracketed),
         });
         self.perform(effects)
+    }
+
+    /// Open the inline rename of the tab at `index`, seeded with its shown
+    /// title so the edit starts from the name it replaces. `None` when there is
+    /// no such tab.
+    ///
+    /// The edit anchors on the tab's first session rather than its index, so
+    /// it survives a reorder while open.
+    fn start_tab_rename(&mut self, index: usize) -> Option<Task<Message>> {
+        let tab = self.core.workspace.tabs.get(index)?;
+        let anchor = tab.sessions().first().copied()?;
+        self.tab_rename = Some((anchor, tab.display_title().to_owned()));
+        Some(operate(focusable::focus(tab_rename_id())))
     }
 
     /// Apply the pending tab rename to the core and clear the edit. The core's
@@ -2857,6 +2854,8 @@ mod key_routing {
             (Action::Copy, "copy"),
             // No pane, so no Claude whose name could be copied.
             (Action::CopyAgentName, "copy-agent-name"),
+            // No tab, so no title to edit.
+            (Action::RenameTab, "rename-tab"),
         ] {
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
@@ -2865,6 +2864,56 @@ mod key_routing {
                 "{name} refused, so it must not report `ran`"
             );
         }
+    }
+
+    #[test]
+    fn the_rename_tab_chord_opens_the_focused_tabs_rename_seeded_with_its_title() {
+        let mut shell = shell_with_three_tabs();
+        let _ = shell.activate_tab(1);
+        let shown = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let step = press_chord(&mut shell, &mod_spec("shift+i"));
+
+        assert_eq!(step, PressStep::Ran("rename-tab".to_owned()));
+        let (anchor, buffer) = shell.tab_rename.clone().expect("renaming");
+        assert_eq!(
+            shell.core.workspace.tab_of(anchor),
+            Some(1),
+            "the focused tab"
+        );
+        assert_eq!(buffer, shown, "the field opens on the name it replaces");
+    }
+
+    #[test]
+    fn a_rename_opened_by_the_action_owns_the_keyboard_until_escape() {
+        // The sequence an agent runs: open the rename, find a second press
+        // answered by the field rather than by the keymap, then leave it.
+        let mut shell = shell_with_three_tabs();
+        let shown = shell.core.workspace.tabs[shell.core.workspace.active]
+            .display_title()
+            .to_owned();
+
+        let (outcome, _task) = shell.perform_presses(vec![
+            Press::Command(Action::RenameTab),
+            Press::Command(Action::RenameTab),
+        ]);
+        assert_eq!(
+            outcome.steps,
+            vec![
+                PressStep::Ran("rename-tab".to_owned()),
+                PressStep::Overlay("tab-rename".to_owned()),
+            ]
+        );
+
+        assert_eq!(
+            press_chord(&mut shell, "escape"),
+            PressStep::Overlay("tab-rename".to_owned())
+        );
+        assert!(shell.tab_rename.is_none(), "escape leaves the field");
+        assert_eq!(
+            shell.core.workspace.tabs[shell.core.workspace.active].display_title(),
+            shown
+        );
     }
 
     #[test]
@@ -3896,17 +3945,11 @@ mod key_routing {
         let mut shell = shell_with_three_tabs();
         let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived.clone(),
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         // The edit anchors on tab 1's session, so it resolves back to index 1.
-        let anchor = shell
-            .tab_rename
-            .as_ref()
-            .map(|(a, _)| *a)
-            .expect("renaming");
+        let (anchor, seed) = shell.tab_rename.clone().expect("renaming");
         assert_eq!(shell.core.workspace.tab_of(anchor), Some(1));
+        assert_eq!(seed, derived, "the field opens on the name it replaces");
 
         let _ = shell.update(Message::TabRenameInput("My work".to_string()));
         let _ = shell.update(Message::CommitTabRename);
@@ -3920,10 +3963,7 @@ mod key_routing {
         let mut shell = shell_with_three_tabs();
         let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived.clone(),
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         let _ = shell.update(Message::TabRenameInput("half-typed".to_string()));
         let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
 
@@ -4239,8 +4279,7 @@ mod key_routing {
     fn arm_overlay(shell: &mut Shell, owner: KeyboardOwner) {
         match owner {
             KeyboardOwner::TabRename => {
-                let current = shell.core.workspace.tabs[0].display_title().to_owned();
-                let _ = shell.update(Message::StartTabRename { index: 0, current });
+                let _ = shell.update(Message::StartTabRename(0));
             }
             KeyboardOwner::SessionRename => {
                 let _ = shell.update(Message::StartRename {
@@ -4268,12 +4307,8 @@ mod key_routing {
     #[test]
     fn pressing_another_tab_commits_the_rename_but_the_double_clicks_own_drag_does_not() {
         let mut shell = shell_with_three_tabs();
-        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived,
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         let _ = shell.update(Message::TabRenameInput("Renamed".to_string()));
 
         // The double-click that opened the edit still emits TabDragStart(1) /
@@ -4297,10 +4332,7 @@ mod key_routing {
         let mut shell = shell_with_three_tabs();
         let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived.clone(),
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         let _ = shell.update(Message::TabRenameInput("   ".to_string()));
         let _ = shell.update(Message::CommitTabRename);
 
@@ -4314,14 +4346,10 @@ mod key_routing {
     #[test]
     fn committing_an_unchanged_tab_name_leaves_the_title_dynamic() {
         let mut shell = shell_with_three_tabs();
-        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
         // Open the editor (seeded with the shown title) and commit without
         // editing — an accidental double-click + Enter.
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived,
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         let _ = shell.update(Message::CommitTabRename);
 
         // No override is stored, so the tab keeps tracking its derived title
@@ -4335,12 +4363,8 @@ mod key_routing {
     #[test]
     fn a_genuine_interaction_elsewhere_commits_a_pending_tab_rename() {
         let mut shell = shell_with_three_tabs();
-        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived,
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         let _ = shell.update(Message::TabRenameInput("Renamed".to_string()));
 
         // Starring a sidebar session is a real blur — it dismisses a session
@@ -4354,11 +4378,7 @@ mod key_routing {
     #[test]
     fn a_pending_tab_rename_follows_its_tab_across_a_reorder() {
         let mut shell = shell_with_three_tabs();
-        let derived = shell.core.workspace.tabs[2].display_title().to_owned();
-        let _ = shell.update(Message::StartTabRename {
-            index: 2,
-            current: derived,
-        });
+        let _ = shell.update(Message::StartTabRename(2));
         let _ = shell.update(Message::TabRenameInput("Pinned".to_string()));
         let anchor = shell
             .tab_rename

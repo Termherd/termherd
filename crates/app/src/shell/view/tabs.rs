@@ -98,10 +98,7 @@ impl Shell {
                 let chip = mouse_area(chip)
                     .on_press(Message::TabDragStart(index))
                     .on_enter(Message::TabDragOver(index))
-                    .on_double_click(Message::StartTabRename {
-                        index,
-                        current: tab.display_title().to_owned(),
-                    });
+                    .on_double_click(Message::StartTabRename(index));
                 // The chip clips the title; hovering reveals the fuller
                 // description — the sidebar's session card, plus the agent line,
                 // when the tab resumes a browsed session, else a minimal title +
