@@ -185,7 +185,8 @@ impl TermherdMcp {
                        the session-browser sidebar, and the open tabs with their \
                        panes (each pane's stable handle, kind, cwd, status, and \
                        for a pane running Claude its pid, peer_name and \
-                       session_id). Light \
+                       session_id, and the color its /color set — the \
+                       /color name, or null). Light \
                        by default — no terminal text. Args (all optional): \
                        `sections` (any of \"config\", \"sidebar\", \"tabs\"; omit \
                        for all), `terminals` (session handles to include screen \

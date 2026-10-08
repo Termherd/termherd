@@ -10,9 +10,9 @@ use std::time::SystemTime;
 use iced::widget::canvas::Canvas;
 use iced::widget::{button, column, container, mouse_area, row, text};
 use iced::{Border, Color, Element, Fill, Length, Size};
-use termherd_core::SessionRecord;
 use termherd_core::browser::relative_age;
 use termherd_core::workspace::{Pane, SessionId, SplitDir};
+use termherd_core::{ClaudeColor, SessionRecord};
 
 use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD};
 use super::ime::ime_area;
@@ -271,12 +271,21 @@ pub(super) fn agent_line(name: &str) -> Element<'static, Message> {
         .into()
 }
 
+/// The hover-card line naming a session's colour, dimmed like the agent line.
+pub(super) fn color_line(color: ClaudeColor) -> Element<'static, Message> {
+    text(strings::session_color(color.name()))
+        .size(10)
+        .style(card_secondary_text)
+        .into()
+}
+
 /// The hover card for a session row: full title, a muted line with relative
 /// last activity and message count, then the last few transcript lines so a
 /// duplicate-looking session is recognisable without opening it.
 pub(super) fn session_card(
     title: String,
     agent: Option<String>,
+    color: Option<ClaudeColor>,
     session: &SessionRecord,
     now: SystemTime,
 ) -> Element<'static, Message> {
@@ -298,12 +307,8 @@ pub(super) fn session_card(
     if let Some(agent) = agent {
         card = card.push(agent_line(&agent));
     }
-    if let Some(color) = session.digest.agent_color {
-        card = card.push(
-            text(strings::session_color(color.name()))
-                .size(10)
-                .style(card_secondary_text),
-        );
+    if let Some(color) = color {
+        card = card.push(color_line(color));
     }
     for line in &session.digest.tail {
         card = card.push(

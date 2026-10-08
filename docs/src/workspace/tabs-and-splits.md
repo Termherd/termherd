@@ -63,7 +63,8 @@ coloured Claude leaves the tab uncoloured.
 
 The eight colours are tuned for each theme, but red and green are both among
 them, so the colour is never the only cue: the hover card names it
-(`Colour: green`). A shell tab has no colour yet.
+(`Colour: green`) — in a split, the colour the outline shows, the focused
+pane's. A shell tab has no colour yet.
 
 **TermHerd asks Claude rather than overriding it.** Where a change belongs to
 Claude — today, handing a session to the desktop app with `send-to-desktop` —

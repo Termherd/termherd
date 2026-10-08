@@ -130,14 +130,13 @@ impl App {
     /// one the last scan has not found yet.
     #[must_use]
     pub fn tab_record(&self, index: usize) -> Option<&SessionRecord> {
-        let first = self
-            .workspace
-            .tabs
-            .get(index)?
-            .sessions()
-            .first()
-            .copied()?;
-        self.session_record(first)
+        self.session_record(self.tab_first_session(index)?)
+    }
+
+    /// The first pane of the tab at `index` — the one a tab is named after.
+    #[must_use]
+    pub fn tab_first_session(&self, index: usize) -> Option<SessionId> {
+        self.workspace.tabs.get(index)?.sessions().first().copied()
     }
 
     /// The Claude session id of the tab at `index`: its first pane's, as
@@ -145,9 +144,7 @@ impl App {
     /// first pane, so that pane's conversation is the one the tab stands for.
     #[must_use]
     pub fn tab_claude_session_id(&self, index: usize) -> Option<&str> {
-        let tab = self.workspace.tabs.get(index)?;
-        let first = tab.sessions().first().copied()?;
-        self.claude_session_id(first)
+        self.claude_session_id(self.tab_first_session(index)?)
     }
 
     /// The activity status to badge on the tab at `index` (FR8): the most
@@ -619,6 +616,25 @@ mod tests {
         assert_eq!(app.tab_color(0), None, "the focused shell has no colour");
         app.apply(Event::FocusPrevPane);
         assert_eq!(app.tab_color(0), Some(ClaudeColor::Red));
+    }
+
+    #[test]
+    fn a_split_tabs_colour_is_its_focused_panes_even_when_its_record_is_coloured() {
+        // The hover card describes the first pane's record but must name the
+        // colour the outline shows, which is the focused pane's.
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "abc",
+            Some(ClaudeColor::Red),
+        )]));
+        let first = resume(&mut app, "abc");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        assert_eq!(app.tab_first_session(0), Some(first));
+        assert_eq!(
+            app.tab_record(0).and_then(|r| r.digest.agent_color),
+            Some(ClaudeColor::Red)
+        );
+        assert_eq!(app.tab_color(0), None);
     }
 
     #[test]

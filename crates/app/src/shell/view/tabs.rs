@@ -147,15 +147,21 @@ impl Shell {
         tab: &Tab,
         now: SystemTime,
     ) -> Element<'static, Message> {
-        let first = tab.sessions().first().copied();
+        let first = self.core.tab_first_session(index);
         let agent = first.and_then(|id| self.core.peer_name(id));
+        // The colour the outline shows (the focused pane's), not the record's:
+        // in a split the two can differ, and the name is the cue that must
+        // match what is drawn.
+        let color = self.core.tab_color(index);
         match self.core.tab_record(index) {
-            Some(record) => session_card(self.core.session_title(record), agent, record, now),
+            Some(record) => {
+                session_card(self.core.session_title(record), agent, color, record, now)
+            }
             None => {
                 let cwd = first
                     .and_then(|id| self.core.sessions.get(&id))
                     .and_then(|s| s.cwd.clone());
-                tab_card(tab.display_title().to_owned(), agent, cwd)
+                tab_card(tab.display_title().to_owned(), agent, color, cwd)
             }
         }
     }
@@ -228,11 +234,15 @@ fn insertion_caret<'a>() -> Element<'a, Message> {
 fn tab_card(
     title: String,
     agent: Option<String>,
+    color: Option<ClaudeColor>,
     cwd: Option<String>,
 ) -> Element<'static, Message> {
     let mut card = column![text(title).size(12)].spacing(4);
     if let Some(agent) = agent {
         card = card.push(super::agent_line(&agent));
+    }
+    if let Some(color) = color {
+        card = card.push(super::color_line(color));
     }
     if let Some(cwd) = cwd {
         card = card.push(text(cwd).size(10).style(card_secondary_text));
