@@ -172,8 +172,9 @@ as empty, so a draft spelling exactly that shape is the one case read wrong.
 
 A prompt armed by this tool **ignores a physical Enter for 600 ms**: someone
 typing in another pane when it appears would otherwise confirm it with the
-Enter that ends their own line. `escape`, and `enter` sent through
-`press_keys`, are never held back.
+Enter that ends their own line. So does one armed by a `press_keys` or
+`run_action` call — `send-to-desktop`, or a pick in the tab colour list.
+`escape`, and `enter` sent through `press_keys`, are never held back.
 
 A name is made safe before it is shown: control characters, line breaks and
 tabs become spaces, invisible formatting characters are dropped, a trailing

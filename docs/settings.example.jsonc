@@ -187,6 +187,7 @@
   //   close-focused             mod+W
   //   rename-tab                mod+Shift+I (inline rename of the focused tab)
   //   open-tab-menu             mod+. / mod+Shift+. (the focused tab's menu)
+  //   pick-tab-color            (unbound) the focused tab's colour list
   //   reopen-closed-tab         mod+Shift+T
   //   new-shell-here            mod+T
   //   new-claude-session-here   mod+Alt+T

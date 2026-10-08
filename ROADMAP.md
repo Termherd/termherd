@@ -96,7 +96,6 @@ issues #18–#29.
 | [F-repo-remove](#f-repo-remove) | feature | sidebar | ☐ | Take a project or repository out of the sidebar, durably and explicitly. |
 | [F-repo-view](#f-repo-view) | feature | sidebar, sessions | ☐ | A per-repository surface to browse and manage one repo's sessions. |
 | [F-scheduled-tasks](#f-scheduled-tasks) | feature | sessions | ☐ | Launch a session on a schedule rather than on a click. |
-| [F-session-accent-colors](#f-session-accent-colors) | feature | workspace, sidebar | ☐ | A per-session accent on its tab, sidebar row and pane border. |
 | [F-session-grid](#f-session-grid) | feature | workspace | ☐ | A layout preset over the pane model. |
 | [F-session-reveal](#f-session-reveal) | feature | sessions, workspace | ☐ | Reveal a session's directory and transcript in the OS file manager. |
 | [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
@@ -117,6 +116,7 @@ issues #18–#29.
 | [F-mcp-snapshot](#f-mcp-snapshot) | feature | mcp, workspace | ✅ | The perception rung: a filterable, light-by-default view of the whole app. |
 | [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) | feature | mcp, workspace | ✅ | One model, two readers: the capture dump is now the MCP snapshot. |
 | [F-mcp-terminal-sync](#f-mcp-terminal-sync) | feature | mcp, terminal | ✅ | The wait rung: block until a session's status settles, then read its text. |
+| [F-session-accent-colors](#f-session-accent-colors) | feature | workspace, sidebar | ✅ | A per-session accent on its tab, sidebar row and pane border. |
 | [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ✅ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
 | [F-tab-kind-icon](#f-tab-kind-icon) | feature | workspace | ✅ | A kind mark beside each tab's status dot, instead of a glyph in its title. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
@@ -1170,33 +1170,6 @@ Never scoped beyond the name. Adjacent to
 [F-mcp-agent-loop](#f-mcp-agent-loop), which drives a session without a human;
 this one would decide *when*.
 
-<a id="f-session-accent-colors"></a>
-
-### F-session-accent-colors
-
-A per-session accent on its tab, sidebar row and pane border.
-
-Per-session visual accents: a colour on a session's tab chip, sidebar row and
-pane border, so parallel sessions are distinguishable at a glance. Chrome
-accents, not grid colours — sibling of, but separate from,
-`F-terminal-palette`. The kind is shown by
-[F-tab-kind-icon](#f-tab-kind-icon), so colour stays free for the session.
-
-Scoped into two slices. For a Claude tab the colour is the one Claude Code's
-`/color` set — the last `agent-color` entry in the transcript — with no local
-copy (#342). Picking a colour sends `/color` to a Claude tab through
-[F-claude-command](#f-claude-command) and stores it on a shell tab, which
-Claude knows nothing of (#343). Both use the same eight-colour palette as
-`/color`.
-
-Slice 1 shipped (#342): the digest keeps the last `agent-color` value, an
-open tab follows it at the next rescan, and the focused pane decides a split
-tab. A Claude tab is outlined and its sidebar row barred in the colour, and
-the hover card names it — the cue for anyone who cannot tell red from green.
-The MCP `snapshot` reports it per pane. The pane border is not coloured yet.
-Slice 2 (#343) is still to do. Torture report:
-`.personal/feature-torture/reports/F-session-accent-colors.md`.
-
 <a id="f-session-grid"></a>
 
 ### F-session-grid
@@ -1655,6 +1628,39 @@ is not an error — the tool reports `{ status, timed_out: true }` with the
 session's current status, so an agent can choose between waiting again and
 giving up. Bounds are the caller's: `timeout_ms` (default 30 s) capped at 5 min
 (Q7). Depends on #193; unblocks #196
+
+<a id="f-session-accent-colors"></a>
+
+### F-session-accent-colors
+
+A per-session accent on its tab, sidebar row and pane border.
+
+Per-session visual accents: a colour on a session's tab chip, sidebar row and
+pane border, so parallel sessions are distinguishable at a glance. Chrome
+accents, not grid colours — sibling of, but separate from,
+`F-terminal-palette`. The kind is shown by
+[F-tab-kind-icon](#f-tab-kind-icon), so colour stays free for the session.
+
+Scoped into two slices. For a Claude tab the colour is the one Claude Code's
+`/color` set — the last `agent-color` entry in the transcript — with no local
+copy (#342). Picking a colour sends `/color` to a Claude tab through
+[F-claude-command](#f-claude-command) and stores it on a shell tab, which
+Claude knows nothing of (#343). Both use the same eight-colour palette as
+`/color`.
+
+Slice 1 shipped (#342): the digest keeps the last `agent-color` value, an
+open tab follows it at the next rescan, and the focused pane decides a split
+tab. A Claude tab is outlined and its sidebar row barred in the colour, and
+the hover card names it — the cue for anyone who cannot tell red from green.
+The MCP `snapshot` reports it per pane.
+
+Slice 2 shipped (#343): the tab menu's *Tab colour…* and a `pick-tab-color`
+action open the palette, plus *None*, over the focused tab. Who keeps a
+pane's colour is decided by its launch, the rule the slash-command check
+uses: a pick for a Claude pane is typed as `/color` behind the confirmation,
+and a shell tab stores it in `core` until the tab closes. The pane border is
+still not coloured. Torture report:
+`.personal/feature-torture/reports/F-session-accent-colors.md`.
 
 <a id="f-tab-context-menu"></a>
 
