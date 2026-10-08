@@ -192,6 +192,15 @@ impl Shell {
         }
     }
 
+    /// Forget a menu anchored on `session`, a pane that just closed. Its id is
+    /// never reused, so the anchor check alone would hide the menu for good;
+    /// dropping it here leaves nothing behind to reason about.
+    pub(super) fn forget_tab_menu_on(&mut self, session: SessionId) {
+        if self.tab_menu.is_some_and(|menu| menu.anchor == session) {
+            self.tab_menu = None;
+        }
+    }
+
     /// Open the focused tab's menu on its first entry. `None` when no tab is
     /// open, so there is nothing for the menu to act on.
     pub(super) fn open_tab_menu(&mut self) -> Option<()> {

@@ -28,7 +28,9 @@ Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 | `open-new-session` | *(unbound)* | reserved — no surface yet |
 
 `rename-tab` opens the same inline field a double-click on the tab opens,
-filled with the tab's current name: <kbd>Enter</kbd> keeps the edit,
+filled with the tab's current name: <kbd>Enter</kbd> keeps the edit — on a
+Claude tab by asking Claude to `/rename` it, as
+[a double-click does](../workspace/tabs-and-splits.md) — and
 <kbd>Escape</kbd> drops it. Its chord is Terminal.app's *Edit Title* on macOS;
 on Windows and Linux <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> reaches a
 program in the terminal as the same byte as <kbd>Ctrl</kbd>+<kbd>I</kbd>, which

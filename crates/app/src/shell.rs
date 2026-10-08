@@ -313,6 +313,10 @@ struct Shell {
     /// The prompt names the exact line, so nothing is typed into Claude that
     /// the user has not read first.
     claude_command: Option<claude_command::PendingCommand>,
+    /// A one-line notice of something the user asked for that did not happen —
+    /// a rename Claude could not take — shown under the tab strip until
+    /// dismissed or replaced. Not a prompt: it holds no keyboard.
+    notice: Option<String>,
     /// Whether Ctrl (or Cmd) is currently held — the link-open modifier.
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
@@ -547,6 +551,8 @@ enum Message {
     ConfirmClaudeCommand,
     /// Dismiss the Claude command confirmation without typing anything.
     CancelClaudeCommand,
+    /// Hide the notice under the tab strip.
+    DismissNotice,
     /// Show or hide archived sessions in the browser (F-session-metadata).
     ShowArchived(bool),
     /// Fold or unfold a project's session list in the sidebar, by path.
@@ -782,6 +788,7 @@ impl Shell {
             gestures: ClipboardGestures::default(),
             archiving: None,
             claude_command: None,
+            notice: None,
             closing_window: None,
             link_modifier: false,
             shift_modifier: false,
@@ -979,7 +986,7 @@ impl Shell {
                 self.perform(effects)
             }
             Message::PtyExited { session, clean } => {
-                let tabs_before = self.core.workspace.tabs.len();
+                let vanishing = self.vanishing_pane(session);
                 let effects = self
                     .core
                     .apply(termherd_core::Event::PtyExited { session, clean });
@@ -991,16 +998,9 @@ impl Shell {
                     // No auto-close: the dead terminal stays on screen.
                     Task::none()
                 } else {
-                    // The pane auto-closed on its clean shell exit — mirror
-                    // `close_tab`'s shell-side hygiene for the vanished session.
-                    self.screens.remove(&session);
-                    if self.core.workspace.tabs.len() != tabs_before {
-                        // Tab indices shifted under any pending close
-                        // confirmation; dropping the prompt is the safe
-                        // reaction (the user can re-request).
-                        self.closing = None;
-                    }
-                    Task::batch([self.perform(effects), self.resize_panes()])
+                    // The pane auto-closed on its clean shell exit.
+                    let kill = self.perform(effects);
+                    Task::batch([kill, self.after_pane_vanished(vanishing)])
                 }
             }
             Message::Key(event) => {
@@ -1221,6 +1221,10 @@ impl Shell {
                 .confirm_claude_command()
                 .unwrap_or_else(|_| Task::none()),
             Message::CancelClaudeCommand => self.cancel_claude_command(),
+            Message::DismissNotice => {
+                self.notice = None;
+                Task::none()
+            }
             Message::ShowArchived(show) => {
                 let effects = self
                     .core
@@ -1269,6 +1273,10 @@ impl Shell {
             }
             Message::CommitRename => match self.renaming.take() {
                 Some((session, title)) => {
+                    if let Some((live, current)) = self.open_claude_to_rename(&session, &title) {
+                        self.rename_through_claude(live, &title, &current);
+                        return Task::none();
+                    }
                     let effects = self
                         .core
                         .apply(termherd_core::Event::RenameSession { session, title });
@@ -1510,8 +1518,7 @@ impl Shell {
     /// it survives a reorder while open.
     fn start_tab_rename(&mut self, index: usize) -> Option<Task<Message>> {
         let tab = self.core.workspace.tabs.get(index)?;
-        let anchor = tab.sessions().first().copied()?;
-        self.tab_rename = Some((anchor, tab.display_title().to_owned()));
+        self.tab_rename = Some((tab.first_session(), tab.display_title().to_owned()));
         Some(operate(focusable::focus(tab_rename_id())))
     }
 
@@ -1531,10 +1538,37 @@ impl Shell {
         let Some(index) = self.core.workspace.tab_of(anchor) else {
             return;
         };
+        if let Some((session, current)) = self.claude_named_tab(index) {
+            self.rename_through_claude(session, &title, &current);
+            return;
+        }
         let effects = self
             .core
             .apply(termherd_core::Event::RenameTab { index, title });
         debug_assert!(effects.is_empty());
+    }
+
+    /// The first pane of the tab at `index` and the name the tab shows, when
+    /// renaming that tab is Claude's to do — see
+    /// [`termherd_core::App::tab_names_through_claude`].
+    fn claude_named_tab(&self, index: usize) -> Option<(SessionId, String)> {
+        let session = self.core.tab_claude_namer(index)?;
+        let tab = self.core.workspace.tabs.get(index)?;
+        Some((session, tab.display_title().to_owned()))
+    }
+
+    /// The open tab a sidebar rename of conversation `claude_id` is asked of
+    /// Claude through, as [`Self::claude_named_tab`] answers it. A blank
+    /// rename stays local whatever is open: it only clears the name termherd
+    /// keeps, which is not Claude's to give back.
+    fn open_claude_to_rename(&self, claude_id: &str, title: &str) -> Option<(SessionId, String)> {
+        if title.trim().is_empty() {
+            return None;
+        }
+        let live = self.core.open_session_for(claude_id)?;
+        let index = self.core.workspace.tab_of(live)?;
+        self.claude_named_tab(index)
+            .filter(|(session, _)| *session == live)
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -2115,6 +2149,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: Some("/tmp/x".into()),
             kind: SessionKind::Shell,
+            placement: termherd_core::Placement::Foreground,
         });
         assert_eq!(outcome.error, None, "opening a session never rejects");
         assert_eq!(
@@ -2134,6 +2169,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: None,
             kind: SessionKind::Claude,
+            placement: termherd_core::Placement::Foreground,
         });
         assert_eq!(outcome.error, None);
         let launches = pty.launches();
@@ -2595,7 +2631,10 @@ mod key_routing {
     fn close_action_closes_a_lone_pane_tab_and_kills_its_pty() {
         let (mut shell, pty) = shell_with_terminal();
         assert_eq!(shell.core.workspace.tabs.len(), 1);
-        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: None });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: None,
+            background: false,
+        });
         assert_eq!(outcome.error, None);
         assert!(
             shell.core.workspace.tabs.is_empty(),
@@ -2627,7 +2666,10 @@ mod key_routing {
         // resolves; the close must land on *that* pane, not on the active tab's
         // focused one.
         let (mut shell, _pty, first) = shell_with_two_tabs();
-        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: Some(first) });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: false,
+        });
         assert_eq!(outcome.error, None);
         let live: Vec<u64> = shell
             .core
@@ -2642,6 +2684,256 @@ mod key_routing {
             "the targeted pane is gone; surviving panes: {live:?}"
         );
         assert_eq!(live.len(), 1, "the other tab must not have been closed");
+    }
+
+    /// The handle an open answered with, as its outcome names it.
+    fn opened(outcome: &super::bridge::ActionOutcome) -> Option<String> {
+        match &outcome.detail {
+            Some(super::bridge::ActionDetail::Opened(handle)) => handle.clone(),
+            other => panic!("an open answers with the opened handle, got {other:?}"),
+        }
+    }
+
+    fn open_in_background(shell: &mut Shell) -> super::bridge::ActionOutcome {
+        shell
+            .perform_action(BridgeAction::Open {
+                project: Some("/tmp/worker".into()),
+                kind: SessionKind::Shell,
+                placement: termherd_core::Placement::Background,
+            })
+            .0
+    }
+
+    #[test]
+    fn a_background_open_appends_a_tab_and_leaves_the_user_where_they_were() {
+        let (mut shell, pty) = shell_with_terminal();
+        let before = focused(&shell);
+        // The user is typing a search with a close prompt up: neither is the
+        // agent's to take away.
+        shell.focus = Focus::Search;
+        shell.closing = Some(0);
+        let outcome = open_in_background(&mut shell);
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.focused, before, "focus is reported unchanged");
+        assert_eq!(focused(&shell), before);
+        assert_eq!(
+            shell.core.workspace.active, 0,
+            "the user's tab stays active"
+        );
+        assert_eq!(shell.core.workspace.tabs.len(), 2, "a tab was appended");
+        let worker = shell.core.workspace.tabs[1].sessions()[0].0.get();
+        assert_eq!(opened(&outcome), Some(worker.to_string()));
+        assert_eq!(pty.spawn_count(), 2, "the worker's PTY was spawned");
+        assert_eq!(shell.focus, Focus::Search, "keyboard owner untouched");
+        assert_eq!(shell.closing, Some(0), "the user's prompt survives");
+    }
+
+    #[test]
+    fn a_foreground_open_names_the_session_it_opened_too() {
+        let pty = Arc::new(RecordingPty::default());
+        let mut shell = shell_over(pty);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Open {
+            project: None,
+            kind: SessionKind::Shell,
+            placement: termherd_core::Placement::Foreground,
+        });
+        assert!(opened(&outcome).is_some());
+        assert_eq!(opened(&outcome), outcome.focused, "it is the focused one");
+    }
+
+    #[test]
+    fn a_background_open_sizes_its_pty_to_the_tab_area_at_once() {
+        // Not the default grid until someone happens to look at the tab: a
+        // Claude started there draws its first screen for the real size.
+        let (mut shell, pty) = shell_with_terminal();
+        let shown = *pty.resizes().last().expect("the first tab was sized");
+        let resized = pty.resizes().len();
+        open_in_background(&mut shell);
+        assert_eq!(
+            pty.resizes()[resized..],
+            [shown],
+            "one resize, to the lone-pane size every tab is drawn at"
+        );
+    }
+
+    #[test]
+    fn a_background_close_reaches_another_tab_without_moving_focus() {
+        let (mut shell, pty, first) = shell_with_two_tabs();
+        let before = focused(&shell);
+        let id = SessionId(std::num::NonZeroU64::new(first).expect("non-zero"));
+        shell.screens.insert(id, screen_of("prompt"));
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: true,
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.focused, before, "focus is reported unchanged");
+        assert_eq!(focused(&shell), before, "the user's pane keeps focus");
+        assert_eq!(shell.core.workspace.tabs.len(), 1);
+        assert_eq!(pty.kill_count(), 1, "the target's PTY was killed");
+        assert!(!shell.screens.contains_key(&id), "its screen is forgotten");
+    }
+
+    fn close_in_background(shell: &mut Shell, pane: u64) {
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(pane),
+            background: true,
+        });
+        assert_eq!(outcome.error, None);
+    }
+
+    #[test]
+    fn a_background_close_keeps_a_close_prompt_on_the_tab_it_named() {
+        // The prompt names the user's tab, at 1; closing tab 0 shifts it to 0.
+        // Dropping it would send the user's Enter to the terminal instead.
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let user_tab = shell.core.workspace.tabs[1].sessions()[0];
+        shell.closing = Some(1);
+        close_in_background(&mut shell, first);
+        assert_eq!(shell.closing, Some(0));
+        assert_eq!(shell.core.workspace.tab_of(user_tab), Some(0));
+    }
+
+    #[test]
+    fn a_background_close_of_the_prompted_tab_drops_its_prompt() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        shell.closing = Some(0);
+        close_in_background(&mut shell, first);
+        assert_eq!(shell.closing, None, "the tab it named is gone");
+    }
+
+    #[test]
+    fn a_background_close_elsewhere_leaves_the_tab_menu_open() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let _ = shell.update(Message::OpenTabMenu(1));
+        close_in_background(&mut shell, first);
+        assert!(
+            shell.live_tab_menu().is_some(),
+            "its pane still holds focus"
+        );
+    }
+
+    #[test]
+    fn a_background_close_of_the_menu_pane_forgets_the_menu() {
+        let (mut shell, _pty, _first) = shell_with_two_tabs();
+        let _ = shell.update(Message::OpenTabMenu(1));
+        let anchor = shell.core.workspace.tabs[1].first_session();
+        close_in_background(&mut shell, anchor.0.get());
+        assert_eq!(shell.tab_menu, None, "forgotten, not merely hidden");
+    }
+
+    #[test]
+    fn a_background_close_shifts_a_tab_drag_with_the_strip() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        shell.tab_drag = Some(TabDrag { from: 1, over: 1 });
+        close_in_background(&mut shell, first);
+        assert_eq!(
+            shell.tab_drag,
+            Some(TabDrag { from: 0, over: 0 }),
+            "the release still lands on the tab that was pressed"
+        );
+    }
+
+    /// Two tabs with the first split in two; the second is active. Returns
+    /// the shell, its PTY double, and the split's two sessions.
+    fn shell_with_a_split_behind() -> (Shell, Arc<RecordingPty>, SessionId, SessionId) {
+        let (mut shell, pty, first) = shell_with_two_tabs();
+        let _ = shell.core.apply(termherd_core::Event::ActivateTab(0));
+        let effects = shell
+            .core
+            .apply(termherd_core::Event::SplitFocused(SplitDir::Vertical));
+        let _ = shell.perform(effects);
+        let _ = shell.core.apply(termherd_core::Event::ActivateTab(1));
+        let left = SessionId(std::num::NonZeroU64::new(first).expect("non-zero"));
+        let right = shell.core.workspace.tabs[0].sessions()[1];
+        (shell, pty, left, right)
+    }
+
+    #[test]
+    fn a_background_close_in_a_split_behind_grows_the_sibling_to_the_tab() {
+        // Left at half width, the survivor would answer `read_terminal` and
+        // `mouse_in_session` for a grid it is no longer drawn at.
+        let (mut shell, pty, _left, right) = shell_with_a_split_behind();
+        let lone = pty.resizes()[0];
+        let resized = pty.resizes().len();
+        close_in_background(&mut shell, right.0.get());
+        assert_eq!(
+            pty.resizes()[resized..],
+            [lone],
+            "the surviving sibling grows to the tab; the user's tab is untouched"
+        );
+    }
+
+    #[test]
+    fn a_background_close_moves_a_pending_tab_rename_to_the_surviving_pane() {
+        let (mut shell, _pty, left, right) = shell_with_a_split_behind();
+        shell.tab_rename = Some((left, "Pinned".into()));
+        close_in_background(&mut shell, left.0.get());
+        assert_eq!(shell.tab_rename, Some((right, "Pinned".into())));
+    }
+
+    #[test]
+    fn a_background_close_drops_a_claude_command_armed_for_the_closed_pane() {
+        // Left armed, the prompt would hold the keyboard for a session that is
+        // gone, and every Enter would only report it unknown.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        close_in_background(&mut shell, session.0.get());
+        assert!(shell.claude_command.is_none());
+        assert_eq!(shell.keyboard_owner(), None);
+        assert!(pty.writes().is_empty(), "nothing was typed on the way out");
+    }
+
+    #[test]
+    fn a_background_close_needs_a_pane_and_touches_nothing_without_one() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: None,
+            background: true,
+        });
+        assert!(
+            outcome.error.as_deref().is_some_and(|e| e.contains("pane")),
+            "rejected, naming the missing argument: {outcome:?}"
+        );
+        assert_eq!(shell.core.workspace.tabs.len(), 1);
+        assert_eq!(pty.kill_count(), 0);
+    }
+
+    #[test]
+    fn a_background_close_rejects_a_handle_no_pane_hosts() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(999),
+            background: true,
+        });
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some("no open pane hosts handle 999")
+        );
+        assert_eq!(pty.kill_count(), 0);
+    }
+
+    #[test]
+    fn a_pointer_reaches_a_background_tab_that_was_never_drawn() {
+        // Screens are filled by the PTY's output, not by drawing: a worker
+        // nobody has looked at is still bounded, and so still reachable.
+        let (mut shell, pty) = shell_with_terminal();
+        let outcome = open_in_background(&mut shell);
+        let worker: u64 = opened(&outcome)
+            .expect("a handle")
+            .parse()
+            .expect("numeric");
+        let session = SessionId(std::num::NonZeroU64::new(worker).expect("non-zero"));
+        let _ = shell.update(Message::PtyOutput {
+            session,
+            screen: screen_of("prompt"),
+        });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: worker,
+            pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(pty.pointers().len(), 1, "the press reached the worker");
     }
 
     #[test]
@@ -2684,12 +2976,18 @@ mod key_routing {
         // beats silently acting on whatever holds focus now, which is how a
         // close request would destroy the wrong terminal.
         let (mut shell, pty, first) = shell_with_two_tabs();
-        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: Some(first) });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: false,
+        });
         assert_eq!(outcome.error, None, "the first close lands");
         let handle = first;
 
         for action in [
-            BridgeAction::Close { pane: Some(handle) },
+            BridgeAction::Close {
+                pane: Some(handle),
+                background: false,
+            },
             BridgeAction::Split {
                 pane: Some(handle),
                 dir: SplitDir::Vertical,
@@ -4582,6 +4880,22 @@ mod key_routing {
     }
 
     #[test]
+    fn a_physical_enter_right_after_a_remote_rename_is_ignored() {
+        // The rename tool arms the same prompt as `claude_command` and owes the
+        // user the same moment to read it.
+        let (mut shell, pty, _session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
+        assert_eq!(outcome.error, None);
+        let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+        let _ = shell.update(Message::Key(enter));
+        assert!(pty.writes().is_empty(), "swallowed during the grace");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+    }
+
+    #[test]
     fn only_a_remote_arm_holds_enter_back_and_never_escape() {
         let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
         let escape = press(Key::Named(Named::Escape), Modifiers::default(), None);
@@ -4738,6 +5052,209 @@ mod key_routing {
             Some("another prompt is open (archive-confirm); answer it first")
         );
         assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Archive));
+    }
+
+    // ---- Renaming a Claude session asks Claude ----------------------------
+
+    /// The command armed for confirmation, if any.
+    fn armed(shell: &Shell) -> Option<&ClaudeCommand> {
+        shell
+            .claude_command
+            .as_ref()
+            .map(|pending| &pending.command)
+    }
+
+    /// Double-click the tab at `index`, type `name`, and press Enter.
+    fn rename_tab_by_hand(shell: &mut Shell, index: usize, name: &str) {
+        let _ = shell.update(Message::StartTabRename(index));
+        let _ = shell.update(Message::TabRenameInput(name.to_owned()));
+        let _ = shell.update(Message::CommitTabRename);
+    }
+
+    #[test]
+    fn renaming_a_claude_tab_arms_rename_instead_of_a_local_name() {
+        let (mut shell, pty, _session) = shell_with_idle_claude();
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+        assert_eq!(shell.notice, None);
+        assert!(pty.writes().is_empty(), "nothing typed before the confirm");
+    }
+
+    #[test]
+    fn the_rename_tab_action_on_a_claude_tab_asks_claude_too() {
+        // The keyboard opens the double-click's field, so its commit takes the
+        // same road: a Claude tab is renamed by Claude, not overridden here.
+        let (mut shell, _pty, _session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::RenameTab)]);
+        assert_eq!(outcome.steps, vec![PressStep::Ran("rename-tab".to_owned())]);
+        let _ = shell.update(Message::TabRenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitTabRename);
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+    }
+
+    #[test]
+    fn the_tab_menu_rename_on_a_claude_tab_asks_claude_too() {
+        let (mut shell, _pty, _session) = shell_with_idle_claude();
+        let _ = shell.update(Message::OpenTabMenu(0));
+        assert_eq!(
+            press_chord(&mut shell, "enter"),
+            PressStep::Ran("rename-tab".to_owned())
+        );
+        let _ = shell.update(Message::TabRenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitTabRename);
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+    }
+
+    #[test]
+    fn a_claude_tab_rename_claude_cannot_take_is_reported_not_dropped() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(armed(&shell), None);
+        let notice = shell.notice.clone().expect("the refusal is shown");
+        assert!(notice.contains("busy"), "it says why: {notice}");
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+
+        let _ = shell.update(Message::DismissNotice);
+        assert_eq!(shell.notice, None);
+    }
+
+    #[test]
+    fn a_claude_tab_rename_over_a_draft_is_reported_with_the_draft() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        shell
+            .screens
+            .insert(session, screen_rows(&[RULE, "❯ half a thought", RULE]));
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(armed(&shell), None);
+        let notice = shell.notice.clone().expect("the refusal is shown");
+        assert!(
+            notice.contains("half a thought"),
+            "it names the draft: {notice}"
+        );
+    }
+
+    #[test]
+    fn a_claude_tab_rename_to_its_current_name_or_to_nothing_arms_nothing() {
+        let (mut shell, _pty, _session) = shell_with_idle_claude();
+        let current = shell.core.workspace.tabs[0].display_title().to_owned();
+        rename_tab_by_hand(&mut shell, 0, &format!("  {current} "));
+        assert_eq!(armed(&shell), None);
+        rename_tab_by_hand(&mut shell, 0, "   ");
+        assert_eq!(armed(&shell), None);
+        assert_eq!(shell.notice, None, "neither is a refusal");
+    }
+
+    const OPEN_ID: &str = "0b6a3c1e-1111-4222-8333-444455556666";
+
+    /// A shell with one idle Claude tab resuming conversation [`OPEN_ID`].
+    fn shell_with_idle_resumed_claude() -> (Shell, SessionId) {
+        let (mut shell, _pty) = empty_shell();
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(termherd_core::ClaudeLaunch::Resume(OPEN_ID.into())),
+        );
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Idle,
+        });
+        shell.screens.insert(session, empty_prompt());
+        (shell, session)
+    }
+
+    #[test]
+    fn renaming_an_open_claude_session_from_the_sidebar_arms_rename() {
+        let (mut shell, _session) = shell_with_idle_resumed_claude();
+        let _ = shell.update(Message::StartRename {
+            session: OPEN_ID.to_owned(),
+            current: "old".to_owned(),
+        });
+        let _ = shell.update(Message::RenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitRename);
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(
+            shell.core.metadata.get(OPEN_ID),
+            None,
+            "no local name is kept for it"
+        );
+    }
+
+    #[test]
+    fn renaming_a_closed_session_from_the_sidebar_stays_local() {
+        let (mut shell, _pty) = empty_shell();
+        let _ = shell.update(Message::StartRename {
+            session: OPEN_ID.to_owned(),
+            current: "old".to_owned(),
+        });
+        let _ = shell.update(Message::RenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitRename);
+
+        assert_eq!(armed(&shell), None);
+        assert_eq!(
+            shell
+                .core
+                .metadata
+                .get(OPEN_ID)
+                .and_then(|meta| meta.title.as_deref()),
+            Some("api work")
+        );
+    }
+
+    #[test]
+    fn the_rename_action_on_a_claude_tab_arms_rename_and_says_so() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(
+            outcome.detail,
+            Some(super::bridge::ActionDetail::ClaudeCommand {
+                line: "/rename api work".to_owned(),
+                overlay: "claude-command-confirm",
+            })
+        );
+
+        let _ = shell.update(Message::CancelClaudeCommand);
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        let (busy, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
+        assert_eq!(
+            busy.error.as_deref(),
+            Some("the session is busy, not idle at its prompt")
+        );
     }
 
     #[test]

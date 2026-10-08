@@ -68,8 +68,15 @@ impl Shell {
             }
             let chip: Element<'_, Message> = if renaming_this {
                 let buffer = self.tab_rename.as_ref().map_or("", |(_, b)| b.as_str());
+                // The hint is what a blank commit leaves: a shell tab reverts
+                // to its derived name, a Claude tab is not renamed at all.
+                let blank_leaves = if self.core.tab_names_through_claude(index) {
+                    tab.display_title()
+                } else {
+                    &tab.title
+                };
                 inner = inner.push(
-                    text_input("", buffer)
+                    text_input(blank_leaves, buffer)
                         .id(tab_rename_id())
                         .on_input(Message::TabRenameInput)
                         .on_submit(Message::CommitTabRename)
@@ -203,16 +210,14 @@ impl Shell {
         color: Option<ClaudeColor>,
         now: SystemTime,
     ) -> Element<'static, Message> {
-        let first = self.core.tab_first_session(index);
-        let agent = first.and_then(|id| self.core.peer_name(id));
+        let first = tab.first_session();
+        let agent = self.core.peer_name(first);
         match self.core.tab_record(index) {
             Some(record) => {
                 session_card(self.core.session_title(record), agent, color, record, now)
             }
             None => {
-                let cwd = first
-                    .and_then(|id| self.core.sessions.get(&id))
-                    .and_then(|s| s.cwd.clone());
+                let cwd = self.core.sessions.get(&first).and_then(|s| s.cwd.clone());
                 tab_card(tab.display_title().to_owned(), agent, color, cwd)
             }
         }

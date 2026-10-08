@@ -54,13 +54,47 @@ runs in it, the card also names its agent (`Agent: termherd-b0`), the peer
 name other Claude sessions address it by; the `copy-agent-name` action puts
 it on the clipboard. In a split tab, the card names the first pane's agent.
 
-**Rename a tab** by double-clicking it, or with the `rename-tab` chord for the
-focused one. Either opens an inline field holding the tab's current name;
-<kbd>Enter</kbd> or a click elsewhere keeps the edit, <kbd>Escape</kbd> drops
-it, and an empty name gives the tab back its derived title. The tab strip does
-not scroll yet: with more tabs than fit, the focused one can sit past its right
-edge, and the chord then opens a field you cannot see. It still holds the
+**TermHerd asks Claude rather than overriding it.** Where a change belongs to
+Claude — today, handing a session to the desktop app with `send-to-desktop` —
+TermHerd types Claude's own slash command for you, behind a prompt that shows
+the exact line first. <kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops it.
+It is offered only while that Claude is idle with nothing typed in its prompt; a
+draft that appears meanwhile keeps the prompt open and says so.
+
+**A Claude tab goes by the name Claude gives its session.** The title is the
+first of these that exists:
+
+| Rank | Source |
+| --- | --- |
+| 1 | the session's name — Claude's `/rename` or one you gave it in the sidebar, whichever came last |
+| 2 | the title Claude last reported to the terminal |
+| 3 | Claude's own summary of the conversation, else its first prompt |
+| 4 | the project the tab opened in |
+
+A `/rename` typed in Claude reaches the tab the next time TermHerd rescans
+`~/.claude`, which it does when the transcript changes on disk — a fresh tab
+included, since TermHerd starts it under a session id of its own. A
+conversation with no prompt yet has nothing to rescan, so a rename typed
+before the first prompt shows once that prompt is sent.
+
+**Double-click a tab to rename it**, or press the `rename-tab` chord to rename
+the focused one; both open the same field and end the same way. The tab strip
+does not scroll yet: with more tabs than fit, the focused one can sit past its
+right edge, and the chord then opens a field you cannot see. It still holds the
 keyboard, so <kbd>Escape</kbd> leaves it.
+
+The field opens on the current name; clear
+it and it shows, greyed out, the name <kbd>Enter</kbd> would then leave. For a
+shell tab, the name you type is the tab's own and stays until you clear it,
+which reverts the tab to the name it would have without one. For a Claude
+tab, TermHerd asks Claude instead: <kbd>Enter</kbd> arms `/rename <name>`
+behind the same prompt as any other command, and the tab takes the new name
+once Claude has recorded it. When Claude cannot take the command — busy,
+waiting on an answer, a draft in its prompt — the rename is not lost
+silently: a notice under the tab strip says why, until you dismiss it with
+`✕`. A blank name, or the name the tab already shows, asks nothing. Once the
+Claude in a tab has exited and its shell is back in front, the tab is
+renamed like a shell tab.
 
 **Right-click a tab for its menu**, or press `open-tab-menu` for the focused
 one. A right-click focuses the tab first, because every entry acts on the
@@ -78,10 +112,12 @@ focused tab:
 | Close pane | `close-focused` | every tab |
 
 Each entry is the keyboard action of the same name, so it does exactly what
-that action's chord does — *Close pane* closes the focused pane of a split and
-the whole tab otherwise, asking first as the chord does. <kbd>↑</kbd> and
-<kbd>↓</kbd> move the selection, <kbd>Enter</kbd> runs it, <kbd>Escape</kbd> or
-a click outside the menu closes it without running anything.
+that action's chord does — *Rename tab* opens the field above, which on a
+Claude tab asks Claude to `/rename`; *Close pane* closes the focused pane of a
+split and the whole tab otherwise, asking first as the chord does.
+<kbd>↑</kbd> and <kbd>↓</kbd> move the selection, <kbd>Enter</kbd> runs it,
+<kbd>Escape</kbd> or a click outside the menu closes it without running
+anything.
 
 *Copy agent name* is listed when the action would find a name at the moment
 the menu opens: a Claude runs in front of the focused pane and has written its

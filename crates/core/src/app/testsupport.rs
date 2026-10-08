@@ -53,6 +53,7 @@ pub(crate) fn launch(app: &mut App, title: &str) -> SessionId {
             cwd: None,
             launch: Launch::Shell,
             title: title.into(),
+            placement: Placement::Foreground,
         }))
         .as_slice()
     {
@@ -69,6 +70,7 @@ pub(crate) fn launch_claude(app: &mut App) -> SessionId {
             cwd: None,
             launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
             title: "claude".into(),
+            placement: Placement::Foreground,
         }))
         .as_slice()
     {

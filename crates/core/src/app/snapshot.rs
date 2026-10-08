@@ -268,6 +268,7 @@ mod tests {
             cwd: Some(cwd.to_owned()),
             launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
             title: title.to_owned(),
+            placement: Placement::Foreground,
         }));
         app.workspace
             .focused_session()
@@ -623,6 +624,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
             title: "work".into(),
+            placement: Placement::Foreground,
         }));
         launch(&mut app, "shell");
         let mut coloured = record(minted, "/proj", "prompt");
