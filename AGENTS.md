@@ -127,9 +127,9 @@ press writes a timestamped pair to `~/.termherd/captures/`:
 
 - `capture-<ts>.json` — a diffable state dump of the whole workspace: focus,
   resolved config, the sidebar, every tab with its panes (each pane's stable
-  handle, kind, cwd, status, and the pid, peer name and session id of the
-  Claude running in it, null when none is), and the focused terminal's
-  visible text. No vision
+  handle, kind, cwd, status, the pid, peer name and session id of the
+  Claude running in it, null when none is, and the colour its `/color` set,
+  null when none), and the focused terminal's visible text. No vision
   needed.
 - `capture-<ts>.png` — the real window pixels (iced `window::screenshot`), for
   render / colour / glyph bugs the text dump can't show.

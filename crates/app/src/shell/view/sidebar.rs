@@ -16,7 +16,7 @@ use iced::{Element, Fill};
 use termherd_core::browser::{ProjectGroup, project_label, relative_age};
 use termherd_core::{SessionKind, SessionRecord, SessionStatus, SidebarFold};
 
-use super::{clip, kind_glyph, session_card, sidebar_secondary_text, status_dot};
+use super::{clip, color_bar, kind_glyph, session_card, sidebar_secondary_text, status_dot};
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
 use crate::strings;
 
@@ -417,6 +417,9 @@ impl Shell {
             .padding(0);
 
         let mut content = row![].spacing(6).align_y(iced::Center);
+        if let Some(bar) = s.digest.agent_color.and_then(color_bar) {
+            content = content.push(bar);
+        }
         // A coloured dot marks a session already open in TermHerd and
         // carries its live activity (FR8).
         if let Some(status) = live.get(id) {
@@ -472,7 +475,7 @@ impl Shell {
             // without opening it.
             tooltip(
                 launch,
-                session_card(title.clone(), None, s, now),
+                session_card(title.clone(), None, s.digest.agent_color, s, now),
                 tooltip::Position::Right,
             )
             .into()

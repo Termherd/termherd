@@ -25,6 +25,7 @@ pub(crate) fn record(id: &str, path: &str, summary: &str) -> SessionRecord {
             slug: None,
             custom_title: None,
             ai_title: None,
+            agent_color: None,
             tail: Vec::new(),
         },
         modified: None,

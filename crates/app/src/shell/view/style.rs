@@ -7,7 +7,7 @@
 use iced::Color;
 use iced::widget::text::Text;
 use iced::widget::{container, text};
-use termherd_core::{SessionKind, SessionStatus};
+use termherd_core::{ClaudeColor, SessionKind, SessionStatus};
 
 /// The mark for what a session runs, shared by the sidebar's launch buttons
 /// and the tab chips so the button that opens a tab shows what the tab will
@@ -49,6 +49,12 @@ fn status_color(status: SessionStatus, dark_surface: bool) -> Color {
         SessionStatus::Attention => Color::from_rgb(0.95, 0.35, 0.35),
         SessionStatus::Exited => Color::from_rgb(0.5, 0.5, 0.5),
     };
+    on_surface(hue, dark_surface)
+}
+
+/// A hue tuned against a dark surface, darkened on a light one so it keeps
+/// its contrast without changing which hue means what.
+fn on_surface(hue: Color, dark_surface: bool) -> Color {
     if dark_surface {
         hue
     } else {
@@ -58,6 +64,51 @@ fn status_color(status: SessionStatus, dark_surface: bool) -> Color {
 
 /// How far a status hue moves toward black on a light surface.
 const LIGHT_SURFACE_DARKEN: f32 = 0.4;
+
+/// What a `/color` name paints in termherd's chrome, or `None` for
+/// [`ClaudeColor::Default`], which leaves a session with no colour of its own.
+/// Like the status dots, the hues are tuned against a dark surface and
+/// darkened by the same step on a light one.
+pub(super) fn claude_color(color: ClaudeColor, dark_surface: bool) -> Option<Color> {
+    let hue = match color {
+        ClaudeColor::Red => Color::from_rgb(1.0, 0.42, 0.40),
+        ClaudeColor::Blue => Color::from_rgb(0.42, 0.62, 1.0),
+        ClaudeColor::Green => Color::from_rgb(0.36, 0.78, 0.38),
+        ClaudeColor::Yellow => Color::from_rgb(0.78, 0.70, 0.06),
+        ClaudeColor::Purple => Color::from_rgb(0.74, 0.52, 1.0),
+        ClaudeColor::Orange => Color::from_rgb(0.98, 0.58, 0.15),
+        ClaudeColor::Pink => Color::from_rgb(0.95, 0.45, 0.80),
+        ClaudeColor::Cyan => Color::from_rgb(0.24, 0.80, 0.86),
+        ClaudeColor::Default => return None,
+    };
+    Some(on_surface(hue, dark_surface))
+}
+
+/// The width of a session colour's mark: a chip's outline, a sidebar bar.
+pub(super) const COLOR_MARK_WIDTH: f32 = 2.0;
+
+/// The sidebar row's colour mark: a thin bar in the colour `/color` set, or
+/// `None` when the session has none. A bar rather than a tinted title, so the
+/// title keeps the contrast the theme gave it.
+pub(super) fn color_bar<'a, M: 'a>(color: ClaudeColor) -> Option<container::Container<'a, M>> {
+    if color == ClaudeColor::Default {
+        return None;
+    }
+    Some(
+        container(text(""))
+            .width(COLOR_MARK_WIDTH + 1.0)
+            .height(14)
+            .style(move |theme: &iced::Theme| container::Style {
+                background: claude_color(color, theme.extended_palette().is_dark)
+                    .map(iced::Background::Color),
+                border: iced::Border {
+                    radius: 1.0.into(),
+                    ..iced::Border::default()
+                },
+                ..container::Style::default()
+            }),
+    )
+}
 
 /// Background for the session hover card — a step away from the surrounding
 /// surface (the `strong` palette tier rather than the default `weak`) so the
@@ -174,6 +225,59 @@ mod tests {
                 for status in ALL {
                     let ratio = contrast(status_color(status, false), surface);
                     assert!(ratio >= FLOOR, "{status:?} on {theme}: {ratio:.2}");
+                }
+            }
+        }
+    }
+
+    /// The colours that paint: every `/color` name but `default`.
+    fn painted_colors() -> Vec<ClaudeColor> {
+        ClaudeColor::ALL
+            .into_iter()
+            .filter(|c| *c != ClaudeColor::Default)
+            .collect()
+    }
+
+    #[test]
+    fn default_paints_nothing_and_every_other_name_paints() {
+        assert_eq!(claude_color(ClaudeColor::Default, true), None);
+        assert_eq!(claude_color(ClaudeColor::Default, false), None);
+        let painted = ClaudeColor::ALL
+            .into_iter()
+            .filter(|c| claude_color(*c, true).is_some())
+            .collect::<Vec<_>>();
+        assert_eq!(painted, painted_colors());
+    }
+
+    #[test]
+    fn every_session_colour_reads_on_every_theme_chrome() {
+        // The WCAG floor for non-text UI components, against the surfaces a
+        // chip outline and a sidebar bar sit on.
+        const FLOOR: f32 = 3.0;
+        for theme in crate::settings::ThemeChoice::ALL.map(crate::settings::ThemeChoice::to_iced) {
+            let palette = theme.extended_palette();
+            for surface in [palette.background.base.color, palette.background.weak.color] {
+                for color in painted_colors() {
+                    let paint = claude_color(color, palette.is_dark).expect("painted");
+                    let ratio = contrast(paint, surface);
+                    assert!(ratio >= FLOOR, "{color:?} on {theme}: {ratio:.2}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_session_colours_paint_alike() {
+        for dark in [true, false] {
+            let palette = painted_colors();
+            for (i, a) in palette.iter().enumerate() {
+                for b in &palette[i + 1..] {
+                    let (pa, pb) = (
+                        claude_color(*a, dark).expect("painted"),
+                        claude_color(*b, dark).expect("painted"),
+                    );
+                    let distance = (pa.r - pb.r).abs() + (pa.g - pb.g).abs() + (pa.b - pb.b).abs();
+                    assert!(distance > 0.2, "{a:?} and {b:?} (dark: {dark})");
                 }
             }
         }

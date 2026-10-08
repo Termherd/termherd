@@ -278,6 +278,7 @@ mod tests {
                 slug: None,
                 custom_title: None,
                 ai_title: None,
+                agent_color: None,
                 tail: Vec::new(),
             },
             modified: Some(UNIX_EPOCH + Duration::from_secs(age_secs)),
