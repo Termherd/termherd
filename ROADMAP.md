@@ -68,12 +68,12 @@ issues #18–#29.
 | [F-auto-update](#f-auto-update) | feature | packaging | ☐ | Check for a new release from inside the app and apply it. |
 | [F-fork-detection](#f-fork-detection) | feature | sessions | ☐ | Detect a forked or plan-accepted session — blocked, the signals do not exist. |
 | [F-jsonl-viewer](#f-jsonl-viewer) | feature | sessions | ☐ | Render a Claude session's JSONL transcript as readable messages, not raw lines. |
-| [F-notification-focus-tab](#f-notification-focus-tab) | feature | workspace, sessions | ☐ | Clicking a tab's desktop notification brings termherd forward on that tab. |
 | [F-session-id-at-launch](#f-session-id-at-launch) | feature | sessions | ☐ | A fresh Claude tab knows its session id from the first keystroke. |
 | [F-store-cache](#f-store-cache) | feature | sessions | ☐ | A SQLite digest cache with an FTS5 index, replacing the in-memory scan. |
 | [F-terminal-images](#f-terminal-images) | feature | terminal | ☐ | Render images inline in the terminal — parked, no demand and no cheap slice. |
 | [F-terminal-split](#f-terminal-split) | feature | workspace, keymap | ☐ | Split panes with directional focus; drag-resize is what remains. |
 | [F-close-on-exit](#f-close-on-exit) | feature | terminal, workspace | ✅ | A pane whose shell exits cleanly closes itself; a failed one stays readable. |
+| [F-notification-focus-tab](#f-notification-focus-tab) | feature | workspace, sessions | ✅ | Clicking a tab's desktop notification brings termherd forward on that tab. |
 | [F-repo-add](#f-repo-add) | feature | sidebar, sessions | ✅ | Declare a repository in the sidebar, before it has any session. |
 | [F-settings-panel](#f-settings-panel) | feature | workspace | ✅ | An in-app settings panel — appearance first, applied live and saved on pick. |
 | [F-terminal-cwd](#f-terminal-cwd) | feature | terminal, mcp, sessions | ✅ | The shell announces the directory it is in, so a session's `cwd` follows a `cd`. |
@@ -518,20 +518,6 @@ Never scoped beyond the name. Sibling to
 [F-file-diff-panel](#f-file-diff-panel) in the rendering family — the same
 question of what termherd draws itself rather than letting the PTY draw.
 
-<a id="f-notification-focus-tab"></a>
-
-### F-notification-focus-tab
-
-Clicking a tab's desktop notification brings termherd forward on that tab.
-
-The click reveals the pane by its `SessionId`, through the path the MCP
-`focus_pane` tool already takes, then raises the window (#352). No new
-dependency: `notify-rust` already answers a click on all three OSes. Each OS
-still needs a real click to confirm the window comes forward, and Windows
-attributes the toast to PowerShell until termherd registers an application id.
-Builds on [F-status-notifications](#f-status-notifications). Torture report:
-`.personal/feature-torture/reports/F-notification-focus-tab.md`.
-
 <a id="f-session-id-at-launch"></a>
 
 ### F-session-id-at-launch
@@ -610,6 +596,28 @@ proved redundant and was dropped mid-review). Ship also fixed exit detection on
 Windows: ConPTY never delivers reader EOF on a child's natural exit, so the
 `pty` adapter reaps in a dedicated waiter thread. Fixed policy, no settings
 knob
+
+<a id="f-notification-focus-tab"></a>
+
+### F-notification-focus-tab
+
+Clicking a tab's desktop notification brings termherd forward on that tab.
+
+Shipped in #352. `Effect::Notify` carries the `SessionId`; the `os-notify`
+thread that posts the notification waits for the OS's answer, and a body click
+sends the session to the shell over a channel an iced subscription drains. The
+shell reveals the pane through the path the MCP `focus_pane` tool takes, then
+raises the window with `window::gain_focus`; a session closed in the meantime
+reveals nothing but still raises the window. No new dependency: `notify-rust`
+answers a click on all three OSes, and only XDG needs the `"default"` action
+declared. A notification nobody answers keeps its thread parked (macOS keeps it
+in the notification centre, a Windows toast in the action centre may never
+answer), and the thread cannot be cancelled from outside the backend, so at
+most 16 notifications wait for a click at once; past that they post without
+one. Each OS still needs a real click to confirm the window comes forward, and
+Windows attributes the toast to PowerShell until termherd registers an
+application id. Builds on [F-status-notifications](#f-status-notifications).
+Torture report: `.personal/feature-torture/reports/F-notification-focus-tab.md`.
 
 <a id="f-repo-add"></a>
 

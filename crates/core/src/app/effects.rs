@@ -69,8 +69,14 @@ pub enum Effect {
     OpenPath(crate::open::OpenTarget),
     /// Post a desktop notification to the OS notification centre. The
     /// shell performs it; `title` names the session/project that wants the
-    /// user, `body` is Claude's message.
-    Notify { title: String, body: String },
+    /// user, `body` is Claude's message. `session` is the pane a click on the
+    /// notification brings back — the stable handle, never the title (two tabs
+    /// may share one) nor the Claude resume id (which re-keys).
+    Notify {
+        session: SessionId,
+        title: String,
+        body: String,
+    },
     /// Write a captured state snapshot for the AI dev loop (G1). The shell
     /// encodes it to `capture-<ts>.json` and takes the companion PNG; `core`
     /// only builds the pure, diffable payload. It is the same

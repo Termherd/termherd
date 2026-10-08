@@ -136,12 +136,18 @@ impl Shell {
             Ok(id) => id,
             Err(outcome) => return (outcome, Task::none()),
         };
+        let task = self.reveal_session(id);
+        (self.applied(), task)
+    }
+
+    /// Bring a hosted session's pane into view and hand it the keyboard — the
+    /// one reveal both `focus_pane` and a clicked notification run.
+    pub(super) fn reveal_session(&mut self, id: SessionId) -> Task<Message> {
         self.focus = Focus::Terminal;
         let effects = self.core.apply(Event::RevealPane(id));
         // A reveal may activate another tab, whose panes were last sized for a
         // different layout — resize like `activate_tab` does.
-        let task = Task::batch([self.perform(effects), self.resize_panes()]);
-        (self.applied(), task)
+        Task::batch([self.perform(effects), self.resize_panes()])
     }
 
     /// Rename the tab at `tab`. A blank title reverts to the derived name

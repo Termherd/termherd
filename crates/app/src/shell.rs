@@ -43,6 +43,7 @@ mod ime;
 mod input;
 mod launch;
 mod live_settings;
+mod notify_click;
 mod orchestrate;
 mod record;
 mod repos;
@@ -225,6 +226,10 @@ struct Shell {
     /// Drains async-bridge transport requests into the subscription (taken
     /// once), so an off-thread caller can read `core` state and get a reply.
     bridge_requests: BridgeRequests,
+    /// Where a clicked desktop notification sends its session, and the source
+    /// the subscription drains it from (taken once).
+    notification_clicks: notify_click::NotificationClicks,
+    notification_clicked: notify_click::ClickSource,
     /// The loopback MCP server's endpoint, if it bound. A Claude launch injects
     /// this url (plus a fresh token) into its `mcpServers` config. `None` when
     /// the substrate runtime or the listener failed — the browser still runs.
@@ -406,6 +411,8 @@ enum Message {
         session: SessionId,
         body: String,
     },
+    /// The user clicked the desktop notification `SessionId` posted.
+    NotificationClicked(SessionId),
     /// A session's process exited; `clean` mirrors [`PtyEvent::Exited`].
     PtyExited {
         session: SessionId,
@@ -707,6 +714,7 @@ impl Shell {
             mcp_endpoint,
             mcp_tokens,
         } = live_bridge;
+        let (notification_clicks, notification_clicked) = notify_click::channel();
         let mut core = termherd_core::App::new();
         core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
         core.apply(termherd_core::Event::CollapsedLoaded(startup.collapsed));
@@ -724,6 +732,8 @@ impl Shell {
             pty,
             pty_output,
             bridge_requests,
+            notification_clicks,
+            notification_clicked,
             mcp_endpoint,
             mcp_tokens,
             mcp_session_tokens: HashMap::new(),
@@ -943,6 +953,7 @@ impl Shell {
                     .apply(termherd_core::Event::SessionNotified { session, body });
                 self.perform(effects)
             }
+            Message::NotificationClicked(session) => self.on_notification_clicked(session),
             Message::PtyExited { session, clean } => {
                 let tabs_before = self.core.workspace.tabs.len();
                 let effects = self
@@ -1492,6 +1503,10 @@ impl Shell {
         subs.push(Subscription::run_with(
             self.bridge_requests.clone(),
             bridge::request_stream,
+        ));
+        subs.push(Subscription::run_with(
+            self.notification_clicked.clone(),
+            notify_click::click_stream,
         ));
         // The screencast is driven by the window's present clock while recording:
         // `window::frames()` yields one tick per present (self-sustaining,
@@ -2567,6 +2582,51 @@ mod key_routing {
             "the reported focus is the pane that was asked for"
         );
         assert_eq!(focused(&shell), Some(first.to_string()));
+    }
+
+    #[test]
+    fn a_clicked_notification_reveals_its_background_tab() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        shell.focus = Focus::Search;
+        let session = SessionId(std::num::NonZeroU64::new(first).expect("non-zero"));
+
+        // The whole seam the OS thread uses: a slot reserved by the effect
+        // executor, clicked, drained by the subscription, then dispatched.
+        shell
+            .notification_clicks
+            .reserve(session)
+            .expect("a free slot")
+            .clicked();
+        let mut stream = Box::pin(notify_click::click_stream(&shell.notification_clicked));
+        let message =
+            iced::futures::executor::block_on(iced::futures::StreamExt::next(&mut stream))
+                .expect("the click arrives");
+        let _ = shell.update(message);
+
+        assert_eq!(shell.core.workspace.active, 0, "its tab was activated");
+        assert_eq!(focused(&shell), Some(first.to_string()));
+        assert_eq!(shell.focus, Focus::Terminal, "the terminal has the keys");
+    }
+
+    #[test]
+    fn a_click_on_a_closed_sessions_notification_changes_nothing() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: Some(first) });
+        assert_eq!(outcome.error, None);
+        shell.focus = Focus::Search;
+        let (tabs, active, before) = (
+            shell.core.workspace.tabs.len(),
+            shell.core.workspace.active,
+            focused(&shell),
+        );
+
+        let session = SessionId(std::num::NonZeroU64::new(first).expect("non-zero"));
+        let _ = shell.update(Message::NotificationClicked(session));
+
+        assert_eq!(shell.core.workspace.tabs.len(), tabs);
+        assert_eq!(shell.core.workspace.active, active);
+        assert_eq!(focused(&shell), before);
+        assert_eq!(shell.focus, Focus::Search, "keyboard focus is untouched");
     }
 
     #[test]

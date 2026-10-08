@@ -60,6 +60,38 @@ good by the first real mark or Claude signal, so it can never contradict what
 the terminal says about itself. Windows ConPTY exposes no foreground process
 group, so a shell with neither route stays on `starting` there.
 
+## Desktop notifications
+
+When a session asks for you (Claude's OSC 9 notification), TermHerd posts a
+desktop notification titled with the session's tab name and carrying Claude's
+message. None is posted for the pane you are already looking at while the
+TermHerd window has focus.
+
+**Clicking the notification brings you back to that session**: TermHerd comes
+to the front and activates the tab and pane that raised it — the same reveal
+the MCP [`focus_pane`](../mcp/live-bridge.md) tool performs. The notification
+remembers the session, not the tab title, so two tabs with the same name are
+never confused. If the tab was closed in the meantime, the click still brings
+TermHerd forward and changes nothing else. Dismissing the notification does
+nothing.
+
+At most 16 notifications wait for a click at once; past that, a new one still
+appears but clicking it does nothing, until earlier ones are clicked or
+dismissed.
+
+How well a click reaches TermHerd depends on the OS, and none of these has been
+confirmed with a real click yet:
+
+| OS | Click reaches TermHerd | Window comes forward |
+| --- | --- | --- |
+| macOS | ✅ expected | ❓ unconfirmed |
+| Linux | ⚠️ only if the notification server supports actions | ❓ Wayland may refuse |
+| Windows | ⚠️ a click from the action centre may never arrive | ❓ may only flash the taskbar |
+
+On Windows the notification is attributed to PowerShell until TermHerd
+registers its own application id, which is why a click from the action centre
+may be lost.
+
 ## Close confirmation
 
 Closing is governed per action — `tab` and `app` — by one of three policies:

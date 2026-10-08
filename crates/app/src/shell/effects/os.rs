@@ -95,19 +95,45 @@ pub(super) fn open_url(url: &str) -> Result<(), PtyError> {
     }
 }
 
+/// Label of the XDG `"default"` action. Most servers never draw it — it is the
+/// key a click on the body reports — but a few render it as a button.
+#[cfg(all(unix, not(target_os = "macos")))]
+const OPEN_ACTION_LABEL: &str = "Show";
+
 /// Post a desktop notification to the OS notification centre. Like
 /// `open_url`, this is an OS handoff, not a PTY call, and fire-and-forget: the
 /// send runs on a detached thread and the result is logged there, never fatal —
 /// a notification backend that's unavailable must not take a session down.
 /// `title`/`body` come pre-derived from `core` (which session, what message).
-///
+pub(super) fn notify(title: &str, body: &str) -> Result<(), PtyError> {
+    post(title, body, None::<fn()>)
+}
+
+/// [`notify`], then wait on the same thread for the user's answer and run
+/// `on_click` if they clicked the notification. A dismissal or an expiry runs
+/// nothing; `on_click` is dropped with the thread either way, which is what
+/// lets its owner count how many waits are still parked.
+pub(super) fn notify_clickable(
+    title: &str,
+    body: &str,
+    on_click: impl FnOnce() + Send + 'static,
+) -> Result<(), PtyError> {
+    post(title, body, Some(on_click))
+}
+
 /// **Why a thread, not a direct call:** on macOS the backend (`NSUserNotification`
 /// via `mac-notification-sys`) drives an `NSRunLoop` to await delivery *when
 /// invoked on the main thread*. iced calls `perform` from inside winit's event
 /// handler, so pumping the run loop there re-enters it and aborts the process.
 /// Off the main thread the backend takes a Condvar wait instead, so this is
-/// both crash-safe and non-blocking for the UI.
-pub(super) fn notify(title: &str, body: &str) -> Result<(), PtyError> {
+/// both crash-safe and non-blocking for the UI — and the same off-main wait is
+/// what lets a clickable notification block until it is answered, with winit's
+/// own run loop delivering the click.
+fn post(
+    title: &str,
+    body: &str,
+    on_click: Option<impl FnOnce() + Send + 'static>,
+) -> Result<(), PtyError> {
     // Attribute notifications to our bundle once, before the first send, so the
     // macOS backend doesn't AppleScript-probe for a placeholder app and pop a
     // "Where is …?" chooser. No-op (and harmless) when run unbundled.
@@ -124,11 +150,32 @@ pub(super) fn notify(title: &str, body: &str) -> Result<(), PtyError> {
     std::thread::Builder::new()
         .name("os-notify".to_owned())
         .spawn(move || {
-            if let Err(error) = notify_rust::Notification::new()
-                .summary(&title)
-                .body(&body)
-                .show()
-            {
+            let mut notification = notify_rust::Notification::new();
+            notification.summary(&title).body(&body);
+            // Only XDG needs the action declared for a body click to be
+            // reported at all. macOS and Windows report the click without it,
+            // and both would draw any declared action as a visible button.
+            #[cfg(all(unix, not(target_os = "macos")))]
+            if on_click.is_some() {
+                notification.action("default", OPEN_ACTION_LABEL);
+            }
+            let handle = match notification.show() {
+                Ok(handle) => handle,
+                Err(error) => {
+                    tracing::warn!(%error, "desktop notification failed");
+                    return;
+                }
+            };
+            let Some(on_click) = on_click else {
+                return;
+            };
+            let waited =
+                handle.wait_for_response(|response: &notify_rust::NotificationResponse| {
+                    if response.is_default_action() {
+                        on_click();
+                    }
+                });
+            if let Err(error) = waited {
                 tracing::warn!(%error, "desktop notification failed");
             }
         })

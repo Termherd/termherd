@@ -23,7 +23,7 @@ use termherd_scan::read_session_file;
 
 use super::bridge::Request;
 use super::{Message, Shell};
-use os::{notify, open_path, open_url, spawn_editor};
+use os::{notify, notify_clickable, open_path, open_url, spawn_editor};
 
 /// Open a resolved file. The configured command fails *visibly* — a click
 /// that opens nothing is indistinguishable from a click that missed, and
@@ -109,7 +109,17 @@ impl Shell {
                     |(request, resolved)| Message::PathResolved { request, resolved },
                 );
             }
-            Effect::Notify { title, body } => notify(&title, &body),
+            Effect::Notify {
+                session,
+                title,
+                body,
+            } => match self.notification_clicks.reserve(session) {
+                Some(slot) => notify_clickable(&title, &body, move || slot.clicked()),
+                None => {
+                    tracing::debug!("too many notifications awaiting a click; posting unclickable");
+                    notify(&title, &body)
+                }
+            },
             // Capture writes the dump and schedules the PNG; record drives the
             // encoder thread. Both return a task the loop above batches in.
             Effect::Capture(dump) => return self.capture_dump(dump),
