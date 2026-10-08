@@ -66,6 +66,9 @@ impl Shell {
         if let Some(menu) = self.tab_menu_card() {
             return modal(base, menu, Message::CloseTabMenu);
         }
+        if let Some(picker) = self.color_picker_card() {
+            return modal(base, picker, Message::CloseColorPicker);
+        }
         if self.settings_open {
             return modal(base, self.settings_panel(), Message::CloseSettings);
         }

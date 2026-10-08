@@ -326,7 +326,18 @@ impl Shell {
     /// but is still gated on the ladder, so neither tool can reach a state the
     /// keyboard cannot.
     fn press(&mut self, press: Press) -> (PressStep, Task<Message>) {
-        self.drop_stale_tab_menu();
+        self.drop_stale_lists();
+        let armed_before = self.claude_command.is_some();
+        let pressed = self.press_unguarded(press);
+        // Whatever path armed it — an action, a menu entry, a colour pick —
+        // an agent armed it, and the user beside it has not read it yet.
+        if !armed_before && self.claude_command.is_some() {
+            self.hold_enter_after_remote_arm();
+        }
+        pressed
+    }
+
+    fn press_unguarded(&mut self, press: Press) -> (PressStep, Task<Message>) {
         match press {
             Press::Chord(chord) => match event_of(&chord) {
                 Some(event) => {

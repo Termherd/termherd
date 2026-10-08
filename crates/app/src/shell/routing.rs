@@ -47,6 +47,9 @@ pub(super) enum KeyboardOwner {
     /// The tab context menu, which answers the arrows and Enter itself rather
     /// than through a widget's submit, which a synthesised key never reaches.
     TabMenu,
+    /// The tab colour picker, which answers the arrows and Enter itself, as
+    /// the tab menu does.
+    ColorPicker,
     /// The settings panel.
     Settings,
     /// The document editor, which handles its own keys.
@@ -61,7 +64,7 @@ impl KeyboardOwner {
     /// `match` below: a new variant fails to compile there, in this file, where
     /// this array is the next thing the author reads.
     #[cfg(test)]
-    pub(super) const ALL: [Self; 9] = [
+    pub(super) const ALL: [Self; 10] = [
         Self::TabRename,
         Self::SessionRename,
         Self::Quit,
@@ -69,6 +72,7 @@ impl KeyboardOwner {
         Self::Archive,
         Self::ClaudeCommand,
         Self::TabMenu,
+        Self::ColorPicker,
         Self::Settings,
         Self::Doc,
     ];
@@ -83,6 +87,7 @@ impl KeyboardOwner {
             Self::Archive => "archive-confirm",
             Self::ClaudeCommand => "claude-command-confirm",
             Self::TabMenu => "tab-menu",
+            Self::ColorPicker => "tab-color-picker",
             Self::Settings => "settings",
             Self::Doc => "doc-editor",
         }
@@ -100,8 +105,9 @@ pub(super) enum Inertia {
     NoSurface,
     /// The action is wired, but refused before acting because a precondition was
     /// absent — no focused session to derive a repo from, no closed tab to
-    /// reopen, no tab to rename or open a menu on, nothing to scroll, nothing
-    /// selected to copy, no agent name, no idle Claude to send a command to.
+    /// reopen, no tab to rename, colour or open a menu on, nothing to scroll,
+    /// nothing selected to copy, no agent name, no idle Claude to send a
+    /// command to.
     ///
     /// Deliberately narrower than "had no visible effect": an action whose event
     /// `core` applies and absorbs (a tab index past the open tabs) *did* run, and
@@ -222,6 +228,10 @@ impl Shell {
                 .ok_or(Inertia::NoContext)?,
             Action::OpenTabMenu => {
                 self.open_tab_menu().ok_or(Inertia::NoContext)?;
+                Task::none()
+            }
+            Action::PickTabColor => {
+                self.open_color_picker().ok_or(Inertia::NoContext)?;
                 Task::none()
             }
             Action::FocusSearch => {
@@ -361,6 +371,9 @@ impl Shell {
         if self.live_tab_menu().is_some() {
             return Some(KeyboardOwner::TabMenu);
         }
+        if self.live_color_picker().is_some() {
+            return Some(KeyboardOwner::ColorPicker);
+        }
         if self.settings_open {
             return Some(KeyboardOwner::Settings);
         }
@@ -390,6 +403,7 @@ impl Shell {
                 (Some(verdict), task)
             }
             KeyboardOwner::TabMenu => self.tab_menu_key(event),
+            KeyboardOwner::ColorPicker => self.color_picker_key(event),
             KeyboardOwner::Settings => (None, self.settings_key(event)),
             KeyboardOwner::Doc => (None, self.open_doc_key(event)),
         };

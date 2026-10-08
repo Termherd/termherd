@@ -5,6 +5,8 @@
 //! user-facing literal should live in the view/shell code. Static labels are
 //! `const`s; strings built from runtime values are functions.
 
+use termherd_core::ClaudeColor;
+
 // --- Sidebar ---
 pub const SEARCH_PLACEHOLDER: &str = "Search…";
 pub const TITLES_ONLY: &str = "Titles only";
@@ -79,12 +81,38 @@ pub fn agent_name(name: &str) -> String {
 
 // --- Tab context menu ---
 pub const TAB_MENU_RENAME: &str = "Rename tab";
+pub const TAB_MENU_COLOR: &str = "Tab colour…";
 pub const TAB_MENU_COPY_AGENT_NAME: &str = "Copy agent name";
 pub const TAB_MENU_NEW_SHELL: &str = "New shell here";
 pub const TAB_MENU_NEW_CLAUDE: &str = "New Claude session here";
 pub const TAB_MENU_SPLIT_RIGHT: &str = "Split right";
 pub const TAB_MENU_SPLIT_DOWN: &str = "Split down";
 pub const TAB_MENU_CLOSE: &str = "Close pane";
+
+// --- Tab colour picker ---
+/// A colour as the picker lists it. `default` is listed as the absence of a
+/// colour it gives the tab, not as a colour of its own.
+#[must_use]
+pub const fn color_choice(color: ClaudeColor) -> &'static str {
+    match color {
+        ClaudeColor::Red => "Red",
+        ClaudeColor::Blue => "Blue",
+        ClaudeColor::Green => "Green",
+        ClaudeColor::Yellow => "Yellow",
+        ClaudeColor::Purple => "Purple",
+        ClaudeColor::Orange => "Orange",
+        ClaudeColor::Pink => "Pink",
+        ClaudeColor::Cyan => "Cyan",
+        ClaudeColor::Default => "None",
+    }
+}
+
+/// The picker's line after a pick for a Claude pane could not be asked of it.
+#[must_use]
+pub fn color_pick_refused(reason: &str) -> String {
+    format!("Not asked: {reason}.")
+}
+
 /// The card line naming the colour `/color` gave a session — the cue that
 /// does not depend on telling the colours apart.
 #[must_use]

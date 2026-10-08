@@ -134,6 +134,10 @@ pub enum Action {
     /// termherd types into Claude. Inert unless the focused pane is a Claude
     /// idle at its prompt.
     SendToDesktop,
+    /// Open the focused tab's colour picker. A pick for a Claude pane is typed
+    /// as `/color`, behind the same confirmation; a shell tab keeps it itself.
+    /// Inert with no tab, or on a Claude pane that cannot take a command now.
+    PickTabColor,
     /// Jump the focused terminal's viewport to the top of its scrollback.
     ScrollTop,
     /// Jump the focused terminal's viewport back to the live bottom.
@@ -278,6 +282,11 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         action: Action::SendToDesktop,
         name: "send-to-desktop",
+        default_chords: &[],
+    },
+    ActionDef {
+        action: Action::PickTabColor,
+        name: "pick-tab-color",
         default_chords: &[],
     },
     ActionDef {

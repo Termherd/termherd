@@ -42,6 +42,11 @@ pub(super) const ENTRIES: &[Entry] = &[
         offered: Offered::OnEveryTab,
     },
     Entry {
+        action: Action::PickTabColor,
+        label: strings::TAB_MENU_COLOR,
+        offered: Offered::OnEveryTab,
+    },
+    Entry {
         action: Action::CopyAgentName,
         label: strings::TAB_MENU_COPY_AGENT_NAME,
         offered: Offered::WithAgentName,
@@ -150,18 +155,21 @@ impl TabMenu {
 impl Shell {
     /// The open menu, if its anchor still holds focus. Every reader goes
     /// through here, so a menu whose pane went away answers nothing even
-    /// before [`Self::drop_stale_tab_menu`] clears it.
+    /// before [`Self::drop_stale_lists`] clears it.
     pub(super) fn live_tab_menu(&self) -> Option<TabMenu> {
         self.tab_menu
             .filter(|menu| self.core.workspace.focused_session() == Some(menu.anchor))
     }
 
-    /// Forget a menu whose pane lost focus, so focus coming back to that pane
-    /// cannot revive a menu nobody reopened. Run before each message and each
-    /// MCP press: the two ways anything moves focus.
-    pub(super) fn drop_stale_tab_menu(&mut self) {
+    /// Forget a menu or a colour picker whose pane lost focus, so focus coming
+    /// back to that pane cannot revive a list nobody reopened. Run before each
+    /// message and each MCP press: the two ways anything moves focus.
+    pub(super) fn drop_stale_lists(&mut self) {
         if self.live_tab_menu().is_none() {
             self.tab_menu = None;
+        }
+        if self.live_color_picker().is_none() {
+            self.color_picker = None;
         }
     }
 
