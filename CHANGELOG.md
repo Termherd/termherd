@@ -7,6 +7,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (a working Claude read as idle)
+
+- Claude Code 2.1 marks a working session's title with `◐` / `◑` rather than
+  a Braille spinner, which termherd did not recognise. A Claude session read
+  as idle while it worked, and once Claude's "waiting for your input" ping
+  arrived it read as needing attention for good, since only work clears that.
+  Every reader of the status was affected: the status dot, `wait_for_status`,
+  the close confirmation, and the slash commands offered only to an idle
+  Claude — `send-to-desktop`, the rename, and the tab colour list (#343).
+
 ### Added (pick a tab's colour)
 
 - The tab menu's *Tab colour…*, or a `pick-tab-color` action (unbound by
