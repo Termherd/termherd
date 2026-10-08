@@ -30,8 +30,8 @@ mod tabs;
 use doc_editor::doc_editor;
 use modals::modal;
 use style::{
-    card_secondary_text, card_style, clip, kind_glyph, kind_icon, mix, sidebar_secondary_text,
-    status_dot,
+    COLOR_MARK_WIDTH, card_secondary_text, card_style, claude_color, clip, color_bar, kind_glyph,
+    kind_icon, mix, sidebar_secondary_text, status_dot,
 };
 
 impl Shell {
@@ -297,6 +297,13 @@ pub(super) fn session_card(
     .spacing(4);
     if let Some(agent) = agent {
         card = card.push(agent_line(&agent));
+    }
+    if let Some(color) = session.digest.agent_color {
+        card = card.push(
+            text(strings::session_color(color.name()))
+                .size(10)
+                .style(card_secondary_text),
+        );
     }
     for line in &session.digest.tail {
         card = card.push(

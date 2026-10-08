@@ -77,6 +77,13 @@ pub fn agent_name(name: &str) -> String {
     format!("Agent: {name}")
 }
 
+/// The card line naming the colour `/color` gave a session — the cue that
+/// does not depend on telling the colours apart.
+#[must_use]
+pub fn session_color(name: &str) -> String {
+    format!("Colour: {name}")
+}
+
 // --- Confirmations ---
 pub const CANCEL: &str = "Cancel";
 pub const CLOSE: &str = "Close";
