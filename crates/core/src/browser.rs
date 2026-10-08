@@ -46,15 +46,16 @@ pub fn last_activity(sessions: &[SessionRecord]) -> Option<SystemTime> {
     sessions.iter().filter_map(|s| s.modified).max()
 }
 
+const MINUTE: u64 = 60;
+const HOUR: u64 = 60 * MINUTE;
+const DAY: u64 = 24 * HOUR;
+
 /// A compact, language-neutral relative age — `now`, `5m`, `3h`, `2d`, `4w`,
 /// `1y` — used to disambiguate sidebar rows whose titles collide within a
 /// project. The caller supplies the elapsed `Duration`: core stays pure
 /// (no clock), the adapter owns the wall clock.
 #[must_use]
 pub fn relative_age(elapsed: Duration) -> String {
-    const MINUTE: u64 = 60;
-    const HOUR: u64 = 60 * MINUTE;
-    const DAY: u64 = 24 * HOUR;
     const WEEK: u64 = 7 * DAY;
     const YEAR: u64 = 365 * DAY;
 
@@ -80,16 +81,14 @@ pub fn relative_age(elapsed: Duration) -> String {
 /// is read for its minutes.
 #[must_use]
 pub fn compact_elapsed(elapsed: Duration) -> String {
-    const MINUTE: u64 = 60;
-    const HOUR: u64 = 60 * MINUTE;
-    const DAY: u64 = 24 * HOUR;
-
     let secs = elapsed.as_secs();
-    let (big, big_unit, small, small_unit) = if secs < MINUTE {
+    if secs < MINUTE {
         return "<1m".to_owned();
-    } else if secs < HOUR {
+    }
+    if secs < HOUR {
         return format!("{}m", secs / MINUTE);
-    } else if secs < DAY {
+    }
+    let (big, big_unit, small, small_unit) = if secs < DAY {
         (secs / HOUR, "h", secs % HOUR / MINUTE, "m")
     } else {
         (secs / DAY, "d", secs % DAY / HOUR, "h")

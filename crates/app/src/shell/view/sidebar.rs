@@ -467,15 +467,10 @@ impl Shell {
             // The narrow row clips the title; hover reveals a richer
             // card — full title, last activity + message count, and the
             // last few transcript lines so the session is recognisable
-            // without opening it. A row has no pane, so its version is the
-            // one its transcript last recorded.
-            let facts = CardFacts {
-                version: s.digest.version.clone(),
-                ..CardFacts::default()
-            };
+            // without opening it.
             tooltip(
                 launch,
-                session_card(title.clone(), &facts, s, now),
+                session_card(title.clone(), &CardFacts::default(), s, now),
                 tooltip::Position::Right,
             )
             .into()

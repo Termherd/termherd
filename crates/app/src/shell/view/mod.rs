@@ -270,8 +270,8 @@ impl Shell {
 pub(super) struct CardFacts {
     /// The peer name other Claude sessions address the pane's Claude by.
     pub agent: Option<String>,
-    /// The Claude Code version, as [`termherd_core::App::claude_version`]
-    /// resolves it.
+    /// The Claude Code version the running Claude reports
+    /// ([`termherd_core::App::live_claude_version`]).
     pub version: Option<String>,
     /// How long the pane's PTY has run.
     pub running_for: Option<Duration>,
@@ -280,13 +280,21 @@ pub(super) struct CardFacts {
 /// The dimmed detail lines both hover cards show under their title, in order:
 /// agent, model and effort (from the transcript `digest`), version, running
 /// time. A fact nobody knows is a line left out rather than a blank one.
+///
+/// The version is the running Claude's when a pane knows it, else the one the
+/// transcript last recorded: the transcript is only as fresh as the last scan,
+/// and a fresh pane has none yet.
 pub(super) fn detail_lines(facts: &CardFacts, digest: Option<&SessionDigest>) -> Vec<String> {
     let model = digest.and_then(|d| d.model.as_deref());
     let effort = digest.and_then(|d| d.effort.as_deref());
+    let version = facts
+        .version
+        .as_deref()
+        .or_else(|| digest.and_then(|d| d.version.as_deref()));
     [
         facts.agent.as_deref().map(strings::agent_name),
         strings::model_and_effort(model, effort),
-        facts.version.as_deref().map(strings::claude_version),
+        version.map(strings::claude_version),
         facts
             .running_for
             .map(|span| strings::running_for(&compact_elapsed(span))),
@@ -413,6 +421,28 @@ mod tests {
                 "line {missing}"
             );
         }
+    }
+
+    #[test]
+    fn the_running_claudes_version_outranks_the_transcripts() {
+        let recorded = SessionDigest {
+            version: Some("2.1.290".to_owned()),
+            ..SessionDigest::default()
+        };
+        let version_line = |facts: &CardFacts| {
+            detail_lines(facts, Some(&recorded))
+                .into_iter()
+                .find(|line| line.contains("2.1."))
+        };
+        assert_eq!(
+            version_line(&every_fact()),
+            Some(strings::claude_version("2.1.294"))
+        );
+        assert_eq!(
+            version_line(&CardFacts::default()),
+            Some(strings::claude_version("2.1.290")),
+            "with no pane, the transcript's version"
+        );
     }
 
     #[test]

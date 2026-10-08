@@ -86,11 +86,13 @@ impl LiveSession {
     /// front of this pane is the Claude that wrote it. Called whenever either
     /// side of the proof changes.
     fn remember_proven_id(&mut self) {
-        if let Some(id) = self
+        let proven = self
             .proven_session_file()
-            .and_then(|f| f.session_id.clone())
+            .and_then(|f| f.session_id.as_deref());
+        if let Some(id) = proven
+            && self.proven_session_id.as_deref() != Some(id)
         {
-            self.proven_session_id = Some(id);
+            self.proven_session_id = Some(id.to_owned());
         }
     }
 
@@ -125,16 +127,6 @@ impl LiveSession {
             },
         }
     }
-}
-
-/// Which Claude Code version a pane runs, given the one its live session file
-/// states and the one its transcript last recorded: the live one, since the
-/// transcript is only as fresh as the last scan and a fresh pane has none.
-fn version_by_precedence<'a>(
-    live: Option<&'a str>,
-    transcript: Option<&'a str>,
-) -> Option<&'a str> {
-    live.or(transcript)
 }
 
 /// Per-session activity surfaced in the sidebar and on tabs (FR8).
@@ -511,16 +503,11 @@ impl App {
         live.spawned_at
     }
 
-    /// The Claude Code version running in `session`: the one its proven
-    /// session file states, else the one its transcript last recorded.
+    /// The Claude Code version the Claude in front of `session` reports in its
+    /// session file, when the file proves that Claude wrote it.
     #[must_use]
-    pub fn claude_version(&self, session: SessionId) -> Option<&str> {
-        let live = self.sessions.get(&session)?;
-        let transcript = live
-            .claude_session_id()
-            .and_then(|id| self.record_for(id))
-            .and_then(|record| record.digest.version.as_deref());
-        version_by_precedence(live.live_version(), transcript)
+    pub fn live_claude_version(&self, session: SessionId) -> Option<&str> {
+        self.sessions.get(&session)?.live_version()
     }
 
     /// A session's PTY ended. A *clean* exit — the user typed `exit` at a
@@ -844,7 +831,6 @@ mod tests {
     fn an_unproven_session_file_never_outranks_the_launch_id() {
         let stale = SessionFile {
             proc_start: Some("another process".into()),
-            version: None,
             ..file_naming(42, "stale")
         };
         let (app, id) = pane(fresh(Some(MINTED)), Some(claude_job(42)), Some(stale));
@@ -1484,19 +1470,12 @@ mod tests {
         assert_eq!(app.running_since(id), None, "a dead terminal runs no more");
     }
 
-    /// A fresh Claude pane under `MINTED` whose transcript the last scan
-    /// found, written by Claude Code `transcript_version`.
-    fn claude_pane_with_transcript(transcript_version: Option<&str>) -> (App, SessionId) {
+    /// A fresh Claude pane under `MINTED` whose session file, written by a
+    /// process started at `started`, reports Claude Code `version`.
+    fn pane_reading(started: &str, version: &str) -> (App, SessionId) {
         let mut app = App::new();
-        let mut scanned = record(MINTED, "/proj", "a prompt");
-        scanned.digest.version = transcript_version.map(str::to_owned);
-        app.apply(Event::ScanCompleted(vec![scanned]));
         app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
         let id = app.workspace.focused_session().expect("a focused session");
-        (app, id)
-    }
-
-    fn read_file(app: &mut App, id: SessionId, started: &str, version: &str) {
         app.apply(Event::ForegroundJobChanged {
             session: id,
             job: Some(claude_job(4399)),
@@ -1510,33 +1489,18 @@ mod tests {
             session: id,
             file: Some(file),
         });
+        (app, id)
     }
 
     #[test]
-    fn the_version_comes_from_the_transcript_until_a_session_file_proves_otherwise() {
-        let (mut app, id) = claude_pane_with_transcript(Some("2.1.290"));
-        assert_eq!(app.claude_version(id), Some("2.1.290"));
-        read_file(&mut app, id, STARTED, "2.1.294");
-        assert_eq!(
-            app.claude_version(id),
-            Some("2.1.294"),
-            "the running Claude outranks what its transcript last recorded"
-        );
-        read_file(&mut app, id, "a later process", "9.9.9");
-        assert_eq!(
-            app.claude_version(id),
-            Some("2.1.290"),
-            "a file the job in front did not write names nothing"
-        );
+    fn the_live_version_is_the_one_a_proven_session_file_reports() {
+        let (app, id) = pane_reading(STARTED, "2.1.294");
+        assert_eq!(app.live_claude_version(id), Some("2.1.294"));
     }
 
     #[test]
-    fn a_pane_with_no_transcript_yet_takes_its_version_from_the_session_file() {
-        let mut app = App::new();
-        app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
-        let id = app.workspace.focused_session().expect("a focused session");
-        assert_eq!(app.claude_version(id), None);
-        read_file(&mut app, id, STARTED, "2.1.294");
-        assert_eq!(app.claude_version(id), Some("2.1.294"));
+    fn a_session_file_the_job_in_front_did_not_write_reports_no_version() {
+        let (app, id) = pane_reading("a later process", "9.9.9");
+        assert_eq!(app.live_claude_version(id), None);
     }
 }

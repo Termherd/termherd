@@ -145,7 +145,7 @@ impl Shell {
         let first = tab.sessions().first().copied();
         let facts = first.map_or_else(CardFacts::default, |id| CardFacts {
             agent: self.core.peer_name(id),
-            version: self.core.claude_version(id).map(str::to_owned),
+            version: self.core.live_claude_version(id).map(str::to_owned),
             running_for: self
                 .core
                 .running_since(id)

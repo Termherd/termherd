@@ -191,8 +191,8 @@ const SYNTHETIC_MODEL: &str = "<synthetic>";
 
 impl RunFacts {
     fn observe(&mut self, entry: &serde_json::Value, carries_version: bool, is_assistant: bool) {
-        if carries_version && let Some(v) = non_empty_str(entry, "version") {
-            self.version = Some(v.to_owned());
+        if carries_version {
+            keep_latest(&mut self.version, non_empty_str(entry, "version"));
         }
         let sidechain = entry
             .get("isSidechain")
@@ -204,14 +204,21 @@ impl RunFacts {
         if model == Some(SYNTHETIC_MODEL) {
             return;
         }
-        if let Some(model) = model {
-            self.model = Some(model.to_owned());
-        }
-        if let Some(effort) =
-            non_empty_str(entry, "effort").or_else(|| non_empty_str(entry, "perTurnEffort"))
-        {
-            self.effort = Some(effort.to_owned());
-        }
+        keep_latest(&mut self.model, model);
+        keep_latest(
+            &mut self.effort,
+            non_empty_str(entry, "effort").or_else(|| non_empty_str(entry, "perTurnEffort")),
+        );
+    }
+}
+
+/// Replace `slot` with `seen` when an entry recorded one. The value rarely
+/// changes from one line to the next, so it is copied only when it does.
+fn keep_latest(slot: &mut Option<String>, seen: Option<&str>) {
+    if let Some(seen) = seen
+        && slot.as_deref() != Some(seen)
+    {
+        *slot = Some(seen.to_owned());
     }
 }
 
@@ -500,8 +507,9 @@ mod tests {
         }
     }
 
-    /// An assistant entry as Claude Code 2.1 writes it, `message` replaced by
-    /// `fields` merged over a text reply, plus `extra` top-level keys.
+    /// An assistant entry as Claude Code 2.1 writes it: a text reply with the
+    /// keys of `message` merged into its `message`, and the keys of `extra`
+    /// into the entry itself.
     fn assistant_line(message: serde_json::Value, extra: serde_json::Value) -> String {
         let mut entry = serde_json::json!({
             "type": "assistant",
