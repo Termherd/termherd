@@ -15,6 +15,11 @@ pub struct SessionMeta {
     pub archived: bool,
     /// A user title that overrides the derived one.
     pub title: Option<String>,
+    /// The name Claude itself gave the session (its `/rename`) when
+    /// [`Self::title`] was set, `None` if it had none. The later naming wins:
+    /// while Claude's name is still this one, the user's title stands; once
+    /// Claude is renamed again, Claude's name does.
+    pub title_over: Option<String>,
 }
 
 impl SessionMeta {

@@ -7,7 +7,7 @@ use iced::advanced::widget::{operate, operation::focusable};
 use iced::keyboard::{Key, key::Named};
 use iced::{Task, keyboard};
 use termherd_core::workspace::{Direction, SplitDir};
-use termherd_core::{Action, ScrollTarget};
+use termherd_core::{Action, ClaudeCommand, ScrollTarget};
 use termherd_pty::TermKey;
 
 use super::input::{chord_of, key_mods, numpad_char, to_term_key};
@@ -42,6 +42,8 @@ pub(super) enum KeyboardOwner {
     TabClose(usize),
     /// The archive confirmation.
     Archive,
+    /// The confirmation naming a slash command about to be typed into Claude.
+    ClaudeCommand,
     /// The tab context menu, which answers the arrows and Enter itself rather
     /// than through a widget's submit, which a synthesised key never reaches.
     TabMenu,
@@ -59,12 +61,13 @@ impl KeyboardOwner {
     /// `match` below: a new variant fails to compile there, in this file, where
     /// this array is the next thing the author reads.
     #[cfg(test)]
-    pub(super) const ALL: [Self; 8] = [
+    pub(super) const ALL: [Self; 9] = [
         Self::TabRename,
         Self::SessionRename,
         Self::Quit,
         Self::TabClose(0),
         Self::Archive,
+        Self::ClaudeCommand,
         Self::TabMenu,
         Self::Settings,
         Self::Doc,
@@ -78,6 +81,7 @@ impl KeyboardOwner {
             Self::Quit => "quit-confirm",
             Self::TabClose(_) => "tab-close-confirm",
             Self::Archive => "archive-confirm",
+            Self::ClaudeCommand => "claude-command-confirm",
             Self::TabMenu => "tab-menu",
             Self::Settings => "settings",
             Self::Doc => "doc-editor",
@@ -97,7 +101,7 @@ pub(super) enum Inertia {
     /// The action is wired, but refused before acting because a precondition was
     /// absent — no focused session to derive a repo from, no closed tab to
     /// reopen, no tab to rename or open a menu on, nothing to scroll, nothing
-    /// selected to copy, no agent name.
+    /// selected to copy, no agent name, no idle Claude to send a command to.
     ///
     /// Deliberately narrower than "had no visible effect": an action whose event
     /// `core` applies and absorbs (a tab index past the open tabs) *did* run, and
@@ -129,6 +133,10 @@ pub(super) enum KeyVerdict {
     /// An open overlay consumed it — acted on it or swallowed it. Carries
     /// [`KeyboardOwner::label`].
     Overlay(&'static str),
+    /// An overlay's confirmation was refused, so the prompt stays open and
+    /// nothing it promised happened. Carries the label and the reason — told
+    /// `overlay` instead, a caller would believe the confirmed action ran.
+    Refused(&'static str, String),
     /// A bound keymap action ran; carries its config name.
     Ran(String),
     /// A bound keymap action changed nothing, and why. Kept apart from
@@ -147,15 +155,23 @@ pub(super) enum KeyVerdict {
 /// swallowed so it can't reach the terminal beneath the prompt.
 fn classify_confirm(event: &keyboard::Event) -> ConfirmKey {
     if is_escape(event) {
-        return ConfirmKey::Cancel;
+        ConfirmKey::Cancel
+    } else if is_enter(event) {
+        ConfirmKey::Confirm
+    } else {
+        ConfirmKey::Swallow
     }
-    match event {
+}
+
+/// Enter, the key every confirmation answers yes to.
+pub(super) fn is_enter(event: &keyboard::Event) -> bool {
+    matches!(
+        event,
         keyboard::Event::KeyPressed {
             key: Key::Named(Named::Enter),
             ..
-        } => ConfirmKey::Confirm,
-        _ => ConfirmKey::Swallow,
-    }
+        }
+    )
 }
 
 /// Escape, the one key every overlay must answer: it is how a caller with no
@@ -195,6 +211,9 @@ impl Shell {
                 .map(iced::clipboard::write)
                 .ok_or(Inertia::NoContext)?,
             Action::Paste => iced::clipboard::read().map(Message::Paste),
+            Action::SendToDesktop => self
+                .arm_focused_claude_command(ClaudeCommand::Desktop)
+                .ok_or(Inertia::NoContext)?,
             Action::NextTab => self.cycle_tab(1).ok_or(Inertia::NoContext)?,
             Action::PrevTab => self.cycle_tab(-1).ok_or(Inertia::NoContext)?,
             Action::CloseFocused => self.close_focused_pane().ok_or(Inertia::NoContext)?,
@@ -282,8 +301,7 @@ impl Shell {
             .get(self.core.workspace.active)
             .is_some_and(|tab| tab.sessions().len() > 1);
         if in_split {
-            let effects = self.core.apply(termherd_core::Event::CloseFocusedPane);
-            Some(Task::batch([self.perform(effects), self.resize_panes()]))
+            Some(self.close_focused_pane_after(Vec::new()))
         } else {
             self.request_close(self.core.workspace.active)
         }
@@ -336,6 +354,9 @@ impl Shell {
         if self.archiving.is_some() {
             return Some(KeyboardOwner::Archive);
         }
+        if self.claude_command.is_some() {
+            return Some(KeyboardOwner::ClaudeCommand);
+        }
         if self.live_tab_menu().is_some() {
             return Some(KeyboardOwner::TabMenu);
         }
@@ -363,6 +384,10 @@ impl Shell {
             KeyboardOwner::Quit => (None, self.quit_confirm_key(event)),
             KeyboardOwner::TabClose(index) => (None, self.tab_close_confirm_key(event, index)),
             KeyboardOwner::Archive => (None, self.archive_confirm_key(event)),
+            KeyboardOwner::ClaudeCommand => {
+                let (verdict, task) = self.claude_command_key(event);
+                (Some(verdict), task)
+            }
             KeyboardOwner::TabMenu => self.tab_menu_key(event),
             KeyboardOwner::Settings => (None, self.settings_key(event)),
             KeyboardOwner::Doc => (None, self.open_doc_key(event)),
@@ -420,6 +445,28 @@ impl Shell {
             }
             ConfirmKey::Swallow => Task::none(),
         }
+    }
+
+    /// Enter types the armed command and Escape drops it, both answered here
+    /// rather than by a widget, so a synthesised key event reaches them too.
+    /// A confirmation that typed nothing answers [`KeyVerdict::Refused`]; the
+    /// prompt stays open.
+    fn claude_command_key(&mut self, event: &keyboard::Event) -> (KeyVerdict, Task<Message>) {
+        let label = KeyboardOwner::ClaudeCommand.label();
+        let task = match classify_confirm(event) {
+            ConfirmKey::Confirm => match self.confirm_claude_command() {
+                Ok(task) => task,
+                Err(refusal) => {
+                    return (
+                        KeyVerdict::Refused(label, refusal.to_string()),
+                        Task::none(),
+                    );
+                }
+            },
+            ConfirmKey::Cancel => self.cancel_claude_command(),
+            ConfirmKey::Swallow => Task::none(),
+        };
+        (KeyVerdict::Overlay(label), task)
     }
 
     /// Escape closes the settings panel; it has no text field, so every other

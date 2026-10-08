@@ -218,9 +218,7 @@ pub(super) fn identity_of(
     let (Some(job), Some(file)) = (job, file) else {
         return ClaudeIdentity::default();
     };
-    // A crashed Claude leaves its file behind, and its pid free for whatever
-    // the OS starts next: only the writer's own start time tells them apart.
-    if file.pid != job.pid || job.started.is_none() || job.started != file.proc_start {
+    if !proves(job, file) {
         return ClaudeIdentity::default();
     }
     ClaudeIdentity {
@@ -228,6 +226,13 @@ pub(super) fn identity_of(
         peer_name: file.name.clone(),
         session_id: file.session_id.clone(),
     }
+}
+
+/// Whether `file` was written by `job`, the process in front of a pane.
+pub(super) fn proves(job: &ForegroundJob, file: &SessionFile) -> bool {
+    // A crashed Claude leaves its file behind, and its pid free for whatever
+    // the OS starts next: only the writer's own start time tells them apart.
+    file.pid == job.pid && job.started.is_some() && job.started == file.proc_start
 }
 
 #[cfg(test)]
@@ -254,8 +259,9 @@ mod tests {
     fn launch_claude_in(app: &mut App, cwd: &str, title: &str) -> u64 {
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some(cwd.to_owned()),
-            launch: Launch::Claude { resume: None },
+            launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
             title: title.to_owned(),
+            placement: Placement::Foreground,
         }));
         app.workspace
             .focused_session()
