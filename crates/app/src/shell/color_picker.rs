@@ -29,9 +29,10 @@ pub(super) struct ColorPicker {
 }
 
 impl ColorPicker {
-    /// What the picker offers, in order: the palette `/color` takes.
-    pub(super) fn colors() -> impl Iterator<Item = ClaudeColor> {
-        ClaudeColor::ALL.into_iter()
+    /// What the picker offers, in order: the palette `/color` takes. Every
+    /// reader of a position in the list reads it here.
+    pub(super) fn colors() -> &'static [ClaudeColor] {
+        &ClaudeColor::ALL
     }
 
     pub(super) fn selected(&self) -> usize {
@@ -51,21 +52,38 @@ impl Shell {
             .filter(|picker| self.core.workspace.focused_session() == Some(picker.anchor))
     }
 
-    /// Open the focused tab's picker on the colour it wears, else the first.
-    /// `None` when no pane is focused, or when the pane is a Claude that could
-    /// not take `/color` now — busy, or gone and left a shell behind — so the
-    /// keymap reports a refusal instead of offering a list that cannot work.
+    /// Whether a colour could be picked for `session` now: always for a pane
+    /// termherd colours, and for a Claude only while it can take `/color` —
+    /// idle, its prompt empty and on screen. Asked by the picker before it
+    /// opens and by the tab menu before it offers the picker, so neither
+    /// offers a list that cannot work.
+    pub(super) fn color_pickable(&self, session: SessionId) -> bool {
+        match self.core.color_keeper(session) {
+            Some(ColorKeeper::Termherd) => true,
+            Some(ColorKeeper::Claude) => self
+                .core
+                .claude_command_check(session, &self.prompt_input(session))
+                .is_ok(),
+            None => false,
+        }
+    }
+
+    /// Open the focused tab's picker on the colour it wears — *None* for an
+    /// uncoloured tab, so an Enter straight away changes nothing. `None` when
+    /// no pane is focused or no colour can be picked for it now
+    /// ([`Self::color_pickable`]), so the keymap reports a refusal.
     pub(super) fn open_color_picker(&mut self) -> Option<()> {
         let anchor = self.core.workspace.focused_session()?;
-        if self.core.color_keeper(anchor)? == ColorKeeper::Claude {
-            self.core
-                .claude_command_check(anchor, &self.prompt_input(anchor))
-                .ok()?;
+        if !self.color_pickable(anchor) {
+            return None;
         }
-        let selected = self
+        let worn = self
             .core
             .session_color(anchor)
-            .and_then(|worn| ColorPicker::colors().position(|color| color == worn))
+            .unwrap_or(ClaudeColor::Default);
+        let selected = ColorPicker::colors()
+            .iter()
+            .position(|color| *color == worn)
             .unwrap_or(0);
         self.color_picker = Some(ColorPicker {
             anchor,
@@ -89,7 +107,7 @@ impl Shell {
         let Some(selected) = self.live_color_picker().map(ColorPicker::selected) else {
             return (None, Task::none());
         };
-        let len = ClaudeColor::ALL.len();
+        let len = ColorPicker::colors().len();
         match key {
             ListKey::Up => self.select_color(step(selected, len, false)),
             ListKey::Down => self.select_color(step(selected, len, true)),
@@ -113,7 +131,8 @@ impl Shell {
     pub(super) fn pick_color(&mut self, position: usize) -> (Option<KeyVerdict>, Task<Message>) {
         let anchor = self.live_color_picker().map(|picker| picker.anchor);
         self.color_picker = None;
-        let (Some(anchor), Some(color)) = (anchor, ClaudeColor::ALL.get(position).copied()) else {
+        let (Some(anchor), Some(color)) = (anchor, ColorPicker::colors().get(position).copied())
+        else {
             return (None, Task::none());
         };
         if self.core.color_keeper(anchor) == Some(ColorKeeper::Claude) {
@@ -132,7 +151,9 @@ impl Shell {
                 }
             };
         }
-        let index = self.core.workspace.active;
+        let Some(index) = self.core.workspace.tab_of(anchor) else {
+            return (None, Task::none());
+        };
         let effects = self.core.apply(Event::SetTabColor { index, color });
         (None, self.perform(effects))
     }

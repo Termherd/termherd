@@ -23,6 +23,26 @@ enum Offered {
     /// `copy-agent-name` action reads it — so never on Windows, and on a shell
     /// tab whenever a Claude runs in front of it.
     WithAgentName,
+    /// Only where a colour can be picked for the focused pane, as the
+    /// `pick-tab-color` action decides it — so not on a busy Claude.
+    WhenColorPickable,
+}
+
+/// What the focused pane allows, read once when the menu opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Offers {
+    pub(super) agent_named: bool,
+    pub(super) color_pickable: bool,
+}
+
+impl Offers {
+    fn allow(self, offered: Offered) -> bool {
+        match offered {
+            Offered::OnEveryTab => true,
+            Offered::WithAgentName => self.agent_named,
+            Offered::WhenColorPickable => self.color_pickable,
+        }
+    }
 }
 
 /// One menu line: the keymap action it runs and the label it shows.
@@ -44,7 +64,7 @@ pub(super) const ENTRIES: &[Entry] = &[
     Entry {
         action: Action::PickTabColor,
         label: strings::TAB_MENU_COLOR,
-        offered: Offered::OnEveryTab,
+        offered: Offered::WhenColorPickable,
     },
     Entry {
         action: Action::CopyAgentName,
@@ -78,12 +98,11 @@ pub(super) const ENTRIES: &[Entry] = &[
     },
 ];
 
-/// The entries offered when the focused pane does (`agent_named`) or does not
-/// have a Claude name to copy.
-pub(super) fn entries(agent_named: bool) -> impl Iterator<Item = &'static Entry> {
+/// The entries a pane allowing `offers` is offered.
+pub(super) fn entries(offers: Offers) -> impl Iterator<Item = &'static Entry> {
     ENTRIES
         .iter()
-        .filter(move |entry| agent_named || entry.offered == Offered::OnEveryTab)
+        .filter(move |entry| offers.allow(entry.offered))
 }
 
 /// What a key does to a list drawn over the window: the tab menu and the
@@ -120,7 +139,7 @@ impl ListKey {
 
 /// The selection one entry down (or up) a list of `len`, wrapping at either
 /// end. The list is never empty: every tab is offered the entries that need
-/// no agent name.
+/// nothing of its pane.
 pub(super) fn step(selected: usize, len: usize, down: bool) -> usize {
     if down {
         (selected + 1) % len
@@ -138,7 +157,7 @@ pub(super) fn step(selected: usize, len: usize, down: bool) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TabMenu {
     anchor: SessionId,
-    agent_named: bool,
+    offers: Offers,
     selected: usize,
 }
 
@@ -148,7 +167,7 @@ impl TabMenu {
     }
 
     pub(super) fn entries(self) -> impl Iterator<Item = &'static Entry> {
-        entries(self.agent_named)
+        entries(self.offers)
     }
 }
 
@@ -186,10 +205,13 @@ impl Shell {
     /// open, so there is nothing for the menu to act on.
     pub(super) fn open_tab_menu(&mut self) -> Option<()> {
         let anchor = self.core.workspace.focused_session()?;
-        let agent_named = self.focused_agent_name().is_some();
+        let offers = Offers {
+            agent_named: self.focused_agent_name().is_some(),
+            color_pickable: self.color_pickable(anchor),
+        };
         self.tab_menu = Some(TabMenu {
             anchor,
-            agent_named,
+            offers,
             selected: 0,
         });
         Some(())
