@@ -697,7 +697,8 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use termherd_core::{
-        Event, ForegroundJob, Launch, LaunchSpec, SessionStatus, SnapshotFilter, SnapshotInputs,
+        ClaudeLaunch, Event, ForegroundJob, Launch, LaunchSpec, SessionStatus, SnapshotFilter,
+        SnapshotInputs,
     };
 
     /// Open `n` shell tabs in a fresh `App`, so a snapshot has real workspace
@@ -827,9 +828,9 @@ mod tests {
     fn launch_claude(app: &mut App, cwd: &str, title: &str, resume: Option<&str>) -> String {
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some(cwd.to_owned()),
-            launch: Launch::Claude {
-                resume: resume.map(str::to_owned),
-            },
+            launch: Launch::Claude(resume.map_or(ClaudeLaunch::Fresh(None), |id| {
+                ClaudeLaunch::Resume(id.to_owned())
+            })),
             title: title.to_owned(),
         }));
         let id = app.workspace.focused_session().expect("a focused session");

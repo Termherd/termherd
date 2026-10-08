@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 
-use super::snapshot::identity_of;
+use super::snapshot::{identity_of, proves};
 use crate::snapshot::SessionKind;
 use crate::workspace::SplitDir;
 use termherd_claude::session_file::SessionFile;
@@ -59,6 +59,30 @@ pub struct ForegroundJob {
 }
 
 impl LiveSession {
+    /// The Claude session id this pane's conversation lives under — the one
+    /// accessor every reader of "this pane's transcript" goes through.
+    ///
+    /// The cached session file wins when it proves the Claude in front (see
+    /// [`identity_of`]): Claude rewrites it when `/clear` or a plan-accept
+    /// re-keys the conversation, which the launch line cannot follow. Without
+    /// that proof, the id the pane was launched under (minted or resumed). The
+    /// cache is only as fresh as the shell's last read of the file.
+    #[must_use]
+    pub fn claude_session_id(&self) -> Option<&str> {
+        session_id_by_precedence(self.live_session_id(), self.launch.claude_id())
+    }
+
+    /// The session id the cached session file names, if it proves the job in
+    /// front of this pane is the Claude that wrote it.
+    fn live_session_id(&self) -> Option<&str> {
+        let job = self.foreground.as_ref()?;
+        let file = self.session_file.as_ref()?;
+        if !proves(job, file) {
+            return None;
+        }
+        file.session_id.as_deref()
+    }
+
     /// Whether this session still holds a **running foreground process** whose
     /// loss is worth confirming before a close. A Claude session *is* that
     /// process — the `claude` CLI runs in the shell's foreground until it
@@ -71,13 +95,23 @@ impl LiveSession {
         match self.status {
             SessionStatus::Exited => false,
             _ => match self.launch {
-                Launch::Claude { .. } => true,
+                Launch::Claude(_) => true,
                 Launch::Shell => {
                     matches!(self.status, SessionStatus::Busy | SessionStatus::Attention)
                 }
             },
         }
     }
+}
+
+/// Which id names a pane's conversation, given the one Claude's live session
+/// file states and the one the pane was launched under: the live one, since
+/// only it follows a re-key.
+fn session_id_by_precedence<'a>(
+    live: Option<&'a str>,
+    launched: Option<&'a str>,
+) -> Option<&'a str> {
+    live.or(launched)
 }
 
 /// Per-session activity surfaced in the sidebar and on tabs (FR8).
@@ -121,25 +155,60 @@ impl SessionStatus {
 
 /// What to run in a launched terminal (FR4a). The core decides the *kind*; the
 /// `pty` adapter decides *how* to start it. `Shell` is a bare login shell;
-/// `Claude` starts the CLI — fresh when `resume` is `None`, else
-/// `claude --resume <id>`.
+/// `Claude` starts the CLI, as a [`ClaudeLaunch`] says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launch {
     /// A plain login shell in the working directory.
     Shell,
-    /// A Claude session: fresh (`resume: None`) or resumed (`resume: Some(id)`).
-    Claude { resume: Option<String> },
+    /// A Claude session, fresh or resumed.
+    Claude(ClaudeLaunch),
+}
+
+/// How a Claude launch starts its conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClaudeLaunch {
+    /// A new conversation. `Some` is the id the shell minted for it
+    /// (`claude --session-id <id>`), so its transcript is known before Claude
+    /// has written anything; `None` leaves Claude to pick one, which only its
+    /// session file then reveals. `core` never mints one itself: it holds no
+    /// source of randomness.
+    Fresh(Option<String>),
+    /// An existing conversation, resumed by its id (`claude --resume <id>`).
+    Resume(String),
 }
 
 impl Launch {
     /// The Claude session id this launch resumes, if any — `None` for a shell
-    /// or a fresh Claude session. Lets the sidebar map a `claude_id` back to the
-    /// live tab hosting it.
+    /// or a fresh Claude session, minted id or not. The id a pane's transcript
+    /// lives under is [`LiveSession::claude_session_id`].
     #[must_use]
     pub fn resume_id(&self) -> Option<&str> {
         match self {
-            Launch::Claude { resume: Some(id) } => Some(id),
+            Launch::Claude(ClaudeLaunch::Resume(id)) => Some(id),
             _ => None,
+        }
+    }
+
+    /// The Claude session id this launch starts under: the one it resumes, or
+    /// the one minted for a fresh conversation. `None` for a shell, or a fresh
+    /// launch nobody minted an id for.
+    #[must_use]
+    pub fn claude_id(&self) -> Option<&str> {
+        match self {
+            Launch::Claude(ClaudeLaunch::Resume(id) | ClaudeLaunch::Fresh(Some(id))) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// This launch with a fresh Claude conversation started under `id` in
+    /// place of any id it carried; a shell or a resume is returned as is. A
+    /// minted id names one conversation only: a second Claude launched under
+    /// it would collide with the first one's transcript.
+    #[must_use]
+    pub fn with_fresh_id(self, id: String) -> Self {
+        match self {
+            Launch::Claude(ClaudeLaunch::Fresh(_)) => Launch::Claude(ClaudeLaunch::Fresh(Some(id))),
+            other => other,
         }
     }
 
@@ -148,7 +217,7 @@ impl Launch {
     pub fn kind(&self) -> SessionKind {
         match self {
             Launch::Shell => SessionKind::Shell,
-            Launch::Claude { .. } => SessionKind::Claude,
+            Launch::Claude(_) => SessionKind::Claude,
         }
     }
 }
@@ -588,13 +657,173 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude {
-                resume: Some("abc-123".into()),
-            },
+            launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
             title: "proj".into(),
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         assert_eq!(app.sessions[&id].launch.resume_id(), Some("abc-123"));
+    }
+
+    const MINTED: &str = "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f9012";
+    const STARTED: &str = "Wed Oct  7 06:48:07 2026";
+
+    fn launch_spec(launch: Launch) -> LaunchSpec {
+        LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch,
+            title: "proj".into(),
+        }
+    }
+
+    fn fresh(id: Option<&str>) -> Launch {
+        Launch::Claude(ClaudeLaunch::Fresh(id.map(str::to_owned)))
+    }
+
+    fn live(launch: Launch, job: Option<ForegroundJob>, file: Option<SessionFile>) -> LiveSession {
+        LiveSession {
+            id: SessionId(NonZeroU64::new(1).expect("nonzero")),
+            cwd: None,
+            launch_cwd: None,
+            launch,
+            status: SessionStatus::Idle,
+            foreground: job,
+            session_file: file,
+        }
+    }
+
+    fn claude_job(pid: u32) -> ForegroundJob {
+        ForegroundJob {
+            pid,
+            started: Some(STARTED.to_owned()),
+        }
+    }
+
+    fn file_naming(pid: u32, session_id: &str) -> SessionFile {
+        SessionFile {
+            pid,
+            name: None,
+            session_id: Some(session_id.to_owned()),
+            proc_start: Some(STARTED.to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_launch_names_its_claude_id_whether_minted_or_resumed() {
+        assert_eq!(fresh(Some(MINTED)).claude_id(), Some(MINTED));
+        assert_eq!(
+            fresh(Some(MINTED)).resume_id(),
+            None,
+            "a minted id is no resume"
+        );
+        assert_eq!(
+            Launch::Claude(ClaudeLaunch::Resume("abc".into())).claude_id(),
+            Some("abc")
+        );
+        assert_eq!(fresh(None).claude_id(), None);
+        assert_eq!(Launch::Shell.claude_id(), None);
+    }
+
+    #[test]
+    fn a_fresh_id_replaces_only_a_fresh_claude_launch() {
+        assert_eq!(
+            fresh(None).with_fresh_id(MINTED.into()),
+            fresh(Some(MINTED))
+        );
+        assert_eq!(
+            fresh(Some("old")).with_fresh_id(MINTED.into()),
+            fresh(Some(MINTED)),
+            "a minted id is never launched twice"
+        );
+        let resume = Launch::Claude(ClaudeLaunch::Resume("abc".into()));
+        assert_eq!(resume.clone().with_fresh_id(MINTED.into()), resume);
+        assert_eq!(Launch::Shell.with_fresh_id(MINTED.into()), Launch::Shell);
+    }
+
+    #[test]
+    fn a_fresh_tab_launched_under_a_minted_id_is_known_by_it_at_once() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
+        let id = app.workspace.focused_session().expect("a focused session");
+        assert_eq!(app.claude_session_id(id), Some(MINTED));
+        assert_eq!(app.tab_claude_session_id(0), Some(MINTED));
+        assert_eq!(
+            app.open_session_for(MINTED),
+            Some(id),
+            "re-clicking its sidebar row must find the open tab"
+        );
+    }
+
+    #[test]
+    fn a_shell_and_an_unminted_fresh_claude_have_no_session_id() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(launch_spec(Launch::Shell)));
+        app.apply(Event::LaunchSession(launch_spec(fresh(None))));
+        assert_eq!(app.tab_claude_session_id(0), None);
+        assert_eq!(app.tab_claude_session_id(1), None);
+        assert_eq!(app.tab_claude_session_id(2), None, "out of range");
+    }
+
+    #[test]
+    fn the_live_session_file_outranks_the_launch_id_after_a_re_key() {
+        let session = live(
+            fresh(Some(MINTED)),
+            Some(claude_job(42)),
+            Some(file_naming(42, "re-keyed")),
+        );
+        assert_eq!(session.claude_session_id(), Some("re-keyed"));
+    }
+
+    #[test]
+    fn an_unproven_session_file_never_outranks_the_launch_id() {
+        let stale = SessionFile {
+            proc_start: Some("another process".into()),
+            ..file_naming(42, "stale")
+        };
+        let session = live(fresh(Some(MINTED)), Some(claude_job(42)), Some(stale));
+        assert_eq!(session.claude_session_id(), Some(MINTED));
+        let gone = live(fresh(Some(MINTED)), None, Some(file_naming(42, "gone")));
+        assert_eq!(
+            gone.claude_session_id(),
+            Some(MINTED),
+            "no job in front, so the cached file proves nothing"
+        );
+    }
+
+    #[test]
+    fn a_shell_pane_running_claude_by_hand_is_known_by_its_session_file() {
+        let session = live(
+            Launch::Shell,
+            Some(claude_job(7)),
+            Some(file_naming(7, "typed")),
+        );
+        assert_eq!(session.claude_session_id(), Some("typed"));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn a_proven_file_id_wins_else_the_launch_id(
+            launched in proptest::option::of("[a-z]{1,8}"),
+            resumed in proptest::bool::ANY,
+            file_id in proptest::option::of("[A-Z]{1,8}"),
+            job_pid in 1u32..4,
+            file_pid in 1u32..4,
+            same_start in proptest::bool::ANY,
+        ) {
+            let launch = match (&launched, resumed) {
+                (Some(id), true) => Launch::Claude(ClaudeLaunch::Resume(id.clone())),
+                (id, _) => fresh(id.as_deref()),
+            };
+            let file = SessionFile {
+                pid: file_pid,
+                name: None,
+                session_id: file_id.clone(),
+                proc_start: Some(if same_start { STARTED.into() } else { "other".into() }),
+            };
+            let session = live(launch, Some(claude_job(job_pid)), Some(file));
+            let proven = job_pid == file_pid && same_start;
+            let expected = file_id.as_deref().filter(|_| proven).or(launched.as_deref());
+            proptest::prop_assert_eq!(session.claude_session_id(), expected);
+        }
     }
 
     #[test]
@@ -947,7 +1176,12 @@ mod tests {
             clean: true,
         });
         // Reopen restores a shell in the directory the exited one ran in.
-        match app.apply(Event::ReopenClosedTab).as_slice() {
+        match app
+            .apply(Event::ReopenClosedTab {
+                fresh_claude_id: "minted".into(),
+            })
+            .as_slice()
+        {
             [Effect::Spawn(spec)] => {
                 assert_eq!(spec.cwd.as_deref(), Some("/proj"));
                 assert_eq!(spec.launch, Launch::Shell);

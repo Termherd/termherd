@@ -88,7 +88,7 @@ mod tests {
         match app
             .apply(Event::LaunchSession(LaunchSpec {
                 cwd: None,
-                launch: Launch::Claude { resume: None },
+                launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
                 title: "claude".into(),
             }))
             .as_slice()

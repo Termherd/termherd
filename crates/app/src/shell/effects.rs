@@ -134,7 +134,7 @@ impl Shell {
         let Some(endpoint) = &self.mcp_endpoint else {
             return;
         };
-        if !matches!(spec.launch, Launch::Claude { .. }) {
+        if !matches!(spec.launch, Launch::Claude(_)) {
             return;
         }
         let token = self.mcp_tokens.issue();

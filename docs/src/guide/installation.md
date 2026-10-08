@@ -2,15 +2,22 @@
 
 ## Requirements
 
-A shell — and, to launch **Claude** sessions, the **Claude Code CLI 1.0.61 or
+A shell — and, to launch **Claude** sessions, the **Claude Code CLI 2.0.73 or
 newer** on your `PATH`.
 
-That floor is the CLI's `--settings` flag, which TermHerd puts on every Claude
-launch. It re-enables the CLI's terminal title *for that session only*, and the
-title is where a Claude session's activity status comes from: without it, a
+That floor is the CLI's `--session-id` flag. TermHerd starts every fresh Claude
+session under an id it chooses itself, so a new tab knows its conversation from
+the first keystroke. Claude Code's changelog never records when the flag
+arrived; 2.0.73 is the oldest release whose notes show it working, so it is the
+oldest TermHerd can vouch for.
+
+The next flag down is `--settings` (1.0.61), which TermHerd also puts on every
+Claude launch. It re-enables the CLI's terminal title *for that session
+only*, and the title is where a Claude session's activity status comes from:
+without it, a
 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` anywhere in your own settings would leave
-every session reading `starting` forever. An older CLI rejects the flag and the
-launch fails. TermHerd's other flag, `--mcp-config` (the
+every session reading `starting` forever. An older CLI rejects either flag and
+the launch fails. TermHerd's other flag, `--mcp-config` (the
 [live bridge](../mcp/live-bridge.md)), has been available since 0.2.75.
 
 A **plain shell** needs nothing installed — see
