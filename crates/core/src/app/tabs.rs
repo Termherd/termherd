@@ -183,15 +183,17 @@ impl App {
         self.workspace.tabs.get(index)?.focused_session()
     }
 
-    /// Who keeps the colour of the live pane `session`: Claude for a pane
-    /// launched as Claude, termherd for a shell. Decided by the launch, as
-    /// whether a Claude command may be typed is, so a pane is never coloured
-    /// one way and recoloured the other.
+    /// Who keeps the colour of the live pane `session`: Claude while the pane
+    /// runs the Claude it was launched for, termherd for a shell — including
+    /// the shell a Claude launch is left at once its Claude has exited. Decided
+    /// by [`LiveSession::runs_claude`], the rule that decides whether a Claude
+    /// command may be typed, so `/color` is never typed into a shell.
     #[must_use]
     pub fn color_keeper(&self, session: SessionId) -> Option<ColorKeeper> {
-        Some(match self.sessions.get(&session)?.launch {
-            Launch::Claude(_) => ColorKeeper::Claude,
-            Launch::Shell => ColorKeeper::Termherd,
+        Some(if self.sessions.get(&session)?.runs_claude() {
+            ColorKeeper::Claude
+        } else {
+            ColorKeeper::Termherd
         })
     }
 
@@ -712,6 +714,46 @@ mod tests {
         assert_eq!(app.color_keeper(claude), Some(ColorKeeper::Claude));
         assert_eq!(app.color_keeper(shell), Some(ColorKeeper::Termherd));
         assert_eq!(app.color_keeper(sid(99)), None);
+    }
+
+    #[test]
+    fn a_claude_launch_whose_claude_exited_is_coloured_like_a_shell() {
+        // Its pane is back at the shell `claude` ran in: `/color` typed there
+        // would run as a command, so termherd keeps the colour instead.
+        let mut app = App::new();
+        let pane = launch_claude(&mut app);
+        let job = ForegroundJob {
+            pid: 42,
+            started: None,
+        };
+        app.apply(Event::ForegroundJobChanged {
+            session: pane,
+            job: Some(job),
+        });
+        assert_eq!(app.color_keeper(pane), Some(ColorKeeper::Claude));
+        pick(&mut app, 0, ClaudeColor::Green);
+        assert_eq!(app.tab_color(0), None, "refused while Claude runs");
+
+        app.apply(Event::ForegroundJobChanged {
+            session: pane,
+            job: None,
+        });
+        assert_eq!(app.color_keeper(pane), Some(ColorKeeper::Termherd));
+        pick(&mut app, 0, ClaudeColor::Green);
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Green));
+    }
+
+    #[test]
+    fn a_claude_launch_never_seen_in_front_still_counts_as_claude() {
+        // ConPTY reports no foreground job at all, so an absent one proves
+        // nothing until one has been reported.
+        let mut app = App::new();
+        let pane = launch_claude(&mut app);
+        app.apply(Event::ForegroundJobChanged {
+            session: pane,
+            job: None,
+        });
+        assert_eq!(app.color_keeper(pane), Some(ColorKeeper::Claude));
     }
 
     #[test]
