@@ -213,8 +213,9 @@ The copy chord does nothing in such a pane unless a <kbd>Shift</kbd> selection
 exists, so a program's own clipboard write (Claude Code copies a drag on
 release) is never overwritten. In the sidebar, click a project or session to
 open it; a tab's `×` also closes it. Hovering a tab shows the session's fuller
-description (the sidebar's card, plus the agent name, colour, model and
-effort, Claude Code version and running time of its first pane).
+description (the sidebar's card, plus the agent name, model and effort,
+Claude Code version and running time of its first pane, and the colour its
+outline shows).
 **+ Add a repo** puts a repository in the sidebar before it has any session — or
 drop its folder on the window, which does the same thing (a dropped *file* is ignored).
 

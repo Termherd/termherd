@@ -24,7 +24,7 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added (a richer tab hover card)
 
 - The tab hover card shows the model and effort, the Claude Code version and
-  how long the tab has run, beside the agent name (#344).
+  how long its first pane has run, beside the agent name (#344).
 
 ### Added (Claude's `/color` on tabs)
 
@@ -34,8 +34,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added (MCP background tabs)
 
-- `open_session` and `close_pane` take `background: true` to open or close a
-  tab without moving the user's focus, and every `open_session` reply carries
+- `open_session` and `close_pane` take `background: true` to open a tab or
+  close a pane without moving the user's focus, and every `open_session` reply carries
   `opened_handle` (#363).
 
 ### Added (the tab follows Claude's name)
