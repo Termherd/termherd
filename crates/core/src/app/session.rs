@@ -431,7 +431,7 @@ impl App {
     pub(super) fn pty_exited(&mut self, session: SessionId, clean: bool) -> Vec<Effect> {
         if clean
             && self.sessions.contains_key(&session)
-            && let Some(effects) = self.auto_close_pane(session)
+            && let Some(effects) = self.close_pane_of(session)
         {
             return effects;
         }
@@ -444,14 +444,15 @@ impl App {
         Vec::new()
     }
 
-    /// Close the pane hosting `session` after its clean exit: the whole tab
-    /// (snapshotted onto the reopen stack, like a manual close) when it is the
-    /// tab's only pane, else just its leaf, collapsing the split. The emptied
-    /// workspace stays open — a clean exit never quits the app. The `Kill`
-    /// still goes out for an already-dead process: it releases the adapter's
-    /// PTY handles. `None` when no tab hosts the session — the caller falls
-    /// back to recording the exit.
-    pub(super) fn auto_close_pane(&mut self, session: SessionId) -> Option<Vec<Effect>> {
+    /// Close the pane hosting `session` wherever it lives, without bringing it
+    /// into view: the whole tab (snapshotted onto the reopen stack, like a
+    /// manual close) when it is the tab's only pane, else just its leaf,
+    /// collapsing the split. The one meaning of "close this session's pane",
+    /// shared by a clean shell exit and [`Event::ClosePane`]. The emptied
+    /// workspace stays open. The `Kill` still goes out for an already-dead
+    /// process: it releases the adapter's PTY handles. `None` when no tab
+    /// hosts the session.
+    pub(super) fn close_pane_of(&mut self, session: SessionId) -> Option<Vec<Effect>> {
         let index = self.workspace.tab_of(session)?;
         let only_pane = self
             .workspace
@@ -461,9 +462,8 @@ impl App {
         if only_pane {
             return Some(self.close_tab(index));
         }
-        self.workspace.close_pane_of(session)?;
-        self.sessions.remove(&session);
-        Some(vec![Effect::Kill(session)])
+        let closed = self.workspace.close_pane_of(session)?;
+        Some(self.release_closed_pane(Some(closed)))
     }
 
     /// Whether closing the tab at `index` would kill a running foreground
@@ -1222,6 +1222,19 @@ mod tests {
         let right = app.workspace.focused_session().expect("the split's pane");
         app.apply(Event::ClosePane(right));
         assert_eq!(app.workspace.focused_session(), Some(left));
+    }
+
+    #[test]
+    fn closing_a_lone_pane_by_session_can_be_reopened_like_any_tab_close() {
+        let mut app = App::new();
+        launch(&mut app, "human");
+        let worker = launch_at(&mut app, Placement::Background);
+        app.apply(Event::ClosePane(worker));
+        let reopened = app.apply(Event::ReopenClosedTab);
+        assert!(
+            matches!(reopened.as_slice(), [Effect::Spawn(_)]),
+            "the closed tab is on the reopen stack, got {reopened:?}"
+        );
     }
 
     #[test]

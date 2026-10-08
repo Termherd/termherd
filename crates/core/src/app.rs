@@ -234,10 +234,7 @@ impl App {
                 Vec::new()
             }
             Event::SplitFocused(dir) => self.split_focused(dir),
-            Event::ClosePane(session) => {
-                let closed = self.workspace.close_pane_of(session);
-                self.release_closed_pane(closed)
-            }
+            Event::ClosePane(session) => self.close_pane_of(session).unwrap_or_default(),
             Event::CloseFocusedPane => {
                 let closed = self.workspace.close_focused();
                 self.release_closed_pane(closed)
