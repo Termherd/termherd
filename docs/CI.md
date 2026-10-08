@@ -367,8 +367,9 @@ here so an exception is never a surprise:
   — a flat iced dispatcher and an inline layout tree, both refactor
   candidates rather than relaxations of the global threshold.
 - **`unsafe`**: the only sanctioned block is `crates/app/src/macos.rs` (AppKit
-  FFI for Cmd+Q, and the `insertText:` relay that turns Character Viewer text
-  winit drops into an input-method commit), a `cfg`-gated module with a
+  FFI for Cmd+Q, the Edit menu giving Ctrl+Cmd+Space its *Emoji & Symbols*
+  item, and the `insertText:` relay that turns Character Viewer text winit
+  drops into an input-method commit), a `cfg`-gated module with a
   `#![allow(unsafe_code)]` and a `// SAFETY:` note per block. See `AGENTS.md`
   → Quality bar.
 - **OS-cfg homes** (`scripts/check-os-cfg-containment.sh` allow-list): the files
