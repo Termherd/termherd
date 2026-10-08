@@ -901,6 +901,7 @@ mod tests {
                 cwd: Some("/proj".into()),
                 launch: Launch::Shell,
                 title: "work".into(),
+                placement: Placement::Foreground,
             }))
             .as_slice()
         {

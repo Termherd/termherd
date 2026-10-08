@@ -51,8 +51,8 @@ pub use pointer::{
     pointer_select,
 };
 pub use session::{
-    ClaudeLaunch, ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus,
-    Sessions, SpawnSpec,
+    ClaudeLaunch, ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, Placement,
+    SessionStatus, Sessions, SpawnSpec,
 };
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
@@ -235,13 +235,11 @@ impl App {
             Event::ReopenClosedTab { fresh_claude_id } => self.reopen_closed_tab(fresh_claude_id),
             Event::RenameTab { index, title } => self.rename_tab(index, &title),
             Event::SplitFocused(dir) => self.split_focused(dir),
-            Event::CloseFocusedPane => match self.workspace.close_focused() {
-                Some(id) => {
-                    self.sessions.remove(&id);
-                    vec![Effect::Kill(id)]
-                }
-                None => Vec::new(),
-            },
+            Event::ClosePane(session) => self.close_pane_of(session).unwrap_or_default(),
+            Event::CloseFocusedPane => self
+                .workspace
+                .close_focused()
+                .map_or_else(Vec::new, |id| self.release_closed_pane(id)),
             Event::FocusNextPane => {
                 self.workspace.focus_next();
                 Vec::new()

@@ -89,6 +89,7 @@ impl App {
             cwd: closed.cwd,
             launch: closed.launch.with_fresh_id(|| fresh_claude_id),
             title: closed.title,
+            placement: Placement::Foreground,
         });
         // Restore the manual name on top of the derived title. `launch` opens
         // the reopened tab as the new active one, so its index is `active` — but
@@ -229,6 +230,7 @@ mod tests {
             cwd: Some("/repo".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("abc".into())),
             title: "repo".into(),
+            placement: Placement::Foreground,
         }));
         let original = app.workspace.focused_session().expect("focused");
         app.apply(Event::CloseTab(0));
@@ -308,6 +310,7 @@ mod tests {
                 cwd: Some(dir.into()),
                 launch: Launch::Shell,
                 title: dir.into(),
+                placement: Placement::Foreground,
             }));
         };
         open(&mut app, "/a");
@@ -414,12 +417,14 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         // Tab 1: a plain shell — no resume id, so no record.
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         assert_eq!(
             app.tab_record(0).map(|r| r.session_id.as_str()),
@@ -437,6 +442,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         assert!(app.tab_record(0).is_none(), "nothing scanned yet");
         app.apply(Event::ScanCompleted(vec![record(
@@ -457,6 +463,7 @@ mod tests {
             cwd: Some("/repo".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("before".into())),
             title: "repo".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("focused");
         let started = Some("Wed Oct  7 06:48:07 2026".to_owned());
@@ -498,6 +505,7 @@ mod tests {
             cwd: Some("/repo".into()),
             launch: Launch::Claude(ClaudeLaunch::Fresh(Some("first".into()))),
             title: "repo".into(),
+            placement: Placement::Foreground,
         }));
         app.apply(Event::CloseTab(0));
         let effects = app.apply(Event::ReopenClosedTab {

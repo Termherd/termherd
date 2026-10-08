@@ -70,6 +70,7 @@ mod tests {
             .apply(Event::LaunchSession(LaunchSpec {
                 cwd: Some("/repo".into()),
                 launch: Launch::Claude(launch),
+                placement: Placement::Foreground,
                 title: "repo".into(),
             }))
             .as_slice()

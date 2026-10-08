@@ -74,11 +74,11 @@ tool-level error; the text reads keep working.
 
 | Tool | Args | Notes |
 | --- | --- | --- |
-| `open_session` | `project`, `kind` | `kind` is `"shell"` (default) or `"claude"`; omit `project` for the home dir |
+| `open_session` | `project`, `kind`, `background` | `kind` is `"shell"` (default) or `"claude"`; omit `project` for the home dir; `background: true` opens without taking focus |
 | `split_pane` | `direction`, `pane` | `"vertical"` (default) or `"horizontal"`; omit `pane` for the focused one |
 | `focus_pane` | `session` | |
 | `rename_tab` | `tab`, `title` | `tab` is the 0-based index `snapshot` reports; a blank title reverts a shell tab to the derived one. A Claude tab is renamed by arming `/rename <title>` for confirmation, answered as `claude_command` is; a blank title, or the name it already shows, arms nothing and leaves it as it is |
-| `close_pane` | `pane` | a lone pane is its whole tab, which closes |
+| `close_pane` | `pane`, `background` | a lone pane is its whole tab, which closes; `background: true` closes `pane` without focusing it first |
 | `run_in_session` | `session`, `text` | include a trailing newline to submit |
 | `mouse_in_session` | `session`, `kind`, `col`, `row`, `button` | a mouse event at a **cell** of the terminal; see below |
 | `add_repo` | `path` | put a repository in the sidebar before it has any session |
@@ -86,7 +86,42 @@ tool-level error; the text reads keep working.
 | `claude_command` | `session`, `command`, `argument` | **arms** a confirmation to type a Claude slash command; see below |
 
 Each returns the resulting `focused_handle` (`null` when the workspace is now
-empty).
+empty). `open_session` also returns `opened_handle`, the new session's handle:
+read the new session from it rather than from `focused_handle`, which names it
+only when the open took focus.
+
+#### Working beside someone who is typing
+
+Every action above moves the keyboard by default: an open activates its new
+tab, and a close focuses its target before closing it. An agent orchestrating
+workers in the same window as a human would send that human's next keys into a
+terminal they did not choose. `background: true` on `open_session` and
+`close_pane` keeps the user where they are:
+
+- A background **open** appends the tab at the end of the strip without
+  activating it. Into an empty workspace it is the only tab, so it is the
+  active one all the same. Its terminal is sized to the tab area at once, so a
+  Claude started there draws its first screen at the size it will be shown.
+- A background **close** closes `pane` wherever it lives, without revealing
+  it, and requires `pane`: the focused pane is the user's, so there is no
+  default to fall back on. The flag means *never take focus*, not *focus
+  cannot move*: closing the pane that holds focus still hands it to its
+  sibling. A lone pane takes its tab with it, onto the reopen stack like any
+  tab close, and a close prompt or tab drag the user has under way stays on
+  the tab it named.
+
+Neither flag lets an agent reach a state the keyboard cannot: a background tab
+is one the user could have opened and then left.
+
+A background session is driven exactly like any other, by handle:
+`run_in_session`, `prompt_in_session`, `wait_for_status`, `read_terminal` and
+`mouse_in_session` all reach a tab nobody has looked at. The terminal fills its
+screen from the program's output, not from being drawn, so `mouse_in_session`
+is bounded as soon as the program has printed something.
+
+An MCP close asks no confirmation, background or not: unlike the keyboard's
+close, it kills a busy pane straight away. Wait for the session to settle with
+`wait_for_status` first when that matters.
 
 The two repo tools answer about a **sidebar row** rather than about focus, so
 they add four fields:

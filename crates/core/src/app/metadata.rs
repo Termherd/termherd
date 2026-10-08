@@ -210,6 +210,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         assert_eq!(app.open_session_for("abc-123"), Some(id));
@@ -429,6 +430,7 @@ mod tests {
             cwd: Some("/p".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("a".into())),
             title: "derived summary".into(),
+            placement: Placement::Foreground,
         }));
         let session = app.workspace.focused_session().expect("a launched tab");
 
