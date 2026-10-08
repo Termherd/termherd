@@ -43,10 +43,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed (slash commands refused with Claude's prompt on screen)
 
-- Claude Code draws a no-break space after its `❯` prompt marker, where
-  termherd expected an ASCII one, so it never found the input prompt and
-  refused every slash command it types into Claude — the rename, `/color`
-  and `send-to-desktop` — with "Claude's input prompt is not on screen"
+- termherd did not find Claude's input prompt on screen, for two reasons:
+  Claude Code draws a no-break space after its `❯` prompt marker, where
+  termherd expected an ASCII one, and once a session is renamed it writes the
+  name into the rule above the prompt, which termherd no longer read as a
+  rule. Every slash command termherd types into Claude — the rename, `/color`
+  and `send-to-desktop` — was refused with "Claude's input prompt is not on
+  screen", and the tab menu left out *Tab colour…* right after a rename
   (#374).
 
 ### Fixed (a working Claude read as idle)
