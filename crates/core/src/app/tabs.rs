@@ -114,7 +114,14 @@ impl App {
     /// one the last scan has not found yet.
     #[must_use]
     pub fn tab_record(&self, index: usize) -> Option<&SessionRecord> {
-        self.record_for(self.tab_claude_session_id(index)?)
+        let first = self
+            .workspace
+            .tabs
+            .get(index)?
+            .sessions()
+            .first()
+            .copied()?;
+        self.session_record(first)
     }
 
     /// The Claude session id of the tab at `index`: its first pane's, as

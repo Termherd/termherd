@@ -85,6 +85,15 @@ impl App {
         self.sessions.get(&session)?.claude_session_id()
     }
 
+    /// The browsed record for the conversation the live pane `session` holds:
+    /// [`Self::claude_session_id`] resolved through [`Self::record_for`]. `None`
+    /// for a shell, an unknown pane, or a conversation the last scan has not
+    /// found yet.
+    #[must_use]
+    pub fn session_record(&self, session: SessionId) -> Option<&SessionRecord> {
+        self.record_for(self.claude_session_id(session)?)
+    }
+
     /// The browsed record for the Claude session `claude_id`, if the last scan
     /// found it. The inverse of [`Self::open_session_for`]: it maps a live tab
     /// back to the sidebar entry it resumes, so the tab hover can reuse the same
