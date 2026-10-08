@@ -61,9 +61,12 @@ pub fn read_prompt(screen: &str) -> PromptInput {
 }
 
 /// The text after the prompt marker, when `row` is the prompt's first row.
+///
+/// Claude Code separates the marker from the text with a no-break space
+/// (U+00A0), not an ASCII one, so any whitespace counts as the separator.
 fn prompt_text(row: &str) -> Option<&str> {
     let rest = row.strip_prefix('❯').or_else(|| row.strip_prefix('>'))?;
-    (rest.is_empty() || rest.starts_with(' ')).then(|| rest.trim())
+    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim())
 }
 
 /// Whether `row` is one of the horizontal rules that frame the prompt.
@@ -134,6 +137,34 @@ mod tests {
                 "{rows:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_no_break_space_after_the_marker_still_reads_as_the_prompt() {
+        // Claude Code draws `❯` then U+00A0, not an ASCII space: the row
+        // below is the one captured from a live pane, byte for byte.
+        let text = screen(&[
+            RULE,
+            "❯\u{a0}la saisie était visible, regarde la dernière capture",
+            RULE,
+            "  scratchpad │ Opus │ Ctx: 0",
+        ]);
+        assert_eq!(
+            read_prompt(&text),
+            PromptInput::Draft("la saisie était visible, regarde la dernière capture".to_owned())
+        );
+        assert_eq!(
+            read_prompt(&screen(&[RULE, "❯\u{a0}", RULE])),
+            PromptInput::Empty
+        );
+        assert_eq!(
+            read_prompt(&screen(&[RULE, "❯\u{a0}Try \"fix lint errors\"", RULE])),
+            PromptInput::Empty
+        );
+        assert_eq!(
+            read_prompt(&screen(&[RULE, "❯\u{a0}fix it\u{a0}", RULE])),
+            PromptInput::Draft("fix it".to_owned())
+        );
     }
 
     #[test]

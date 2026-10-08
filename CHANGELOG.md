@@ -41,6 +41,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   arrived as, so a binding that never fires can be told apart from one that
   never reached termherd.
 
+### Fixed (slash commands refused with Claude's prompt on screen)
+
+- Claude Code draws a no-break space after its `❯` prompt marker, where
+  termherd expected an ASCII one, so it never found the input prompt and
+  refused every slash command it types into Claude — the rename, `/color`
+  and `send-to-desktop` — with "Claude's input prompt is not on screen"
+  (#374).
+
 ### Fixed (a working Claude read as idle)
 
 - Claude Code 2.1 marks a working session's title with `◐` / `◑` rather than
