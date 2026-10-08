@@ -61,20 +61,26 @@ impl App {
         }
     }
 
-    /// Type `command` into `session` if it can take one now, else nothing.
+    /// Type `command` into `session` if it can take one now, else nothing. A
+    /// `/rename` typed also gives up the name termherd kept for the session,
+    /// which would otherwise hide Claude's.
     pub(super) fn send_claude_command(
-        &self,
+        &mut self,
         session: SessionId,
         command: &ClaudeCommand,
     ) -> Vec<Effect> {
         if self.claude_command_check(session).is_err() {
             return Vec::new();
         }
-        command
+        let mut effects: Vec<Effect> = command
             .keystrokes()
             .into_iter()
             .map(|bytes| Effect::Write { session, bytes })
-            .collect()
+            .collect();
+        if matches!(command, ClaudeCommand::Rename(_)) {
+            effects.extend(self.yield_name_to_claude(session));
+        }
+        effects
     }
 }
 

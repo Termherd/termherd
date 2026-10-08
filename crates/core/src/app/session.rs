@@ -374,6 +374,7 @@ impl App {
             session_file: None,
         });
         self.workspace.open(id, spec.title);
+        self.retitle_tabs();
         vec![Effect::Spawn(SpawnSpec {
             session: id,
             cwd: spec.cwd,
@@ -457,6 +458,8 @@ impl App {
         if let Some(live) = self.sessions.get_mut(&session) {
             live.session_file = file;
         }
+        // A re-key moves the pane onto another transcript, and its name with it.
+        self.retitle_tabs();
         Vec::new()
     }
 

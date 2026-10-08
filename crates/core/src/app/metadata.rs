@@ -9,26 +9,14 @@ use super::*;
 
 impl App {
     /// Set (or clear, when blank) a session's custom title, persisting the
-    /// overlay, and keep a live tab resuming this id in step with the sidebar.
-    /// A non-empty rename wins directly; clearing restores the digest-derived
-    /// name when the session is still in the last scan.
+    /// overlay, and keep a live tab on this conversation in step with the
+    /// sidebar: the tab re-resolves its title from the same sources.
     pub(super) fn rename_session(&mut self, session: String, title: String) -> Vec<Effect> {
         let trimmed = title.trim().to_owned();
-        let effects = self.update_meta(session.clone(), |meta| {
-            meta.title = (!trimmed.is_empty()).then(|| trimmed.clone());
+        let effects = self.update_meta(session, |meta| {
+            meta.title = (!trimmed.is_empty()).then_some(trimmed);
         });
-        if let Some(live) = self.open_session_for(&session) {
-            let next = if trimmed.is_empty() {
-                self.record_for(&session)
-                    .map(|record| self.session_title(record))
-                    .filter(|name| !name.trim().is_empty())
-            } else {
-                Some(trimmed)
-            };
-            if let Some(next) = next {
-                self.workspace.set_session_title(live, next);
-            }
-        }
+        self.retitle_tabs();
         effects
     }
 

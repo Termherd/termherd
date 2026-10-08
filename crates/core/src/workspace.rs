@@ -63,14 +63,28 @@ pub struct Tab {
     /// Path from the root to the focused leaf. An empty path means the root
     /// itself is the focused leaf.
     pub focus: Vec<Branch>,
-    /// The derived title — the scanned session digest / OSC title, updated by
-    /// [`Workspace::set_session_title`]. Shown only when there is no manual
-    /// override (see [`Tab::custom_title`] / [`Tab::display_title`]).
+    /// The derived title: the highest-ranked of the tab's [`TabTitles`], as
+    /// [`crate::title::resolve`] ranks them. Read-only by convention — it is
+    /// re-resolved whenever a source changes, so a write here would be lost
+    /// on the next one. Shown only when there is no manual override (see
+    /// [`Tab::custom_title`] / [`Tab::display_title`]).
     pub title: String,
     /// A user-set name that overrides the derived [`title`](Self::title) and is
     /// never clobbered by a later derived/OSC update — the manual rename wins.
     /// `None` means "use the derived title"; a rename to blank reverts to it.
     pub custom_title: Option<String>,
+    /// Every source [`Self::title`] is resolved from.
+    titles: TabTitles,
+}
+
+/// The sources a tab's derived title is resolved from, each kept apart so a
+/// higher-ranked one coming or going re-exposes the one beneath it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TabTitles {
+    named: Option<String>,
+    live: Option<String>,
+    described: Option<String>,
+    launch: String,
 }
 
 impl Tab {
@@ -91,6 +105,36 @@ impl Tab {
             Pane::Leaf(s) => Some(*s),
             Pane::Split { .. } => None,
         }
+    }
+
+    /// Record the title the tab's program last reported over OSC.
+    pub fn set_live_title(&mut self, title: impl Into<String>) {
+        self.titles.live = Some(title.into());
+        self.resolve_title();
+    }
+
+    /// Record the titles a scan and the metadata overlay give the tab's
+    /// conversation: the name it was given, and what it is about. `None` for
+    /// either when there is none, which re-exposes the sources beneath it.
+    pub fn set_recorded_titles(&mut self, named: Option<&str>, described: Option<&str>) {
+        let named = named.map(str::to_owned);
+        let described = described.map(str::to_owned);
+        if self.titles.named != named || self.titles.described != described {
+            self.titles.named = named;
+            self.titles.described = described;
+            self.resolve_title();
+        }
+    }
+
+    fn resolve_title(&mut self) {
+        let titles = &self.titles;
+        self.title = crate::title::resolve(&crate::title::TitleSources {
+            named: titles.named.as_deref(),
+            live: titles.live.as_deref(),
+            described: titles.described.as_deref(),
+            launch: &titles.launch,
+        })
+        .to_owned();
     }
 
     /// The title to display: the manual override when set, else the derived
@@ -126,11 +170,16 @@ impl Workspace {
 
     /// Open a session as a new tab, made active.
     pub fn open(&mut self, session: SessionId, title: impl Into<String>) {
+        let title = title.into();
         self.tabs.push(Tab {
             root: Pane::Leaf(session),
             focus: Vec::new(),
-            title: title.into(),
+            title: title.clone(),
             custom_title: None,
+            titles: TabTitles {
+                launch: title,
+                ..TabTitles::default()
+            },
         });
         self.active = self.tabs.len() - 1;
     }
@@ -172,19 +221,15 @@ impl Workspace {
         Some(())
     }
 
-    /// Set the title of the tab hosting `session`, to follow the title Claude
-    /// reports over OSC. Returns `None` if no tab hosts the session,
-    /// leaving every title unchanged.
-    pub fn set_session_title(
-        &mut self,
-        session: SessionId,
-        title: impl Into<String>,
-    ) -> Option<()> {
+    /// Record the OSC title `session` reported on the tab hosting it — any
+    /// pane of a split speaks for its tab. Returns `None` if no tab hosts the
+    /// session, leaving every title unchanged.
+    pub fn set_live_title(&mut self, session: SessionId, title: impl Into<String>) -> Option<()> {
         let tab = self
             .tabs
             .iter_mut()
             .find(|tab| tab.sessions().contains(&session))?;
-        tab.title = title.into();
+        tab.set_live_title(title);
         Some(())
     }
 
@@ -577,22 +622,22 @@ mod tests {
     }
 
     #[test]
-    fn set_session_title_relabels_the_hosting_tab_only() {
+    fn a_live_title_relabels_the_hosting_tab_only() {
         let mut ws = Workspace::new();
         ws.open(sid(1), "first");
         ws.open(sid(2), "second");
         // A split: tab 1 now hosts sid(2) and sid(3).
         ws.split(SplitDir::Vertical, sid(3));
 
-        assert_eq!(ws.set_session_title(sid(1), "renamed"), Some(()));
+        assert_eq!(ws.set_live_title(sid(1), "renamed"), Some(()));
         assert_eq!(ws.tabs[0].title, "renamed");
         // Any session in a split tab relabels that tab.
-        assert_eq!(ws.set_session_title(sid(3), "split title"), Some(()));
+        assert_eq!(ws.set_live_title(sid(3), "split title"), Some(()));
         assert_eq!(ws.tabs[1].title, "split title");
         // The untouched tab keeps its title.
         assert_eq!(ws.tabs[0].title, "renamed");
         // An unknown session changes nothing.
-        assert_eq!(ws.set_session_title(sid(99), "ghost"), None);
+        assert_eq!(ws.set_live_title(sid(99), "ghost"), None);
         assert_eq!(ws.tabs[0].title, "renamed");
         assert_eq!(ws.tabs[1].title, "split title");
     }
@@ -712,7 +757,7 @@ mod tests {
         let mut ws = Workspace::new();
         ws.open(sid(1), "derived");
         ws.rename_tab(0, "custom");
-        assert_eq!(ws.set_session_title(sid(1), "new derived"), Some(()));
+        assert_eq!(ws.set_live_title(sid(1), "new derived"), Some(()));
         assert_eq!(ws.tabs[0].display_title(), "custom");
         assert_eq!(ws.tabs[0].title, "new derived");
     }
