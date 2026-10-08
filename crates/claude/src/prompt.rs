@@ -23,7 +23,8 @@ pub enum PromptInput {
 ///
 /// The prompt is the row starting with `❯` (or `>` in older versions) that
 /// sits right under a horizontal rule, and it runs to the next rule — a draft
-/// of several lines continues on the rows between. An empty prompt shows a
+/// of several lines continues on the rows between. Either rule may carry the
+/// session's name as a label, `──── name ─`. An empty prompt shows a
 /// placeholder hint, `Try "…"`, which counts as empty: the screen carries no
 /// colour that would tell it from a draft spelling the same words, so a draft
 /// of exactly that shape is the one this reads wrong.
@@ -61,15 +62,24 @@ pub fn read_prompt(screen: &str) -> PromptInput {
 }
 
 /// The text after the prompt marker, when `row` is the prompt's first row.
+///
+/// Claude Code separates the marker from the text with a no-break space
+/// (U+00A0), not an ASCII one, so any whitespace counts as the separator.
 fn prompt_text(row: &str) -> Option<&str> {
     let rest = row.strip_prefix('❯').or_else(|| row.strip_prefix('>'))?;
-    (rest.is_empty() || rest.starts_with(' ')).then(|| rest.trim())
+    (rest.is_empty() || rest.starts_with(char::is_whitespace)).then(|| rest.trim())
 }
 
 /// Whether `row` is one of the horizontal rules that frame the prompt.
+///
+/// Once a session is named, Claude Code writes the name into a rule
+/// (`──── name ─`), so a rule is a run of `─` at both ends with anything
+/// between. The opening run must be long enough that a lone dash, or a line of
+/// text that happens to start with one, is never read as a rule.
 fn is_rule(row: &str) -> bool {
+    const OPENING_RUN: usize = 3;
     let row = row.trim();
-    !row.is_empty() && row.chars().all(|c| c == '─')
+    row.chars().take(OPENING_RUN).filter(|&c| c == '─').count() == OPENING_RUN && row.ends_with('─')
 }
 
 /// Whether `text` is the hint an empty prompt shows, `Try "…"`.
@@ -132,6 +142,74 @@ mod tests {
                 read_prompt(&screen(rows)),
                 PromptInput::NotVisible,
                 "{rows:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_no_break_space_after_the_marker_still_reads_as_the_prompt() {
+        // Claude Code draws `❯` then U+00A0, not an ASCII space: the row
+        // below is the one captured from a live pane, byte for byte.
+        let text = screen(&[
+            RULE,
+            "❯\u{a0}la saisie était visible, regarde la dernière capture",
+            RULE,
+            "  scratchpad │ Opus │ Ctx: 0",
+        ]);
+        assert_eq!(
+            read_prompt(&text),
+            PromptInput::Draft("la saisie était visible, regarde la dernière capture".to_owned())
+        );
+        assert_eq!(
+            read_prompt(&screen(&[RULE, "❯\u{a0}", RULE])),
+            PromptInput::Empty
+        );
+        assert_eq!(
+            read_prompt(&screen(&[RULE, "❯\u{a0}Try \"fix lint errors\"", RULE])),
+            PromptInput::Empty
+        );
+        assert_eq!(
+            read_prompt(&screen(&[RULE, "❯\u{a0}fix it\u{a0}", RULE])),
+            PromptInput::Draft("fix it".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_rule_carrying_the_session_name_still_frames_the_prompt() {
+        // After `/rename`, Claude Code writes the session name into the rule
+        // above the prompt, right-aligned.
+        let labelled = "───────────────────────────────────────── termherd un nom ─";
+        let text = screen(&[
+            labelled,
+            "❯\u{a0}",
+            RULE,
+            "  termherd │ ⎇ main │ Opus 5.5 │ …",
+        ]);
+        assert_eq!(read_prompt(&text), PromptInput::Empty);
+        assert_eq!(
+            read_prompt(&screen(&[RULE, "❯\u{a0}fix it", labelled])),
+            PromptInput::Draft("fix it".to_owned())
+        );
+        assert_eq!(
+            read_prompt(&screen(&["───\u{a0}name\u{a0}─", "❯", RULE])),
+            PromptInput::Empty
+        );
+    }
+
+    #[test]
+    fn a_row_that_only_looks_like_a_rule_does_not_frame_the_prompt() {
+        for above in [
+            "─",
+            "── name ─",
+            "plain text",
+            "❯ 1. Default",
+            "─── name",
+            "name ───",
+        ] {
+            assert_eq!(
+                read_prompt(&screen(&[above, "❯ draft", RULE])),
+                PromptInput::NotVisible,
+                "{above:?}"
             );
         }
     }
