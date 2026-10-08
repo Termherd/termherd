@@ -10,6 +10,7 @@ use iced::widget::{button, column, container, mouse_area, row, text, text_input,
 use iced::{Color, Element, Fill};
 use termherd_core::workspace::Tab;
 
+use super::modals::modal_card;
 use super::{card_secondary_text, card_style, clip, kind_icon, session_card, status_dot};
 use crate::shell::{Message, Shell, tab_rename_id};
 
@@ -135,7 +136,7 @@ impl Shell {
             .tabs
             .get(self.core.workspace.active)
             .map_or("", Tab::display_title);
-        let mut card = column![text(clip(title, 32)).size(11).style(card_secondary_text)]
+        let mut card = column![text(clip(title, 32)).size(11)]
             .spacing(2)
             .width(240);
         for (position, entry) in menu.entries().enumerate() {
@@ -151,12 +152,7 @@ impl Shell {
                 .padding([4, 8]);
             card = card.push(mouse_area(line).on_enter(Message::HoverTabMenuEntry(position)));
         }
-        Some(
-            container(card)
-                .padding(6)
-                .style(container::rounded_box)
-                .into(),
-        )
+        Some(modal_card(card))
     }
 
     /// The hover card for a tab. A tab that resumes a browsed session

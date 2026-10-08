@@ -201,7 +201,10 @@ impl Shell {
             Action::RenameTab => self
                 .start_tab_rename(self.core.workspace.active)
                 .ok_or(Inertia::NoContext)?,
-            Action::OpenTabMenu => self.open_tab_menu().ok_or(Inertia::NoContext)?,
+            Action::OpenTabMenu => {
+                self.open_tab_menu().ok_or(Inertia::NoContext)?;
+                Task::none()
+            }
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -347,24 +350,24 @@ impl Shell {
 
     /// Hand one key press to the overlay that owns the keyboard. The key is
     /// consumed either way — acted on or swallowed — and never leaks to the
-    /// terminal beneath the prompt. Reported as the overlay's, except where the
-    /// tab menu ran an entry and answers with that action's own verdict.
+    /// terminal beneath the prompt. Reported as the overlay's unless the
+    /// overlay ran an action and answers with that action's own verdict.
     fn overlay_key(
         &mut self,
         owner: KeyboardOwner,
         event: &keyboard::Event,
     ) -> (KeyVerdict, Task<Message>) {
-        let task = match owner {
-            KeyboardOwner::TabRename => self.tab_rename_key(event),
-            KeyboardOwner::SessionRename => self.session_rename_key(event),
-            KeyboardOwner::Quit => self.quit_confirm_key(event),
-            KeyboardOwner::TabClose(index) => self.tab_close_confirm_key(event, index),
-            KeyboardOwner::Archive => self.archive_confirm_key(event),
-            KeyboardOwner::TabMenu => return self.tab_menu_key(event),
-            KeyboardOwner::Settings => self.settings_key(event),
-            KeyboardOwner::Doc => self.open_doc_key(event),
+        let (verdict, task) = match owner {
+            KeyboardOwner::TabRename => (None, self.tab_rename_key(event)),
+            KeyboardOwner::SessionRename => (None, self.session_rename_key(event)),
+            KeyboardOwner::Quit => (None, self.quit_confirm_key(event)),
+            KeyboardOwner::TabClose(index) => (None, self.tab_close_confirm_key(event, index)),
+            KeyboardOwner::Archive => (None, self.archive_confirm_key(event)),
+            KeyboardOwner::TabMenu => self.tab_menu_key(event),
+            KeyboardOwner::Settings => (None, self.settings_key(event)),
+            KeyboardOwner::Doc => (None, self.open_doc_key(event)),
         };
-        (KeyVerdict::Overlay(owner.label()), task)
+        (verdict.unwrap_or(KeyVerdict::Overlay(owner.label())), task)
     }
 
     /// Escape abandons a tab rename; Enter and a blur commit it elsewhere, so

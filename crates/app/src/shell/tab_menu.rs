@@ -11,7 +11,7 @@ use iced::keyboard::{self, Key, key::Named};
 use termherd_core::Action;
 use termherd_core::workspace::SessionId;
 
-use super::routing::{KeyVerdict, KeyboardOwner, is_escape};
+use super::routing::{KeyVerdict, is_escape};
 use super::{Message, Shell};
 use crate::strings;
 
@@ -81,15 +81,12 @@ pub(super) fn entries(agent_named: bool) -> impl Iterator<Item = &'static Entry>
         .filter(move |entry| agent_named || entry.offered == Offered::OnEveryTab)
 }
 
-/// The selection one entry down a list of `len`, wrapping to the top.
-pub(super) fn next(selected: usize, len: usize) -> usize {
-    if len == 0 { 0 } else { (selected + 1) % len }
-}
-
-/// The selection one entry up a list of `len`, wrapping to the bottom.
-pub(super) fn prev(selected: usize, len: usize) -> usize {
-    if len == 0 {
-        0
+/// The selection one entry down (or up) a list of `len`, wrapping at either
+/// end. The list is never empty: every tab is offered the entries that need
+/// no agent name.
+pub(super) fn step(selected: usize, len: usize, down: bool) -> usize {
+    if down {
+        (selected + 1) % len
     } else {
         (selected + len - 1) % len
     }
@@ -120,15 +117,25 @@ impl TabMenu {
 
 impl Shell {
     /// The open menu, if its anchor still holds focus. Every reader goes
-    /// through here, so a menu whose pane went away answers nothing.
+    /// through here, so a menu whose pane went away answers nothing even
+    /// before [`Self::drop_stale_tab_menu`] clears it.
     pub(super) fn live_tab_menu(&self) -> Option<TabMenu> {
         self.tab_menu
             .filter(|menu| self.core.workspace.focused_session() == Some(menu.anchor))
     }
 
+    /// Forget a menu whose pane lost focus, so focus coming back to that pane
+    /// cannot revive a menu nobody reopened. Run before each message and each
+    /// MCP press: the two ways anything moves focus.
+    pub(super) fn drop_stale_tab_menu(&mut self) {
+        if self.live_tab_menu().is_none() {
+            self.tab_menu = None;
+        }
+    }
+
     /// Open the focused tab's menu on its first entry. `None` when no tab is
     /// open, so there is nothing for the menu to act on.
-    pub(super) fn open_tab_menu(&mut self) -> Option<Task<Message>> {
+    pub(super) fn open_tab_menu(&mut self) -> Option<()> {
         let anchor = self.core.workspace.focused_session()?;
         let agent_named = self.focused_agent_name().is_some();
         self.tab_menu = Some(TabMenu {
@@ -136,7 +143,7 @@ impl Shell {
             agent_named,
             selected: 0,
         });
-        Some(Task::none())
+        Some(())
     }
 
     /// A right-click on the tab at `index`: focus it first, since every entry
@@ -157,31 +164,33 @@ impl Shell {
     /// keymap or the terminal beneath the menu.
     ///
     /// Enter answers with the verdict of the entry it ran, so a caller learns
-    /// whether that action ran or refused; every other key is the menu's.
-    pub(super) fn tab_menu_key(&mut self, event: &keyboard::Event) -> (KeyVerdict, Task<Message>) {
-        let consumed = KeyVerdict::Overlay(KeyboardOwner::TabMenu.label());
+    /// whether that action ran or refused; `None` is the menu's own verdict.
+    pub(super) fn tab_menu_key(
+        &mut self,
+        event: &keyboard::Event,
+    ) -> (Option<KeyVerdict>, Task<Message>) {
         if is_escape(event) {
             self.tab_menu = None;
-            return (consumed, Task::none());
+            return (None, Task::none());
         }
-        let keyboard::Event::KeyPressed {
-            key: Key::Named(named),
-            ..
-        } = event
+        let (
+            keyboard::Event::KeyPressed {
+                key: Key::Named(named),
+                ..
+            },
+            Some(menu),
+        ) = (event, self.live_tab_menu())
         else {
-            return (consumed, Task::none());
+            return (None, Task::none());
         };
-        match (named, self.live_tab_menu()) {
-            (Named::ArrowUp, Some(menu)) => {
-                self.select_tab_menu_entry(prev(menu.selected, menu.entries().count()))
-            }
-            (Named::ArrowDown, Some(menu)) => {
-                self.select_tab_menu_entry(next(menu.selected, menu.entries().count()))
-            }
-            (Named::Enter, Some(menu)) => return self.run_tab_menu_entry(menu.selected),
+        let len = menu.entries().count();
+        match named {
+            Named::ArrowUp => self.select_tab_menu_entry(step(menu.selected, len, false)),
+            Named::ArrowDown => self.select_tab_menu_entry(step(menu.selected, len, true)),
+            Named::Enter => return self.run_tab_menu_entry(menu.selected),
             _ => {}
         }
-        (consumed, Task::none())
+        (None, Task::none())
     }
 
     /// Point the selection at the entry at `position`, as the pointer does.
@@ -192,18 +201,22 @@ impl Shell {
     }
 
     /// Close the menu, then run the entry at `position` through the dispatch a
-    /// chord uses, answering with its verdict. Closing first matters: an entry
-    /// that opens an overlay of its own, such as the rename field, must find
-    /// the keyboard free.
-    pub(super) fn run_tab_menu_entry(&mut self, position: usize) -> (KeyVerdict, Task<Message>) {
-        let menu = self.live_tab_menu();
+    /// chord uses, answering with its verdict (`None` when there is no such
+    /// entry). Closing first matters: an entry that opens an overlay of its
+    /// own, such as the rename field, must find the keyboard free.
+    pub(super) fn run_tab_menu_entry(
+        &mut self,
+        position: usize,
+    ) -> (Option<KeyVerdict>, Task<Message>) {
+        let entry = self
+            .live_tab_menu()
+            .and_then(|menu| menu.entries().nth(position));
         self.tab_menu = None;
-        let consumed = KeyVerdict::Overlay(KeyboardOwner::TabMenu.label());
-        let Some(entry) = menu.and_then(|menu| menu.entries().nth(position)) else {
-            return (consumed, Task::none());
+        let Some(entry) = entry else {
+            return (None, Task::none());
         };
         let (verdict, task) = self.dispatch_action(entry.action);
         tracing::info!(?verdict, "tab menu entry");
-        (verdict, task)
+        (Some(verdict), task)
     }
 }

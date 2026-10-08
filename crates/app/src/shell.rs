@@ -832,6 +832,7 @@ impl Shell {
     // deferred cleanup.
     #[allow(clippy::too_many_lines)]
     fn update(&mut self, message: Message) -> Task<Message> {
+        self.drop_stale_tab_menu();
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
         // is open discards it — the blur-cancels-edit convention. Only genuine
         // user interactions dismiss it; background traffic (PTY output,
@@ -6097,7 +6098,7 @@ mod key_routing {
 
     mod tab_menu {
         use super::*;
-        use crate::shell::tab_menu::{ENTRIES, TabMenu, entries, next, prev};
+        use crate::shell::tab_menu::{ENTRIES, TabMenu, entries, step};
 
         /// Move the open menu's selection onto `action` with arrow presses, as
         /// a caller with no pointer would.
@@ -6362,6 +6363,25 @@ mod key_routing {
         }
 
         #[test]
+        fn a_menu_that_lost_its_pane_stays_closed_when_focus_comes_back() {
+            // Nobody reopened it: returning to the pane must not hand the
+            // keyboard back to a menu that was already left behind.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let _ = shell.activate_tab(2);
+
+            let (outcome, _task) =
+                shell.perform_presses(vec![Press::Command(Action::ActivateTab(0))]);
+
+            assert_eq!(
+                outcome.steps,
+                vec![PressStep::Ran("activate-tab-1".to_owned())]
+            );
+            assert_eq!(shell.core.workspace.active, 0);
+            assert!(shell.keyboard_owner().is_none());
+        }
+
+        #[test]
         fn the_menu_closes_when_its_tab_closes() {
             let mut shell = shell_with_three_tabs();
             let _ = shell.update(Message::OpenTabMenu(2));
@@ -6403,16 +6423,20 @@ mod key_routing {
             #[test]
             fn the_selection_never_leaves_the_entries(
                 moves in proptest::collection::vec(proptest::bool::ANY, 0..40),
-                len in 0usize..12,
+                len in 1usize..12,
             ) {
-                // An empty list included: a move there must neither divide by
-                // zero nor invent a selection.
                 let mut selected = 0;
                 for down in moves {
-                    selected = if down { next(selected, len) } else { prev(selected, len) };
-                    proptest::prop_assert!(selected < len.max(1));
+                    selected = step(selected, len, down);
+                    proptest::prop_assert!(selected < len);
                 }
             }
+        }
+
+        #[test]
+        fn no_tab_is_offered_an_empty_menu() {
+            // The precondition `step` relies on: it never wraps a list of none.
+            assert!(entries(false).count() > 0);
         }
     }
 }
