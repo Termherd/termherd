@@ -81,8 +81,9 @@ struct PaneDto {
     status: &'static str,
     #[serde(flatten)]
     identity: IdentityDto,
-    /// The colour `/color` set for the pane's conversation, by its `/color`
-    /// name; `null` when it has none.
+    /// The colour the pane wears — Claude's `/color` for a Claude pane, the
+    /// tab's picked colour for a shell — by its `/color` name; `null` when it
+    /// wears none.
     color: Option<&'static str>,
 }
 

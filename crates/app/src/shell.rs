@@ -37,6 +37,7 @@ use crate::window_config::WindowConfig;
 mod appearance;
 pub(crate) mod bridge;
 mod claude_command;
+mod color_picker;
 mod docs;
 mod effects;
 mod geometry;
@@ -271,6 +272,11 @@ struct Shell {
     /// The open tab context menu, if any. It holds no tab of its own: it is
     /// always the focused tab's, because every entry acts on focus.
     tab_menu: Option<tab_menu::TabMenu>,
+    /// The open tab colour picker, if any — the focused tab's, like the menu.
+    color_picker: Option<color_picker::ColorPicker>,
+    /// Set only while an MCP call is being served, so a prompt armed then is
+    /// marked as one the user has not read (see `for_a_remote_caller`).
+    serving_remote_caller: bool,
     /// Browsable plan / memory docs (F-plans-memory), refreshed on scan.
     docs: Vec<DocEntry>,
     /// Whether a scan is currently in flight. At most one runs at a time;
@@ -516,6 +522,12 @@ enum Message {
     RunTabMenuEntry(usize),
     /// Close the menu without running anything (a click off it).
     CloseTabMenu,
+    /// The pointer entered the colour picker's line at this position.
+    HoverColorPickerEntry(usize),
+    /// Pick the colour at this position (a click on it).
+    PickColorPickerEntry(usize),
+    /// Close the colour picker without picking (a click off it).
+    CloseColorPicker,
     /// Confirm quitting TermHerd, closing the window (and hard-killing every
     /// live session). Reached only after the quit modal is accepted.
     ConfirmCloseWindow,
@@ -763,6 +775,8 @@ impl Shell {
             renaming: None,
             tab_rename: None,
             tab_menu: None,
+            color_picker: None,
+            serving_remote_caller: false,
             // Populated by the first scan's `refresh_docs` — `discover` does
             // blocking fs I/O, which must stay off the UI thread.
             docs: Vec::new(),
@@ -849,7 +863,7 @@ impl Shell {
     // deferred cleanup.
     #[allow(clippy::too_many_lines)]
     fn update(&mut self, message: Message) -> Task<Message> {
-        self.drop_stale_tab_menu();
+        self.drop_stale_lists();
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
         // is open discards it — the blur-cancels-edit convention. Only genuine
         // user interactions dismiss it; background traffic (PTY output,
@@ -1132,6 +1146,15 @@ impl Shell {
             Message::RunTabMenuEntry(position) => self.run_tab_menu_entry(position).1,
             Message::CloseTabMenu => {
                 self.tab_menu = None;
+                Task::none()
+            }
+            Message::HoverColorPickerEntry(position) => {
+                self.select_color(position);
+                Task::none()
+            }
+            Message::PickColorPickerEntry(position) => self.pick_color(position).1,
+            Message::CloseColorPicker => {
+                self.color_picker = None;
                 Task::none()
             }
             Message::CancelTabRename => {
@@ -2809,6 +2832,35 @@ mod key_routing {
         assert_eq!(shell.tab_menu, None, "forgotten, not merely hidden");
     }
 
+    /// Open the colour list over the focused tab, as the keyboard does.
+    fn open_color_picker(shell: &mut Shell) {
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("pick-tab-color".to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_background_close_elsewhere_leaves_the_colour_picker_open() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        open_color_picker(&mut shell);
+        close_in_background(&mut shell, first);
+        assert!(
+            shell.live_color_picker().is_some(),
+            "its pane still holds focus"
+        );
+    }
+
+    #[test]
+    fn a_background_close_of_the_picker_pane_forgets_the_picker() {
+        let (mut shell, _pty, _first) = shell_with_two_tabs();
+        open_color_picker(&mut shell);
+        let anchor = shell.core.workspace.tabs[1].first_session();
+        close_in_background(&mut shell, anchor.0.get());
+        assert!(shell.color_picker.is_none(), "forgotten, not merely hidden");
+    }
+
     #[test]
     fn a_background_close_shifts_a_tab_drag_with_the_strip() {
         let (mut shell, _pty, first) = shell_with_two_tabs();
@@ -3257,6 +3309,8 @@ mod key_routing {
             (Action::OpenTabMenu, "open-tab-menu"),
             // No pane, so no idle Claude to type `/desktop` into.
             (Action::SendToDesktop, "send-to-desktop"),
+            // No tab, so nothing to colour.
+            (Action::PickTabColor, "pick-tab-color"),
         ] {
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
@@ -4877,10 +4931,17 @@ mod key_routing {
         let escape = press(Key::Named(Named::Escape), Modifiers::default(), None);
 
         let (mut local, _pty, _session) = shell_with_idle_claude();
-        let _ = local.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        let _ = local.dispatch_action(Action::SendToDesktop);
         assert!(
             !local.enter_too_soon(&enter, Instant::now()),
             "the user read it"
+        );
+
+        let (mut pressed, _pty, _session) = shell_with_idle_claude();
+        let _ = pressed.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert!(
+            pressed.enter_too_soon(&enter, Instant::now()),
+            "an agent's press arms it as remotely as the tool does"
         );
 
         let (mut remote, _pty, session) = shell_with_idle_claude();
@@ -5283,6 +5344,14 @@ mod key_routing {
                     enter_ignored_until: None,
                     refused: None,
                 });
+            }
+            KeyboardOwner::ColorPicker => {
+                let (outcome, _task) =
+                    shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+                assert_eq!(
+                    outcome.steps,
+                    vec![PressStep::Ran("pick-tab-color".to_owned())]
+                );
             }
             KeyboardOwner::Settings => {
                 let _ = shell.update(Message::ToggleSettings);
@@ -7061,7 +7130,7 @@ mod key_routing {
 
     mod tab_menu {
         use super::*;
-        use crate::shell::tab_menu::{ENTRIES, TabMenu, entries, step};
+        use crate::shell::tab_menu::{ENTRIES, Offers, TabMenu, entries, step};
 
         /// Move the open menu's selection onto `action` with arrow presses, as
         /// a caller with no pointer would.
@@ -7296,18 +7365,37 @@ mod key_routing {
             assert!(offered(&shell), "a named Claude in front of a shell pane");
         }
 
-        #[test]
-        fn the_agent_name_entry_is_the_only_one_that_depends_on_the_pane() {
-            let with: Vec<Action> = entries(true).map(|entry| entry.action).collect();
-            let without: Vec<Action> = entries(false).map(|entry| entry.action).collect();
+        const NOTHING: Offers = Offers {
+            agent_named: false,
+            color_pickable: false,
+        };
 
-            assert_eq!(with.len(), ENTRIES.len());
-            assert_eq!(
-                with.into_iter()
-                    .filter(|action| !without.contains(action))
-                    .collect::<Vec<_>>(),
-                vec![Action::CopyAgentName]
-            );
+        /// The entries that `offers` adds over a pane that allows nothing.
+        fn added_by(offers: Offers) -> Vec<Action> {
+            let bare: Vec<Action> = entries(NOTHING).map(|entry| entry.action).collect();
+            entries(offers)
+                .map(|entry| entry.action)
+                .filter(|action| !bare.contains(action))
+                .collect()
+        }
+
+        #[test]
+        fn each_entry_that_depends_on_the_pane_depends_on_its_own_condition() {
+            let everything = Offers {
+                agent_named: true,
+                color_pickable: true,
+            };
+            assert_eq!(entries(everything).count(), ENTRIES.len());
+            let named = Offers {
+                agent_named: true,
+                ..NOTHING
+            };
+            assert_eq!(added_by(named), vec![Action::CopyAgentName]);
+            let pickable = Offers {
+                color_pickable: true,
+                ..NOTHING
+            };
+            assert_eq!(added_by(pickable), vec![Action::PickTabColor]);
         }
 
         #[test]
@@ -7399,7 +7487,263 @@ mod key_routing {
         #[test]
         fn no_tab_is_offered_an_empty_menu() {
             // The precondition `step` relies on: it never wraps a list of none.
-            assert!(entries(false).count() > 0);
+            assert!(entries(NOTHING).count() > 0);
+        }
+    }
+
+    mod color_picker {
+        use super::*;
+        use crate::shell::color_picker::ColorPicker;
+        use crate::shell::routing::KeyVerdict;
+
+        fn picker_steps(count: usize) -> Vec<PressStep> {
+            vec![PressStep::Overlay("tab-color-picker".to_owned()); count]
+        }
+
+        /// Open the focused tab's picker by name and move onto `color`, then
+        /// pick it, as an agent with no pointer would.
+        fn pick_by_keys(shell: &mut Shell, color: ClaudeColor) -> Vec<PressStep> {
+            let _ = shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+            let from = shell.live_color_picker().map_or(0, ColorPicker::selected);
+            let palette = ClaudeColor::ALL;
+            let at = palette
+                .iter()
+                .position(|listed| *listed == color)
+                .expect("in the palette");
+            let moves = (at + palette.len() - from) % palette.len();
+            let mut presses = Vec::new();
+            presses.extend(
+                std::iter::repeat_n("down", moves)
+                    .chain(["enter"])
+                    .map(|spec| Press::Chord(KeyChord::parse(spec).expect("parses"))),
+            );
+            shell.perform_presses(presses).0.steps
+        }
+
+        #[test]
+        fn the_picker_offers_the_palette_of_color_in_its_order() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+            let picker = shell.live_color_picker().expect("open");
+            assert_eq!(
+                ClaudeColor::ALL[picker.selected()],
+                ClaudeColor::Default,
+                "an uncoloured tab opens on None, so Enter changes nothing"
+            );
+        }
+
+        #[test]
+        fn a_colour_picked_for_a_shell_tab_is_stored_on_it_and_types_nothing() {
+            let (mut shell, pty) = shell_with_terminal();
+
+            let steps = pick_by_keys(&mut shell, ClaudeColor::Green);
+
+            assert_eq!(steps, picker_steps(steps.len()));
+            assert_eq!(shell.core.tab_color(0), Some(ClaudeColor::Green));
+            assert!(shell.keyboard_owner().is_none(), "the picker closed");
+            assert!(pty.writes().is_empty(), "a shell is told nothing");
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Default);
+            assert_eq!(shell.core.tab_color(0), None, "\"none\" clears it");
+        }
+
+        #[test]
+        fn a_colour_picked_for_a_claude_tab_asks_claude_through_the_confirmation() {
+            let (mut shell, pty, session) = shell_with_idle_claude();
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Cyan);
+
+            assert_eq!(
+                shell
+                    .claude_command
+                    .as_ref()
+                    .map(|p| (p.session, p.command.clone())),
+                Some((session, ClaudeCommand::Color(ClaudeColor::Cyan)))
+            );
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+            assert!(
+                pty.writes().is_empty(),
+                "nothing typed before the confirmation"
+            );
+            assert_eq!(shell.core.workspace.tabs[0].color, None, "no local copy");
+
+            let _ = press_all(&mut shell, &["enter"]);
+            assert_eq!(pty.writes()[0], b"\x15/color cyan");
+        }
+
+        #[test]
+        fn an_agents_pick_holds_back_a_physical_enter_on_the_confirmation() {
+            let (mut shell, _pty, _session) = shell_with_idle_claude();
+            let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Red);
+
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+            assert!(shell.enter_too_soon(&enter, Instant::now()));
+        }
+
+        #[test]
+        fn a_busy_claude_is_offered_no_picker_from_the_keymap_or_the_menu() {
+            // The line would queue behind its work.
+            let (mut shell, _pty, session) = shell_with_idle_claude();
+            let _ = shell.update(Message::PtyStatus {
+                session,
+                status: SessionStatus::Busy,
+            });
+
+            let (outcome, _task) =
+                shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+
+            assert_eq!(outcome.steps, vec![inert("pick-tab-color", "no-context")]);
+            assert!(shell.keyboard_owner().is_none());
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert!(
+                shell
+                    .live_tab_menu()
+                    .expect("open")
+                    .entries()
+                    .all(|entry| entry.action != Action::PickTabColor),
+                "the menu does not offer a list that cannot work"
+            );
+        }
+
+        #[test]
+        fn a_claude_tab_whose_claude_exited_is_coloured_as_a_shell_not_typed_into() {
+            // Its shell idles at a prompt and Claude's last frame is still on
+            // screen, reading as an empty prompt: only the foreground says
+            // Claude has gone, and `/color` must not reach zsh.
+            let (mut shell, pty, session) = shell_with_idle_claude();
+            let job = |pid| termherd_core::ForegroundJob { pid, started: None };
+            let _ = shell
+                .core
+                .apply(termherd_core::Event::ForegroundJobChanged {
+                    session,
+                    job: Some(job(42)),
+                });
+            let _ = shell
+                .core
+                .apply(termherd_core::Event::ForegroundJobChanged { session, job: None });
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Orange);
+
+            assert!(shell.claude_command.is_none(), "no command armed");
+            assert!(pty.writes().is_empty(), "nothing typed into the shell");
+            assert_eq!(shell.core.tab_color(0), Some(ClaudeColor::Orange));
+        }
+
+        #[test]
+        fn a_claude_that_went_busy_under_the_picker_refuses_the_pick_and_keeps_it_open() {
+            let (mut shell, pty, session) = shell_with_idle_claude();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+            let _ = shell.update(Message::PtyStatus {
+                session,
+                status: SessionStatus::Busy,
+            });
+
+            let steps = press_all(&mut shell, &["enter"]);
+
+            assert_eq!(
+                steps,
+                vec![PressStep::Refused {
+                    overlay: "tab-color-picker".to_owned(),
+                    reason: "the session is busy, not idle at its prompt".to_owned(),
+                }]
+            );
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ColorPicker));
+            assert!(shell.claude_command.is_none());
+            assert!(pty.writes().is_empty());
+            assert!(
+                shell
+                    .live_color_picker()
+                    .is_some_and(|p| p.refused().is_some()),
+                "the picker says why"
+            );
+        }
+
+        #[test]
+        fn the_tab_menu_leads_to_the_picker() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let at = shell
+                .live_tab_menu()
+                .expect("open")
+                .entries()
+                .position(|entry| entry.action == Action::PickTabColor)
+                .expect("listed");
+
+            let (verdict, _task) = shell.run_tab_menu_entry(at);
+
+            assert_eq!(verdict, Some(KeyVerdict::Ran("pick-tab-color".to_owned())));
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ColorPicker));
+        }
+
+        #[test]
+        fn a_click_picks_the_colour_under_it_and_hovering_selects_it() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.update(Message::HoverColorPickerEntry(3));
+            assert_eq!(
+                shell.live_color_picker().map(ColorPicker::selected),
+                Some(3)
+            );
+            let _ = shell.update(Message::PickColorPickerEntry(1));
+
+            assert_eq!(shell.core.tab_color(0), Some(ClaudeColor::ALL[1]));
+            assert!(shell.keyboard_owner().is_none());
+        }
+
+        #[test]
+        fn a_position_past_the_palette_picks_nothing_and_closes_the_picker() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.update(Message::PickColorPickerEntry(ClaudeColor::ALL.len()));
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.tab_color(0), None);
+        }
+
+        #[test]
+        fn a_click_off_the_picker_closes_it_without_picking() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.update(Message::CloseColorPicker);
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.tab_color(0), None);
+        }
+
+        #[test]
+        fn the_picker_closes_when_its_pane_loses_focus() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.activate_tab(0);
+            assert!(shell.keyboard_owner().is_none());
+            let _ = shell.update(Message::PickColorPickerEntry(0));
+            assert!(
+                (0..3).all(|index| shell.core.tab_color(index).is_none()),
+                "a stale click colours nothing"
+            );
+
+            let _ = shell.activate_tab(2);
+            assert!(shell.keyboard_owner().is_none(), "nor does it come back");
+        }
+
+        #[test]
+        fn the_picker_draws_and_opens_on_the_colour_in_force() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Blue);
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            assert!(shell.color_picker_card().is_some());
+            assert_eq!(
+                shell.live_color_picker().map(ColorPicker::selected),
+                Some(1),
+                "it opens on the colour the tab wears"
+            );
         }
     }
 }

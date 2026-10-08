@@ -23,6 +23,26 @@ enum Offered {
     /// `copy-agent-name` action reads it — so never on Windows, and on a shell
     /// tab whenever a Claude runs in front of it.
     WithAgentName,
+    /// Only where a colour can be picked for the focused pane, as the
+    /// `pick-tab-color` action decides it — so not on a busy Claude.
+    WhenColorPickable,
+}
+
+/// What the focused pane allows, read once when the menu opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Offers {
+    pub(super) agent_named: bool,
+    pub(super) color_pickable: bool,
+}
+
+impl Offers {
+    fn allow(self, offered: Offered) -> bool {
+        match offered {
+            Offered::OnEveryTab => true,
+            Offered::WithAgentName => self.agent_named,
+            Offered::WhenColorPickable => self.color_pickable,
+        }
+    }
 }
 
 /// One menu line: the keymap action it runs and the label it shows.
@@ -40,6 +60,11 @@ pub(super) const ENTRIES: &[Entry] = &[
         action: Action::RenameTab,
         label: strings::TAB_MENU_RENAME,
         offered: Offered::OnEveryTab,
+    },
+    Entry {
+        action: Action::PickTabColor,
+        label: strings::TAB_MENU_COLOR,
+        offered: Offered::WhenColorPickable,
     },
     Entry {
         action: Action::CopyAgentName,
@@ -73,17 +98,48 @@ pub(super) const ENTRIES: &[Entry] = &[
     },
 ];
 
-/// The entries offered when the focused pane does (`agent_named`) or does not
-/// have a Claude name to copy.
-pub(super) fn entries(agent_named: bool) -> impl Iterator<Item = &'static Entry> {
+/// The entries a pane allowing `offers` is offered.
+pub(super) fn entries(offers: Offers) -> impl Iterator<Item = &'static Entry> {
     ENTRIES
         .iter()
-        .filter(move |entry| agent_named || entry.offered == Offered::OnEveryTab)
+        .filter(move |entry| offers.allow(entry.offered))
+}
+
+/// What a key does to a list drawn over the window: the tab menu and the
+/// lists it leads to answer the same four keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ListKey {
+    Up,
+    Down,
+    Run,
+    Leave,
+    /// Swallowed, so nothing reaches the keymap or the terminal beneath.
+    Other,
+}
+
+impl ListKey {
+    pub(super) fn of(event: &keyboard::Event) -> Self {
+        if is_escape(event) {
+            return Self::Leave;
+        }
+        match event {
+            keyboard::Event::KeyPressed {
+                key: Key::Named(named),
+                ..
+            } => match named {
+                Named::ArrowUp => Self::Up,
+                Named::ArrowDown => Self::Down,
+                Named::Enter => Self::Run,
+                _ => Self::Other,
+            },
+            _ => Self::Other,
+        }
+    }
 }
 
 /// The selection one entry down (or up) a list of `len`, wrapping at either
 /// end. The list is never empty: every tab is offered the entries that need
-/// no agent name.
+/// nothing of its pane.
 pub(super) fn step(selected: usize, len: usize, down: bool) -> usize {
     if down {
         (selected + 1) % len
@@ -101,7 +157,7 @@ pub(super) fn step(selected: usize, len: usize, down: bool) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TabMenu {
     anchor: SessionId,
-    agent_named: bool,
+    offers: Offers,
     selected: usize,
 }
 
@@ -111,34 +167,44 @@ impl TabMenu {
     }
 
     pub(super) fn entries(self) -> impl Iterator<Item = &'static Entry> {
-        entries(self.agent_named)
+        entries(self.offers)
     }
 }
 
 impl Shell {
     /// The open menu, if its anchor still holds focus. Every reader goes
     /// through here, so a menu whose pane went away answers nothing even
-    /// before [`Self::drop_stale_tab_menu`] clears it.
+    /// before [`Self::drop_stale_lists`] clears it.
     pub(super) fn live_tab_menu(&self) -> Option<TabMenu> {
         self.tab_menu
             .filter(|menu| self.core.workspace.focused_session() == Some(menu.anchor))
     }
 
-    /// Forget a menu whose pane lost focus, so focus coming back to that pane
-    /// cannot revive a menu nobody reopened. Run before each message and each
-    /// MCP press: the two ways anything moves focus.
-    pub(super) fn drop_stale_tab_menu(&mut self) {
+    /// Forget a menu or a colour picker whose pane lost focus, so focus coming
+    /// back to that pane cannot revive a list nobody reopened. Run before each
+    /// message and each MCP press: the two ways anything moves focus.
+    pub(super) fn drop_stale_lists(&mut self) {
         if self.live_tab_menu().is_none() {
             self.tab_menu = None;
         }
+        if self.live_color_picker().is_none() {
+            self.color_picker = None;
+        }
     }
 
-    /// Forget a menu anchored on `session`, a pane that just closed. Its id is
-    /// never reused, so the anchor check alone would hide the menu for good;
-    /// dropping it here leaves nothing behind to reason about.
-    pub(super) fn forget_tab_menu_on(&mut self, session: SessionId) {
+    /// Forget a menu or a colour picker anchored on `session`, a pane that just
+    /// closed. Its id is never reused, so the anchor check alone would hide the
+    /// list for good; dropping it here leaves nothing behind to reason about.
+    pub(super) fn forget_lists_on(&mut self, session: SessionId) {
         if self.tab_menu.is_some_and(|menu| menu.anchor == session) {
             self.tab_menu = None;
+        }
+        if self
+            .color_picker
+            .as_ref()
+            .is_some_and(|picker| picker.anchor == session)
+        {
+            self.color_picker = None;
         }
     }
 
@@ -146,10 +212,13 @@ impl Shell {
     /// open, so there is nothing for the menu to act on.
     pub(super) fn open_tab_menu(&mut self) -> Option<()> {
         let anchor = self.core.workspace.focused_session()?;
-        let agent_named = self.focused_agent_name().is_some();
+        let offers = Offers {
+            agent_named: self.focused_agent_name().is_some(),
+            color_pickable: self.color_pickable(anchor),
+        };
         self.tab_menu = Some(TabMenu {
             anchor,
-            agent_named,
+            offers,
             selected: 0,
         });
         Some(())
@@ -178,26 +247,20 @@ impl Shell {
         &mut self,
         event: &keyboard::Event,
     ) -> (Option<KeyVerdict>, Task<Message>) {
-        if is_escape(event) {
+        let key = ListKey::of(event);
+        if key == ListKey::Leave {
             self.tab_menu = None;
             return (None, Task::none());
         }
-        let (
-            keyboard::Event::KeyPressed {
-                key: Key::Named(named),
-                ..
-            },
-            Some(menu),
-        ) = (event, self.live_tab_menu())
-        else {
+        let Some(menu) = self.live_tab_menu() else {
             return (None, Task::none());
         };
         let len = menu.entries().count();
-        match named {
-            Named::ArrowUp => self.select_tab_menu_entry(step(menu.selected, len, false)),
-            Named::ArrowDown => self.select_tab_menu_entry(step(menu.selected, len, true)),
-            Named::Enter => return self.run_tab_menu_entry(menu.selected),
-            _ => {}
+        match key {
+            ListKey::Up => self.select_tab_menu_entry(step(menu.selected, len, false)),
+            ListKey::Down => self.select_tab_menu_entry(step(menu.selected, len, true)),
+            ListKey::Run => return self.run_tab_menu_entry(menu.selected),
+            ListKey::Leave | ListKey::Other => {}
         }
         (None, Task::none())
     }

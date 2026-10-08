@@ -243,9 +243,9 @@ pub struct PaneSnapshot {
     pub status: SessionStatus,
     /// Who the Claude in front of this pane is; all `None` when none is.
     pub identity: ClaudeIdentity,
-    /// The colour `/color` gave this pane's conversation, read from its
-    /// transcript by the last scan. `None` for a shell, an unscanned
-    /// conversation, or one with no colour of its own.
+    /// The colour the pane wears, as its tab chip shows it: for a Claude pane
+    /// the one `/color` set, read from its transcript by the last scan; for a
+    /// shell the one picked for its tab. `None` when it wears none.
     pub color: Option<ClaudeColor>,
 }
 

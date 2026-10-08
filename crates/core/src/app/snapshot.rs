@@ -635,9 +635,19 @@ mod tests {
         coloured.digest.agent_color = Some(ClaudeColor::Yellow);
         app.apply(Event::ScanCompleted(vec![coloured]));
 
-        let panes = panes(&app, &SnapshotInputs::default());
-        assert_eq!(panes[0].color, Some(ClaudeColor::Yellow));
-        assert_eq!(panes[1].color, None);
+        let panes_now = panes(&app, &SnapshotInputs::default());
+        assert_eq!(panes_now[0].color, Some(ClaudeColor::Yellow));
+        assert_eq!(panes_now[1].color, None);
+
+        // A shell wears the colour picked for its tab, as its chip does.
+        app.apply(Event::SetTabColor {
+            index: 1,
+            color: ClaudeColor::Pink,
+        });
+        assert_eq!(
+            panes(&app, &SnapshotInputs::default())[1].color,
+            Some(ClaudeColor::Pink)
+        );
     }
 
     #[test]

@@ -31,8 +31,8 @@ mod tabs;
 use doc_editor::doc_editor;
 use modals::modal;
 use style::{
-    COLOR_MARK_WIDTH, card_secondary_text, card_style, claude_color, clip, color_bar, kind_glyph,
-    kind_icon, mix, sidebar_secondary_text, status_dot,
+    COLOR_MARK_WIDTH, card_secondary_text, card_style, claude_color, clip, color_bar, color_swatch,
+    kind_glyph, kind_icon, mix, sidebar_secondary_text, status_dot,
 };
 
 impl Shell {
@@ -66,6 +66,9 @@ impl Shell {
         // ladder, so the menu drawn is the one that answers the keys.
         if let Some(menu) = self.tab_menu_card() {
             return modal(base, menu, Message::CloseTabMenu);
+        }
+        if let Some(picker) = self.color_picker_card() {
+            return modal(base, picker, Message::CloseColorPicker);
         }
         if self.settings_open {
             return modal(base, self.settings_panel(), Message::CloseSettings);

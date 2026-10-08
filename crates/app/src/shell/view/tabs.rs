@@ -14,10 +14,11 @@ use termherd_core::ClaudeColor;
 
 use super::modals::modal_card;
 use super::{
-    COLOR_MARK_WIDTH, CardFacts, card_frame, card_secondary_line, claude_color, clip, detail_lines,
-    kind_icon, session_card, status_dot,
+    COLOR_MARK_WIDTH, CardFacts, card_frame, card_secondary_line, claude_color, clip, color_swatch,
+    detail_lines, kind_icon, session_card, status_dot,
 };
 use crate::shell::{Message, Shell, tab_rename_id};
+use crate::strings;
 
 impl Shell {
     /// The tab strip (FR5): one chip per open session, the active one
@@ -145,29 +146,52 @@ impl Shell {
     /// entry, the selected one filled. `None` when no menu is open.
     pub(in crate::shell) fn tab_menu_card(&self) -> Option<Element<'_, Message>> {
         let menu = self.live_tab_menu()?;
-        let title = self
-            .core
+        let lines = menu
+            .entries()
+            .map(|entry| text(entry.label).size(12).into());
+        Some(list_card(
+            vec![list_heading(self.active_tab_title())],
+            lines,
+            menu.selected(),
+            Message::RunTabMenuEntry,
+            Message::HoverTabMenuEntry,
+        ))
+    }
+
+    /// The open colour picker's card: the focused tab's title, why the last
+    /// pick was refused when it was, then one line per colour with a swatch
+    /// of it beside its name. `None` when no picker is open.
+    pub(in crate::shell) fn color_picker_card(&self) -> Option<Element<'_, Message>> {
+        let picker = self.live_color_picker()?;
+        let mut heading = vec![list_heading(self.active_tab_title())];
+        if let Some(reason) = picker.refused() {
+            heading.push(card_secondary_line(strings::color_pick_refused(reason)));
+        }
+        let lines = ClaudeColor::ALL.into_iter().map(|color| {
+            row![
+                color_swatch(color),
+                text(strings::color_choice(color)).size(12)
+            ]
+            .spacing(8)
+            .align_y(iced::Center)
+            .into()
+        });
+        Some(list_card(
+            heading,
+            lines,
+            picker.selected(),
+            Message::PickColorPickerEntry,
+            Message::HoverColorPickerEntry,
+        ))
+    }
+
+    /// The focused tab's shown title, the heading of a list drawn over it.
+    fn active_tab_title(&self) -> &str {
+        self.core
             .workspace
             .tabs
             .get(self.core.workspace.active)
-            .map_or("", Tab::display_title);
-        let mut card = column![text(clip(title, 32)).size(11)]
-            .spacing(2)
-            .width(240);
-        for (position, entry) in menu.entries().enumerate() {
-            let style = if position == menu.selected() {
-                button::primary
-            } else {
-                button::text
-            };
-            let line = button(text(entry.label).size(12))
-                .on_press(Message::RunTabMenuEntry(position))
-                .style(style)
-                .width(Fill)
-                .padding([4, 8]);
-            card = card.push(mouse_area(line).on_enter(Message::HoverTabMenuEntry(position)));
-        }
-        Some(modal_card(card))
+            .map_or("", Tab::display_title)
     }
 
     /// The hover card for a tab. A tab that resumes a browsed session shows the
@@ -205,6 +229,38 @@ impl Shell {
             }
         }
     }
+}
+
+/// A list's heading: the title of the tab it acts on.
+fn list_heading<'a>(title: &str) -> Element<'a, Message> {
+    text(clip(title, 32)).size(11).into()
+}
+
+/// A list drawn over the window for the focused tab: its title, then one
+/// line per entry, the `selected` one filled. A click on a line runs it and
+/// hovering selects it, so the pointer moves the selection the arrows move.
+fn list_card<'a>(
+    heading: Vec<Element<'a, Message>>,
+    lines: impl Iterator<Item = Element<'a, Message>>,
+    selected: usize,
+    on_run: fn(usize) -> Message,
+    on_hover: fn(usize) -> Message,
+) -> Element<'a, Message> {
+    let mut card = column(heading).spacing(2).width(240);
+    for (position, label) in lines.enumerate() {
+        let style = if position == selected {
+            button::primary
+        } else {
+            button::text
+        };
+        let line = button(label)
+            .on_press(on_run(position))
+            .style(style)
+            .width(Fill)
+            .padding([4, 8]);
+        card = card.push(mouse_area(line).on_enter(on_hover(position)));
+    }
+    modal_card(card)
 }
 
 /// A tab chip's text colour: the primary tier on the active (filled) chip, the

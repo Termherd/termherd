@@ -24,6 +24,7 @@ Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 | `close-focused` | `mod+w` | close the focused pane; a lone pane closes its tab |
 | `rename-tab` | `mod+shift+i` | rename the focused tab, as a double-click does |
 | `open-tab-menu` | `mod+shift+m` | open the focused tab's menu, as a right-click does |
+| `pick-tab-color` | *(unbound)* | pick the focused tab's colour |
 | `open-new-session` | *(unbound)* | reserved — no surface yet |
 
 `rename-tab` opens the same inline field a double-click on the tab opens,
@@ -34,6 +35,16 @@ Claude tab by asking Claude to `/rename` it, as
 on Windows and Linux <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> reaches a
 program in the terminal as the same byte as <kbd>Ctrl</kbd>+<kbd>I</kbd>, which
 is <kbd>Tab</kbd>, so claiming it takes nothing away from that program.
+
+`pick-tab-color` opens a list of the eight colours Claude's `/color` takes,
+and *None*, over the focused tab — the list the tab menu's *Tab colour…*
+opens. <kbd>↑</kbd> and <kbd>↓</kbd> move, <kbd>Enter</kbd> picks,
+<kbd>Escape</kbd> leaves. On a Claude tab the pick is typed as `/color` behind
+the usual prompt, and the action does nothing unless that Claude is idle with
+an empty prompt; on a shell tab, or one whose Claude has exited, TermHerd
+keeps the colour itself (see
+[tabs](../workspace/tabs-and-splits.md#tabs)). Bind it yourself; it has no
+default.
 
 `open-tab-menu` opens the [tab menu](../workspace/tabs-and-splits.md#tabs) a
 right-click opens; every entry in it is one of the actions on this page. With

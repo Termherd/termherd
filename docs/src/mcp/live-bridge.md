@@ -49,11 +49,14 @@ always present:
 `session_id` is Claude's own id, which changes on a fork or a plan-accept;
 address a session by `handle`, never by it.
 
-A `snapshot` pane also carries `color`: the colour Claude Code's `/color` set
-for the pane's conversation, spelt as `/color` takes it (`"green"`), or `null`
-for a shell, a conversation the sidebar has not listed yet, or one with no
-colour of its own. Unlike the three fields above it is read from the
-transcript, so it follows the sidebar's rescan rather than each call.
+A `snapshot` pane also carries `color`: the colour the pane wears, as its tab
+shows it, spelt as `/color` takes it (`"green"`), or `null` when it wears
+none. For a pane running Claude it is the colour Claude Code's `/color` set,
+read from the transcript, so it follows the sidebar's rescan rather than each
+call, and is `null` until the sidebar lists the conversation. For a shell it
+is the colour picked for its tab (see
+[tabs](../workspace/tabs-and-splits.md#tabs)), else that of a Claude run in
+it by hand — and a Claude pane whose Claude has exited counts as a shell.
 
 **`snapshot` is light by default**: structure only, no terminal text. Scope
 text to named handles with `terminals` (or set `focused_terminal: true` for the
@@ -207,8 +210,9 @@ as empty, so a draft spelling exactly that shape is the one case read wrong.
 
 A prompt armed by this tool **ignores a physical Enter for 600 ms**: someone
 typing in another pane when it appears would otherwise confirm it with the
-Enter that ends their own line. `escape`, and `enter` sent through
-`press_keys`, are never held back.
+Enter that ends their own line. So does one armed by a `press_keys` or
+`run_action` call — `send-to-desktop`, or a pick in the tab colour list.
+`escape`, and `enter` sent through `press_keys`, are never held back.
 
 A name is made safe before it is shown: control characters, line breaks and
 tabs become spaces, invisible formatting characters are dropped, a trailing
