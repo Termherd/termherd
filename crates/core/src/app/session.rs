@@ -83,6 +83,15 @@ impl LiveSession {
         file.session_id.as_deref()
     }
 
+    /// Whether this pane was launched to run Claude — the panes whose name and
+    /// colour belong to Claude, and that take a typed slash command. A shell
+    /// in which someone started `claude` by hand is not one: the line typed
+    /// into it would reach whichever program is in front.
+    #[must_use]
+    pub fn is_claude_launch(&self) -> bool {
+        matches!(self.launch, Launch::Claude(_))
+    }
+
     /// Whether this session still holds a **running foreground process** whose
     /// loss is worth confirming before a close. A Claude session *is* that
     /// process — the `claude` CLI runs in the shell's foreground until it

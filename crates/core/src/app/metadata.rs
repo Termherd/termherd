@@ -3,6 +3,7 @@
 
 use crate::browser::SessionRecord;
 use crate::metadata::Overlay;
+use crate::title::{TitleSources, first_present};
 
 use super::*;
 
@@ -35,10 +36,33 @@ impl App {
     /// the one derived from the digest (`F-session-metadata`).
     #[must_use]
     pub fn session_title(&self, record: &SessionRecord) -> String {
-        self.metadata
-            .get(&record.session_id)
-            .and_then(|meta| meta.title.clone())
-            .unwrap_or_else(|| record.digest.display_title(None).to_owned())
+        let (named, described) = self.recorded_titles(&record.session_id, Some(record));
+        crate::title::resolve(&TitleSources {
+            named,
+            described,
+            ..TitleSources::default()
+        })
+        .to_owned()
+    }
+
+    /// The two tiers of [`TitleSources`] a scan and the metadata overlay
+    /// supply for the Claude conversation `claude_id`: the name it was given
+    /// (termherd's own title for it, else Claude's `/rename`), and what its
+    /// transcript says it is about (Claude's AI title, else its first prompt).
+    pub(super) fn recorded_titles<'a>(
+        &'a self,
+        claude_id: &str,
+        record: Option<&'a SessionRecord>,
+    ) -> (Option<&'a str>, Option<&'a str>) {
+        let local = self
+            .metadata
+            .get(claude_id)
+            .and_then(|meta| meta.title.as_deref());
+        let digest = record.map(|record| &record.digest);
+        let named = first_present([local, digest.and_then(|d| d.custom_title.as_deref())]);
+        let described =
+            digest.and_then(|d| first_present([d.ai_title.as_deref(), Some(d.summary.as_str())]));
+        (named, described)
     }
 
     /// Whether a session (by Claude id) is starred / archived.

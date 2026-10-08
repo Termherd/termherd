@@ -52,7 +52,7 @@ impl App {
             .sessions
             .get(&session)
             .ok_or(CommandRefusal::UnknownSession)?;
-        if !matches!(live.launch, Launch::Claude { .. }) {
+        if !live.is_claude_launch() {
             return Err(CommandRefusal::NotClaude);
         }
         match live.status {
