@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
+use termherd_core::Placement;
 use termherd_core::{
     Action as KeymapAction, App, ClaudeIdentity, KeyChord, LiveSession, PointerEvent, PointerRoute,
     SessionKind, SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot, claude_identity,
@@ -242,12 +243,12 @@ impl fmt::Debug for ShotResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Open a new session in `project` (or the home dir when `None`), running
-    /// `kind`; with `background`, its tab is appended without taking focus.
+    /// `kind`; a background `placement` appends its tab without taking focus.
     /// → `Event::LaunchSession`, via the shell's own launch path.
     Open {
         project: Option<String>,
         kind: SessionKind,
-        background: bool,
+        placement: Placement,
     },
     /// Split a pane, opening a fresh session beside it. Splits the focused pane,
     /// or `pane` when given (revealed first, so a pane in another tab is

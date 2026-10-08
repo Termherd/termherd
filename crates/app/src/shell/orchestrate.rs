@@ -33,8 +33,8 @@ impl Shell {
             Action::Open {
                 project,
                 kind,
-                background,
-            } => self.act_open(project, kind, background),
+                placement,
+            } => self.act_open(project, kind, placement),
             Action::Split { pane, dir } => self.act_split(pane, dir),
             Action::Focus { session } => self.act_focus(session),
             Action::Rename { tab, title } => self.act_rename(tab, title),
@@ -104,21 +104,16 @@ impl Shell {
     /// Open a new session, reusing the shell's own launch path (the same one a
     /// click drives), so the spawn and resize match. No project falls back to
     /// the home directory, so the tool works from an empty workspace. A
-    /// `background` open appends its tab without taking focus.
+    /// background placement appends its tab without taking focus.
     fn act_open(
         &mut self,
         project: Option<String>,
         kind: SessionKind,
-        background: bool,
+        placement: Placement,
     ) -> (ActionOutcome, Task<Message>) {
         let launch = match kind {
             SessionKind::Shell => Launch::Shell,
             SessionKind::Claude => Launch::Claude { resume: None },
-        };
-        let placement = if background {
-            Placement::Background
-        } else {
-            Placement::Foreground
         };
         let (opened, task) = self.launch_at(project.unwrap_or_else(home_dir), launch, placement);
         let opened = opened.map(|id| id.0.get().to_string());
@@ -205,10 +200,10 @@ impl Shell {
             Ok(id) => id,
             Err(outcome) => return (outcome, Task::none()),
         };
-        let tabs_before = self.core.workspace.tabs.len();
+        let vanishing = self.vanishing_pane(id);
         let effects = self.core.apply(Event::ClosePane(id));
-        self.forget_vanished_pane(id, tabs_before);
-        let task = Task::batch([self.perform(effects), self.resize_panes()]);
+        let kill = self.perform(effects);
+        let task = Task::batch([kill, self.after_pane_vanished(vanishing)]);
         (self.applied(), task)
     }
 

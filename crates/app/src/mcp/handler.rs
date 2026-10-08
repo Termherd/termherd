@@ -26,6 +26,7 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
+use termherd_core::Placement;
 use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
@@ -215,7 +216,7 @@ impl TermherdMcp {
     /// → `open_session`.
     #[tool(
         name = "open_session",
-        description = "Open a new terminal session and focus it. Args: `project` \
+        description = "Open a new terminal session, focused unless `background`. Args: `project` \
                        (working directory; omit for the home dir), `kind` \
                        (\"shell\" or \"claude\", default \"shell\"), `background` \
                        (true appends the tab without taking focus; default \
@@ -238,7 +239,11 @@ impl TermherdMcp {
                     ));
                 }
             },
-            background: args.background,
+            placement: if args.background {
+                Placement::Background
+            } else {
+                Placement::Foreground
+            },
         };
         self.act(action).await
     }
@@ -2002,7 +2007,7 @@ mod tests {
             Action::Open {
                 project: Some("/proj".into()),
                 kind: SessionKind::Claude,
-                background: true,
+                placement: Placement::Background,
             }
         );
     }
@@ -2017,7 +2022,7 @@ mod tests {
             Action::Open {
                 project: None,
                 kind: SessionKind::Shell,
-                background: false,
+                placement: Placement::Foreground,
             }
         );
     }

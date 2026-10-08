@@ -944,7 +944,7 @@ impl Shell {
                 self.perform(effects)
             }
             Message::PtyExited { session, clean } => {
-                let tabs_before = self.core.workspace.tabs.len();
+                let vanishing = self.vanishing_pane(session);
                 let effects = self
                     .core
                     .apply(termherd_core::Event::PtyExited { session, clean });
@@ -957,8 +957,8 @@ impl Shell {
                     Task::none()
                 } else {
                     // The pane auto-closed on its clean shell exit.
-                    self.forget_vanished_pane(session, tabs_before);
-                    Task::batch([self.perform(effects), self.resize_panes()])
+                    let kill = self.perform(effects);
+                    Task::batch([kill, self.after_pane_vanished(vanishing)])
                 }
             }
             Message::Key(event) => {
@@ -2001,7 +2001,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: Some("/tmp/x".into()),
             kind: SessionKind::Shell,
-            background: false,
+            placement: termherd_core::Placement::Foreground,
         });
         assert_eq!(outcome.error, None, "opening a session never rejects");
         assert_eq!(
@@ -2021,7 +2021,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: None,
             kind: SessionKind::Claude,
-            background: false,
+            placement: termherd_core::Placement::Foreground,
         });
         assert_eq!(outcome.error, None);
         assert_eq!(
@@ -2549,7 +2549,7 @@ mod key_routing {
             .perform_action(BridgeAction::Open {
                 project: Some("/tmp/worker".into()),
                 kind: SessionKind::Shell,
-                background: true,
+                placement: termherd_core::Placement::Background,
             })
             .0
     }
@@ -2585,7 +2585,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: None,
             kind: SessionKind::Shell,
-            background: false,
+            placement: termherd_core::Placement::Foreground,
         });
         assert!(opened(&outcome).is_some());
         assert_eq!(opened(&outcome), outcome.focused, "it is the focused one");
@@ -2624,17 +2624,82 @@ mod key_routing {
         assert!(!shell.screens.contains_key(&id), "its screen is forgotten");
     }
 
-    #[test]
-    fn a_background_close_drops_a_close_prompt_whose_index_shifted() {
-        // The prompt names tab 1; closing tab 0 makes that index name nothing,
-        // or another tab. Confirming it then must not close the wrong one.
-        let (mut shell, _pty, first) = shell_with_two_tabs();
-        shell.closing = Some(1);
-        let _ = shell.perform_action(BridgeAction::Close {
-            pane: Some(first),
+    fn close_in_background(shell: &mut Shell, pane: u64) {
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(pane),
             background: true,
         });
-        assert_eq!(shell.closing, None);
+        assert_eq!(outcome.error, None);
+    }
+
+    #[test]
+    fn a_background_close_keeps_a_close_prompt_on_the_tab_it_named() {
+        // The prompt names the user's tab, at 1; closing tab 0 shifts it to 0.
+        // Dropping it would send the user's Enter to the terminal instead.
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let user_tab = shell.core.workspace.tabs[1].sessions()[0];
+        shell.closing = Some(1);
+        close_in_background(&mut shell, first);
+        assert_eq!(shell.closing, Some(0));
+        assert_eq!(shell.core.workspace.tab_of(user_tab), Some(0));
+    }
+
+    #[test]
+    fn a_background_close_of_the_prompted_tab_drops_its_prompt() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        shell.closing = Some(0);
+        close_in_background(&mut shell, first);
+        assert_eq!(shell.closing, None, "the tab it named is gone");
+    }
+
+    #[test]
+    fn a_background_close_shifts_a_tab_drag_with_the_strip() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        shell.tab_drag = Some(TabDrag { from: 1, over: 1 });
+        close_in_background(&mut shell, first);
+        assert_eq!(
+            shell.tab_drag,
+            Some(TabDrag { from: 0, over: 0 }),
+            "the release still lands on the tab that was pressed"
+        );
+    }
+
+    /// Two tabs with the first split in two; the second is active. Returns
+    /// the shell, its PTY double, and the split's two sessions.
+    fn shell_with_a_split_behind() -> (Shell, Arc<RecordingPty>, SessionId, SessionId) {
+        let (mut shell, pty, first) = shell_with_two_tabs();
+        let _ = shell.core.apply(termherd_core::Event::ActivateTab(0));
+        let effects = shell
+            .core
+            .apply(termherd_core::Event::SplitFocused(SplitDir::Vertical));
+        let _ = shell.perform(effects);
+        let _ = shell.core.apply(termherd_core::Event::ActivateTab(1));
+        let left = SessionId(std::num::NonZeroU64::new(first).expect("non-zero"));
+        let right = shell.core.workspace.tabs[0].sessions()[1];
+        (shell, pty, left, right)
+    }
+
+    #[test]
+    fn a_background_close_in_a_split_behind_grows_the_sibling_to_the_tab() {
+        // Left at half width, the survivor would answer `read_terminal` and
+        // `mouse_in_session` for a grid it is no longer drawn at.
+        let (mut shell, pty, _left, right) = shell_with_a_split_behind();
+        let lone = pty.resizes()[0];
+        let resized = pty.resizes().len();
+        close_in_background(&mut shell, right.0.get());
+        assert_eq!(
+            pty.resizes()[resized..],
+            [lone, lone],
+            "the active tab and the surviving sibling are both sized"
+        );
+    }
+
+    #[test]
+    fn a_background_close_moves_a_pending_tab_rename_to_the_surviving_pane() {
+        let (mut shell, _pty, left, right) = shell_with_a_split_behind();
+        shell.tab_rename = Some((left, "Pinned".into()));
+        close_in_background(&mut shell, left.0.get());
+        assert_eq!(shell.tab_rename, Some((right, "Pinned".into())));
     }
 
     #[test]

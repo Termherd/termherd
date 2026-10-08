@@ -105,7 +105,9 @@ terminal they did not choose. `background: true` on `open_session` and
   it, and requires `pane`: the focused pane is the user's, so there is no
   default to fall back on. The flag means *never take focus*, not *focus
   cannot move*: closing the pane that holds focus still hands it to its
-  sibling.
+  sibling. A lone pane takes its tab with it, onto the reopen stack like any
+  tab close, and a close prompt or tab drag the user has under way stays on
+  the tab it named.
 
 Neither flag lets an agent reach a state the keyboard cannot: a background tab
 is one the user could have opened and then left.
