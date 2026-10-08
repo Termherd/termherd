@@ -1739,6 +1739,21 @@ mod key_routing {
         (shell, pty)
     }
 
+    #[test]
+    fn every_spawned_pane_is_stamped_with_the_shells_clock() {
+        let before = SystemTime::now();
+        let (mut shell, _pty) = shell_with_terminal();
+        let first = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.run_action(Action::SplitVertical);
+        let second = shell.core.workspace.focused_session().expect("focused");
+        assert_ne!(first, second, "the split focuses its new pane");
+        let after = SystemTime::now();
+        for session in [first, second] {
+            let stamped = shell.core.running_since(session).expect("stamped");
+            assert!(before <= stamped && stamped <= after, "{session:?}");
+        }
+    }
+
     /// The id a fresh Claude launch was minted, when `launch` is one and the id
     /// is a UUID — the shape `--session-id` takes.
     fn minted_fresh_claude(launch: Option<&Launch>) -> Option<&str> {

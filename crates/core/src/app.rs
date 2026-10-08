@@ -219,6 +219,7 @@ impl App {
                 self.foreground_job_changed(session, job)
             }
             Event::SessionFileRead { session, file } => self.session_file_read(session, file),
+            Event::SessionSpawned { session, at } => self.session_spawned(session, at),
             Event::ActivateTab(index) => {
                 self.workspace.activate(index);
                 Vec::new()

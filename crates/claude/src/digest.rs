@@ -29,6 +29,17 @@ pub struct SessionDigest {
     /// separate from [`Self::text_content`] so it captures the true *tail* even
     /// when the indexed text hit its size cap mid-session.
     pub tail: Vec<String>,
+    /// The Claude Code version (`version`) of the last user, assistant or
+    /// system entry that records one.
+    pub version: Option<String>,
+    /// The model (`message.model`) of the last assistant reply that names one.
+    /// Sidechain and synthetic replies are skipped: neither is the model the
+    /// session talks to.
+    pub model: Option<String>,
+    /// The reasoning effort of the last assistant reply that records one:
+    /// `effort`, else `perTurnEffort`. Neither is documented, and older
+    /// Claude Code versions write neither.
+    pub effort: Option<String>,
 }
 
 impl SessionDigest {
@@ -83,6 +94,7 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
     let mut custom_title: Option<String> = None;
     let mut ai_title: Option<String> = None;
     let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut run = RunFacts::default();
 
     for entry in crate::jsonl::entries(content) {
         if slug.is_none()
@@ -112,6 +124,11 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         if is_user || is_assistant {
             message_count = message_count.saturating_add(1);
         }
+        run.observe(
+            &entry,
+            is_user || is_assistant || entry_type == Some("system"),
+            is_assistant,
+        );
 
         let text = message_text(&entry);
 
@@ -153,7 +170,49 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         custom_title,
         ai_title,
         tail: tail.into(),
+        version: run.version,
+        model: run.model,
+        effort: run.effort,
     })
+}
+
+/// What a transcript says about the Claude that wrote it, each field the last
+/// value an entry recorded.
+#[derive(Default)]
+struct RunFacts {
+    version: Option<String>,
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+/// The model Claude Code names on a reply it made up itself (an interrupted
+/// or failed turn), which no API call answered.
+const SYNTHETIC_MODEL: &str = "<synthetic>";
+
+impl RunFacts {
+    fn observe(&mut self, entry: &serde_json::Value, carries_version: bool, is_assistant: bool) {
+        if carries_version && let Some(v) = non_empty_str(entry, "version") {
+            self.version = Some(v.to_owned());
+        }
+        let sidechain = entry
+            .get("isSidechain")
+            .and_then(serde_json::Value::as_bool);
+        if !is_assistant || sidechain == Some(true) {
+            return;
+        }
+        let model = entry.get("message").and_then(|m| non_empty_str(m, "model"));
+        if model == Some(SYNTHETIC_MODEL) {
+            return;
+        }
+        if let Some(model) = model {
+            self.model = Some(model.to_owned());
+        }
+        if let Some(effort) =
+            non_empty_str(entry, "effort").or_else(|| non_empty_str(entry, "perTurnEffort"))
+        {
+            self.effort = Some(effort.to_owned());
+        }
+    }
 }
 
 /// First line of `text` with surrounding whitespace stripped, skipping leading
@@ -429,5 +488,141 @@ mod tests {
             let d = digest_session(&user_line(&text)).unwrap();
             prop_assert_eq!(d.summary, text);
         }
+
+        #[test]
+        fn the_last_reply_names_the_model(models in prop::collection::vec("[a-z0-9-]{1,20}", 1..8)) {
+            let mut lines = vec![user_line("prompt")];
+            lines.extend(models.iter().map(|m| reply(serde_json::json!({ "model": m }))));
+            let d = digest_session(&lines.join("\n")).unwrap();
+            prop_assert_eq!(d.model.as_deref(), models.last().map(String::as_str));
+        }
+    }
+
+    /// An assistant entry as Claude Code 2.1 writes it, `message` replaced by
+    /// `fields` merged over a text reply, plus `extra` top-level keys.
+    fn assistant_line(message: serde_json::Value, extra: serde_json::Value) -> String {
+        let mut entry = serde_json::json!({
+            "type": "assistant",
+            "message": { "role": "assistant", "content": [{ "type": "text", "text": "ok" }] },
+        });
+        if let (Some(target), Some(fields)) =
+            (entry["message"].as_object_mut(), message.as_object())
+        {
+            target.extend(fields.clone());
+        }
+        if let (Some(target), Some(fields)) = (entry.as_object_mut(), extra.as_object()) {
+            target.extend(fields.clone());
+        }
+        entry.to_string()
+    }
+
+    fn reply(message: serde_json::Value) -> String {
+        assistant_line(message, serde_json::json!({}))
+    }
+
+    #[test]
+    fn version_model_and_effort_come_from_the_last_entries_carrying_them() {
+        let jsonl = [
+            serde_json::json!({"type":"user","message":"hi","version":"2.1.290"}).to_string(),
+            assistant_line(
+                serde_json::json!({"model":"claude-sonnet-5"}),
+                serde_json::json!({"version":"2.1.290","effort":"low","perTurnEffort":"low"}),
+            ),
+            assistant_line(
+                serde_json::json!({"model":"claude-opus-5-5"}),
+                serde_json::json!({"version":"2.1.291","effort":"medium","perTurnEffort":"high"}),
+            ),
+            serde_json::json!({"type":"system","subtype":"x","version":"2.1.294"}).to_string(),
+        ]
+        .join("\n");
+        let d = digest_session(&jsonl).unwrap();
+        assert_eq!(d.version.as_deref(), Some("2.1.294"));
+        assert_eq!(d.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(d.effort.as_deref(), Some("medium"));
+    }
+
+    #[test]
+    fn a_transcript_recording_no_effort_has_none() {
+        let jsonl = [
+            user_line("hi"),
+            assistant_line(
+                serde_json::json!({"model":"claude-opus-5"}),
+                serde_json::json!({"version":"2.1.284"}),
+            ),
+        ]
+        .join("\n");
+        let d = digest_session(&jsonl).unwrap();
+        assert_eq!(d.effort, None);
+        assert_eq!(d.model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(d.version.as_deref(), Some("2.1.284"));
+    }
+
+    #[test]
+    fn effort_falls_back_to_the_per_turn_effort() {
+        let jsonl = [
+            user_line("hi"),
+            assistant_line(
+                serde_json::json!({}),
+                serde_json::json!({"perTurnEffort":"high"}),
+            ),
+        ]
+        .join("\n");
+        assert_eq!(
+            digest_session(&jsonl).unwrap().effort.as_deref(),
+            Some("high")
+        );
+    }
+
+    #[test]
+    fn a_later_reply_without_effort_keeps_the_earlier_one() {
+        let jsonl = [
+            user_line("hi"),
+            assistant_line(
+                serde_json::json!({}),
+                serde_json::json!({"effort":"medium"}),
+            ),
+            reply(serde_json::json!({"model":"claude-opus-5-5"})),
+        ]
+        .join("\n");
+        assert_eq!(
+            digest_session(&jsonl).unwrap().effort.as_deref(),
+            Some("medium")
+        );
+    }
+
+    #[test]
+    fn sidechain_and_synthetic_replies_do_not_name_the_model() {
+        let jsonl = [
+            user_line("hi"),
+            reply(serde_json::json!({"model":"claude-opus-5-5"})),
+            assistant_line(
+                serde_json::json!({"model":"claude-haiku-5"}),
+                serde_json::json!({"isSidechain":true,"effort":"low"}),
+            ),
+            reply(serde_json::json!({"model":"<synthetic>"})),
+        ]
+        .join("\n");
+        let d = digest_session(&jsonl).unwrap();
+        assert_eq!(d.model.as_deref(), Some("claude-opus-5-5"));
+        assert_eq!(d.effort, None);
+    }
+
+    #[test]
+    fn a_transcript_recording_none_of_them_has_none() {
+        let d = digest_session(&user_line("hi")).unwrap();
+        assert_eq!((d.version, d.model, d.effort), (None, None, None));
+    }
+
+    #[test]
+    fn a_version_on_an_entry_that_is_no_message_is_ignored() {
+        let jsonl = [
+            serde_json::json!({"type":"user","message":"hi","version":"2.1.290"}).to_string(),
+            serde_json::json!({"type":"summary","version":"9.9.9"}).to_string(),
+        ]
+        .join("\n");
+        assert_eq!(
+            digest_session(&jsonl).unwrap().version.as_deref(),
+            Some("2.1.290")
+        );
     }
 }

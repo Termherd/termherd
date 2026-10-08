@@ -82,8 +82,12 @@ Additions live in `~/.termherd/metadata.json`, beside stars and renames.
 Nothing is written under `~/.claude`.
 
 Hovering a session shows a card with its fuller description — relative last
-activity and message count (`3h ago · 214 messages`). A tab shows the same
-card on hover, plus an `Agent:` line when a Claude runs in it.
+activity and message count (`3h ago · 214 messages`), the model and reasoning
+effort of its last reply (`Model: claude-opus-5-5  ·  medium effort`) and the
+Claude Code version that wrote it (`Claude Code 2.1.294`). A line is left out
+when the transcript does not record it: older Claude Code versions write no
+effort. A tab shows the same card on hover, plus the live facts described in
+[Tabs and splits](tabs-and-splits.md).
 
 ## Search
 

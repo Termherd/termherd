@@ -5,13 +5,14 @@
 //! live in [`modals`]. No state transitions live here — those are in the
 //! parent module.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use iced::widget::canvas::Canvas;
 use iced::widget::{Column, button, column, container, mouse_area, row, text};
 use iced::{Border, Color, Element, Fill, Length, Size};
+use termherd_claude::digest::SessionDigest;
 use termherd_core::SessionRecord;
-use termherd_core::browser::relative_age;
+use termherd_core::browser::{compact_elapsed, relative_age};
 use termherd_core::workspace::{Pane, SessionId, SplitDir};
 
 use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD};
@@ -269,17 +270,30 @@ impl Shell {
 pub(super) struct CardFacts {
     /// The peer name other Claude sessions address the pane's Claude by.
     pub agent: Option<String>,
+    /// The Claude Code version, as [`termherd_core::App::claude_version`]
+    /// resolves it.
+    pub version: Option<String>,
+    /// How long the pane's PTY has run.
+    pub running_for: Option<Duration>,
 }
 
-/// The dimmed detail lines both hover cards show under their title, in order;
-/// a fact nobody knows is a line left out rather than a blank one.
-pub(super) fn detail_lines(facts: &CardFacts) -> Vec<String> {
-    facts
-        .agent
-        .as_deref()
-        .map(strings::agent_name)
-        .into_iter()
-        .collect()
+/// The dimmed detail lines both hover cards show under their title, in order:
+/// agent, model and effort (from the transcript `digest`), version, running
+/// time. A fact nobody knows is a line left out rather than a blank one.
+pub(super) fn detail_lines(facts: &CardFacts, digest: Option<&SessionDigest>) -> Vec<String> {
+    let model = digest.and_then(|d| d.model.as_deref());
+    let effort = digest.and_then(|d| d.effort.as_deref());
+    [
+        facts.agent.as_deref().map(strings::agent_name),
+        strings::model_and_effort(model, effort),
+        facts.version.as_deref().map(strings::claude_version),
+        facts
+            .running_for
+            .map(|span| strings::running_for(&compact_elapsed(span))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// One dimmed hover-card line. The title inherits the card's text colour;
@@ -316,11 +330,94 @@ pub(super) fn session_card(
     let meta = strings::session_meta(age.as_deref(), count);
 
     let mut card = column![text(title).size(12), secondary_line(meta)].spacing(4);
-    for line in detail_lines(facts) {
+    for line in detail_lines(facts, Some(&session.digest)) {
         card = card.push(secondary_line(line));
     }
     for line in &session.digest.tail {
         card = card.push(secondary_line(format!("› {line}")));
     }
     card_frame(card)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn digest(model: Option<&str>, effort: Option<&str>) -> SessionDigest {
+        SessionDigest {
+            model: model.map(str::to_owned),
+            effort: effort.map(str::to_owned),
+            ..SessionDigest::default()
+        }
+    }
+
+    fn every_fact() -> CardFacts {
+        CardFacts {
+            agent: Some("termherd-b0".to_owned()),
+            version: Some("2.1.294".to_owned()),
+            running_for: Some(Duration::from_secs(3600 + 12 * 60)),
+        }
+    }
+
+    #[test]
+    fn a_card_knowing_everything_shows_every_line_in_order() {
+        let known = digest(Some("claude-opus-5-5"), Some("medium"));
+        assert_eq!(
+            detail_lines(&every_fact(), Some(&known)),
+            vec![
+                strings::agent_name("termherd-b0"),
+                strings::model_and_effort(Some("claude-opus-5-5"), Some("medium")).expect("a line"),
+                strings::claude_version("2.1.294"),
+                strings::running_for("1h 12m"),
+            ]
+        );
+    }
+
+    #[test]
+    fn each_unknown_fact_is_a_line_left_out() {
+        let known = || digest(Some("m"), Some("e"));
+        let all = detail_lines(&every_fact(), Some(&known()));
+        let cases = [
+            (
+                CardFacts {
+                    agent: None,
+                    ..every_fact()
+                },
+                known(),
+                0,
+            ),
+            (every_fact(), digest(None, None), 1),
+            (
+                CardFacts {
+                    version: None,
+                    ..every_fact()
+                },
+                known(),
+                2,
+            ),
+            (
+                CardFacts {
+                    running_for: None,
+                    ..every_fact()
+                },
+                known(),
+                3,
+            ),
+        ];
+        for (facts, digest, missing) in cases {
+            let mut expected = all.clone();
+            expected.remove(missing);
+            assert_eq!(
+                detail_lines(&facts, Some(&digest)),
+                expected,
+                "line {missing}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_card_with_no_transcript_still_shows_the_live_facts() {
+        assert_eq!(detail_lines(&every_fact(), None).len(), 3);
+        assert!(detail_lines(&CardFacts::default(), None).is_empty());
+    }
 }

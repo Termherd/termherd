@@ -569,6 +569,7 @@ mod tests {
             name: Some(name.to_owned()),
             session_id: Some(session_id.to_owned()),
             proc_start: Some(STARTED.to_owned()),
+            version: None,
         }
     }
 

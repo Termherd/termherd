@@ -103,7 +103,6 @@ issues #18–#29.
 | [F-session-reveal](#f-session-reveal) | feature | sessions, workspace | ☐ | Reveal a session's directory and transcript in the OS file manager. |
 | [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
 | [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ☐ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
-| [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ☐ | The tab hover card shows agent name, model, effort, version and elapsed time. |
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
 | [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ☐ | A Claude tab's title follows the session name Claude holds. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
@@ -118,6 +117,7 @@ issues #18–#29.
 | [F-mcp-snapshot](#f-mcp-snapshot) | feature | mcp, workspace | ✅ | The perception rung: a filterable, light-by-default view of the whole app. |
 | [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) | feature | mcp, workspace | ✅ | One model, two readers: the capture dump is now the MCP snapshot. |
 | [F-mcp-terminal-sync](#f-mcp-terminal-sync) | feature | mcp, terminal | ✅ | The wait rung: block until a session's status settles, then read its text. |
+| [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ✅ | The tab hover card shows agent name, model, effort, version and elapsed time. |
 | [F-tab-kind-icon](#f-tab-kind-icon) | feature | workspace | ✅ | A kind mark beside each tab's status dot, instead of a glyph in its title. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
 
@@ -1256,22 +1256,6 @@ arrive with their own features — [F-keymap-rename-tab](#f-keymap-rename-tab),
 [F-session-send-desktop](#f-session-send-desktop). Torture report:
 `.personal/feature-torture/reports/F-tab-context-menu.md`.
 
-<a id="f-tab-hover-details"></a>
-
-### F-tab-hover-details
-
-The tab hover card shows agent name, model, effort, version and elapsed time.
-
-Extends the single-sourced session card (#76) with what Claude records in the
-transcript and in its session file (#344). Needs
-[F-session-id-at-launch](#f-session-id-at-launch) and
-[F-copy-agent-name](#f-copy-agent-name). Torture report:
-`.personal/feature-torture/reports/F-tab-hover-details.md`.
-
-The agent name shipped with [F-copy-agent-name](#f-copy-agent-name) (#339): an
-`Agent:` line the tab card carries and the sidebar's does not. Model, effort,
-version and elapsed time remain.
-
 <a id="f-tab-park"></a>
 
 ### F-tab-park
@@ -1634,6 +1618,26 @@ is not an error — the tool reports `{ status, timed_out: true }` with the
 session's current status, so an agent can choose between waiting again and
 giving up. Bounds are the caller's: `timeout_ms` (default 30 s) capped at 5 min
 (Q7). Depends on #193; unblocks #196
+
+<a id="f-tab-hover-details"></a>
+
+### F-tab-hover-details
+
+The tab hover card shows agent name, model, effort, version and elapsed time.
+
+Extends the single-sourced session card (#76) with what Claude records in the
+transcript and in its session file (#344). Needs
+[F-session-id-at-launch](#f-session-id-at-launch) and
+[F-copy-agent-name](#f-copy-agent-name). Torture report:
+`.personal/feature-torture/reports/F-tab-hover-details.md`.
+
+The agent name shipped with [F-copy-agent-name](#f-copy-agent-name) (#339): an
+`Agent:` line the tab card carries and the sidebar's does not. Model, effort,
+version and elapsed time shipped in #344: the transcript digest records the
+last reply's model and effort and the last recorded version, the live session
+file's version outranks the transcript's, and the shell stamps each PTY spawn
+so the card can say how long a tab has run. The MCP pane snapshot is
+unchanged.
 
 <a id="f-tab-kind-icon"></a>
 

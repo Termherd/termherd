@@ -715,6 +715,7 @@ mod tests {
                 name: Some("proj-35".to_owned()),
                 session_id: Some("7eff".to_owned()),
                 proc_start: Some(STARTED.to_owned()),
+                version: None,
             },
         )]);
 
@@ -747,6 +748,7 @@ mod tests {
                     name: Some("proj-35".to_owned()),
                     session_id: None,
                     proc_start: Some(STARTED.to_owned()),
+                    version: None,
                 },
             )]),
             ..SnapshotInputs::default()
@@ -785,6 +787,7 @@ mod tests {
                 name: Some("typed-claude".to_owned()),
                 session_id: None,
                 proc_start: Some(STARTED.to_owned()),
+                version: None,
             },
         )]);
 

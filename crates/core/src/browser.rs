@@ -74,6 +74,33 @@ pub fn relative_age(elapsed: Duration) -> String {
     }
 }
 
+/// How long a session has run, compact and language-neutral: `<1m`, `3m`,
+/// `1h 12m`, `2d 3h`. Two units at most, the smaller one dropped when it is
+/// zero. Unlike [`relative_age`], an hour is not rounded away: a running time
+/// is read for its minutes.
+#[must_use]
+pub fn compact_elapsed(elapsed: Duration) -> String {
+    const MINUTE: u64 = 60;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+
+    let secs = elapsed.as_secs();
+    let (big, big_unit, small, small_unit) = if secs < MINUTE {
+        return "<1m".to_owned();
+    } else if secs < HOUR {
+        return format!("{}m", secs / MINUTE);
+    } else if secs < DAY {
+        (secs / HOUR, "h", secs % HOUR / MINUTE, "m")
+    } else {
+        (secs / DAY, "d", secs % DAY / HOUR, "h")
+    };
+    if small == 0 {
+        format!("{big}{big_unit}")
+    } else {
+        format!("{big}{big_unit} {small}{small_unit}")
+    }
+}
+
 /// Name a project from its path: the last non-empty path component, treating
 /// both `/` and `\` as separators so Windows and collapsed-worktree paths land
 /// on the same rule. Falls back to the whole input when it is all separators or
@@ -371,6 +398,22 @@ mod tests {
         assert_eq!(relative_age(Duration::from_secs(25 * 3600)), "1d");
         assert_eq!(relative_age(Duration::from_secs(8 * 86_400)), "1w");
         assert_eq!(relative_age(Duration::from_secs(400 * 86_400)), "1y");
+    }
+
+    #[test]
+    fn compact_elapsed_shows_two_units_at_each_boundary() {
+        let at = |secs| compact_elapsed(Duration::from_secs(secs));
+        assert_eq!(at(0), "<1m");
+        assert_eq!(at(59), "<1m");
+        assert_eq!(at(60), "1m");
+        assert_eq!(at(3 * 60 + 59), "3m");
+        assert_eq!(at(3599), "59m");
+        assert_eq!(at(3600), "1h");
+        assert_eq!(at(3600 + 12 * 60), "1h 12m");
+        assert_eq!(at(86_399), "23h 59m");
+        assert_eq!(at(86_400), "1d");
+        assert_eq!(at(2 * 86_400 + 3 * 3600 + 59 * 60), "2d 3h");
+        assert_eq!(at(400 * 86_400), "400d");
     }
 
     #[test]

@@ -64,7 +64,12 @@ impl Shell {
         let outcome = match effect {
             Effect::Spawn(mut spec) => {
                 self.attach_mcp(&mut spec);
-                self.pty.spawn(spec)
+                let session = spec.session;
+                let spawned = self.pty.spawn(spec);
+                if spawned.is_ok() {
+                    self.stamp_spawn(session);
+                }
+                spawned
             }
             Effect::Write { session, bytes } => self.pty.write(session, &bytes),
             Effect::Resize {
@@ -122,6 +127,22 @@ impl Shell {
             tracing::warn!(%error, "pty effect failed");
         }
         Task::none()
+    }
+
+    /// Tell `core` when `session`'s PTY started, by the wall clock it has no
+    /// access to, so a hover card can say how long the session has run.
+    fn stamp_spawn(&mut self, session: SessionId) {
+        let effects = self.core.apply(termherd_core::Event::SessionSpawned {
+            session,
+            at: SystemTime::now(),
+        });
+        // Mid-`perform_one` there is no `Task` to carry an effect out with, so
+        // an effect this event starts emitting must fail the tests rather than
+        // vanish.
+        debug_assert!(
+            effects.is_empty(),
+            "SessionSpawned now emits effects: route them through `perform`"
+        );
     }
 
     /// Enrich a Claude spawn with the live-bridge endpoint: mint a per-session

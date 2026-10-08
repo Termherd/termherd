@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
+use std::time::SystemTime;
 
 use super::snapshot::{identity_of, proves};
 use crate::snapshot::SessionKind;
@@ -46,6 +47,9 @@ pub struct LiveSession {
     /// ([`Event::SessionFileRead`]). Only a cache: whether it names this job
     /// is decided on every read, so a stale one names nobody.
     pub session_file: Option<SessionFile>,
+    /// When the shell spawned this pane's PTY ([`Event::SessionSpawned`]).
+    /// The shell's clock, not core's: core only keeps the stamp.
+    pub spawned_at: Option<SystemTime>,
 }
 
 /// The job in front of a session's shell, as the PTY adapter reads it.
@@ -76,6 +80,12 @@ impl LiveSession {
     /// front of this pane is the Claude that wrote it.
     fn live_session_id(&self) -> Option<&str> {
         self.proven_session_file()?.session_id.as_deref()
+    }
+
+    /// The Claude Code version the cached session file states, if it proves
+    /// the job in front of this pane is the Claude that wrote it.
+    fn live_version(&self) -> Option<&str> {
+        self.proven_session_file()?.version.as_deref()
     }
 
     /// The cached session file, only when it proves the job in front of this
@@ -115,6 +125,16 @@ fn session_id_by_precedence<'a>(
     launched: Option<&'a str>,
 ) -> Option<&'a str> {
     live.or(launched)
+}
+
+/// Which Claude Code version a pane runs, given the one its live session file
+/// states and the one its transcript last recorded: the live one, since the
+/// transcript is only as fresh as the last scan and a fresh pane has none.
+fn version_by_precedence<'a>(
+    live: Option<&'a str>,
+    transcript: Option<&'a str>,
+) -> Option<&'a str> {
+    live.or(transcript)
 }
 
 /// Per-session activity surfaced in the sidebar and on tabs (FR8).
@@ -366,6 +386,7 @@ impl App {
             status: SessionStatus::Starting,
             foreground: None,
             session_file: None,
+            spawned_at: None,
         });
         self.workspace.open(id, spec.title);
         vec![Effect::Spawn(SpawnSpec {
@@ -402,6 +423,7 @@ impl App {
             status: SessionStatus::Starting,
             foreground: None,
             session_file: None,
+            spawned_at: None,
         });
         vec![Effect::Spawn(SpawnSpec {
             session: id,
@@ -460,6 +482,38 @@ impl App {
     pub fn peer_name(&self, session: SessionId) -> Option<String> {
         let live = self.sessions.get(&session)?;
         identity_of(live.foreground.as_ref(), live.session_file.as_ref()).peer_name
+    }
+
+    /// Stamp `session` with the moment the shell spawned its PTY. Unknown
+    /// sessions are ignored.
+    pub(super) fn session_spawned(&mut self, session: SessionId, at: SystemTime) -> Vec<Effect> {
+        if let Some(live) = self.sessions.get_mut(&session) {
+            live.spawned_at = Some(at);
+        }
+        Vec::new()
+    }
+
+    /// When `session`'s PTY was spawned, while it still runs: `None` for an
+    /// unknown or exited session, or one the shell never stamped.
+    #[must_use]
+    pub fn running_since(&self, session: SessionId) -> Option<SystemTime> {
+        let live = self.sessions.get(&session)?;
+        if live.status == SessionStatus::Exited {
+            return None;
+        }
+        live.spawned_at
+    }
+
+    /// The Claude Code version running in `session`: the one its proven
+    /// session file states, else the one its transcript last recorded.
+    #[must_use]
+    pub fn claude_version(&self, session: SessionId) -> Option<&str> {
+        let live = self.sessions.get(&session)?;
+        let transcript = live
+            .claude_session_id()
+            .and_then(|id| self.record_for(id))
+            .and_then(|record| record.digest.version.as_deref());
+        version_by_precedence(live.live_version(), transcript)
     }
 
     /// A session's PTY ended. A *clean* exit — the user typed `exit` at a
@@ -691,6 +745,7 @@ mod tests {
             status: SessionStatus::Idle,
             foreground: job,
             session_file: file,
+            spawned_at: None,
         }
     }
 
@@ -707,6 +762,7 @@ mod tests {
             name: None,
             session_id: Some(session_id.to_owned()),
             proc_start: Some(STARTED.to_owned()),
+            version: None,
         }
     }
 
@@ -780,6 +836,7 @@ mod tests {
     fn an_unproven_session_file_never_outranks_the_launch_id() {
         let stale = SessionFile {
             proc_start: Some("another process".into()),
+            version: None,
             ..file_naming(42, "stale")
         };
         let session = live(fresh(Some(MINTED)), Some(claude_job(42)), Some(stale));
@@ -821,6 +878,7 @@ mod tests {
                 name: None,
                 session_id: file_id.clone(),
                 proc_start: Some(if same_start { STARTED.into() } else { "other".into() }),
+                version: None,
             };
             let session = live(launch, Some(claude_job(job_pid)), Some(file));
             let proven = job_pid == file_pid && same_start;
@@ -1343,5 +1401,79 @@ mod tests {
             status: SessionStatus::Idle,
         });
         assert_eq!(app.sessions[&id].status, SessionStatus::Exited);
+    }
+
+    #[test]
+    fn a_spawn_stamp_counts_while_the_session_runs_and_not_after() {
+        let mut app = App::new();
+        let id = launch(&mut app, "sh");
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000);
+        assert_eq!(app.running_since(id), None, "nothing stamped yet");
+        assert!(
+            app.apply(Event::SessionSpawned { session: id, at })
+                .is_empty()
+        );
+        assert_eq!(app.running_since(id), Some(at));
+        app.apply(Event::PtyExited {
+            session: id,
+            clean: false,
+        });
+        assert_eq!(app.running_since(id), None, "a dead terminal runs no more");
+    }
+
+    /// A fresh Claude pane under `MINTED` whose transcript the last scan
+    /// found, written by Claude Code `transcript_version`.
+    fn claude_pane_with_transcript(transcript_version: Option<&str>) -> (App, SessionId) {
+        let mut app = App::new();
+        let mut scanned = record(MINTED, "/proj", "a prompt");
+        scanned.digest.version = transcript_version.map(str::to_owned);
+        app.apply(Event::ScanCompleted(vec![scanned]));
+        app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
+        let id = app.workspace.focused_session().expect("a focused session");
+        (app, id)
+    }
+
+    fn read_file(app: &mut App, id: SessionId, started: &str, version: &str) {
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: Some(claude_job(4399)),
+        });
+        let file = SessionFile {
+            proc_start: Some(started.to_owned()),
+            version: Some(version.to_owned()),
+            ..file_naming(4399, MINTED)
+        };
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: Some(file),
+        });
+    }
+
+    #[test]
+    fn the_version_comes_from_the_transcript_until_a_session_file_proves_otherwise() {
+        let (mut app, id) = claude_pane_with_transcript(Some("2.1.290"));
+        assert_eq!(app.claude_version(id), Some("2.1.290"));
+        read_file(&mut app, id, STARTED, "2.1.294");
+        assert_eq!(
+            app.claude_version(id),
+            Some("2.1.294"),
+            "the running Claude outranks what its transcript last recorded"
+        );
+        read_file(&mut app, id, "a later process", "9.9.9");
+        assert_eq!(
+            app.claude_version(id),
+            Some("2.1.290"),
+            "a file the job in front did not write names nothing"
+        );
+    }
+
+    #[test]
+    fn a_pane_with_no_transcript_yet_takes_its_version_from_the_session_file() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
+        let id = app.workspace.focused_session().expect("a focused session");
+        assert_eq!(app.claude_version(id), None);
+        read_file(&mut app, id, STARTED, "2.1.294");
+        assert_eq!(app.claude_version(id), Some("2.1.294"));
     }
 }

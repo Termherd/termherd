@@ -105,7 +105,7 @@ impl Shell {
                         current: tab.display_title().to_owned(),
                     });
                 // The chip clips the title; hovering reveals the fuller
-                // description — the sidebar's session card, plus the agent line,
+                // description — the sidebar's session card, plus the live pane facts,
                 // when the tab resumes a browsed session, else a minimal title +
                 // cwd card.
                 tooltip(
@@ -130,11 +130,11 @@ impl Shell {
     }
 
     /// The hover card for a tab. A tab that resumes a browsed session
-    /// shows the [`session_card`] the sidebar does, plus its agent — one derive (the core
-    /// resolves the record via [`termherd_core::App::tab_record`]), no divergent
+    /// shows the [`session_card`] the sidebar does, with the live [`CardFacts`] of its
+    /// first pane — one derive (the core resolves the record via [`termherd_core::App::tab_record`]), no divergent
     /// formatting. A shell or a fresh, not-yet-scanned session has no record, so
     /// it falls back to a minimal card with the full title and the working
-    /// directory it runs in.
+    /// directory it runs in, under the same live facts.
     fn tab_hover_card(
         &self,
         index: usize,
@@ -142,9 +142,14 @@ impl Shell {
         now: SystemTime,
     ) -> Element<'static, Message> {
         let first = tab.sessions().first().copied();
-        let facts = CardFacts {
-            agent: first.and_then(|id| self.core.peer_name(id)),
-        };
+        let facts = first.map_or_else(CardFacts::default, |id| CardFacts {
+            agent: self.core.peer_name(id),
+            version: self.core.claude_version(id).map(str::to_owned),
+            running_for: self
+                .core
+                .running_since(id)
+                .and_then(|spawned| now.duration_since(spawned).ok()),
+        });
         match self.core.tab_record(index) {
             Some(record) => session_card(self.core.session_title(record), &facts, record, now),
             None => {
@@ -207,11 +212,11 @@ fn insertion_caret<'a>() -> Element<'a, Message> {
 }
 
 /// The minimal hover card for a tab with no browsed record — a shell or a fresh
-/// session: the full, untruncated title and the working directory it runs
-/// in. Styled like [`session_card`] so the two hover surfaces read alike.
+/// session: the full, untruncated title, the live [`CardFacts`] and the
+/// working directory it runs in. Styled like [`session_card`] so the two hover surfaces read alike.
 fn tab_card(title: String, facts: &CardFacts, cwd: Option<String>) -> Element<'static, Message> {
     let mut card = column![text(title).size(12)].spacing(4);
-    for line in detail_lines(facts) {
+    for line in detail_lines(facts, None) {
         card = card.push(secondary_line(line));
     }
     if let Some(cwd) = cwd {
