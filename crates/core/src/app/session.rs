@@ -341,6 +341,16 @@ impl App {
         })]
     }
 
+    /// Forget the session whose pane the workspace just closed and kill its
+    /// PTY. `None` — nothing was closed — yields no effects.
+    pub(super) fn release_closed_pane(&mut self, closed: Option<SessionId>) -> Vec<Effect> {
+        let Some(id) = closed else {
+            return Vec::new();
+        };
+        self.sessions.remove(&id);
+        vec![Effect::Kill(id)]
+    }
+
     /// Record `session`'s new activity. An exited session stays exited: a late
     /// report from its dying terminal must not revive it.
     pub(super) fn status_changed(

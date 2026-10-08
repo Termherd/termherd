@@ -233,13 +233,10 @@ impl App {
                 Vec::new()
             }
             Event::SplitFocused(dir) => self.split_focused(dir),
-            Event::CloseFocusedPane => match self.workspace.close_focused() {
-                Some(id) => {
-                    self.sessions.remove(&id);
-                    vec![Effect::Kill(id)]
-                }
-                None => Vec::new(),
-            },
+            Event::CloseFocusedPane => {
+                let closed = self.workspace.close_focused();
+                self.release_closed_pane(closed)
+            }
             Event::FocusNextPane => {
                 self.workspace.focus_next();
                 Vec::new()
