@@ -2356,6 +2356,7 @@ mod key_routing {
                 slug: None,
                 custom_title: None,
                 ai_title: None,
+                agent_color: None,
                 tail: Vec::new(),
             },
             modified: None,
@@ -3435,6 +3436,7 @@ mod key_routing {
                 slug: None,
                 custom_title: custom.map(str::to_string),
                 ai_title: None,
+                agent_color: None,
                 tail: Vec::new(),
             },
             modified: None,
@@ -3462,6 +3464,7 @@ mod key_routing {
                 slug: None,
                 custom_title: None,
                 ai_title: None,
+                agent_color: None,
                 tail: Vec::new(),
             },
             modified: None,
@@ -4309,7 +4312,10 @@ mod key_routing {
     /// A shell with one Claude tab open, focused and idle at its prompt.
     fn shell_with_idle_claude() -> (Shell, Arc<RecordingPty>, SessionId) {
         let (mut shell, pty) = empty_shell();
-        let _ = shell.launch("/tmp/claude".to_string(), Launch::Claude(ClaudeLaunch::Fresh(None)));
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(ClaudeLaunch::Fresh(None)),
+        );
         let session = shell.core.workspace.focused_session().expect("focused");
         let _ = shell.update(Message::PtyStatus {
             session,
@@ -5713,6 +5719,7 @@ mod key_routing {
                 slug: None,
                 custom_title: None,
                 ai_title: None,
+                agent_color: None,
                 tail: Vec::new(),
             },
             modified: None,
