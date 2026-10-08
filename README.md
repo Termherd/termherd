@@ -37,8 +37,9 @@ newer**, on your `PATH`.
 
 That floor is the `--session-id` flag: termherd starts every fresh Claude
 session under an id it mints, so a new tab knows its conversation from the
-first keystroke. Claude Code's changelog never records when the flag arrived;
-2.0.73 is the oldest release whose notes show it in use. Below it sits
+first keystroke. Claude Code's changelog never records when the flag arrived,
+so the floor is an estimate: 2.0.73 is the oldest release whose notes show it
+in use, and an older CLI without it fails the launch. Below it sits
 `--settings` (1.0.61), which termherd also puts on every Claude launch. It
 re-enables the CLI's terminal title for that session only, and the title is
 where a Claude session's activity comes from — without it, a
