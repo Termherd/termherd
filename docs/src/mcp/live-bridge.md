@@ -15,7 +15,7 @@ session is torn down.
 
 | Tool | Args | Returns |
 | --- | --- | --- |
-| `list_sessions` | — | `{ sessions: [...] }` — each row a live session: stable `handle`, tab title, cwd, kind (`shell` / `claude`), resumed Claude id, status, and Claude's `pid`, `peer_name`, `session_id` |
+| `list_sessions` | — | `{ sessions: [...] }` — each row a live session: stable `handle`, tab title, cwd, kind (`shell` / `claude`), resumed Claude id (`resume_id`, null for a fresh tab — `session_id` is the live one), status, and Claude's `pid`, `peer_name`, `session_id` |
 | `snapshot` | `sections`, `terminals`, `focused_terminal`, `text_lines` | the whole state: config, sidebar, tabs and panes |
 | `read_terminal` | `session`, `lines` | `{ text, rendered }` |
 | `screenshot` | `max_width` | the window as a PNG |

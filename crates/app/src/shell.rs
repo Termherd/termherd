@@ -24,8 +24,8 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    ConfigInput, Keymap, Launch, Overlay, PointerEvent, ScrollTarget, SelectOp, SessionRecord,
-    SessionStatus,
+    ClaudeLaunch, ConfigInput, Keymap, Launch, Overlay, PointerEvent, ScrollTarget, SelectOp,
+    SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
@@ -898,22 +898,21 @@ impl Shell {
                 self.perform(effects)
             }
             Message::LaunchProject(cwd) => self.launch(cwd, Launch::Shell),
-            Message::LaunchClaude(cwd) => self.launch(cwd, Launch::Claude { resume: None }),
+            Message::LaunchClaude(cwd) => {
+                self.launch(cwd, Launch::Claude(ClaudeLaunch::Fresh(None)))
+            }
             Message::LaunchSession { cwd, resume } => {
                 // Re-clicking a session already open in TermHerd re-focuses its
                 // tab instead of spawning a second terminal for the same Claude
-                // session (FR4).
+                // session (FR4). A re-key rewrites the session file under the
+                // same pid, which no job change announces, so read them first.
+                self.refresh_session_files();
                 if let Some(session) = self.core.open_session_for(&resume)
                     && let Some(index) = self.core.workspace.tab_of(session)
                 {
                     return self.activate_tab(index);
                 }
-                self.launch(
-                    cwd,
-                    Launch::Claude {
-                        resume: Some(resume),
-                    },
-                )
+                self.launch(cwd, Launch::Claude(ClaudeLaunch::Resume(resume)))
             }
             Message::PtyOutput { session, screen } => {
                 self.screens.insert(session, screen);
@@ -1373,6 +1372,14 @@ impl Shell {
         self.core.peer_name(session)
     }
 
+    /// Re-read the session file of every live pane.
+    fn refresh_session_files(&mut self) {
+        let sessions: Vec<SessionId> = self.core.sessions.values().map(|s| s.id).collect();
+        for session in sessions {
+            self.refresh_session_file(session);
+        }
+    }
+
     /// Re-read the session file of every pane in the tab at `index`.
     fn refresh_tab_session_files(&mut self, index: usize) {
         let sessions = self
@@ -1759,6 +1766,19 @@ mod key_routing {
         (shell, pty)
     }
 
+    /// The id a fresh Claude launch was minted, when `launch` is one and the id
+    /// is a UUID — the shape `--session-id` takes.
+    fn minted_fresh_claude(launch: Option<&Launch>) -> Option<&str> {
+        match launch {
+            Some(Launch::Claude(ClaudeLaunch::Fresh(Some(id))))
+                if termherd_claude::session_id::is_uuid(id) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        }
+    }
+
     const STARTED: &str = "Wed Oct  7 06:48:07 2026";
 
     /// Write Claude's session file for `pid` under `name` into `dir`.
@@ -1795,6 +1815,31 @@ mod key_routing {
             });
         }
         (shell, session)
+    }
+
+    #[test]
+    fn a_sidebar_click_on_a_re_keyed_session_focuses_its_tab_instead_of_resuming_it() {
+        // `/clear` rewrites the session file under the same pid, so no job
+        // change announces it: the click itself must read the file again.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+        std::fs::write(
+            dir.path().join("4399.json"),
+            format!(r#"{{"pid":4399,"sessionId":"re-keyed","procStart":"{STARTED}"}}"#),
+        )
+        .expect("write session file");
+        let _ = shell.launch("/tmp/other".to_string(), Launch::Shell);
+        assert_eq!(shell.core.workspace.active, 1);
+
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "re-keyed".to_string(),
+        });
+        assert_eq!(shell.core.workspace.tabs.len(), 2, "no duplicate resume");
+        assert_eq!(
+            shell.core.workspace.active, 0,
+            "the hosting tab came forward"
+        );
     }
 
     #[test]
@@ -2046,9 +2091,10 @@ mod key_routing {
             kind: SessionKind::Claude,
         });
         assert_eq!(outcome.error, None);
-        assert_eq!(
-            pty.launches(),
-            vec![Launch::Claude { resume: None }],
+        let launches = pty.launches();
+        assert_eq!(launches.len(), 1);
+        assert!(
+            minted_fresh_claude(launches.first()).is_some(),
             "a fresh Claude session, no project → home dir"
         );
     }
@@ -3344,11 +3390,52 @@ mod key_routing {
         let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
         let launches = pty.launches();
         assert_eq!(launches.len(), before + 1, "one new spawn");
-        assert_eq!(
-            launches.last(),
-            Some(&Launch::Claude { resume: None }),
+        assert!(
+            minted_fresh_claude(launches.last()).is_some(),
             "the bot button starts a fresh Claude session — never a shell, never a resume"
         );
+    }
+
+    #[test]
+    fn a_fresh_claude_tab_knows_the_id_it_was_launched_under() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let launches = pty.launches();
+        let first = minted_fresh_claude(launches.get(1)).expect("a minted id");
+        let second = minted_fresh_claude(launches.get(2)).expect("a minted id");
+        assert_ne!(first, second, "every fresh launch gets its own id");
+        assert_eq!(shell.core.tab_claude_session_id(1), Some(first));
+        assert_eq!(shell.core.tab_claude_session_id(2), Some(second));
+    }
+
+    #[test]
+    fn a_resume_and_a_shell_are_launched_without_a_minted_id() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "abc-123".to_string(),
+        });
+        assert_eq!(
+            pty.launches(),
+            vec![
+                Launch::Shell,
+                Launch::Claude(ClaudeLaunch::Resume("abc-123".to_string()))
+            ]
+        );
+    }
+
+    #[test]
+    fn reopening_a_fresh_claude_tab_mints_it_a_new_id() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let closed = shell.core.tab_claude_session_id(1).map(str::to_owned);
+        let _ = shell.update(Message::CloseTab(1));
+        let _ = shell.reopen_closed_tab().expect("a tab to reopen");
+        let launches = pty.launches();
+        let reopened = minted_fresh_claude(launches.last()).expect("a minted id");
+        assert_ne!(Some(reopened), closed.as_deref());
+        assert_eq!(shell.core.tab_claude_session_id(1), Some(reopened));
     }
 
     #[test]
@@ -4285,7 +4372,7 @@ mod key_routing {
     /// A shell with one Claude tab open, focused and idle at an empty prompt.
     fn shell_with_idle_claude() -> (Shell, Arc<RecordingPty>, SessionId) {
         let (mut shell, pty) = empty_shell();
-        let _ = shell.launch("/tmp/claude".to_string(), Launch::Claude { resume: None });
+        let _ = shell.launch("/tmp/claude".to_string(), Launch::Claude(ClaudeLaunch::Fresh(None)));
         let session = shell.core.workspace.focused_session().expect("focused");
         let _ = shell.update(Message::PtyStatus {
             session,
@@ -4968,7 +5055,10 @@ mod key_routing {
         // A Claude session is a running foreground process even when idle, so
         // its tab must always confirm before closing.
         let (mut shell, pty) = shell_with_terminal();
-        let _ = shell.launch("/tmp/claude".to_string(), Launch::Claude { resume: None });
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(ClaudeLaunch::Fresh(None)),
+        );
         let claude_tab = shell.core.workspace.active;
         let _ = shell.update(Message::RequestCloseTab(claude_tab));
         assert_eq!(shell.closing, Some(claude_tab), "a Claude tab confirms");
@@ -5231,7 +5321,7 @@ mod key_routing {
             url: "http://127.0.0.1:9/mcp".into(),
         });
         let session = session_id(1);
-        let mut spec = bare_spawn(session, Launch::Claude { resume: None });
+        let mut spec = bare_spawn(session, Launch::Claude(ClaudeLaunch::Fresh(None)));
 
         shell.attach_mcp(&mut spec);
 
@@ -5259,8 +5349,8 @@ mod key_routing {
         shell.mcp_endpoint = Some(crate::mcp::Endpoint {
             url: "http://127.0.0.1:9/mcp".into(),
         });
-        let mut first = bare_spawn(session_id(1), Launch::Claude { resume: None });
-        let mut second = bare_spawn(session_id(2), Launch::Claude { resume: None });
+        let mut first = bare_spawn(session_id(1), Launch::Claude(ClaudeLaunch::Fresh(None)));
+        let mut second = bare_spawn(session_id(2), Launch::Claude(ClaudeLaunch::Fresh(None)));
         shell.attach_mcp(&mut first);
         shell.attach_mcp(&mut second);
         assert_ne!(
@@ -5286,7 +5376,7 @@ mod key_routing {
         // The server failed to bind (or no runtime): `mcp_endpoint` is `None`, so
         // even a Claude launch goes out without the bridge rather than panicking.
         let (mut shell, _pty) = empty_shell();
-        let mut spec = bare_spawn(session_id(1), Launch::Claude { resume: None });
+        let mut spec = bare_spawn(session_id(1), Launch::Claude(ClaudeLaunch::Fresh(None)));
         shell.attach_mcp(&mut spec);
         assert!(spec.mcp.is_none(), "no endpoint → no injection");
     }
@@ -5324,10 +5414,7 @@ mod key_routing {
         let before = pty.spawn_count();
         let _ = shell.run_action(Action::NewClaudeSessionHere);
         assert_eq!(pty.spawn_count(), before + 1);
-        assert_eq!(
-            pty.launches().last(),
-            Some(&Launch::Claude { resume: None })
-        );
+        assert!(minted_fresh_claude(pty.launches().last()).is_some());
         assert_eq!(focused_cwd(&shell).as_deref(), Some("/tmp/project"));
     }
 
@@ -5927,16 +6014,12 @@ mod key_routing {
         let (mut shell, pty) = shell_with_terminal();
         let _ = shell.launch(
             "/tmp/project".to_string(),
-            Launch::Claude {
-                resume: Some("sess".to_string()),
-            },
+            Launch::Claude(ClaudeLaunch::Resume("sess".to_string())),
         );
         let sess_tab = shell.core.workspace.active;
         let _ = shell.launch(
             "/tmp/other".to_string(),
-            Launch::Claude {
-                resume: Some("other".to_string()),
-            },
+            Launch::Claude(ClaudeLaunch::Resume("other".to_string())),
         );
         assert_ne!(
             shell.core.workspace.active, sess_tab,

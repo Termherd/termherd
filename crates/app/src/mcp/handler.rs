@@ -1469,7 +1469,7 @@ mod tests {
     use super::*;
     use crate::shell::bridge::{Reply, Request, ShotResult, channel, spawn_test_shell};
     use termherd_core::{
-        App, ClaudeIdentity, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs,
+        App, ClaudeIdentity, ClaudeLaunch, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs,
     };
 
     /// A `list_sessions` row for an idle shell, the bridge's plainest answer.
@@ -2102,7 +2102,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude { resume: None },
+            launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
             title: "work".into(),
         }));
         let filter = SnapshotFilter::default();

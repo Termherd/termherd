@@ -12,3 +12,4 @@ pub mod osc;
 pub mod path;
 pub mod prompt;
 pub mod session_file;
+pub mod session_id;

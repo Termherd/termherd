@@ -13,7 +13,7 @@ use std::num::NonZeroU64;
 
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
-use termherd_core::{ClaudeCommand, Event, Launch, PointerEvent, SessionKind};
+use termherd_core::{ClaudeCommand, ClaudeLaunch, Event, Launch, PointerEvent, SessionKind};
 
 use super::bridge::{
     Action, ActionDetail, ActionOutcome, Press, PressOutcome, PressStep, RepoOutcome,
@@ -128,7 +128,7 @@ impl Shell {
     ) -> (ActionOutcome, Task<Message>) {
         let launch = match kind {
             SessionKind::Shell => Launch::Shell,
-            SessionKind::Claude => Launch::Claude { resume: None },
+            SessionKind::Claude => Launch::Claude(ClaudeLaunch::Fresh(None)),
         };
         let task = self.launch(project.unwrap_or_else(home_dir), launch);
         (self.applied(), task)
