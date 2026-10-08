@@ -48,7 +48,8 @@ pub use pointer::{
     pointer_select,
 };
 pub use session::{
-    ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec,
+    ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, Placement, SessionStatus, Sessions,
+    SpawnSpec,
 };
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
@@ -233,6 +234,10 @@ impl App {
                 Vec::new()
             }
             Event::SplitFocused(dir) => self.split_focused(dir),
+            Event::ClosePane(session) => {
+                let closed = self.workspace.close_pane_of(session);
+                self.release_closed_pane(closed)
+            }
             Event::CloseFocusedPane => {
                 let closed = self.workspace.close_focused();
                 self.release_closed_pane(closed)

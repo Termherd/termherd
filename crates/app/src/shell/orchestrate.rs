@@ -13,7 +13,7 @@ use std::num::NonZeroU64;
 
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
-use termherd_core::{Event, Launch, PointerEvent, SessionKind};
+use termherd_core::{Event, Launch, Placement, PointerEvent, SessionKind};
 
 use super::bridge::{
     Action, ActionDetail, ActionOutcome, Press, PressOutcome, PressStep, RepoOutcome,
@@ -30,11 +30,15 @@ impl Shell {
     /// tab — is rejected before any state is touched.
     pub(super) fn perform_action(&mut self, action: Action) -> (ActionOutcome, Task<Message>) {
         match action {
-            Action::Open { project, kind } => self.act_open(project, kind),
+            Action::Open {
+                project,
+                kind,
+                background,
+            } => self.act_open(project, kind, background),
             Action::Split { pane, dir } => self.act_split(pane, dir),
             Action::Focus { session } => self.act_focus(session),
             Action::Rename { tab, title } => self.act_rename(tab, title),
-            Action::Close { pane } => self.act_close(pane),
+            Action::Close { pane, background } => self.act_close(pane, background),
             Action::Run { session, bytes } => self.act_run(session, bytes),
             Action::Pointer { session, pointer } => self.act_pointer(session, pointer),
             Action::DeclareRepo { path } => self.act_declare_repo(&path),
@@ -98,19 +102,30 @@ impl Shell {
     }
 
     /// Open a new session, reusing the shell's own launch path (the same one a
-    /// click drives), so the spawn, focus and resize all match. No project falls
-    /// back to the home directory, so the tool works from an empty workspace.
+    /// click drives), so the spawn and resize match. No project falls back to
+    /// the home directory, so the tool works from an empty workspace. A
+    /// `background` open appends its tab without taking focus.
     fn act_open(
         &mut self,
         project: Option<String>,
         kind: SessionKind,
+        background: bool,
     ) -> (ActionOutcome, Task<Message>) {
         let launch = match kind {
             SessionKind::Shell => Launch::Shell,
             SessionKind::Claude => Launch::Claude { resume: None },
         };
-        let task = self.launch(project.unwrap_or_else(home_dir), launch);
-        (self.applied(), task)
+        let placement = if background {
+            Placement::Background
+        } else {
+            Placement::Foreground
+        };
+        let (opened, task) = self.launch_at(project.unwrap_or_else(home_dir), launch, placement);
+        let opened = opened.map(|id| id.0.get().to_string());
+        (
+            self.applied().with_detail(ActionDetail::Opened(opened)),
+            task,
+        )
     }
 
     /// Split a pane, opening a fresh session beside it. With `pane` given, focus
@@ -160,12 +175,39 @@ impl Shell {
     /// Close a pane — the focused one, or `pane` when given (focused first). A
     /// lone pane is the whole tab, so core collapses to `close_tab`, killing the
     /// PTY. Rejects an unknown target.
-    fn act_close(&mut self, pane: Option<u64>) -> (ActionOutcome, Task<Message>) {
+    fn act_close(&mut self, pane: Option<u64>, background: bool) -> (ActionOutcome, Task<Message>) {
+        if background {
+            return self.act_close_in_background(pane);
+        }
         let mut effects = match self.retarget(pane) {
             Ok(effects) => effects,
             Err(outcome) => return (outcome, Task::none()),
         };
         effects.extend(self.core.apply(Event::CloseFocusedPane));
+        let task = Task::batch([self.perform(effects), self.resize_panes()]);
+        (self.applied(), task)
+    }
+
+    /// Close `pane` where it lives, without revealing it first, so the user's
+    /// tab and focus stay put unless the pane closed was the focused one.
+    /// "The focused pane" is the one thing a background close cannot target:
+    /// it is whatever the user is in, so a missing `pane` is rejected.
+    fn act_close_in_background(&mut self, pane: Option<u64>) -> (ActionOutcome, Task<Message>) {
+        let Some(handle) = pane else {
+            return (
+                ActionOutcome::rejected(
+                    "a background close needs a `pane` handle: the focused pane is the user's",
+                ),
+                Task::none(),
+            );
+        };
+        let id = match self.resolve_pane(handle) {
+            Ok(id) => id,
+            Err(outcome) => return (outcome, Task::none()),
+        };
+        let tabs_before = self.core.workspace.tabs.len();
+        let effects = self.core.apply(Event::ClosePane(id));
+        self.forget_vanished_pane(id, tabs_before);
         let task = Task::batch([self.perform(effects), self.resize_panes()]);
         (self.applied(), task)
     }

@@ -108,6 +108,7 @@ issues #18–#29.
 | [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ☐ | A Claude tab's title follows the session name Claude holds. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
 | [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
+| [F-mcp-background-tab](#f-mcp-background-tab) | feature | mcp, workspace | ✅ | Open and close a tab over MCP without moving the user's focus. |
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
 | [F-mcp-keys](#f-mcp-keys) | feature | mcp, keymap | ✅ | The keyboard rung: drive the app by key chords through the real keymap. |
 | [F-mcp-live-bridge](#f-mcp-live-bridge) | feature | mcp | ✅ | The gate: an in-process MCP server on loopback, reaching the live `core::App`. |
@@ -1323,6 +1324,35 @@ The composed prompt→wait→read over **any** session, shell or Claude: the
 primitive shipped as `run_in_session` (#194) and is kind-agnostic, so what is
 left is the one-round-trip composition, the guards, and an opt-in scoped to the
 nested-Claude case only. Depends on #195
+
+<a id="f-mcp-background-tab"></a>
+
+### F-mcp-background-tab
+
+Open and close a tab over MCP without moving the user's focus.
+
+**Background open and close** (#363). Every action of
+[F-mcp-orchestration](#f-mcp-orchestration) moved the keyboard: an open
+activated its new tab, a close focused its target first. An agent running
+workers beside a human sent that human's next keys into a terminal they did
+not choose. One optional `background` flag (default `false`) on `open_session`
+and `close_pane` fixes it without a new tool and without changing the default.
+
+A background open appends its tab without activating it — a `Placement` on
+`core`'s `LaunchSpec` — and sizes its PTY to the tab area at once, so a Claude
+started there never draws its first screen for the default grid. A background
+close goes through a public `Event::ClosePane(SessionId)` over the existing
+`Workspace::close_pane_of`, never revealing the pane, and requires `pane`: the
+focused pane is the user's. The flag means *never take focus*, not *focus
+cannot move* — closing the focused pane still hands focus to its sibling.
+Every `open_session` reply now carries `opened_handle`, since `focused_handle`
+no longer names the new session.
+
+Answered probes: `mouse_in_session` reaches a never-drawn tab, since a
+terminal's screen fills from its output rather than from drawing. An MCP close
+asks no confirmation, background or not; the book says so rather than the
+behaviour changing. An "opened by an agent" cue on the tab stays out of scope.
+Follow-up candidate: the same flag on `split_pane`.
 
 <a id="f-mcp-config-write"></a>
 

@@ -2001,6 +2001,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: Some("/tmp/x".into()),
             kind: SessionKind::Shell,
+            background: false,
         });
         assert_eq!(outcome.error, None, "opening a session never rejects");
         assert_eq!(
@@ -2020,6 +2021,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: None,
             kind: SessionKind::Claude,
+            background: false,
         });
         assert_eq!(outcome.error, None);
         assert_eq!(
@@ -2479,7 +2481,10 @@ mod key_routing {
     fn close_action_closes_a_lone_pane_tab_and_kills_its_pty() {
         let (mut shell, pty) = shell_with_terminal();
         assert_eq!(shell.core.workspace.tabs.len(), 1);
-        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: None });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: None,
+            background: false,
+        });
         assert_eq!(outcome.error, None);
         assert!(
             shell.core.workspace.tabs.is_empty(),
@@ -2511,7 +2516,10 @@ mod key_routing {
         // resolves; the close must land on *that* pane, not on the active tab's
         // focused one.
         let (mut shell, _pty, first) = shell_with_two_tabs();
-        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: Some(first) });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: false,
+        });
         assert_eq!(outcome.error, None);
         let live: Vec<u64> = shell
             .core
@@ -2526,6 +2534,159 @@ mod key_routing {
             "the targeted pane is gone; surviving panes: {live:?}"
         );
         assert_eq!(live.len(), 1, "the other tab must not have been closed");
+    }
+
+    /// The handle an open answered with, as its outcome names it.
+    fn opened(outcome: &super::bridge::ActionOutcome) -> Option<String> {
+        match &outcome.detail {
+            Some(super::bridge::ActionDetail::Opened(handle)) => handle.clone(),
+            other => panic!("an open answers with the opened handle, got {other:?}"),
+        }
+    }
+
+    fn open_in_background(shell: &mut Shell) -> super::bridge::ActionOutcome {
+        shell
+            .perform_action(BridgeAction::Open {
+                project: Some("/tmp/worker".into()),
+                kind: SessionKind::Shell,
+                background: true,
+            })
+            .0
+    }
+
+    #[test]
+    fn a_background_open_appends_a_tab_and_leaves_the_user_where_they_were() {
+        let (mut shell, pty) = shell_with_terminal();
+        let before = focused(&shell);
+        // The user is typing a search with a close prompt up: neither is the
+        // agent's to take away.
+        shell.focus = Focus::Search;
+        shell.closing = Some(0);
+        let outcome = open_in_background(&mut shell);
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.focused, before, "focus is reported unchanged");
+        assert_eq!(focused(&shell), before);
+        assert_eq!(
+            shell.core.workspace.active, 0,
+            "the user's tab stays active"
+        );
+        assert_eq!(shell.core.workspace.tabs.len(), 2, "a tab was appended");
+        let worker = shell.core.workspace.tabs[1].sessions()[0].0.get();
+        assert_eq!(opened(&outcome), Some(worker.to_string()));
+        assert_eq!(pty.spawn_count(), 2, "the worker's PTY was spawned");
+        assert_eq!(shell.focus, Focus::Search, "keyboard owner untouched");
+        assert_eq!(shell.closing, Some(0), "the user's prompt survives");
+    }
+
+    #[test]
+    fn a_foreground_open_names_the_session_it_opened_too() {
+        let pty = Arc::new(RecordingPty::default());
+        let mut shell = shell_over(pty);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Open {
+            project: None,
+            kind: SessionKind::Shell,
+            background: false,
+        });
+        assert!(opened(&outcome).is_some());
+        assert_eq!(opened(&outcome), outcome.focused, "it is the focused one");
+    }
+
+    #[test]
+    fn a_background_open_sizes_its_pty_to_the_tab_area_at_once() {
+        // Not the default grid until someone happens to look at the tab: a
+        // Claude started there draws its first screen for the real size.
+        let (mut shell, pty) = shell_with_terminal();
+        let shown = *pty.resizes().last().expect("the first tab was sized");
+        let resized = pty.resizes().len();
+        open_in_background(&mut shell);
+        assert_eq!(
+            pty.resizes()[resized..],
+            [shown],
+            "one resize, to the lone-pane size every tab is drawn at"
+        );
+    }
+
+    #[test]
+    fn a_background_close_reaches_another_tab_without_moving_focus() {
+        let (mut shell, pty, first) = shell_with_two_tabs();
+        let before = focused(&shell);
+        let id = SessionId(std::num::NonZeroU64::new(first).expect("non-zero"));
+        shell.screens.insert(id, screen_of("prompt"));
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: true,
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.focused, before, "focus is reported unchanged");
+        assert_eq!(focused(&shell), before, "the user's pane keeps focus");
+        assert_eq!(shell.core.workspace.tabs.len(), 1);
+        assert_eq!(pty.kill_count(), 1, "the target's PTY was killed");
+        assert!(!shell.screens.contains_key(&id), "its screen is forgotten");
+    }
+
+    #[test]
+    fn a_background_close_drops_a_close_prompt_whose_index_shifted() {
+        // The prompt names tab 1; closing tab 0 makes that index name nothing,
+        // or another tab. Confirming it then must not close the wrong one.
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        shell.closing = Some(1);
+        let _ = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: true,
+        });
+        assert_eq!(shell.closing, None);
+    }
+
+    #[test]
+    fn a_background_close_needs_a_pane_and_touches_nothing_without_one() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: None,
+            background: true,
+        });
+        assert!(
+            outcome.error.as_deref().is_some_and(|e| e.contains("pane")),
+            "rejected, naming the missing argument: {outcome:?}"
+        );
+        assert_eq!(shell.core.workspace.tabs.len(), 1);
+        assert_eq!(pty.kill_count(), 0);
+    }
+
+    #[test]
+    fn a_background_close_rejects_a_handle_no_pane_hosts() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(999),
+            background: true,
+        });
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some("no open pane hosts handle 999")
+        );
+        assert_eq!(pty.kill_count(), 0);
+    }
+
+    #[test]
+    fn a_pointer_reaches_a_background_tab_that_was_never_drawn() {
+        // Screens are filled by the PTY's output, not by drawing: a worker
+        // nobody has looked at is still bounded, and so still reachable.
+        let (mut shell, pty) = shell_with_terminal();
+        let outcome = open_in_background(&mut shell);
+        let worker: u64 = opened(&outcome)
+            .expect("a handle")
+            .parse()
+            .expect("numeric");
+        let session = SessionId(std::num::NonZeroU64::new(worker).expect("non-zero"));
+        let _ = shell.update(Message::PtyOutput {
+            session,
+            screen: screen_of("prompt"),
+        });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: worker,
+            pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(pty.pointers().len(), 1, "the press reached the worker");
     }
 
     #[test]
@@ -2568,12 +2729,18 @@ mod key_routing {
         // beats silently acting on whatever holds focus now, which is how a
         // close request would destroy the wrong terminal.
         let (mut shell, pty, first) = shell_with_two_tabs();
-        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: Some(first) });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: false,
+        });
         assert_eq!(outcome.error, None, "the first close lands");
         let handle = first;
 
         for action in [
-            BridgeAction::Close { pane: Some(handle) },
+            BridgeAction::Close {
+                pane: Some(handle),
+                background: false,
+            },
             BridgeAction::Split {
                 pane: Some(handle),
                 dir: SplitDir::Vertical,

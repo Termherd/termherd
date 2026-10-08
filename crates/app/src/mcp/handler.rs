@@ -211,13 +211,16 @@ impl TermherdMcp {
         structured(SnapshotDto::from(&snapshot))
     }
 
-    /// Open a new terminal session and focus it. → `open_session`.
+    /// Open a new terminal session, focused unless `background`.
+    /// → `open_session`.
     #[tool(
         name = "open_session",
         description = "Open a new terminal session and focus it. Args: `project` \
                        (working directory; omit for the home dir), `kind` \
-                       (\"shell\" or \"claude\", default \"shell\"). Returns the \
-                       new session's `focused_handle`."
+                       (\"shell\" or \"claude\", default \"shell\"), `background` \
+                       (true appends the tab without taking focus; default \
+                       false). Returns the new session's `opened_handle` and the \
+                       resulting `focused_handle`."
     )]
     async fn open_session(
         &self,
@@ -235,6 +238,7 @@ impl TermherdMcp {
                     ));
                 }
             },
+            background: args.background,
         };
         self.act(action).await
     }
@@ -339,8 +343,10 @@ impl TermherdMcp {
     #[tool(
         name = "close_pane",
         description = "Close a pane and kill its terminal. Args: `pane` (session \
-                       handle to close; omit for the focused pane). A lone pane is \
-                       its whole tab, which closes. Returns the resulting \
+                       handle to close; omit for the focused pane), `background` \
+                       (true closes `pane` where it lives without focusing it \
+                       first, and then requires `pane`; default false). A lone \
+                       pane is its whole tab, which closes. Returns the resulting \
                        `focused_handle` (null when the workspace is now empty)."
     )]
     async fn close_pane(
@@ -348,7 +354,11 @@ impl TermherdMcp {
         Parameters(args): Parameters<CloseArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let pane = parse_optional_handle(args.pane)?;
-        self.act(Action::Close { pane }).await
+        self.act(Action::Close {
+            pane,
+            background: args.background,
+        })
+        .await
     }
 
     /// Type text into a session's terminal; the wait is a separate call.
@@ -863,6 +873,9 @@ impl TermherdMcp {
                 ActionDetail::Pointer(pointer) => {
                     object.insert("pointer".into(), pointer_str(pointer).into());
                 }
+                ActionDetail::Opened(handle) => {
+                    object.insert("opened_handle".into(), handle.into());
+                }
             }
         }
         structured(value)
@@ -997,6 +1010,9 @@ struct OpenArgs {
     /// `"shell"` (default) or `"claude"`.
     #[serde(default)]
     kind: Option<String>,
+    /// Append the tab without taking focus. Default false.
+    #[serde(default)]
+    background: bool,
 }
 
 /// Arguments for `split_pane`.
@@ -1046,6 +1062,10 @@ struct CloseArgs {
     /// Session handle to close. Omit for the focused pane.
     #[serde(default)]
     pane: Option<String>,
+    /// Close `pane` where it lives without focusing it. Requires `pane`.
+    /// Default false.
+    #[serde(default)]
+    background: bool,
 }
 
 /// Arguments for `run_in_session`.
@@ -1897,6 +1917,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Claude { resume: None },
             title: "work".into(),
+            placement: termherd_core::Placement::Foreground,
         }));
         let filter = SnapshotFilter::default();
         let snapshot = app.snapshot(&filter, &SnapshotInputs::default());
@@ -1971,6 +1992,7 @@ mod tests {
             mcp.open_session(Parameters(OpenArgs {
                 project: Some("/proj".into()),
                 kind: Some("claude".into()),
+                background: true,
             }))
             .await
         })
@@ -1980,6 +2002,7 @@ mod tests {
             Action::Open {
                 project: Some("/proj".into()),
                 kind: SessionKind::Claude,
+                background: true,
             }
         );
     }
@@ -1994,6 +2017,7 @@ mod tests {
             Action::Open {
                 project: None,
                 kind: SessionKind::Shell,
+                background: false,
             }
         );
     }
@@ -2006,6 +2030,7 @@ mod tests {
             .open_session(Parameters(OpenArgs {
                 project: None,
                 kind: Some("wizard".into()),
+                background: false,
             }))
             .await
             .expect_err("an unknown kind is an invalid_params error");
@@ -2224,11 +2249,39 @@ mod tests {
         let close = action_of(|mcp| async move {
             mcp.close_pane(Parameters(CloseArgs {
                 pane: Some("4".into()),
+                background: true,
             }))
             .await
         })
         .await;
-        assert_eq!(close, Action::Close { pane: Some(4) });
+        assert_eq!(
+            close,
+            Action::Close {
+                pane: Some(4),
+                background: true,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn an_open_reports_the_opened_handle_beside_the_focus() {
+        // A background open leaves focus where it was, so the new session is
+        // named by its own field rather than read off `focused_handle`.
+        let (handle, requests) = channel();
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Acted(
+                ActionOutcome::applied(Some("1".into()))
+                    .with_detail(ActionDetail::Opened(Some("3".into()))),
+            ),
+        );
+        let result = TermherdMcp::new(handle)
+            .open_session(Parameters(OpenArgs::default()))
+            .await
+            .expect("the tool returns a result");
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(value["opened_handle"], "3");
+        assert_eq!(value["focused_handle"], "1");
     }
 
     #[tokio::test]

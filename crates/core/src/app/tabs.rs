@@ -77,6 +77,7 @@ impl App {
             cwd: closed.cwd,
             launch: closed.launch,
             title: closed.title,
+            placement: Placement::Foreground,
         });
         // Restore the manual name on top of the derived title. `launch` opens
         // the reopened tab as the new active one, so its index is `active` — but
@@ -212,6 +213,7 @@ mod tests {
                 resume: Some("abc".into()),
             },
             title: "repo".into(),
+            placement: Placement::Foreground,
         }));
         let original = app.workspace.focused_session().expect("focused");
         app.apply(Event::CloseTab(0));
@@ -279,6 +281,7 @@ mod tests {
                 cwd: Some(dir.into()),
                 launch: Launch::Shell,
                 title: dir.into(),
+                placement: Placement::Foreground,
             }));
         };
         open(&mut app, "/a");
@@ -382,12 +385,14 @@ mod tests {
                 resume: Some("abc-123".into()),
             },
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         // Tab 1: a plain shell — no resume id, so no record.
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         assert_eq!(
             app.tab_record(0).map(|r| r.session_id.as_str()),

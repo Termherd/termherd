@@ -241,7 +241,7 @@ nothing to configure. It exposes the running workspace:
 | --- | --- |
 | `list_sessions` | every live session with its stable `handle` |
 | `snapshot` | the whole state — config, sidebar, tabs and panes; filterable, no terminal text by default |
-| `open_session` · `split_pane` · `focus_pane` · `rename_tab` · `close_pane` | workspace actions, each reporting the resulting focus |
+| `open_session` · `split_pane` · `focus_pane` · `rename_tab` · `close_pane` | workspace actions, each reporting the resulting focus; open and close can run in the background, leaving focus alone |
 | `run_in_session` | type into a terminal (returns immediately) |
 | `wait_for_status` | block until a session goes idle / wants attention |
 | `read_terminal` | one pane's visible text |

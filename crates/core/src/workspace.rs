@@ -126,13 +126,20 @@ impl Workspace {
 
     /// Open a session as a new tab, made active.
     pub fn open(&mut self, session: SessionId, title: impl Into<String>) {
+        self.active = self.append(session, title);
+    }
+
+    /// Open a session as a new tab at the end of the strip without activating
+    /// it, returning its index. Into an empty workspace the new tab is the only
+    /// one, so it is active all the same.
+    pub fn append(&mut self, session: SessionId, title: impl Into<String>) -> usize {
         self.tabs.push(Tab {
             root: Pane::Leaf(session),
             focus: Vec::new(),
             title: title.into(),
             custom_title: None,
         });
-        self.active = self.tabs.len() - 1;
+        self.tabs.len() - 1
     }
 
     /// Index of the tab hosting `session`, if any. A session lives in exactly
