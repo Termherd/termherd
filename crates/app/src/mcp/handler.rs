@@ -26,12 +26,13 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
+use termherd_core::Placement;
 use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
 use termherd_core::{
-    Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, PointerRoute,
-    Section, SessionKind, SessionStatus, SnapshotFilter, TerminalScope,
+    Action as KeymapAction, ClaudeColor, ClaudeCommand, KeyChord, PointerButton, PointerEvent,
+    PointerKind, PointerRoute, Section, SessionKind, SessionStatus, SnapshotFilter, TerminalScope,
 };
 use termherd_mcp::file::SetAtError;
 
@@ -211,13 +212,16 @@ impl TermherdMcp {
         structured(SnapshotDto::from(&snapshot))
     }
 
-    /// Open a new terminal session and focus it. → `open_session`.
+    /// Open a new terminal session, focused unless `background`.
+    /// → `open_session`.
     #[tool(
         name = "open_session",
-        description = "Open a new terminal session and focus it. Args: `project` \
+        description = "Open a new terminal session, focused unless `background`. Args: `project` \
                        (working directory; omit for the home dir), `kind` \
-                       (\"shell\" or \"claude\", default \"shell\"). Returns the \
-                       new session's `focused_handle`."
+                       (\"shell\" or \"claude\", default \"shell\"), `background` \
+                       (true appends the tab without taking focus; default \
+                       false). Returns the new session's `opened_handle` and the \
+                       resulting `focused_handle`."
     )]
     async fn open_session(
         &self,
@@ -234,6 +238,11 @@ impl TermherdMcp {
                         None,
                     ));
                 }
+            },
+            placement: if args.background {
+                Placement::Background
+            } else {
+                Placement::Foreground
             },
         };
         self.act(action).await
@@ -286,7 +295,12 @@ impl TermherdMcp {
         name = "rename_tab",
         description = "Give the tab at `tab` (0-based index, as `snapshot` reports \
                        tab order) a manual name. A blank `title` reverts to the \
-                       derived title. Returns the current `focused_handle`."
+                       derived title. A Claude tab's name is Claude's: it arms \
+                       `/rename <title>` for confirmation instead, as \
+                       `claude_command` does, and is refused when that Claude \
+                       is not idle; there a blank `title`, or the name the tab \
+                       already shows, arms nothing and changes nothing. \
+                       Returns the current `focused_handle`."
     )]
     async fn rename_tab(
         &self,
@@ -339,8 +353,10 @@ impl TermherdMcp {
     #[tool(
         name = "close_pane",
         description = "Close a pane and kill its terminal. Args: `pane` (session \
-                       handle to close; omit for the focused pane). A lone pane is \
-                       its whole tab, which closes. Returns the resulting \
+                       handle to close; omit for the focused pane), `background` \
+                       (true closes `pane` where it lives without focusing it \
+                       first, and then requires `pane`; default false). A lone \
+                       pane is its whole tab, which closes. Returns the resulting \
                        `focused_handle` (null when the workspace is now empty)."
     )]
     async fn close_pane(
@@ -348,7 +364,11 @@ impl TermherdMcp {
         Parameters(args): Parameters<CloseArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let pane = parse_optional_handle(args.pane)?;
-        self.act(Action::Close { pane }).await
+        self.act(Action::Close {
+            pane,
+            background: args.background,
+        })
+        .await
     }
 
     /// Type text into a session's terminal; the wait is a separate call.
@@ -374,6 +394,34 @@ impl TermherdMcp {
             bytes: args.text.into_bytes(),
         })
         .await
+    }
+
+    /// Arm the confirmation for a Claude slash command. → `claude_command`.
+    #[tool(
+        name = "claude_command",
+        description = "Ask termherd to type one of Claude Code's own slash \
+                       commands into a Claude session: `rename` (a name), \
+                       `color` (red, blue, green, yellow, purple, orange, pink, \
+                       cyan or default) or `desktop`. Nothing is typed yet: \
+                       this arms the confirmation prompt that shows the human \
+                       at the window the exact line; it holds the keyboard \
+                       until answered: `press_keys([\"enter\"])` types it \
+                       (a `refused` step means it typed nothing and says why), \
+                       `press_keys([\"escape\"])` drops it, or the user \
+                       answers. Refused unless the session is a Claude idle at \
+                       an empty input prompt on screen (no draft, no menu), and \
+                       no other prompt is open. Control \
+                       characters in a name become spaces. Args: `session` \
+                       (handle), `command`, `argument` (the name or colour). \
+                       Returns `{ line, overlay, focused_handle }`."
+    )]
+    async fn claude_command(
+        &self,
+        Parameters(args): Parameters<ClaudeCommandArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+        let command = parse_claude_command(&args.command, args.argument.as_deref())?;
+        self.act(Action::ClaudeCommand { session, command }).await
     }
 
     /// Place a pointer event at a cell of a session's terminal — the pointer
@@ -863,6 +911,13 @@ impl TermherdMcp {
                 ActionDetail::Pointer(pointer) => {
                     object.insert("pointer".into(), pointer_str(pointer).into());
                 }
+                ActionDetail::Opened(handle) => {
+                    object.insert("opened_handle".into(), handle.into());
+                }
+                ActionDetail::ClaudeCommand { line, overlay } => {
+                    object.insert("line".into(), line.into());
+                    object.insert("overlay".into(), overlay.into());
+                }
             }
         }
         structured(value)
@@ -997,6 +1052,9 @@ struct OpenArgs {
     /// `"shell"` (default) or `"claude"`.
     #[serde(default)]
     kind: Option<String>,
+    /// Append the tab without taking focus. Default false.
+    #[serde(default)]
+    background: bool,
 }
 
 /// Arguments for `split_pane`.
@@ -1025,7 +1083,8 @@ struct FocusArgs {
 struct RenameArgs {
     /// 0-based tab index, as `snapshot` reports tab order.
     tab: usize,
-    /// The new manual title; blank reverts to the derived title.
+    /// The new manual title; blank reverts a shell tab to its derived title
+    /// and leaves a Claude tab as it is.
     title: String,
 }
 
@@ -1046,6 +1105,50 @@ struct CloseArgs {
     /// Session handle to close. Omit for the focused pane.
     #[serde(default)]
     pane: Option<String>,
+    /// Close `pane` where it lives without focusing it. Requires `pane`.
+    /// Default false.
+    #[serde(default)]
+    background: bool,
+}
+
+/// Arguments for `claude_command`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct ClaudeCommandArgs {
+    /// The stable handle of the target Claude session.
+    session: String,
+    /// `rename`, `color` or `desktop`.
+    command: String,
+    /// The new name for `rename`, the colour for `color`; none for `desktop`.
+    argument: Option<String>,
+}
+
+/// The catalogue entry a caller named, with its argument checked. A command
+/// outside the catalogue, a missing or surplus argument, a colour outside the
+/// palette and a name with nothing typeable in it are all refused here, before
+/// anything reaches the shell.
+fn parse_claude_command(command: &str, argument: Option<&str>) -> Result<ClaudeCommand, ErrorData> {
+    let invalid = |message: String| ErrorData::invalid_params(message, None);
+    match (command, argument) {
+        ("rename", Some(name)) => {
+            ClaudeCommand::rename(name).map_err(|error| invalid(format!("rename: {error}")))
+        }
+        ("color", Some(name)) => ClaudeColor::from_name(name)
+            .map(ClaudeCommand::Color)
+            .ok_or_else(|| {
+                let palette: Vec<_> = ClaudeColor::ALL.iter().map(|c| c.name()).collect();
+                invalid(format!(
+                    "unknown colour {name:?}; expected one of {}",
+                    palette.join(", ")
+                ))
+            }),
+        ("desktop", None) => Ok(ClaudeCommand::Desktop),
+        ("rename" | "color", None) => Err(invalid(format!("{command} needs an `argument`"))),
+        ("desktop", Some(_)) => Err(invalid("desktop takes no `argument`".to_owned())),
+        (other, _) => Err(invalid(format!(
+            "unknown command {other:?}; expected rename, color or desktop"
+        ))),
+    }
 }
 
 /// Arguments for `run_in_session`.
@@ -1227,6 +1330,9 @@ struct PressStepDto {
     /// was absent, which the caller can go and create).
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
+    /// Why a confirmation typed nothing, for `"refused"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<String>,
 }
 
 impl PressStepDto {
@@ -1234,14 +1340,21 @@ impl PressStepDto {
     /// fields are per-outcome, so each is omitted where it means nothing rather
     /// than sent as a null the caller has to interpret.
     fn new(press: &str, step: &PressStep) -> Self {
-        let (result, action, overlay, reason) = match step {
-            PressStep::Ran(name) => ("ran", Some(name.clone()), None, None),
+        let (result, action, overlay, reason, refusal) = match step {
+            PressStep::Ran(name) => ("ran", Some(name.clone()), None, None, None),
             PressStep::Inert { action, reason } => {
-                ("inert", Some(action.clone()), None, Some(*reason))
+                ("inert", Some(action.clone()), None, Some(*reason), None)
             }
-            PressStep::Overlay(name) => ("overlay", None, Some(name.clone()), None),
-            PressStep::Typed => ("typed", None, None, None),
-            PressStep::Unbound => ("unbound", None, None, None),
+            PressStep::Overlay(name) => ("overlay", None, Some(name.clone()), None, None),
+            PressStep::Refused { overlay, reason } => (
+                "refused",
+                None,
+                Some(overlay.clone()),
+                None,
+                Some(reason.clone()),
+            ),
+            PressStep::Typed => ("typed", None, None, None, None),
+            PressStep::Unbound => ("unbound", None, None, None, None),
         };
         Self {
             press: press.to_owned(),
@@ -1249,6 +1362,7 @@ impl PressStepDto {
             action,
             overlay,
             reason,
+            refusal,
         }
     }
 }
@@ -1386,7 +1500,7 @@ mod tests {
     use super::*;
     use crate::shell::bridge::{Reply, Request, ShotResult, channel, spawn_test_shell};
     use termherd_core::{
-        App, ClaudeIdentity, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs,
+        App, ClaudeIdentity, ClaudeLaunch, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs,
     };
 
     /// A `list_sessions` row for an idle shell, the bridge's plainest answer.
@@ -1508,6 +1622,99 @@ mod tests {
     }
 
     #[test]
+    fn claude_command_reads_the_catalogue_and_refuses_what_is_outside_it() {
+        let parsed = |command: &str, argument: Option<&str>| {
+            parse_claude_command(command, argument).map(|command| command.line())
+        };
+        assert_eq!(
+            parsed("rename", Some("api\nwork")).ok().as_deref(),
+            Some("/rename api work")
+        );
+        assert_eq!(
+            parsed("color", Some("Cyan")).ok().as_deref(),
+            Some("/color cyan")
+        );
+        assert_eq!(parsed("desktop", None).ok().as_deref(), Some("/desktop"));
+        for (command, argument) in [
+            ("rename", None),
+            ("rename", Some(" \t ")),
+            ("color", Some("magenta")),
+            ("color", None),
+            ("desktop", Some("now")),
+            ("exit", None),
+            ("clear", Some("x")),
+        ] {
+            assert!(
+                parse_claude_command(command, argument).is_err(),
+                "{command} {argument:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_confirmation_is_reported_apart_from_an_overlay() {
+        let refused = PressStepDto::new(
+            "enter",
+            &PressStep::Refused {
+                overlay: "claude-command-confirm".into(),
+                reason: "the session is busy, not idle at its prompt".into(),
+            },
+        );
+        assert_eq!(
+            serde_json::to_value(&refused).expect("json"),
+            serde_json::json!({
+                "press": "enter",
+                "result": "refused",
+                "overlay": "claude-command-confirm",
+                "refusal": "the session is busy, not idle at its prompt",
+            })
+        );
+        let consumed = PressStepDto::new("x", &PressStep::Overlay("settings".into()));
+        assert_eq!(
+            serde_json::to_value(&consumed).expect("json"),
+            serde_json::json!({ "press": "x", "result": "overlay", "overlay": "settings" }),
+            "no refusal field where nothing was refused"
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_command_arms_over_the_bridge_and_reports_the_line() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(
+            requests,
+            Reply::Acted(ActionOutcome::applied(Some("3".into())).with_detail(
+                ActionDetail::ClaudeCommand {
+                    line: "/color red".into(),
+                    overlay: "claude-command-confirm",
+                },
+            )),
+        );
+        let result = TermherdMcp::new(handle)
+            .claude_command(Parameters(ClaudeCommandArgs {
+                session: "3".into(),
+                command: "color".into(),
+                argument: Some("red".into()),
+            }))
+            .await
+            .expect("the tool answers");
+        assert_eq!(
+            shell.await.expect("shell task"),
+            Request::Act(Action::ClaudeCommand {
+                session: 3,
+                command: ClaudeCommand::Color(ClaudeColor::Red),
+            })
+        );
+        assert_eq!(
+            result.structured_content.expect("structured json"),
+            serde_json::json!({
+                "focused_handle": "3",
+                "line": "/color red",
+                "overlay": "claude-command-confirm",
+            })
+        );
+    }
+
+    #[test]
     fn structured_refuses_a_payload_that_is_not_an_object() {
         let error = structured(serde_json::json!([1, 2, 3]))
             .expect_err("a bare array is not valid structuredContent");
@@ -1535,15 +1742,46 @@ mod tests {
         }
     }
 
+    /// The sweep's Claude command tool, apart so the main table stays within
+    /// the function-length gate.
+    fn claude_command_sweep_case<'a>(
+        mcp: &'a TermherdMcp,
+        tool: &str,
+    ) -> Option<(Vec<Reply>, SweepCall<'a>)> {
+        use crate::shell::bridge::ActionOutcome;
+
+        (tool == "claude_command").then(|| {
+            (
+                vec![Reply::Acted(
+                    ActionOutcome::applied(Some("1".into())).with_detail(
+                        ActionDetail::ClaudeCommand {
+                            line: "/desktop".into(),
+                            overlay: "claude-command-confirm",
+                        },
+                    ),
+                )],
+                Box::pin(mcp.claude_command(Parameters(ClaudeCommandArgs {
+                    session: "1".into(),
+                    command: "desktop".into(),
+                    argument: None,
+                }))) as SweepCall<'a>,
+            )
+        })
+    }
+
     /// The replies the shell must give for `tool`, and the call that drives it.
     ///
-    /// One `match` states the tool list once, so a tool the sweep does not know
-    /// panics here rather than being skipped in silence.
+    /// Every tool lands in the `match` below or in one of the two pre-checks
+    /// above it, and anything else panics, so a tool the sweep does not know
+    /// fails here rather than being skipped in silence.
     fn sweep_case<'a>(mcp: &'a TermherdMcp, tool: &str) -> (Vec<Reply>, SweepCall<'a>) {
         use crate::shell::bridge::{ActionOutcome, ShotResult, TerminalRead, WaitOutcome};
 
         if let Some(call) = options_sweep_case(mcp, tool) {
             return (Vec::new(), call);
+        }
+        if let Some(case) = claude_command_sweep_case(mcp, tool) {
+            return case;
         }
 
         let acted = || Reply::Acted(ActionOutcome::applied(Some("1".into())));
@@ -1895,8 +2133,9 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude { resume: None },
+            launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
             title: "work".into(),
+            placement: termherd_core::Placement::Foreground,
         }));
         let filter = SnapshotFilter::default();
         let snapshot = app.snapshot(&filter, &SnapshotInputs::default());
@@ -1971,6 +2210,7 @@ mod tests {
             mcp.open_session(Parameters(OpenArgs {
                 project: Some("/proj".into()),
                 kind: Some("claude".into()),
+                background: true,
             }))
             .await
         })
@@ -1980,6 +2220,7 @@ mod tests {
             Action::Open {
                 project: Some("/proj".into()),
                 kind: SessionKind::Claude,
+                placement: Placement::Background,
             }
         );
     }
@@ -1994,6 +2235,7 @@ mod tests {
             Action::Open {
                 project: None,
                 kind: SessionKind::Shell,
+                placement: Placement::Foreground,
             }
         );
     }
@@ -2006,6 +2248,7 @@ mod tests {
             .open_session(Parameters(OpenArgs {
                 project: None,
                 kind: Some("wizard".into()),
+                background: false,
             }))
             .await
             .expect_err("an unknown kind is an invalid_params error");
@@ -2224,11 +2467,39 @@ mod tests {
         let close = action_of(|mcp| async move {
             mcp.close_pane(Parameters(CloseArgs {
                 pane: Some("4".into()),
+                background: true,
             }))
             .await
         })
         .await;
-        assert_eq!(close, Action::Close { pane: Some(4) });
+        assert_eq!(
+            close,
+            Action::Close {
+                pane: Some(4),
+                background: true,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn an_open_reports_the_opened_handle_beside_the_focus() {
+        // A background open leaves focus where it was, so the new session is
+        // named by its own field rather than read off `focused_handle`.
+        let (handle, requests) = channel();
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Acted(
+                ActionOutcome::applied(Some("1".into()))
+                    .with_detail(ActionDetail::Opened(Some("3".into()))),
+            ),
+        );
+        let result = TermherdMcp::new(handle)
+            .open_session(Parameters(OpenArgs::default()))
+            .await
+            .expect("the tool returns a result");
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(value["opened_handle"], "3");
+        assert_eq!(value["focused_handle"], "1");
     }
 
     #[tokio::test]

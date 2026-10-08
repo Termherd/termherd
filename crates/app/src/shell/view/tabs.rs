@@ -60,8 +60,15 @@ impl Shell {
             }
             let chip: Element<'_, Message> = if renaming_this {
                 let buffer = self.tab_rename.as_ref().map_or("", |(_, b)| b.as_str());
+                // The hint is what a blank commit leaves: a shell tab reverts
+                // to its derived name, a Claude tab is not renamed at all.
+                let blank_leaves = if self.core.tab_names_through_claude(index) {
+                    tab.display_title()
+                } else {
+                    &tab.title
+                };
                 inner = inner.push(
-                    text_input("", buffer)
+                    text_input(blank_leaves, buffer)
                         .id(tab_rename_id())
                         .on_input(Message::TabRenameInput)
                         .on_submit(Message::CommitTabRename)
@@ -98,10 +105,7 @@ impl Shell {
                 let chip = mouse_area(chip)
                     .on_press(Message::TabDragStart(index))
                     .on_enter(Message::TabDragOver(index))
-                    .on_double_click(Message::StartTabRename {
-                        index,
-                        current: tab.display_title().to_owned(),
-                    });
+                    .on_double_click(Message::StartTabRename(index));
                 // The chip clips the title; hovering reveals the fuller
                 // description — the sidebar's session card, plus the agent line,
                 // when the tab resumes a browsed session, else a minimal title +
@@ -139,14 +143,12 @@ impl Shell {
         tab: &Tab,
         now: SystemTime,
     ) -> Element<'static, Message> {
-        let first = tab.sessions().first().copied();
-        let agent = first.and_then(|id| self.core.peer_name(id));
+        let first = tab.first_session();
+        let agent = self.core.peer_name(first);
         match self.core.tab_record(index) {
             Some(record) => session_card(self.core.session_title(record), agent, record, now),
             None => {
-                let cwd = first
-                    .and_then(|id| self.core.sessions.get(&id))
-                    .and_then(|s| s.cwd.clone());
+                let cwd = self.core.sessions.get(&first).and_then(|s| s.cwd.clone());
                 tab_card(tab.display_title().to_owned(), agent, cwd)
             }
         }

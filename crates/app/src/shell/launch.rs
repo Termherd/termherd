@@ -4,14 +4,36 @@
 //! spawn-and-focus flow lives in one place.
 
 use iced::Task;
-use termherd_core::{Launch, LaunchSpec};
+use termherd_core::workspace::SessionId;
+use termherd_core::{ClaudeLaunch, Effect, Launch, LaunchSpec, Placement};
 
 use super::{Focus, Message, Shell, home_dir};
 
+/// A new Claude session id: a v4 UUID, the shape `claude --session-id` takes.
+/// Minted in the shell because `core` holds no source of randomness.
+fn mint_session_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 impl Shell {
     /// Launch a terminal: register it in `core`, perform the spawn, focus it,
-    /// and size its PTY to the current pane (FR4).
+    /// and size its PTY to the current pane (FR4). A fresh Claude starts under
+    /// an id minted here, so its transcript is known from the first keystroke.
     pub(super) fn launch(&mut self, cwd: String, launch: Launch) -> Task<Message> {
+        self.launch_at(cwd, launch, Placement::Foreground).1
+    }
+
+    /// Launch a terminal at `placement`, returning the new session alongside
+    /// the spawn. A foreground launch takes focus and drops any pending
+    /// prompt; a background one leaves both to the user and sizes only its own
+    /// tab, which is drawn at the same area when it is brought forward.
+    pub(super) fn launch_at(
+        &mut self,
+        cwd: String,
+        launch: Launch,
+        placement: Placement,
+    ) -> (Option<SessionId>, Task<Message>) {
+        let launch = launch.with_fresh_id(mint_session_id);
         let title = self.core.tab_title(&cwd, &launch);
         let effects = self
             .core
@@ -19,15 +41,28 @@ impl Shell {
                 cwd: Some(cwd),
                 launch,
                 title,
+                placement,
             }));
+        let opened = effects.iter().find_map(|effect| match effect {
+            Effect::Spawn(spec) => Some(spec.session),
+            _ => None,
+        });
         let spawn = self.perform(effects);
-        self.focus = Focus::Terminal;
-        // Opening another session drops any pending confirmation: a
-        // stray Enter in the terminal must not confirm a sidebar prompt that's
-        // no longer in view.
-        self.closing = None;
-        self.archiving = None;
-        Task::batch([spawn, self.resize_panes()])
+        let resize = match placement {
+            Placement::Foreground => {
+                self.focus = Focus::Terminal;
+                // Opening another session drops any pending confirmation: a
+                // stray Enter in the terminal must not confirm a sidebar prompt
+                // that's no longer in view.
+                self.closing = None;
+                self.archiving = None;
+                self.resize_panes()
+            }
+            Placement::Background => opened
+                .and_then(|id| self.core.workspace.tab_of(id))
+                .map_or_else(Task::none, |index| self.resize_tab(index)),
+        };
+        (opened, Task::batch([spawn, resize]))
     }
 
     /// The working directory of the focused session, if one is open and its cwd
@@ -54,7 +89,7 @@ impl Shell {
         let root = termherd_scan::repo_root(std::path::Path::new(&cwd))
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or(cwd);
-        Some(self.launch(root, Launch::Claude { resume: None }))
+        Some(self.launch(root, Launch::Claude(ClaudeLaunch::Fresh(None))))
     }
 
     /// Reopen the most recently closed tab, restoring its mode and
@@ -63,7 +98,9 @@ impl Shell {
     /// close stack is empty (`core` yields no effects), so a caller learns there
     /// was nothing to reopen instead of being told a tab came back.
     pub(super) fn reopen_closed_tab(&mut self) -> Option<Task<Message>> {
-        let effects = self.core.apply(termherd_core::Event::ReopenClosedTab);
+        let effects = self.core.apply(termherd_core::Event::ReopenClosedTab {
+            fresh_claude_id: mint_session_id(),
+        });
         if effects.is_empty() {
             return None;
         }

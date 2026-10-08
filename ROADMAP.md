@@ -69,12 +69,12 @@ issues #18–#29.
 | [F-fork-detection](#f-fork-detection) | feature | sessions | ☐ | Detect a forked or plan-accepted session — blocked, the signals do not exist. |
 | [F-jsonl-viewer](#f-jsonl-viewer) | feature | sessions | ☐ | Render a Claude session's JSONL transcript as readable messages, not raw lines. |
 | [F-notification-focus-tab](#f-notification-focus-tab) | feature | workspace, sessions | ☐ | Clicking a tab's desktop notification brings termherd forward on that tab. |
-| [F-session-id-at-launch](#f-session-id-at-launch) | feature | sessions | ☐ | A fresh Claude tab knows its session id from the first keystroke. |
 | [F-store-cache](#f-store-cache) | feature | sessions | ☐ | A SQLite digest cache with an FTS5 index, replacing the in-memory scan. |
 | [F-terminal-images](#f-terminal-images) | feature | terminal | ☐ | Render images inline in the terminal — parked, no demand and no cheap slice. |
 | [F-terminal-split](#f-terminal-split) | feature | workspace, keymap | ☐ | Split panes with directional focus; drag-resize is what remains. |
 | [F-close-on-exit](#f-close-on-exit) | feature | terminal, workspace | ✅ | A pane whose shell exits cleanly closes itself; a failed one stays readable. |
 | [F-repo-add](#f-repo-add) | feature | sidebar, sessions | ✅ | Declare a repository in the sidebar, before it has any session. |
+| [F-session-id-at-launch](#f-session-id-at-launch) | feature | sessions | ✅ | A fresh Claude tab knows its session id from the first keystroke. |
 | [F-settings-panel](#f-settings-panel) | feature | workspace | ✅ | An in-app settings panel — appearance first, applied live and saved on pick. |
 | [F-terminal-cwd](#f-terminal-cwd) | feature | terminal, mcp, sessions | ✅ | The shell announces the directory it is in, so a session's `cwd` follows a `cd`. |
 
@@ -84,9 +84,7 @@ issues #18–#29.
 | --- | --- | --- | --- | --- |
 | [F-activity-stats](#f-activity-stats) | feature | sessions | ☐ | Aggregate what the sessions have been doing — counts, durations, activity. |
 | [F-capture](#f-capture) | feature | workspace | ☐ | Capture termherd along a fidelity ladder: debug dumps, promo, bug repros. |
-| [F-claude-command](#f-claude-command) | feature | sessions, keymap | ☐ | Send a confirmed slash command into an idle Claude session. |
 | [F-file-browser](#f-file-browser) | feature | workspace, sidebar | ☐ | A file tree for the focused repository, floating or as a right pane. |
-| [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ☐ | A `rename-tab` keymap action opening the focused tab's inline rename. |
 | [F-launch-profiles](#f-launch-profiles) | feature | sessions | ☐ | Persistent per-project `--add-dir`, applied to fresh and resumed launches. |
 | [F-mcp-attach](#f-mcp-attach) | feature | mcp, workspace | ☐ | The attach rung: reach the live bridge from outside a spawned session. |
 | [F-mcp-control-surface](#f-mcp-control-surface) | feature | mcp | ☐ | Termherd exposes its own control and orchestration surface as an MCP server. |
@@ -105,9 +103,11 @@ issues #18–#29.
 | [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ☐ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
 | [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ☐ | The tab hover card shows agent name, model, effort, version and elapsed time. |
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
-| [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ☐ | A Claude tab's title follows the session name Claude holds. |
+| [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
+| [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ✅ | A `rename-tab` keymap action opening the focused tab's inline rename. |
 | [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
+| [F-mcp-background-tab](#f-mcp-background-tab) | feature | mcp, workspace | ✅ | Open and close a tab over MCP without moving the user's focus. |
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
 | [F-mcp-keys](#f-mcp-keys) | feature | mcp, keymap | ✅ | The keyboard rung: drive the app by key chords through the real keymap. |
 | [F-mcp-live-bridge](#f-mcp-live-bridge) | feature | mcp | ✅ | The gate: an in-process MCP server on loopback, reaching the live `core::App`. |
@@ -119,6 +119,7 @@ issues #18–#29.
 | [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) | feature | mcp, workspace | ✅ | One model, two readers: the capture dump is now the MCP snapshot. |
 | [F-mcp-terminal-sync](#f-mcp-terminal-sync) | feature | mcp, terminal | ✅ | The wait rung: block until a session's status settles, then read its text. |
 | [F-tab-kind-icon](#f-tab-kind-icon) | feature | workspace | ✅ | A kind mark beside each tab's status dot, instead of a glyph in its title. |
+| [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ✅ | A Claude tab's title follows the session name Claude holds. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
 
 ## Backlog
@@ -544,24 +545,6 @@ once; past that a notification posts without a click. Builds on
 [F-status-notifications](#f-status-notifications). Torture report:
 `.personal/feature-torture/reports/F-notification-focus-tab.md`.
 
-<a id="f-session-id-at-launch"></a>
-
-### F-session-id-at-launch
-
-A fresh Claude tab knows its session id from the first keystroke.
-
-Today a fresh tab carries no Claude id, so every feature that reads a
-session's JSONL — [F-tab-title-sync](#f-tab-title-sync),
-[F-session-accent-colors](#f-session-accent-colors),
-[F-tab-hover-details](#f-tab-hover-details),
-[F-prompt-history](#f-prompt-history), [F-session-reveal](#f-session-reveal) —
-does nothing there (#336). Two sources: launch with
-`claude --session-id <uuid>`, or read the `sessionId` Claude Code writes to
-`~/.claude/sessions/<pid>.json`, through the reader #333 built. The session
-file also carries the agent name `/list-agents` shows, which favours it: each
-pane already caches that file for [F-copy-agent-name](#f-copy-agent-name). To
-settle before building.
-
 <a id="f-store-cache"></a>
 
 ### F-store-cache
@@ -734,6 +717,35 @@ read as one that never had any and was pinned to the top as freshly added.
 Adjacent: [F-repo-view](#f-repo-view) (#148) takes the other end — this is
 about a repository *existing* in the sidebar, that one about *viewing* it.
 
+<a id="f-session-id-at-launch"></a>
+
+### F-session-id-at-launch
+
+A fresh Claude tab knows its session id from the first keystroke.
+
+Before, a fresh tab carried no Claude id, so every feature that reads a
+session's JSONL — [F-tab-title-sync](#f-tab-title-sync),
+[F-session-accent-colors](#f-session-accent-colors),
+[F-tab-hover-details](#f-tab-hover-details),
+[F-prompt-history](#f-prompt-history), [F-session-reveal](#f-session-reveal) —
+did nothing there (#336).
+
+**Shipped in #336, both sources, layered.** The shell mints a v4 UUID for every
+fresh launch and the launch line gains `claude --session-id <uuid>` (validated
+at the argv seam: a non-UUID is dropped, never typed). The per-pane session
+file `~/.claude/sessions/<pid>.json`, the reader
+[F-copy-agent-name](#f-copy-agent-name) built, outranks the minted id whenever
+it proves the Claude in front, since Claude rewrites it on a re-key. One
+accessor, `LiveSession::claude_session_id` (with `App::claude_session_id` and
+`App::tab_claude_session_id`), is what every reader of a pane's transcript
+goes through; the last id a file proved outlives the Claude that wrote it.
+Reopening a closed Claude tab resumes its last conversation when the scan has
+it, else starts a new one under a new id. The CLI floor rose to 2.0.73, an
+estimate: the oldest release whose changelog shows `--session-id` in use.
+
+Not verified: whether `/clear` or a plan-accept re-keys a session started with
+`--session-id`. If it does, the session file is what follows it.
+
 <a id="f-settings-panel"></a>
 
 ### F-settings-panel
@@ -847,18 +859,6 @@ tightening. Ladder:
   sessions) is the cheap workaround for the same problem; this is the durable
   one, because it is the only version that regenerates in CI.
 
-<a id="f-claude-command"></a>
-
-### F-claude-command
-
-Send a confirmed slash command into an idle Claude session.
-
-One write path for every edit termherd makes to a Claude session (#337): a
-closed catalogue (`/rename`, `/color`, `/desktop`), sent only when the session
-is idle, behind a confirmation overlay that names the exact line typed. The
-overlay is a `KeyboardOwner` rung, so `escape` leaves it. Claude drives the
-information termherd shows; termherd sends actions.
-
 <a id="f-file-browser"></a>
 
 ### F-file-browser
@@ -871,16 +871,6 @@ exists in the app (the closest, Plans & mémoire, is a flat fixed list of
 Markdown docs). Adjacent to `F-repo-view` (#148) — both answer "show me this
 repo", one by session, one by file — and worth shaping together rather than
 twice
-
-<a id="f-keymap-rename-tab"></a>
-
-### F-keymap-rename-tab
-
-A `rename-tab` keymap action opening the focused tab's inline rename.
-
-Rename is double-click only today, so neither the keyboard, the
-[F-tab-context-menu](#f-tab-context-menu) nor MCP `run_action` can reach it
-(#338).
 
 <a id="f-launch-profiles"></a>
 
@@ -1288,19 +1278,37 @@ session asking for attention reactivates it; dragging a tab into the parked
 zone parks it. A natural entry for [F-tab-context-menu](#f-tab-context-menu).
 Torture report: `.personal/feature-torture/reports/F-tab-park.md`.
 
-<a id="f-tab-title-sync"></a>
+<a id="f-claude-command"></a>
 
-### F-tab-title-sync
+### F-claude-command
 
-A Claude tab's title follows the session name Claude holds.
+Send a confirmed slash command into an idle Claude session.
 
-The tab title follows Claude's own `/rename` and session name until the user
-renames the tab by hand; clearing a manual name re-seeds the field with the
-session name and resumes following (#119). Renaming a Claude tab sends
-`/rename` through [F-claude-command](#f-claude-command) rather than keeping a
-local copy that disagrees with Claude. Needs
-[F-session-id-at-launch](#f-session-id-at-launch) for fresh tabs. Torture
-report: `.personal/feature-torture/reports/F-tab-title-sync.md`.
+One write path for every edit termherd makes to a Claude session (#337): a
+closed catalogue (`/rename`, `/color`, `/desktop`), sent only when the session
+is idle, behind a confirmation overlay that names the exact line typed. The
+overlay is a `KeyboardOwner` rung, so `escape` leaves it. Claude drives the
+information termherd shows; termherd sends actions.
+
+Shipped (#337): `core::ClaudeCommand` renders the line, and makes a name safe to
+type — control characters and line breaks become spaces, invisible formatting is
+dropped, a trailing backslash goes, an empty name is refused. The colour is the
+closed `ClaudeColor` palette, kept in the `claude` codec so the transcript
+reader can share it. `App::claude_command_check` refuses anything but a Claude
+launch idle at an empty input prompt — read off the screen by `read_prompt`, so
+a draft or an open picker refuses — and is asked again at the send, where a
+refusal keeps the prompt open and says why. The confirmation answers `enter` and
+`escape` itself, so a synthesised key event reaches both. Two surfaces arm it: a
+`send-to-desktop` action, unbound by default, and an MCP `claude_command` tool,
+which arms the same prompt instead of typing. Confirming sends Ctrl+U, then the
+line, then Enter on its own. A prompt the MCP tool arms ignores a physical Enter
+for 600 ms.
+
+Checked against a live Claude Code: the shape of the empty prompt (its `Try "…"`
+hint) and of a two-line draft. Not checked: whether the line and its Enter,
+written back to back, always submit rather than read as a paste, and whether an
+`@` in a name opens the file autocomplete. The rename and colour surfaces that
+use this path are #119 and #343.
 
 <a id="f-copy-agent-name"></a>
 
@@ -1325,6 +1333,23 @@ a session file and nothing is ever named there; finding the Claude pid another
 way is #357. Nor does a build launched from inside a Claude session name
 anything, since its PTYs inherit that session's `CLAUDE*` environment (#356).
 
+<a id="f-keymap-rename-tab"></a>
+
+### F-keymap-rename-tab
+
+A `rename-tab` keymap action opening the focused tab's inline rename.
+
+Rename was double-click only, so neither the keyboard, the
+[F-tab-context-menu](#f-tab-context-menu) nor MCP `run_action` could reach it
+(#338).
+
+Shipped (#338): `rename-tab`, bound to ⌘⇧I on macOS (Terminal.app's *Edit
+Title*) and Ctrl+Shift+I elsewhere, a chord a legacy-encoded terminal program
+cannot tell from Ctrl+I (Tab). It opens the field a double-click opens, filled
+with the tab's current name, and reports `inert` / `no-context` with no tab
+open. Over MCP the field can be opened and abandoned with `escape`, not
+committed: `enter` on a rename is #246.
+
 <a id="f-mcp-agent-loop"></a>
 
 ### F-mcp-agent-loop
@@ -1335,6 +1360,35 @@ The composed prompt→wait→read over **any** session, shell or Claude: the
 primitive shipped as `run_in_session` (#194) and is kind-agnostic, so what is
 left is the one-round-trip composition, the guards, and an opt-in scoped to the
 nested-Claude case only. Depends on #195
+
+<a id="f-mcp-background-tab"></a>
+
+### F-mcp-background-tab
+
+Open and close a tab over MCP without moving the user's focus.
+
+**Background open and close** (#363). Every action of
+[F-mcp-orchestration](#f-mcp-orchestration) moved the keyboard: an open
+activated its new tab, a close focused its target first. An agent running
+workers beside a human sent that human's next keys into a terminal they did
+not choose. One optional `background` flag (default `false`) on `open_session`
+and `close_pane` fixes it without a new tool and without changing the default.
+
+A background open appends its tab without activating it — a `Placement` on
+`core`'s `LaunchSpec` — and sizes its PTY to the tab area at once, so a Claude
+started there never draws its first screen for the default grid. A background
+close goes through a public `Event::ClosePane(SessionId)` over the existing
+`Workspace::close_pane_of`, never revealing the pane, and requires `pane`: the
+focused pane is the user's. The flag means *never take focus*, not *focus
+cannot move* — closing the focused pane still hands focus to its sibling.
+Every `open_session` reply now carries `opened_handle`, since `focused_handle`
+no longer names the new session.
+
+Answered probes: `mouse_in_session` reaches a never-drawn tab, since a
+terminal's screen fills from its output rather than from drawing. An MCP close
+asks no confirmation, background or not; the book says so rather than the
+behaviour changing. An "opened by an agent" cue on the tab stays out of scope.
+Follow-up candidate: the same flag on `split_pane`.
 
 <a id="f-mcp-config-write"></a>
 
@@ -1654,6 +1708,28 @@ that opens a tab shows what the tab will. Lands ahead of
 [F-tab-title-sync](#f-tab-title-sync), which rewrites the same title policy.
 Torture report:
 `.personal/feature-torture/reports/F-tab-kind-icon.md`.
+
+<a id="f-tab-title-sync"></a>
+
+### F-tab-title-sync
+
+A Claude tab's title follows the session name Claude holds.
+
+Shipped in #119. One resolver in `core` ranks a tab's title sources —
+the session's name (Claude's `/rename` or a name kept in the sidebar,
+whichever was given last) >
+the live OSC title > Claude's AI title or first prompt > the launch label —
+and every open tab re-resolves on a rescan, a metadata load, a sidebar
+rename and a re-key. That reaches fresh tabs too, through the id minted by
+[F-session-id-at-launch](#f-session-id-at-launch).
+
+Renaming a Claude tab (double-click, the MCP `rename_tab`, or the sidebar ✎
+on an open session) arms `/rename` through
+[F-claude-command](#f-claude-command) rather than keeping a local copy that
+disagrees with Claude; a refusal shows a notice under the tab strip. A shell
+tab keeps its local name (#145), and so does a Claude tab whose Claude has
+exited. Once cleared, the rename field shows the name a blank commit leaves.
+The "follow by default" setting was dropped as YAGNI. Torture report: `.personal/feature-torture/reports/F-tab-title-sync.md`.
 
 <a id="f-terminal-palette"></a>
 

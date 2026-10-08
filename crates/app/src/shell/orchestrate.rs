@@ -13,14 +13,16 @@ use std::num::NonZeroU64;
 
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
-use termherd_core::{Event, Launch, PointerEvent, SessionKind};
+use termherd_core::{
+    ClaudeCommand, ClaudeLaunch, Event, Launch, Placement, PointerEvent, SessionKind,
+};
 
 use super::bridge::{
     Action, ActionDetail, ActionOutcome, Press, PressOutcome, PressStep, RepoOutcome,
 };
 use super::input::event_of;
 use super::repos::RepoGesture;
-use super::routing::KeyVerdict;
+use super::routing::{KeyVerdict, KeyboardOwner};
 use super::{Focus, Message, Shell, home_dir};
 
 impl Shell {
@@ -30,16 +32,46 @@ impl Shell {
     /// tab — is rejected before any state is touched.
     pub(super) fn perform_action(&mut self, action: Action) -> (ActionOutcome, Task<Message>) {
         match action {
-            Action::Open { project, kind } => self.act_open(project, kind),
+            Action::Open {
+                project,
+                kind,
+                placement,
+            } => self.act_open(project, kind, placement),
             Action::Split { pane, dir } => self.act_split(pane, dir),
             Action::Focus { session } => self.act_focus(session),
             Action::Rename { tab, title } => self.act_rename(tab, title),
-            Action::Close { pane } => self.act_close(pane),
+            Action::Close { pane, background } => self.act_close(pane, background),
             Action::Run { session, bytes } => self.act_run(session, bytes),
             Action::Pointer { session, pointer } => self.act_pointer(session, pointer),
             Action::DeclareRepo { path } => self.act_declare_repo(&path),
             Action::ForgetRepo { path } => self.act_forget_repo(&path),
+            Action::ClaudeCommand { session, command } => {
+                (self.act_claude_command(session, command), Task::none())
+            }
         }
+    }
+
+    /// Arm the Claude command confirmation for `session`. The caller is told
+    /// the line and the overlay; typing waits on the prompt being answered.
+    fn act_claude_command(&mut self, session: u64, command: ClaudeCommand) -> ActionOutcome {
+        let Some(id) = self.resolve(session) else {
+            return unknown_handle(session);
+        };
+        match self.arm_claude_command(id, command) {
+            Ok(line) => self.armed_remotely(line),
+            Err(refusal) => ActionOutcome::rejected(refusal.to_string()),
+        }
+    }
+
+    /// The outcome of a prompt a remote caller just armed, showing `line`.
+    /// Every remote arm goes through here, so none skips the moment a physical
+    /// Enter is ignored for: the user at the keyboard has not read it yet.
+    fn armed_remotely(&mut self, line: String) -> ActionOutcome {
+        self.hold_enter_after_remote_arm();
+        self.applied().with_detail(ActionDetail::ClaudeCommand {
+            line,
+            overlay: KeyboardOwner::ClaudeCommand.label(),
+        })
     }
 
     /// Add a repo to the sidebar. The path is normalised first — the caller may
@@ -98,19 +130,25 @@ impl Shell {
     }
 
     /// Open a new session, reusing the shell's own launch path (the same one a
-    /// click drives), so the spawn, focus and resize all match. No project falls
-    /// back to the home directory, so the tool works from an empty workspace.
+    /// click drives), so the spawn and resize match. No project falls back to
+    /// the home directory, so the tool works from an empty workspace. A
+    /// background placement appends its tab without taking focus.
     fn act_open(
         &mut self,
         project: Option<String>,
         kind: SessionKind,
+        placement: Placement,
     ) -> (ActionOutcome, Task<Message>) {
         let launch = match kind {
             SessionKind::Shell => Launch::Shell,
-            SessionKind::Claude => Launch::Claude { resume: None },
+            SessionKind::Claude => Launch::Claude(ClaudeLaunch::Fresh(None)),
         };
-        let task = self.launch(project.unwrap_or_else(home_dir), launch);
-        (self.applied(), task)
+        let (opened, task) = self.launch_at(project.unwrap_or_else(home_dir), launch, placement);
+        let opened = opened.map(handle_of);
+        (
+            self.applied().with_detail(ActionDetail::Opened(opened)),
+            task,
+        )
     }
 
     /// Split a pane, opening a fresh session beside it. With `pane` given, focus
@@ -151,13 +189,23 @@ impl Shell {
     }
 
     /// Rename the tab at `tab`. A blank title reverts to the derived name
-    /// (core's rule). Rejects an index past the open tabs.
+    /// (core's rule). A Claude tab is renamed by asking Claude, so the caller
+    /// gets the armed `/rename` line, or why it could not be armed. Rejects an
+    /// index past the open tabs.
     fn act_rename(&mut self, tab: usize, title: String) -> (ActionOutcome, Task<Message>) {
         if self.core.workspace.tabs.get(tab).is_none() {
             return (
                 ActionOutcome::rejected(format!("no tab at index {tab}")),
                 Task::none(),
             );
+        }
+        if let Some((session, current)) = self.claude_named_tab(tab) {
+            let outcome = match self.ask_claude_to_rename(session, &title, &current) {
+                Ok(Some(line)) => self.armed_remotely(line),
+                Ok(None) => self.applied(),
+                Err(why) => ActionOutcome::rejected(why),
+            };
+            return (outcome, Task::none());
         }
         let effects = self.core.apply(Event::RenameTab { index: tab, title });
         (self.applied(), self.perform(effects))
@@ -166,13 +214,39 @@ impl Shell {
     /// Close a pane — the focused one, or `pane` when given (focused first). A
     /// lone pane is the whole tab, so core collapses to `close_tab`, killing the
     /// PTY. Rejects an unknown target.
-    fn act_close(&mut self, pane: Option<u64>) -> (ActionOutcome, Task<Message>) {
-        let mut effects = match self.retarget(pane) {
+    fn act_close(&mut self, pane: Option<u64>, background: bool) -> (ActionOutcome, Task<Message>) {
+        if background {
+            return self.act_close_in_background(pane);
+        }
+        let reveal = match self.retarget(pane) {
             Ok(effects) => effects,
             Err(outcome) => return (outcome, Task::none()),
         };
-        effects.extend(self.core.apply(Event::CloseFocusedPane));
-        let task = Task::batch([self.perform(effects), self.resize_panes()]);
+        let task = self.close_focused_pane_after(reveal);
+        (self.applied(), task)
+    }
+
+    /// Close `pane` where it lives, without revealing it first, so the user's
+    /// tab and focus stay put unless the pane closed was the focused one.
+    /// "The focused pane" is the one thing a background close cannot target:
+    /// it is whatever the user is in, so a missing `pane` is rejected.
+    fn act_close_in_background(&mut self, pane: Option<u64>) -> (ActionOutcome, Task<Message>) {
+        let Some(handle) = pane else {
+            return (
+                ActionOutcome::rejected(
+                    "a background close needs a `pane` handle: the focused pane is the user's",
+                ),
+                Task::none(),
+            );
+        };
+        let id = match self.resolve_pane(handle) {
+            Ok(id) => id,
+            Err(outcome) => return (outcome, Task::none()),
+        };
+        let vanishing = self.vanishing_pane(id);
+        let effects = self.core.apply(Event::ClosePane(id));
+        let kill = self.perform(effects);
+        let task = Task::batch([kill, self.after_pane_vanished(vanishing)]);
         (self.applied(), task)
     }
 
@@ -339,10 +413,7 @@ impl Shell {
     /// The stable handle of the session holding focus, as an external caller
     /// spells it — `None` when the workspace is empty.
     fn focused_handle(&self) -> Option<String> {
-        self.core
-            .workspace
-            .focused_session()
-            .map(|id| id.0.get().to_string())
+        self.core.workspace.focused_session().map(handle_of)
     }
 }
 
@@ -352,6 +423,10 @@ impl Shell {
 fn step_of(verdict: KeyVerdict) -> PressStep {
     match verdict {
         KeyVerdict::Overlay(name) => PressStep::Overlay(name.to_owned()),
+        KeyVerdict::Refused(name, reason) => PressStep::Refused {
+            overlay: name.to_owned(),
+            reason,
+        },
         KeyVerdict::Ran(name) => PressStep::Ran(name),
         KeyVerdict::Inert(name, inertia) => PressStep::Inert {
             action: name,
@@ -373,4 +448,9 @@ fn unknown_handle(handle: u64) -> ActionOutcome {
 /// whatever happens to hold focus.
 fn unhosted_handle(handle: u64) -> ActionOutcome {
     ActionOutcome::rejected(format!("no open pane hosts handle {handle}"))
+}
+
+/// A session's stable handle as an external caller spells it.
+fn handle_of(id: SessionId) -> String {
+    id.0.get().to_string()
 }

@@ -30,7 +30,9 @@ needed for that stream to exist, and TermHerd arranges both:
   would silence it entirely, and that `env` block outranks the environment
   TermHerd spawns with. So a Claude launch passes a private `--settings`
   overlay, which outranks it in turn and *merges with* — never replaces — your
-  settings. This is why the CLI floor is **1.0.61**.
+  settings. The flag needs Claude Code **1.0.61**; the CLI floor sits higher
+  still, at **2.0.73**, for `--session-id` (see
+  [Installation](../guide/installation.md)).
 
 The CLI's own product name (`✳ Claude Code`), which it reports until it has
 something session-specific to say, is ignored: a tab would otherwise trade its
