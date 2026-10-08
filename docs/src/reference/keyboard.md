@@ -23,7 +23,7 @@ Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 | `reopen-closed-tab` | `mod+shift+t` | reopen the tab you just closed |
 | `close-focused` | `mod+w` | close the focused pane; a lone pane closes its tab |
 | `rename-tab` | `mod+shift+i` | rename the focused tab, as a double-click does |
-| `open-tab-menu` | `mod+.`, `mod+shift+.` | open the focused tab's menu, as a right-click does |
+| `open-tab-menu` | `mod+shift+m` | open the focused tab's menu, as a right-click does |
 | `pick-tab-color` | *(unbound)* | pick the focused tab's colour |
 | `open-new-session` | *(unbound)* | reserved — no surface yet |
 
@@ -47,14 +47,19 @@ keeps the colour itself (see
 default.
 
 `open-tab-menu` opens the [tab menu](../workspace/tabs-and-splits.md#tabs) a
-right-click opens; every entry in it is one of the actions on this page. On
-Windows and Linux <kbd>Ctrl</kbd>+<kbd>.</kbd> has no control code of its own,
-so a program in the terminal loses nothing to it either. With no tab open it
-does nothing. The shifted chord is the same gesture on layouts where `.` takes
-Shift, such as French AZERTY. Some input methods claim
-<kbd>Ctrl</kbd>+<kbd>.</kbd> before termherd sees it — Microsoft Pinyin and
-fcitx toggle Chinese punctuation with it — so rebind `open-tab-menu` if the
-chord does nothing.
+right-click opens; every entry in it is one of the actions on this page. With
+no tab open it does nothing. The chord follows the letter M wherever the layout
+puts it. On Windows and Linux <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd>
+reaches a terminal program as <kbd>Ctrl</kbd>+<kbd>M</kbd>, which is
+<kbd>Enter</kbd>, so the unshifted chord still gets there.
+
+**Bind letters and named keys, not punctuation that needs Shift.** A chord is
+matched on the key pressed *before* Shift applies, so on French AZERTY, where
+`.` is <kbd>Shift</kbd>+<kbd>;</kbd>, a press of
+<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>;</kbd> is the chord `cmd+shift+;`, never
+`cmd+shift+.`. When a chord does nothing, run with
+`RUST_LOG=termherd=debug`: every chord with a modifier other than Shift that
+reaches no action is logged with the key and modifiers it arrived as.
 
 `activate-tab-N` is matched by **physical key position**, so it lands on the
 same keys on AZERTY and QWERTZ, where the number row produces `&`, `é`, …

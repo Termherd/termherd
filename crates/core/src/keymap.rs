@@ -312,14 +312,14 @@ const ACTIONS: &[ActionDef] = &[
         name: "rename-tab",
         default_chords: &["mod+shift+i"],
     },
-    // Ctrl+. has no control byte in a legacy terminal encoding, so on
-    // Windows/Linux the chord takes no key a program in a pane could receive.
-    // The shifted spelling is the same gesture where `.` needs Shift (AZERTY),
-    // as zoom-in's `mod+shift+plus` is.
+    // A letter, not punctuation: a press names its key without Shift, so a
+    // character that takes Shift on some layout (`.` on AZERTY) is unreachable
+    // there. Ctrl+Shift+M is Ctrl+M (Enter) to a legacy terminal, which still
+    // reaches a program in the pane unshifted, as with `rename-tab`.
     ActionDef {
         action: Action::OpenTabMenu,
         name: "open-tab-menu",
-        default_chords: &["mod+.", "mod+shift+."],
+        default_chords: &["mod+shift+m"],
     },
     ActionDef {
         action: Action::NewClaudeSessionHere,
@@ -898,24 +898,15 @@ mod tests {
     }
 
     #[test]
-    fn defaults_bind_open_tab_menu_to_the_primary_modifier_period_on_every_platform() {
+    fn defaults_bind_open_tab_menu_to_the_primary_modifier_shift_m_on_every_platform() {
         assert_eq!(
-            Keymap::defaults_for(Platform::MacOs).lookup(&KeyChord::new(".", MOD_CMD)),
+            Keymap::defaults_for(Platform::MacOs).lookup(&KeyChord::new("m", MOD_CMD | MOD_SHIFT)),
             Some(Action::OpenTabMenu)
         );
         assert_eq!(
-            Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new(".", MOD_CTRL)),
+            Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new("m", MOD_CTRL | MOD_SHIFT)),
             Some(Action::OpenTabMenu)
         );
-        // On AZERTY `.` is Shift+`;`, so the chord arrives with Shift held.
-        for platform in Platform::ALL {
-            assert_eq!(
-                Keymap::defaults_for(platform)
-                    .lookup(&KeyChord::new(".", platform.primary_mod() | MOD_SHIFT)),
-                Some(Action::OpenTabMenu),
-                "{platform:?}"
-            );
-        }
         assert_eq!(
             Action::from_config_name("open-tab-menu"),
             Some(Action::OpenTabMenu)
