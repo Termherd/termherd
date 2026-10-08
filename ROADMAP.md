@@ -545,9 +545,10 @@ session's JSONL — [F-tab-title-sync](#f-tab-title-sync),
 [F-prompt-history](#f-prompt-history), [F-session-reveal](#f-session-reveal) —
 does nothing there (#336). Two sources: launch with
 `claude --session-id <uuid>`, or read the `sessionId` Claude Code writes to
-`~/.claude/sessions/<pid>.json`, through the reader #333 needs anyway. The
-session file also carries the agent name `/list-agents` shows, which favours
-it; to settle before building.
+`~/.claude/sessions/<pid>.json`, through the reader #333 built. The session
+file also carries the agent name `/list-agents` shows, which favours it: each
+pane already caches that file for [F-copy-agent-name](#f-copy-agent-name). To
+settle before building.
 
 <a id="f-store-cache"></a>
 
@@ -1258,6 +1259,10 @@ transcript and in its session file (#344). Needs
 [F-copy-agent-name](#f-copy-agent-name). Torture report:
 `.personal/feature-torture/reports/F-tab-hover-details.md`.
 
+The agent name shipped with [F-copy-agent-name](#f-copy-agent-name) (#339): an
+`Agent:` line the tab card carries and the sidebar's does not. Model, effort,
+version and elapsed time remain.
+
 <a id="f-tab-park"></a>
 
 ### F-tab-park
@@ -1293,7 +1298,7 @@ Copy a session's agent name, the one `/list-agents` shows.
 
 The peer name Claude Code gives a session (`termherd-b0`) is how one session
 addresses another (#339). Read from `~/.claude/sessions/<pid>.json`, through
-the pid-to-session-file reader #333 needs anyway. Also shown in
+the pid-to-session-file reader #333 built. Also shown in
 [F-tab-hover-details](#f-tab-hover-details).
 
 Shipped (#339): a `copy-agent-name` action, unbound by default and reachable
@@ -1302,6 +1307,11 @@ through `run_action`, which re-reads the file on every press and is inert
 in the tab hover card, read from a cache refreshed when the foreground job
 changes and when the pointer enters the tab. The tab menu entry waits
 for #340.
+
+Not shipped: Windows. ConPTY reports no foreground process, so no pid leads to
+a session file and nothing is ever named there; finding the Claude pid another
+way is #357. Nor does a build launched from inside a Claude session name
+anything, since its PTYs inherit that session's `CLAUDE*` environment (#356).
 
 <a id="f-mcp-agent-loop"></a>
 

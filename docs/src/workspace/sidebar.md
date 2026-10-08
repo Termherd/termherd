@@ -79,8 +79,8 @@ Additions live in `~/.termherd/metadata.json`, beside stars and renames.
 Nothing is written under `~/.claude`.
 
 Hovering a session shows a card with its fuller description — relative last
-activity and message count (`3h ago · 214 messages`). The same card is what a
-tab shows on hover.
+activity and message count (`3h ago · 214 messages`). A tab shows the same
+card on hover, plus an `Agent:` line when a Claude runs in it.
 
 ## Search
 

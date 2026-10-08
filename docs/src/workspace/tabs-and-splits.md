@@ -39,7 +39,7 @@ session, `❯` for a shell — a title derived from its session, and a `×` to c
 it. In a split tab, the mark follows the focused pane. The kind is never part
 of the title, so renaming a tab or a retitle from Claude cannot lose it: a
 fresh tab is titled after its project alone. Hovering a tab shows the
-session's fuller description — the same card the sidebar shows. When a Claude
+session's fuller description — the card the sidebar shows. When a Claude
 runs in it, the card also names its agent (`Agent: termherd-b0`), the peer
 name other Claude sessions address it by; the `copy-agent-name` action puts
 it on the clipboard. In a split tab, the card names the first pane's agent.

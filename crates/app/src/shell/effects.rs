@@ -193,7 +193,8 @@ impl Shell {
     /// afresh on every call, since Claude rewrites its name and session id in
     /// place. Which pane the file then describes is `core`'s call.
     // ponytail: one small read per pane on the GUI thread, per snapshot or
-    // list_sessions; move it to the terminal thread if a caller polls hard.
+    // list_sessions (and per tab hover, job change or agent-name copy, through
+    // `session_file`); move it to the terminal thread if a caller polls hard.
     fn session_files(&self) -> BTreeMap<u32, SessionFile> {
         self.core
             .sessions

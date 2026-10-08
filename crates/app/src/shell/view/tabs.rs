@@ -103,8 +103,9 @@ impl Shell {
                         current: tab.display_title().to_owned(),
                     });
                 // The chip clips the title; hovering reveals the fuller
-                // description — the very session card the sidebar shows when the
-                // tab resumes a browsed session, else a minimal title + cwd card.
+                // description — the sidebar's session card, plus the agent line,
+                // when the tab resumes a browsed session, else a minimal title +
+                // cwd card.
                 tooltip(
                     chip,
                     self.tab_hover_card(index, tab, now),
@@ -127,7 +128,7 @@ impl Shell {
     }
 
     /// The hover card for a tab. A tab that resumes a browsed session
-    /// shows the *same* [`session_card`] the sidebar does — one derive (the core
+    /// shows the [`session_card`] the sidebar does, plus its agent — one derive (the core
     /// resolves the record via [`termherd_core::App::tab_record`]), no divergent
     /// formatting. A shell or a fresh, not-yet-scanned session has no record, so
     /// it falls back to a minimal card with the full title and the working

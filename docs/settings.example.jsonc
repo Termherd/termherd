@@ -179,6 +179,7 @@
   //
   //   copy                      Cmd+C (macOS) / Ctrl+Shift+C
   //   paste                     Cmd+V (macOS) / Ctrl+V, Ctrl+Shift+V
+  //   copy-agent-name           (unbound) copies the focused Claude's agent name
   //   next-tab                  Ctrl+Tab
   //   prev-tab                  Ctrl+Shift+Tab
   //   activate-tab-1 … -9       mod+1 … mod+9 (physical number-row keys)
