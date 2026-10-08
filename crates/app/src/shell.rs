@@ -5424,7 +5424,10 @@ mod key_routing {
             KeyboardOwner::TabClose(index) => shell.closing = Some(index),
             KeyboardOwner::Archive => shell.archiving = Some("sess".to_string()),
             KeyboardOwner::TabMenu => {
-                let _ = shell.update(Message::OpenTabMenu(0));
+                // Over the active tab: a right-click focuses its tab first, so a
+                // menu on another one would move focus before the sweep looks.
+                let active = shell.core.workspace.active;
+                let _ = shell.update(Message::OpenTabMenu(active));
             }
             KeyboardOwner::ClaudeCommand => {
                 let session = shell.core.workspace.focused_session().expect("focused");
