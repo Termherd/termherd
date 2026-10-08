@@ -1116,7 +1116,7 @@ impl Shell {
                 self.select_tab_menu_entry(position);
                 Task::none()
             }
-            Message::RunTabMenuEntry(position) => self.run_tab_menu_entry(position),
+            Message::RunTabMenuEntry(position) => self.run_tab_menu_entry(position).1,
             Message::CloseTabMenu => {
                 self.tab_menu = None;
                 Task::none()
@@ -6097,7 +6097,7 @@ mod key_routing {
 
     mod tab_menu {
         use super::*;
-        use crate::shell::tab_menu::{ENTRIES, TabMenu, entries};
+        use crate::shell::tab_menu::{ENTRIES, TabMenu, entries, next, prev};
 
         /// Move the open menu's selection onto `action` with arrow presses, as
         /// a caller with no pointer would.
@@ -6106,11 +6106,19 @@ mod key_routing {
             press_all(shell, &vec!["down"; at])
         }
 
-        fn position_of(shell: &Shell, action: Action) -> usize {
+        fn listed(shell: &Shell) -> Vec<Action> {
             shell
-                .tab_menu_entries()
+                .live_tab_menu()
+                .expect("a menu is open")
+                .entries()
+                .map(|entry| entry.action)
+                .collect()
+        }
+
+        fn position_of(shell: &Shell, action: Action) -> usize {
+            listed(shell)
                 .iter()
-                .position(|entry| entry.action == action)
+                .position(|listed| *listed == action)
                 .expect("the menu lists the entry")
         }
 
@@ -6119,7 +6127,7 @@ mod key_routing {
         }
 
         fn selected(shell: &Shell) -> Option<usize> {
-            shell.tab_menu.map(TabMenu::selected)
+            shell.live_tab_menu().map(TabMenu::selected)
         }
 
         #[test]
@@ -6155,10 +6163,15 @@ mod key_routing {
             let _ = shell.update(Message::OpenTabMenu(1));
             let shown = shell.core.workspace.tabs[1].display_title().to_owned();
 
-            let mut steps = select(&mut shell, Action::RenameTab);
-            steps.extend(press_all(&mut shell, &["enter"]));
+            let moves = select(&mut shell, Action::RenameTab);
+            let enter = press_chord(&mut shell, "enter");
 
-            assert_eq!(steps, menu_steps(steps.len()), "every key is the menu's");
+            assert_eq!(moves, menu_steps(moves.len()), "the arrows are the menu's");
+            assert_eq!(
+                enter,
+                PressStep::Ran("rename-tab".to_owned()),
+                "enter answers with the entry it ran"
+            );
             assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabRename));
             let (anchor, buffer) = shell.tab_rename.clone().expect("renaming");
             assert_eq!(shell.core.workspace.tab_of(anchor), Some(1));
@@ -6190,9 +6203,25 @@ mod key_routing {
         }
 
         #[test]
-        fn an_entry_past_the_list_runs_nothing_and_closes_the_menu() {
-            // The list can shorten under an open menu when the focused pane's
-            // kind changes, leaving a stale position behind.
+        fn an_entry_that_refuses_reports_its_refusal_through_enter() {
+            // A caller must learn that the entry it picked did nothing; a bare
+            // `overlay` would read as success.
+            // The Claude exits while its menu is open, taking its name along.
+            let dir = tempfile::tempdir().expect("tempdir");
+            write_session_file(dir.path(), 4399, "termherd-b0");
+            let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let _ = select(&mut shell, Action::CopyAgentName);
+            std::fs::remove_file(dir.path().join("4399.json")).expect("remove");
+
+            let enter = press_chord(&mut shell, "enter");
+
+            assert_eq!(enter, inert("copy-agent-name", "no-context"));
+            assert!(shell.keyboard_owner().is_none(), "the menu closed");
+        }
+
+        #[test]
+        fn a_position_past_the_list_runs_nothing_and_closes_the_menu() {
             let mut shell = shell_with_three_tabs();
             let _ = shell.update(Message::OpenTabMenu(0));
 
@@ -6230,7 +6259,7 @@ mod key_routing {
         fn the_arrows_wrap_at_both_ends() {
             let mut shell = shell_with_three_tabs();
             let _ = shell.update(Message::OpenTabMenu(0));
-            let len = shell.tab_menu_entries().len();
+            let len = listed(&shell).len();
 
             let _ = press_all(&mut shell, &["up"]);
             assert_eq!(selected(&shell), Some(len - 1));
@@ -6286,28 +6315,72 @@ mod key_routing {
         }
 
         #[test]
-        fn copy_agent_name_is_listed_on_a_claude_tab_and_not_on_a_shell() {
-            let listed = |kind| {
-                entries(Some(kind))
-                    .iter()
-                    .any(|entry| entry.action == Action::CopyAgentName)
-            };
-            assert!(listed(SessionKind::Claude));
-            assert!(!listed(SessionKind::Shell));
+        fn copy_agent_name_is_offered_exactly_when_the_action_would_find_a_name() {
+            // The same reading the action makes — a Claude job in front of the
+            // pane with a session file — whatever the pane was launched as:
+            // this pane is a shell.
+            let dir = tempfile::tempdir().expect("tempdir");
+            let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+            let offered = |shell: &Shell| listed(shell).contains(&Action::CopyAgentName);
+
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert!(!offered(&shell), "no session file, no name to copy");
+            let _ = shell.update(Message::CloseTabMenu);
+
+            write_session_file(dir.path(), 4399, "termherd-b0");
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert!(offered(&shell), "a named Claude in front of a shell pane");
         }
 
         #[test]
-        fn the_menu_lists_by_the_kind_of_the_tab_it_opened_on() {
-            let (mut shell, _pty) = shell_with_terminal();
-            let _ = shell.launch("/tmp/claude".to_string(), Launch::Claude { resume: None });
+        fn the_agent_name_entry_is_the_only_one_that_depends_on_the_pane() {
+            let with: Vec<Action> = entries(true).map(|entry| entry.action).collect();
+            let without: Vec<Action> = entries(false).map(|entry| entry.action).collect();
 
-            let _ = shell.update(Message::OpenTabMenu(1));
-            let on_claude = shell.tab_menu_entries().len();
-            let _ = shell.update(Message::CloseTabMenu);
+            assert_eq!(with.len(), ENTRIES.len());
+            assert_eq!(
+                with.into_iter()
+                    .filter(|action| !without.contains(action))
+                    .collect::<Vec<_>>(),
+                vec![Action::CopyAgentName]
+            );
+        }
+
+        #[test]
+        fn the_menu_closes_when_its_pane_loses_focus() {
+            // An MCP caller can move focus under an open menu; its entries
+            // would otherwise run on a tab the menu was never opened for.
+            let mut shell = shell_with_three_tabs();
             let _ = shell.update(Message::OpenTabMenu(0));
-            let on_shell = shell.tab_menu_entries().len();
 
-            assert_eq!(on_claude, on_shell + 1, "the agent-name entry");
+            let _ = shell.activate_tab(2);
+
+            assert!(shell.keyboard_owner().is_none());
+            assert!(shell.tab_menu_card().is_none(), "nor is it drawn");
+            let _ = shell.update(Message::RunTabMenuEntry(0));
+            assert!(shell.tab_rename.is_none(), "a stale click runs nothing");
+        }
+
+        #[test]
+        fn the_menu_closes_when_its_tab_closes() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(2));
+
+            let _ = shell.close_tab(2);
+
+            assert!(shell.keyboard_owner().is_none());
+        }
+
+        #[test]
+        fn a_right_click_on_a_tab_that_is_gone_opens_nothing() {
+            // The tab closed between the render and the click.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.activate_tab(1);
+
+            let _ = shell.update(Message::OpenTabMenu(3));
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.workspace.active, 1);
         }
 
         #[test]
@@ -6334,10 +6407,10 @@ mod key_routing {
             ) {
                 // An empty list included: a move there must neither divide by
                 // zero nor invent a selection.
-                let mut menu = TabMenu::default();
+                let mut selected = 0;
                 for down in moves {
-                    if down { menu.next(len) } else { menu.prev(len) }
-                    proptest::prop_assert!(menu.selected() < len.max(1));
+                    selected = if down { next(selected, len) } else { prev(selected, len) };
+                    proptest::prop_assert!(selected < len.max(1));
                 }
             }
         }

@@ -127,8 +127,8 @@ impl Shell {
 
     /// The open tab menu's card: the focused tab's title, then one line per
     /// entry, the selected one filled. `None` when no menu is open.
-    pub(super) fn tab_menu_card(&self) -> Option<Element<'_, Message>> {
-        let menu = self.tab_menu?;
+    pub(in crate::shell) fn tab_menu_card(&self) -> Option<Element<'_, Message>> {
+        let menu = self.live_tab_menu()?;
         let title = self
             .core
             .workspace
@@ -138,7 +138,7 @@ impl Shell {
         let mut card = column![text(clip(title, 32)).size(11).style(card_secondary_text)]
             .spacing(2)
             .width(240);
-        for (position, entry) in self.tab_menu_entries().into_iter().enumerate() {
+        for (position, entry) in menu.entries().enumerate() {
             let style = if position == menu.selected() {
                 button::primary
             } else {

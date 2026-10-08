@@ -295,10 +295,12 @@ const ACTIONS: &[ActionDef] = &[
     },
     // Ctrl+. has no control byte in a legacy terminal encoding, so on
     // Windows/Linux the chord takes no key a program in a pane could receive.
+    // The shifted spelling is the same gesture where `.` needs Shift (AZERTY),
+    // as zoom-in's `mod+shift+plus` is.
     ActionDef {
         action: Action::OpenTabMenu,
         name: "open-tab-menu",
-        default_chords: &["mod+."],
+        default_chords: &["mod+.", "mod+shift+."],
     },
     ActionDef {
         action: Action::NewClaudeSessionHere,
@@ -886,6 +888,15 @@ mod tests {
             Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new(".", MOD_CTRL)),
             Some(Action::OpenTabMenu)
         );
+        // On AZERTY `.` is Shift+`;`, so the chord arrives with Shift held.
+        for platform in Platform::ALL {
+            assert_eq!(
+                Keymap::defaults_for(platform)
+                    .lookup(&KeyChord::new(".", platform.primary_mod() | MOD_SHIFT)),
+                Some(Action::OpenTabMenu),
+                "{platform:?}"
+            );
+        }
         assert_eq!(
             Action::from_config_name("open-tab-menu"),
             Some(Action::OpenTabMenu)

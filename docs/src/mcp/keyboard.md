@@ -86,12 +86,14 @@ selection, and `copy` runs on it.
 - **`tab-menu`** (opened by `open-tab-menu`, or a human's right-click on a
   tab) answers `up`, `down` and `enter` itself, so unlike the renames it is
   fully drivable: `enter` closes the menu and runs the selected entry exactly
-  as `run_action` would run that entry's action. Every press while it is open
-  reports `overlay: "tab-menu"` — including the `enter`, so read the effect
-  back with `snapshot` rather than from the step. The entries and their order
-  are on the [tabs page](../workspace/tabs-and-splits.md#tabs); *Copy agent
-  name* is listed only when the focused pane runs Claude, which shifts every
-  entry below it by one.
+  as `run_action` would run that entry's action. The `enter` reports what
+  that action did — `ran` with its name, or `inert` with its reason — and
+  every other press while the menu is open reports `overlay: "tab-menu"`.
+  The entries and their order are on the
+  [tabs page](../workspace/tabs-and-splits.md#tabs); *Copy agent name* is
+  listed only when the focused pane has a named Claude in front of it, which
+  shifts every entry below it by one. The menu closes if its pane loses focus,
+  so a `focus_pane` call while it is open dismisses it.
 - Every other overlay is exitable from the keyboard, and a test sweep derived
   from the overlay enumeration — not a hand-written list — is what keeps it
   that way. A new overlay added without an exit fails there.

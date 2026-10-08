@@ -23,7 +23,7 @@ Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 | `reopen-closed-tab` | `mod+shift+t` | reopen the tab you just closed |
 | `close-focused` | `mod+w` | close the focused pane; a lone pane closes its tab |
 | `rename-tab` | `mod+shift+i` | rename the focused tab, as a double-click does |
-| `open-tab-menu` | `mod+.` | open the focused tab's menu, as a right-click does |
+| `open-tab-menu` | `mod+.`, `mod+shift+.` | open the focused tab's menu, as a right-click does |
 | `open-new-session` | *(unbound)* | reserved — no surface yet |
 
 `rename-tab` opens the same inline field a double-click on the tab opens,
@@ -37,7 +37,11 @@ is <kbd>Tab</kbd>, so claiming it takes nothing away from that program.
 right-click opens; every entry in it is one of the actions on this page. On
 Windows and Linux <kbd>Ctrl</kbd>+<kbd>.</kbd> has no control code of its own,
 so a program in the terminal loses nothing to it either. With no tab open it
-does nothing.
+does nothing. The shifted chord is the same gesture on layouts where `.` takes
+Shift, such as French AZERTY. Some input methods claim
+<kbd>Ctrl</kbd>+<kbd>.</kbd> before termherd sees it — Microsoft Pinyin and
+fcitx toggle Chinese punctuation with it — so rebind `open-tab-menu` if the
+chord does nothing.
 
 `activate-tab-N` is matched by **physical key position**, so it lands on the
 same keys on AZERTY and QWERTZ, where the number row produces `&`, `é`, …

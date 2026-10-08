@@ -61,7 +61,7 @@ focused tab:
 | Entry | Runs | Shown on |
 | --- | --- | --- |
 | Rename tab | `rename-tab` | every tab |
-| Copy agent name | `copy-agent-name` | a tab whose focused pane runs Claude |
+| Copy agent name | `copy-agent-name` | a tab whose focused pane has a named Claude in front |
 | New shell here | `new-shell-here` | every tab |
 | New Claude session here | `new-claude-session-here` | every tab |
 | Split right | `split-vertical` | every tab |
@@ -72,7 +72,16 @@ Each entry is the keyboard action of the same name, so it does exactly what
 that action's chord does — *Close pane* closes the focused pane of a split and
 the whole tab otherwise, asking first as the chord does. <kbd>↑</kbd> and
 <kbd>↓</kbd> move the selection, <kbd>Enter</kbd> runs it, <kbd>Escape</kbd> or
-a click outside the menu closes it without running anything. The menu opens in
+a click outside the menu closes it without running anything.
+
+*Copy agent name* is listed when the action would find a name at the moment
+the menu opens: a Claude runs in front of the focused pane and has written its
+session file, whether the pane was opened as a Claude session or as a shell.
+It never appears on Windows, where no Claude is ever named. The menu belongs
+to the pane it opened over: if that pane closes or loses focus, the menu goes
+with it.
+
+The menu opens in
 the middle of the window rather than beside the tab, and screen readers do not
 see it: it is drawn by termherd, not by the operating system.
 

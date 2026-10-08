@@ -96,8 +96,8 @@ pub(super) enum Inertia {
     NoSurface,
     /// The action is wired, but refused before acting because a precondition was
     /// absent — no focused session to derive a repo from, no closed tab to
-    /// reopen, no tab to rename, nothing to scroll, nothing selected to copy,
-    /// no agent name.
+    /// reopen, no tab to rename or open a menu on, nothing to scroll, nothing
+    /// selected to copy, no agent name.
     ///
     /// Deliberately narrower than "had no visible effect": an action whose event
     /// `core` applies and absorbs (a tab index past the open tabs) *did* run, and
@@ -164,7 +164,7 @@ fn classify_confirm(event: &keyboard::Event) -> ConfirmKey {
 /// Modifiers are ignored, so `Shift+Escape` and `Cmd+Escape` leave too. No
 /// platform binds them to anything an overlay could mean, and a caller
 /// fumbling a modifier while trying to escape should still escape.
-fn is_escape(event: &keyboard::Event) -> bool {
+pub(super) fn is_escape(event: &keyboard::Event) -> bool {
     matches!(
         event,
         keyboard::Event::KeyPressed {
@@ -310,10 +310,7 @@ impl Shell {
     /// alongside the work it produced — see [`KeyVerdict`].
     pub(super) fn on_key(&mut self, event: keyboard::Event) -> (KeyVerdict, Task<Message>) {
         match self.keyboard_owner() {
-            Some(owner) => (
-                KeyVerdict::Overlay(owner.label()),
-                self.overlay_key(owner, &event),
-            ),
+            Some(owner) => self.overlay_key(owner, &event),
             None => self.terminal_key(event),
         }
     }
@@ -336,7 +333,7 @@ impl Shell {
         if self.archiving.is_some() {
             return Some(KeyboardOwner::Archive);
         }
-        if self.tab_menu.is_some() {
+        if self.live_tab_menu().is_some() {
             return Some(KeyboardOwner::TabMenu);
         }
         if self.settings_open {
@@ -350,18 +347,24 @@ impl Shell {
 
     /// Hand one key press to the overlay that owns the keyboard. The key is
     /// consumed either way — acted on or swallowed — and never leaks to the
-    /// terminal beneath the prompt.
-    fn overlay_key(&mut self, owner: KeyboardOwner, event: &keyboard::Event) -> Task<Message> {
-        match owner {
+    /// terminal beneath the prompt. Reported as the overlay's, except where the
+    /// tab menu ran an entry and answers with that action's own verdict.
+    fn overlay_key(
+        &mut self,
+        owner: KeyboardOwner,
+        event: &keyboard::Event,
+    ) -> (KeyVerdict, Task<Message>) {
+        let task = match owner {
             KeyboardOwner::TabRename => self.tab_rename_key(event),
             KeyboardOwner::SessionRename => self.session_rename_key(event),
             KeyboardOwner::Quit => self.quit_confirm_key(event),
             KeyboardOwner::TabClose(index) => self.tab_close_confirm_key(event, index),
             KeyboardOwner::Archive => self.archive_confirm_key(event),
-            KeyboardOwner::TabMenu => self.tab_menu_key(event),
+            KeyboardOwner::TabMenu => return self.tab_menu_key(event),
             KeyboardOwner::Settings => self.settings_key(event),
             KeyboardOwner::Doc => self.open_doc_key(event),
-        }
+        };
+        (KeyVerdict::Overlay(owner.label()), task)
     }
 
     /// Escape abandons a tab rename; Enter and a blur commit it elsewhere, so
