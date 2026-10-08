@@ -101,7 +101,10 @@ impl Shell {
                 // platforms.
                 #[cfg(target_os = "macos")]
                 match objc2_foundation::MainThreadMarker::new() {
-                    Some(mtm) => crate::macos::route_quit_through_close(mtm),
+                    Some(mtm) => {
+                        crate::macos::route_quit_through_close(mtm);
+                        crate::macos::route_stray_text_through_ime(mtm);
+                    }
                     // We expect to be on the main thread here; if not, skipping
                     // would silently leave Cmd+Q on AppKit's hard-kill
                     // `terminate:` with no trace explaining why. Log it.

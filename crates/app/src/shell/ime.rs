@@ -62,6 +62,20 @@ impl<Message> ImeArea<'_, Message> {
     }
 }
 
+/// The composed text the terminal takes from `event`, if any. A disabled area
+/// takes nothing, so while an overlay owns the keyboard the commit travels on
+/// to the focused input field instead of being captured for the PTY. The empty
+/// pre-edit that always precedes a commit is not a commit — we do not render
+/// an on-the-spot pre-edit overlay.
+fn terminal_commit(enabled: bool, event: &Event) -> Option<&str> {
+    match event {
+        Event::InputMethod(input_method::Event::Commit(text)) if enabled && !text.is_empty() => {
+            Some(text)
+        }
+        _ => None,
+    }
+}
+
 impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ImeArea<'_, Message> {
     fn tag(&self) -> iced::advanced::widget::tree::Tag {
         iced::advanced::widget::tree::Tag::stateless()
@@ -128,29 +142,21 @@ impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ImeArea<'_, Messa
             viewport,
         );
 
-        if !self.enabled {
+        if let Some(text) = terminal_commit(self.enabled, event) {
+            shell.publish((self.on_commit)(text.to_owned()));
+            shell.capture_event();
             return;
         }
-        match event {
-            // The composed result of a dead-key / IME sequence: hand it to the
-            // PTY as typed text. The empty pre-edit that always precedes a commit
-            // is ignored — we do not render an on-the-spot pre-edit overlay.
-            Event::InputMethod(input_method::Event::Commit(text)) if !text.is_empty() => {
-                shell.publish((self.on_commit)(text.clone()));
-                shell.capture_event();
-            }
-            // The IME request is only honoured during a redraw, so (re)assert it
-            // every frame the terminal is focused; dropping it would let the
-            // runtime disable the IME again and re-break dead keys.
-            Event::Window(window::Event::RedrawRequested(_)) => {
-                let ime = InputMethod::<String>::Enabled {
-                    cursor: self.ime_cursor(layout.bounds()),
-                    purpose: input_method::Purpose::Terminal,
-                    preedit: None,
-                };
-                shell.request_input_method(&ime);
-            }
-            _ => {}
+        // The IME request is only honoured during a redraw, so (re)assert it
+        // every frame the terminal is focused; dropping it would let the
+        // runtime disable the IME again and re-break dead keys.
+        if self.enabled && matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
+            let ime = InputMethod::<String>::Enabled {
+                cursor: self.ime_cursor(layout.bounds()),
+                purpose: input_method::Purpose::Terminal,
+                preedit: None,
+            };
+            shell.request_input_method(&ime);
         }
     }
 
@@ -213,5 +219,31 @@ impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ImeArea<'_, Messa
 impl<'a, Message: 'a> From<ImeArea<'a, Message>> for Element<'a, Message> {
     fn from(area: ImeArea<'a, Message>) -> Self {
         Element::new(area)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit(text: &str) -> Event {
+        Event::InputMethod(input_method::Event::Commit(text.to_owned()))
+    }
+
+    #[test]
+    fn an_enabled_area_takes_a_commit_for_the_terminal() {
+        assert_eq!(terminal_commit(true, &commit("ê")), Some("ê"));
+    }
+
+    #[test]
+    fn a_disabled_area_lets_an_emoji_commit_travel_on_to_the_rename_field() {
+        assert_eq!(terminal_commit(false, &commit("🚀")), None);
+    }
+
+    #[test]
+    fn neither_an_empty_commit_nor_a_preedit_is_taken() {
+        assert_eq!(terminal_commit(true, &commit("")), None);
+        let preedit = Event::InputMethod(input_method::Event::Preedit("^".to_owned(), None));
+        assert_eq!(terminal_commit(true, &preedit), None);
     }
 }
