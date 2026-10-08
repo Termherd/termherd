@@ -10,9 +10,9 @@ use std::time::SystemTime;
 use iced::widget::canvas::Canvas;
 use iced::widget::{button, column, container, mouse_area, row, text};
 use iced::{Border, Color, Element, Fill, Length, Size};
-use termherd_core::SessionRecord;
 use termherd_core::browser::relative_age;
 use termherd_core::workspace::{Pane, SessionId, SplitDir};
+use termherd_core::{ClaudeColor, SessionRecord};
 
 use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD};
 use super::ime::ime_area;
@@ -30,8 +30,8 @@ mod tabs;
 use doc_editor::doc_editor;
 use modals::modal;
 use style::{
-    card_secondary_text, card_style, clip, kind_glyph, kind_icon, mix, sidebar_secondary_text,
-    status_dot,
+    COLOR_MARK_WIDTH, card_secondary_text, card_style, claude_color, clip, color_bar, kind_glyph,
+    kind_icon, mix, sidebar_secondary_text, status_dot,
 };
 
 impl Shell {
@@ -270,10 +270,17 @@ impl Shell {
 /// The hover-card line naming a tab's Claude, dimmed like the other
 /// secondary lines.
 pub(super) fn agent_line(name: &str) -> Element<'static, Message> {
-    text(strings::agent_name(name))
-        .size(10)
-        .style(card_secondary_text)
-        .into()
+    card_secondary_line(strings::agent_name(name))
+}
+
+/// A dimmed secondary line on a hover card.
+pub(super) fn card_secondary_line(line: String) -> Element<'static, Message> {
+    text(line).size(10).style(card_secondary_text).into()
+}
+
+/// The hover-card line naming a session's colour, dimmed like the agent line.
+pub(super) fn color_line(color: ClaudeColor) -> Element<'static, Message> {
+    card_secondary_line(strings::session_color(color.name()))
 }
 
 /// The hover card for a session row: full title, a muted line with relative
@@ -282,6 +289,7 @@ pub(super) fn agent_line(name: &str) -> Element<'static, Message> {
 pub(super) fn session_card(
     title: String,
     agent: Option<String>,
+    color: Option<ClaudeColor>,
     session: &SessionRecord,
     now: SystemTime,
 ) -> Element<'static, Message> {
@@ -302,6 +310,9 @@ pub(super) fn session_card(
     .spacing(4);
     if let Some(agent) = agent {
         card = card.push(agent_line(&agent));
+    }
+    if let Some(color) = color {
+        card = card.push(color_line(color));
     }
     for line in &session.digest.tail {
         card = card.push(

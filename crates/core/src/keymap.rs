@@ -129,6 +129,11 @@ pub enum Action {
     /// Open the focused tab's context menu, whose entries are keymap actions.
     /// Inert when no tab is open.
     OpenTabMenu,
+    /// Ask to hand the focused Claude session to the Claude desktop app by
+    /// typing `/desktop` — behind the same confirmation as every command
+    /// termherd types into Claude. Inert unless the focused pane is a Claude
+    /// idle at its prompt.
+    SendToDesktop,
     /// Jump the focused terminal's viewport to the top of its scrollback.
     ScrollTop,
     /// Jump the focused terminal's viewport back to the live bottom.
@@ -268,6 +273,11 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef {
         action: Action::CopyAgentName,
         name: "copy-agent-name",
+        default_chords: &[],
+    },
+    ActionDef {
+        action: Action::SendToDesktop,
+        name: "send-to-desktop",
         default_chords: &[],
     },
     ActionDef {

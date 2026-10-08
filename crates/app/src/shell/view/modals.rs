@@ -1,7 +1,8 @@
-//! Confirmation modals and the scrim that hosts them. Quit, tab-close and
-//! archive all confirm through the one centred [`modal`] overlay (so the three
-//! flows look and behave alike), driven by [`Shell::active_confirmation`] which
-//! picks the single armed confirmation in priority order.
+//! Confirmation modals and the scrim that hosts them. Quit, tab-close,
+//! archive and a Claude command all confirm through the one centred [`modal`]
+//! overlay (so the four flows look and behave alike), driven by
+//! [`Shell::active_confirmation`] which picks the single armed confirmation in
+//! priority order.
 
 use iced::widget::{button, center, container, mouse_area, opaque, row, stack, text};
 use iced::{Color, Element};
@@ -12,9 +13,10 @@ use crate::strings;
 
 impl Shell {
     /// The active confirmation card and the message to fire when its backdrop is
-    /// dismissed. Quit, tab-close and archive are all routed through the same
-    /// [`modal`] presentation for parity, in priority order (quit > tab-close >
-    /// archive — at most one is armed at a time); `view` wraps the base UI with
+    /// dismissed. Quit, tab-close, archive and a Claude command are all routed
+    /// through the same [`modal`] presentation for parity, in priority order
+    /// (quit > tab-close > archive > Claude command — at most one is armed at a
+    /// time); `view` wraps the base UI with
     /// it. `pub(in crate::shell)` so the shell's own tests can assert the
     /// routing.
     pub(in crate::shell) fn active_confirmation(&self) -> Option<(Element<'_, Message>, Message)> {
@@ -27,6 +29,10 @@ impl Shell {
             .or_else(|| {
                 self.archive_confirmation()
                     .map(|card| (card, Message::CancelArchive))
+            })
+            .or_else(|| {
+                self.claude_command_confirmation()
+                    .map(|card| (card, Message::CancelClaudeCommand))
             })
     }
 
@@ -80,6 +86,31 @@ impl Shell {
             button::primary,
             Message::ConfirmArchive,
             Message::CancelArchive,
+        ))
+    }
+
+    /// The card naming the exact line about to be typed into a Claude session,
+    /// and the tab it lands in. `None` when no command is armed.
+    fn claude_command_confirmation(&self) -> Option<Element<'_, Message>> {
+        let pending = self.claude_command.as_ref()?;
+        let line = pending.command.line();
+        let prompt = match &pending.refused {
+            Some(refusal) => strings::claude_command_refused(&line, &refusal.to_string()),
+            None => {
+                let workspace = &self.core.workspace;
+                let title = workspace
+                    .tab_of(pending.session)
+                    .and_then(|index| workspace.tabs.get(index))
+                    .map_or("", |tab| tab.display_title());
+                strings::claude_command_prompt(&line, &clip(title, 24))
+            }
+        };
+        Some(Self::confirmation_bar(
+            prompt,
+            strings::SEND,
+            button::primary,
+            Message::ConfirmClaudeCommand,
+            Message::CancelClaudeCommand,
         ))
     }
 

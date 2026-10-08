@@ -40,6 +40,7 @@ neither tool may reach a state the keyboard cannot.
 | `ran` | the ladder applied it | `action` — the name that ran |
 | `inert` | nothing happened | `reason` — see below |
 | `overlay` | an open prompt consumed it | which prompt |
+| `refused` | a prompt's confirmation typed nothing; it stays open | which prompt, and `refusal` — why |
 | `typed` | bound to nothing, so it reached the focused terminal | |
 | `unbound` | nothing claimed it | |
 
@@ -55,7 +56,7 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing yet (`open-new-session` is the one) | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to | **create it**, then retry |
 
 Each handler that can refuse this way says so at its own refusal site.
 
@@ -71,7 +72,7 @@ selection, and `copy` runs on it.
 
 ## Answering an overlay
 
-`escape` usually cancels; `enter` usually confirms. Four cautions:
+`escape` usually cancels; `enter` usually confirms. Five cautions:
 
 - On **`quit-confirm`**, `enter` quits the app — killing every session and the
   connection you are speaking over.
@@ -94,6 +95,10 @@ selection, and `copy` runs on it.
   listed only when the focused pane has a named Claude in front of it, which
   shifts every entry below it by one. The menu closes if its pane loses focus,
   so a `focus_pane` call while it is open dismisses it.
+- On **`claude-command-confirm`**, `enter` types the slash command the
+  prompt names into its Claude session — or answers `refused` with the reason,
+  leaving the prompt open, when Claude went busy or a draft appeared meanwhile;
+  see [`claude_command`](./live-bridge.md#a-claude-slash-command-confirmed).
 - Every other overlay is exitable from the keyboard, and a test sweep derived
   from the overlay enumeration — not a hand-written list — is what keeps it
   that way. A new overlay added without an exit fails there.

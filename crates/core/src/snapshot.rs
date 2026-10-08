@@ -16,6 +16,7 @@
 
 use std::collections::BTreeMap;
 
+use termherd_claude::color::ClaudeColor;
 use termherd_claude::session_file::SessionFile;
 
 use crate::app::SessionStatus;
@@ -242,6 +243,10 @@ pub struct PaneSnapshot {
     pub status: SessionStatus,
     /// Who the Claude in front of this pane is; all `None` when none is.
     pub identity: ClaudeIdentity,
+    /// The colour `/color` gave this pane's conversation, read from its
+    /// transcript by the last scan. `None` for a shell, an unscanned
+    /// conversation, or one with no colour of its own.
+    pub color: Option<ClaudeColor>,
 }
 
 /// What identifies the Claude process a pane runs, to a peer that wants to

@@ -41,7 +41,15 @@ session, `❯` for a shell — a title derived from its session, and a `×` to c
 it. In a split tab, the mark follows the focused pane. The kind is never part
 of the title, so renaming a tab or a retitle from Claude cannot lose it: a
 fresh tab is titled after its project alone. Hovering a tab shows the
-session's fuller description — the card the sidebar shows. When a Claude
+session's fuller description — the card the sidebar shows, for a fresh Claude
+tab as soon as the sidebar lists its session. Should `/clear` or a
+plan-accept give the conversation a new id, the tab picks it up from
+Claude's own session file the next time TermHerd reads it — hovering the
+tab, or clicking a row in the sidebar — and keeps it after Claude exits
+(not on Windows, where that file cannot be matched to its pane). Until then
+the sidebar's status dot stays on the old row. Reopening a closed Claude tab
+resumes the conversation it held last, once the sidebar lists it; a fresh
+tab closed before then comes back as a new conversation. When a Claude
 runs in it, the card also names its agent (`Agent: termherd-b0`), the peer
 name other Claude sessions address it by; the `copy-agent-name` action puts
 it on the clipboard. In a split tab, the card names the first pane's agent.
@@ -84,6 +92,27 @@ with it.
 The menu opens in
 the middle of the window rather than beside the tab, and screen readers do not
 see it: it is drawn by termherd, not by the operating system.
+
+**A Claude tab wears the colour its `/color` set.** Run `/color green` in a
+Claude session and its tab is outlined in green, and its sidebar row gets a
+green bar, within about half a second — the time the sidebar takes to notice
+the transcript changed. `/color default` takes the colour away again. The
+colour is Claude's, read from the session's transcript: there is no setting
+for it and no way to override it from TermHerd. In a split tab the focused
+pane decides, as it does for the kind mark, so a shell focused beside a
+coloured Claude leaves the tab uncoloured.
+
+The eight colours are tuned for each theme, but red and green are both among
+them, so the colour is never the only cue: the hover card names it
+(`Colour: green`) — in a split, the colour the outline shows, the focused
+pane's. A shell tab has no colour yet.
+
+**TermHerd asks Claude rather than overriding it.** Where a change belongs to
+Claude — today, handing a session to the desktop app with `send-to-desktop` —
+TermHerd types Claude's own slash command for you, behind a prompt that shows
+the exact line first. <kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops it.
+It is offered only while that Claude is idle with nothing typed in its prompt; a
+draft that appears meanwhile keeps the prompt open and says so.
 
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on
