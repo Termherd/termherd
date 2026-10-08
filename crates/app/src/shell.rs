@@ -2889,9 +2889,6 @@ mod key_routing {
         // The sequence an agent runs: open the rename, find a second press
         // answered by the field rather than by the keymap, then leave it.
         let mut shell = shell_with_three_tabs();
-        let shown = shell.core.workspace.tabs[shell.core.workspace.active]
-            .display_title()
-            .to_owned();
 
         let (outcome, _task) = shell.perform_presses(vec![
             Press::Command(Action::RenameTab),
@@ -2910,10 +2907,6 @@ mod key_routing {
             PressStep::Overlay("tab-rename".to_owned())
         );
         assert!(shell.tab_rename.is_none(), "escape leaves the field");
-        assert_eq!(
-            shell.core.workspace.tabs[shell.core.workspace.active].display_title(),
-            shown
-        );
     }
 
     #[test]

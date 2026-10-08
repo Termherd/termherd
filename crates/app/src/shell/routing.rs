@@ -91,7 +91,8 @@ pub(super) enum Inertia {
     NoSurface,
     /// The action is wired, but refused before acting because a precondition was
     /// absent — no focused session to derive a repo from, no closed tab to
-    /// reopen, nothing to scroll, nothing selected to copy, no agent name.
+    /// reopen, no tab to rename, nothing to scroll, nothing selected to copy,
+    /// no agent name.
     ///
     /// Deliberately narrower than "had no visible effect": an action whose event
     /// `core` applies and absorbs (a tab index past the open tabs) *did* run, and

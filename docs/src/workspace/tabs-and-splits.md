@@ -48,7 +48,10 @@ it on the clipboard. In a split tab, the card names the first pane's agent.
 **Rename a tab** by double-clicking it, or with the `rename-tab` chord for the
 focused one. Either opens an inline field holding the tab's current name;
 <kbd>Enter</kbd> or a click elsewhere keeps the edit, <kbd>Escape</kbd> drops
-it, and an empty name gives the tab back its derived title.
+it, and an empty name gives the tab back its derived title. The tab strip does
+not scroll yet: with more tabs than fit, the focused one can sit past its right
+edge, and the chord then opens a field you cannot see. It still holds the
+keyboard, so <kbd>Escape</kbd> leaves it.
 
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on
