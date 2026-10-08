@@ -129,12 +129,13 @@ impl Shell {
         Some(bar.into())
     }
 
-    /// The hover card for a tab. A tab that resumes a browsed session
-    /// shows the [`session_card`] the sidebar does, with the live [`CardFacts`] of its
-    /// first pane — one derive (the core resolves the record via [`termherd_core::App::tab_record`]), no divergent
-    /// formatting. A shell or a fresh, not-yet-scanned session has no record, so
-    /// it falls back to a minimal card with the full title and the working
-    /// directory it runs in, under the same live facts.
+    /// The hover card for a tab. A tab that resumes a browsed session shows the
+    /// [`session_card`] the sidebar does, with the live [`CardFacts`] of its first
+    /// pane — one derive (the core resolves the record via
+    /// [`termherd_core::App::tab_record`]), no divergent formatting. A shell or a
+    /// fresh, not-yet-scanned session has no record, so it falls back to a minimal
+    /// card with the full title and the working directory it runs in, under the
+    /// same live facts.
     fn tab_hover_card(
         &self,
         index: usize,

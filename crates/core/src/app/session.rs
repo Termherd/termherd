@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::time::SystemTime;
 
-use super::snapshot::{identity_of, proves};
+use super::snapshot::{identity_of, proven};
 use crate::snapshot::SessionKind;
 use crate::workspace::SplitDir;
 use termherd_claude::session_file::SessionFile;
@@ -86,13 +86,11 @@ impl LiveSession {
     /// front of this pane is the Claude that wrote it. Called whenever either
     /// side of the proof changes.
     fn remember_proven_id(&mut self) {
-        let (Some(job), Some(file)) = (&self.foreground, &self.session_file) else {
-            return;
-        };
-        if let Some(id) = file.session_id.as_deref().filter(|_| proves(job, file))
-            && self.proven_session_id.as_deref() != Some(id)
+        if let Some(id) = self
+            .proven_session_file()
+            .and_then(|f| f.session_id.clone())
         {
-            self.proven_session_id = Some(id.to_owned());
+            self.proven_session_id = Some(id);
         }
     }
 
@@ -105,9 +103,7 @@ impl LiveSession {
     /// The cached session file, only when it proves the job in front of this
     /// pane is the Claude that wrote it.
     fn proven_session_file(&self) -> Option<&SessionFile> {
-        let job = self.foreground.as_ref()?;
-        let file = self.session_file.as_ref()?;
-        proves(job, file).then_some(file)
+        proven(self.foreground.as_ref(), self.session_file.as_ref())
     }
 
     /// Whether this session still holds a **running foreground process** whose

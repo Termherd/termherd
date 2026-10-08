@@ -54,9 +54,10 @@ it on the clipboard. The card also says how long the tab has run, counted from
 the moment termherd started its terminal (`Running for 1h 12m`), and which
 Claude Code version runs in it: the one the running Claude reports, else the
 one its transcript last recorded. Model and effort come from the transcript,
-as in the sidebar card. Of these, a shell tab shows only its running time,
-beside its working directory. In a split tab, the card describes the first
-pane.
+as in the sidebar card. A plain shell tab, with no Claude running in it,
+shows only its running time beside its working directory; a shell tab in
+which `claude` was typed by hand also shows its agent and version while that
+Claude runs. In a split tab, the card describes the first pane.
 
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on

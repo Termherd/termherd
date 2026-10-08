@@ -490,7 +490,9 @@ mod tests {
         }
 
         #[test]
-        fn the_last_reply_names_the_model(models in prop::collection::vec("[a-z0-9-]{1,20}", 1..8)) {
+        fn the_last_reply_names_the_model(
+            models in prop::collection::vec("[a-z0-9-]{1,20}", 1..8),
+        ) {
             let mut lines = vec![user_line("prompt")];
             lines.extend(models.iter().map(|m| reply(serde_json::json!({ "model": m }))));
             let d = digest_session(&lines.join("\n")).unwrap();

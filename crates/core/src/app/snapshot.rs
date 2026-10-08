@@ -215,24 +215,27 @@ pub(super) fn identity_of(
     job: Option<&ForegroundJob>,
     file: Option<&SessionFile>,
 ) -> ClaudeIdentity {
-    let (Some(job), Some(file)) = (job, file) else {
+    let Some(file) = proven(job, file) else {
         return ClaudeIdentity::default();
     };
-    if !proves(job, file) {
-        return ClaudeIdentity::default();
-    }
     ClaudeIdentity {
-        pid: Some(job.pid),
+        pid: Some(file.pid),
         peer_name: file.name.clone(),
         session_id: file.session_id.clone(),
     }
 }
 
-/// Whether `file` was written by `job`, the process in front of a pane.
-pub(super) fn proves(job: &ForegroundJob, file: &SessionFile) -> bool {
+/// `file`, only when it was written by `job`, the process in front of a pane.
+/// The one place that proof is decided.
+pub(super) fn proven<'a>(
+    job: Option<&ForegroundJob>,
+    file: Option<&'a SessionFile>,
+) -> Option<&'a SessionFile> {
+    let (job, file) = (job?, file?);
     // A crashed Claude leaves its file behind, and its pid free for whatever
     // the OS starts next: only the writer's own start time tells them apart.
-    file.pid == job.pid && job.started.is_some() && job.started == file.proc_start
+    let proves = file.pid == job.pid && job.started.is_some() && job.started == file.proc_start;
+    proves.then_some(file)
 }
 
 #[cfg(test)]

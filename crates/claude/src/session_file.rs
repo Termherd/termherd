@@ -5,9 +5,10 @@
 //! (`ListAgents` / `SendMessage`) is written down. Reading the file is the
 //! scan adapter's job; this module only decodes it.
 
-/// What termherd takes from a session file: the process it describes, the
-/// two identities a peer needs, and the Claude Code version it runs. A field Claude Code did not write is `None`,
-/// since an older CLI or a session still starting writes fewer of them.
+/// What termherd takes from a session file: the process it describes, the two
+/// identities a peer needs, and the Claude Code version it runs. A field Claude
+/// Code did not write is `None`, since an older CLI or a session still starting
+/// writes fewer of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionFile {
     /// The Claude process id, as the file itself states it.
