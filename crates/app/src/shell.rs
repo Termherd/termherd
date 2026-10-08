@@ -4342,6 +4342,40 @@ mod key_routing {
     }
 
     #[test]
+    fn either_rename_leaves_an_input_method_commit_for_its_field() {
+        // The view enables the terminal's IME area with `accepts_terminal_input`.
+        let emoji = iced::Event::InputMethod(iced::advanced::input_method::Event::Commit(
+            "🚀".to_string(),
+        ));
+        let (mut shell, _pty) = shell_with_terminal();
+        let taken = |shell: &Shell| ime::terminal_commit(shell.accepts_terminal_input(), &emoji);
+        assert_eq!(taken(&shell), Some("🚀"));
+
+        let _ = shell.update(Message::StartTabRename(0));
+        assert!(shell.tab_rename.is_some());
+        assert_eq!(taken(&shell), None, "a tab rename owns the commit");
+        let _ = shell.update(Message::CancelTabRename);
+
+        let _ = shell.update(Message::StartRename {
+            session: "sid".to_string(),
+            current: "build".to_string(),
+        });
+        assert_eq!(taken(&shell), None, "a session rename owns the commit");
+
+        let _ = shell.update(Message::CancelRename);
+        assert_eq!(taken(&shell), Some("🚀"));
+    }
+
+    #[test]
+    fn an_emoji_typed_into_the_tab_rename_becomes_the_title() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.update(Message::StartTabRename(0));
+        let _ = shell.update(Message::TabRenameInput("Build 🚀".to_string()));
+        let _ = shell.update(Message::CommitTabRename);
+        assert_eq!(shell.core.workspace.tabs[0].display_title(), "Build 🚀");
+    }
+
+    #[test]
     fn clicking_elsewhere_cancels_an_inline_rename() {
         // Clicking another part of the UI while renaming (here: focusing the
         // search box) discards the in-progress edit — blur cancels.

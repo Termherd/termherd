@@ -438,11 +438,13 @@ exists). Do not relax them locally.
   require-time singletons. Construct dependencies in `main()` and inject.
 - **One logging stack:** `tracing`. No `println!` outside tests.
 - **`unsafe_code = "deny"`** workspace-wide. The lone sanctioned exception is
-  `crates/app/src/macos.rs` (AppKit FFI for the Cmd+Q quit path): a `#![cfg(…)]`
-  module with a module-scoped `#![allow(unsafe_code)]` and a `// SAFETY:` note
-  on every block. Any further exception needs the same — OS-FFI that can't be
-  expressed safely, quarantined in its own `cfg`-gated module — not a relaxation
-  scattered through otherwise-safe code.
+  `crates/app/src/macos.rs` (AppKit FFI for the Cmd+Q quit path, and the
+  `insertText:` relay that turns Character Viewer text winit drops into an
+  input-method commit): a `#![cfg(…)]` module with a module-scoped
+  `#![allow(unsafe_code)]` and a `// SAFETY:` note on every block. Any further
+  exception needs the same — OS-FFI that can't be expressed safely, quarantined
+  in its own `cfg`-gated module — not a relaxation scattered through
+  otherwise-safe code.
 - **A `cfg`-gated API is not compiled by the PR gate — cross-check it
   yourself.** The `cross-os` job does not run on pull requests, so
   `cargo check --target x86_64-pc-windows-msvc` is the *only* thing standing

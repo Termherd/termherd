@@ -139,6 +139,7 @@ across layouts.
 | <kbd>Shift</kbd>+drag in such a program | the terminal's own selection, as a plain drag is at a shell |
 | <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click | open a URL, hidden (OSC 8) hyperlink or file path under the pointer |
 | Drag a tab | reorder it |
+| <kbd>Ctrl</kbd>+<kbd>Cmd</kbd>+<kbd>Space</kbd> (macOS) | open the Character Viewer (**Edit → Emoji & Symbols**); a picked emoji goes to the focused rename field or terminal |
 
 <kbd>Escape</kbd> and <kbd>Enter</kbd> are bound to no *action* on purpose:
 they belong to whichever overlay is open. That is also what makes them the only

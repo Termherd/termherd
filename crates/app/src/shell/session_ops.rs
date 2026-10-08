@@ -168,21 +168,29 @@ impl Shell {
         match event {
             window::Event::Opened { .. } => {
                 // Reroute the macOS menu Quit item (and ⌘Q) through the iced
-                // runtime. Done here, not in the boot closure: iced constructs
-                // the app state *before* `run_app`, so the boot closure runs
-                // ahead of winit's `applicationDidFinishLaunching` (where the
-                // default menu is installed). By the time the window is `Opened`
-                // the event loop is running and the menu exists, and we are on
-                // the main thread. Fires once (single window); no-op on other
-                // platforms.
+                // runtime, give Ctrl+Cmd+Space its Character Viewer menu item,
+                // and route the text it inserts, which winit would drop,
+                // through the input method. Done here, not in the boot closure: iced
+                // constructs the app state *before* `run_app`, so the boot
+                // closure runs ahead of winit's `applicationDidFinishLaunching`
+                // (where the default menu is installed) and ahead of the
+                // window's view. By the time the window is `Opened` both
+                // exist, and we are on the main thread. Fires once (single
+                // window); no-op on other platforms.
                 #[cfg(target_os = "macos")]
                 match objc2_foundation::MainThreadMarker::new() {
-                    Some(mtm) => crate::macos::route_quit_through_close(mtm),
+                    Some(mtm) => {
+                        crate::macos::route_quit_through_close(mtm);
+                        crate::macos::add_character_palette_item(mtm);
+                        crate::macos::route_stray_text_through_ime(mtm);
+                    }
                     // We expect to be on the main thread here; if not, skipping
                     // would silently leave Cmd+Q on AppKit's hard-kill
-                    // `terminate:` with no trace explaining why. Log it.
+                    // `terminate:` and Character Viewer text dropped, with no
+                    // trace explaining why. Log it.
                     None => tracing::warn!(
-                        "window Opened off the main thread; Cmd+Q stays on AppKit terminate:"
+                        "window Opened off the main thread; Cmd+Q stays on AppKit \
+                         terminate: and Character Viewer text stays dropped"
                     ),
                 }
                 Task::none()
