@@ -956,15 +956,8 @@ impl Shell {
                     // No auto-close: the dead terminal stays on screen.
                     Task::none()
                 } else {
-                    // The pane auto-closed on its clean shell exit — mirror
-                    // `close_tab`'s shell-side hygiene for the vanished session.
-                    self.screens.remove(&session);
-                    if self.core.workspace.tabs.len() != tabs_before {
-                        // Tab indices shifted under any pending close
-                        // confirmation; dropping the prompt is the safe
-                        // reaction (the user can re-request).
-                        self.closing = None;
-                    }
+                    // The pane auto-closed on its clean shell exit.
+                    self.forget_vanished_pane(session, tabs_before);
                     Task::batch([self.perform(effects), self.resize_panes()])
                 }
             }

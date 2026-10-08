@@ -5,6 +5,8 @@
 
 use iced::{Task, window};
 
+use termherd_core::workspace::SessionId;
+
 use super::{Focus, Message, Shell};
 
 impl Shell {
@@ -62,6 +64,18 @@ impl Shell {
         }
         let kill = self.perform(effects);
         Task::batch([kill, self.resize_panes()])
+    }
+
+    /// The shell-side hygiene for a pane `core` closed without the user
+    /// closing it from its tab: drop its cached screen, as `close_tab` does,
+    /// and drop a pending close confirmation when the strip lost a tab
+    /// (`tabs_before` was its length), since the prompt's index may now name
+    /// another tab; the user can re-request.
+    pub(super) fn forget_vanished_pane(&mut self, session: SessionId, tabs_before: usize) {
+        self.screens.remove(&session);
+        if self.core.workspace.tabs.len() != tabs_before {
+            self.closing = None;
+        }
     }
 
     /// Switch to the tab at `index` and return focus to the terminal. Switching
