@@ -1379,9 +1379,15 @@ impl Shell {
             .get(&session)
             .and_then(|live| live.foreground.as_ref())
             .and_then(|job| self.session_file(job.pid));
-        let _ = self
+        let effects = self
             .core
             .apply(termherd_core::Event::SessionFileRead { session, file });
+        // Callers here hold no `Task` to carry an effect out with, so an effect
+        // this event starts emitting must fail the tests rather than vanish.
+        debug_assert!(
+            effects.is_empty(),
+            "SessionFileRead now emits effects: route them through `perform`"
+        );
     }
 
     /// Put the terminal selection on the clipboard (FR4). `None` when there is
