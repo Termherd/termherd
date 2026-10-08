@@ -61,6 +61,11 @@ impl Shell {
         if let Some((card, on_cancel)) = self.active_confirmation() {
             return modal(base, card, on_cancel);
         }
+        // Below the confirmations and above settings, as on the keyboard
+        // ladder, so the menu drawn is the one that answers the keys.
+        if let Some(menu) = self.tab_menu_card() {
+            return modal(base, menu, Message::CloseTabMenu);
+        }
         if self.settings_open {
             return modal(base, self.settings_panel(), Message::CloseSettings);
         }

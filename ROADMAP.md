@@ -100,7 +100,6 @@ issues #18–#29.
 | [F-session-grid](#f-session-grid) | feature | workspace | ☐ | A layout preset over the pane model. |
 | [F-session-reveal](#f-session-reveal) | feature | sessions, workspace | ☐ | Reveal a session's directory and transcript in the OS file manager. |
 | [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
-| [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ☐ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
 | [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ☐ | The tab hover card shows agent name, model, effort, version and elapsed time. |
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
@@ -118,6 +117,7 @@ issues #18–#29.
 | [F-mcp-snapshot](#f-mcp-snapshot) | feature | mcp, workspace | ✅ | The perception rung: a filterable, light-by-default view of the whole app. |
 | [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) | feature | mcp, workspace | ✅ | One model, two readers: the capture dump is now the MCP snapshot. |
 | [F-mcp-terminal-sync](#f-mcp-terminal-sync) | feature | mcp, terminal | ✅ | The wait rung: block until a session's status settles, then read its text. |
+| [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ✅ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
 | [F-tab-kind-icon](#f-tab-kind-icon) | feature | workspace | ✅ | A kind mark beside each tab's status dot, instead of a glyph in its title. |
 | [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ✅ | A Claude tab's title follows the session name Claude holds. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
@@ -1229,21 +1229,6 @@ its shell afterwards, since success is not observable. macOS and Windows x64
 only. Torture report:
 `.personal/feature-torture/reports/F-session-send-desktop.md`.
 
-<a id="f-tab-context-menu"></a>
-
-### F-tab-context-menu
-
-A per-tab action menu, from a right-click or an `open-tab-menu` action.
-
-An in-app overlay rather than a native OS menu, so `press_keys` / `run_action`
-can drive it (#340). Every entry is an existing keymap action; the entries
-arrive with their own features — [F-keymap-rename-tab](#f-keymap-rename-tab),
-[F-session-accent-colors](#f-session-accent-colors),
-[F-session-reveal](#f-session-reveal), [F-prompt-history](#f-prompt-history),
-[F-copy-agent-name](#f-copy-agent-name),
-[F-session-send-desktop](#f-session-send-desktop). Torture report:
-`.personal/feature-torture/reports/F-tab-context-menu.md`.
-
 <a id="f-tab-hover-details"></a>
 
 ### F-tab-hover-details
@@ -1686,6 +1671,36 @@ is not an error — the tool reports `{ status, timed_out: true }` with the
 session's current status, so an agent can choose between waiting again and
 giving up. Bounds are the caller's: `timeout_ms` (default 30 s) capped at 5 min
 (Q7). Depends on #193; unblocks #196
+
+<a id="f-tab-context-menu"></a>
+
+### F-tab-context-menu
+
+A per-tab action menu, from a right-click or an `open-tab-menu` action.
+
+An in-app overlay rather than a native OS menu, so `press_keys` / `run_action`
+can drive it (#340). Every entry is an existing keymap action; the entries
+arrive with their own features — [F-keymap-rename-tab](#f-keymap-rename-tab),
+[F-session-accent-colors](#f-session-accent-colors),
+[F-session-reveal](#f-session-reveal), [F-prompt-history](#f-prompt-history),
+[F-copy-agent-name](#f-copy-agent-name),
+[F-session-send-desktop](#f-session-send-desktop). Torture report:
+`.personal/feature-torture/reports/F-tab-context-menu.md`.
+
+Shipped (#340): the menu, bound to `mod+shift+m`. A first `mod+.` binding
+never fired on French AZERTY: a chord is named from the key without Shift,
+so `.` (Shift+`;` there) arrives as `;`; a letter is reachable on every
+layout. A
+right-click focuses the tab first, since every entry acts on focus, and the
+menu is anchored on that pane: it closes when the pane loses focus. It is a
+`tab-menu` rung on the keyboard ladder that answers the arrows, `enter` and
+`escape` itself, so MCP can drive it end to end; `enter` reports the verdict
+of the entry it ran. Entries today: rename tab, copy agent name (only when the
+action would find a name), new shell / new Claude session here, split right /
+down, close pane. The list is data in
+`shell::tab_menu`: each later entry (colour, reveal, history, send to Claude
+Desktop) is one line there once its action exists. Not yet: the menu opens
+centred rather than beside the tab, and a screen reader cannot see it.
 
 <a id="f-tab-kind-icon"></a>
 

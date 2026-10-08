@@ -29,6 +29,7 @@ terminal, or many, split vertically and horizontally.
 | Reopen the tab you closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 | Close focused pane | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>W</kbd> |
 | Rename the focused tab | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> |
+| Open the focused tab's menu | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> |
 
 **Jump-to-tab is matched by physical key position**, not by the character the
 key produces. On AZERTY and QWERTZ, where the number row produces `&`, `é`, …
@@ -108,6 +109,39 @@ silently: a notice under the tab strip says why, until you dismiss it with
 `✕`. A blank name, or the name the tab already shows, asks nothing. Once the
 Claude in a tab has exited and its shell is back in front, the tab is
 renamed like a shell tab.
+
+**Right-click a tab for its menu**, or press `open-tab-menu` for the focused
+one. A right-click focuses the tab first, because every entry acts on the
+focused tab:
+
+| Entry | Runs | Shown on |
+| --- | --- | --- |
+| Rename tab | `rename-tab` | every tab |
+| Copy agent name | `copy-agent-name` | a tab whose focused pane has a named Claude in front |
+| New shell here | `new-shell-here` | every tab |
+| New Claude session here | `new-claude-session-here` | every tab |
+| Split right | `split-vertical` | every tab |
+| Split down | `split-horizontal` | every tab |
+| Close pane | `close-focused` | every tab |
+
+Each entry is the keyboard action of the same name, so it does exactly what
+that action's chord does — *Rename tab* opens the field above, which on a
+Claude tab asks Claude to `/rename`; *Close pane* closes the focused pane of a
+split and the whole tab otherwise, asking first as the chord does.
+<kbd>↑</kbd> and <kbd>↓</kbd> move the selection, <kbd>Enter</kbd> runs it,
+<kbd>Escape</kbd> or a click outside the menu closes it without running
+anything.
+
+*Copy agent name* is listed when the action would find a name at the moment
+the menu opens: a Claude runs in front of the focused pane and has written its
+session file, whether the pane was opened as a Claude session or as a shell.
+It never appears on Windows, where no Claude is ever named. The menu belongs
+to the pane it opened over: if that pane closes or loses focus, the menu goes
+with it.
+
+The menu opens in
+the middle of the window rather than beside the tab, and screen readers do not
+see it: it is drawn by termherd, not by the operating system.
 
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on

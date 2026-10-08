@@ -543,4 +543,58 @@ mod tests {
             Some(KeyChord::new("c", keymap::MOD_CMD))
         );
     }
+
+    /// What the default keymap does with a press, built the way iced hands it
+    /// over: `key` is winit's `key_without_modifiers`, so Shift never changes
+    /// the character it names.
+    fn default_action_of(
+        platform: keymap::Platform,
+        key: &str,
+        physical: Code,
+        modifiers: Modifiers,
+    ) -> Option<termherd_core::Action> {
+        let chord = chord_of(
+            &Key::Character(key.into()),
+            &Physical::Code(physical),
+            modifiers,
+        )?;
+        keymap::default_bindings(platform)
+            .into_iter()
+            .find_map(|(bound, action)| (bound == chord).then_some(action))
+    }
+
+    #[test]
+    fn the_tab_menu_chord_is_reachable_from_a_real_press_on_qwerty_and_azerty() {
+        use keymap::Platform;
+        use termherd_core::Action;
+        let cmd_shift = Modifiers::LOGO | Modifiers::SHIFT;
+        let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
+        // QWERTY: M sits on KeyM. AZERTY: the M key is where QWERTY has `;`.
+        for physical in [Code::KeyM, Code::Semicolon] {
+            assert_eq!(
+                default_action_of(Platform::MacOs, "m", physical, cmd_shift),
+                Some(Action::OpenTabMenu),
+                "{physical:?} on macOS"
+            );
+            assert_eq!(
+                default_action_of(Platform::Other, "m", physical, ctrl_shift),
+                Some(Action::OpenTabMenu),
+                "{physical:?} on Windows and Linux"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shifted_punctuation_chord_arrives_as_its_unshifted_key() {
+        // Why `.` cannot be a default: on AZERTY it is Shift+`;`, and the key
+        // a press reports drops the Shift, so Cmd+Shift+`;` names `;`.
+        assert_eq!(
+            chord_of(
+                &Key::Character(";".into()),
+                &Physical::Code(Code::Comma),
+                Modifiers::LOGO | Modifiers::SHIFT,
+            ),
+            Some(KeyChord::new(";", keymap::MOD_CMD | keymap::MOD_SHIFT))
+        );
+    }
 }

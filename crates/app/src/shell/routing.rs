@@ -7,7 +7,7 @@ use iced::advanced::widget::{operate, operation::focusable};
 use iced::keyboard::{Key, key::Named};
 use iced::{Task, keyboard};
 use termherd_core::workspace::{Direction, SplitDir};
-use termherd_core::{Action, ClaudeCommand, ScrollTarget};
+use termherd_core::{Action, ClaudeCommand, ScrollTarget, keymap};
 use termherd_pty::TermKey;
 
 use super::input::{chord_of, key_mods, numpad_char, to_term_key};
@@ -44,6 +44,9 @@ pub(super) enum KeyboardOwner {
     Archive,
     /// The confirmation naming a slash command about to be typed into Claude.
     ClaudeCommand,
+    /// The tab context menu, which answers the arrows and Enter itself rather
+    /// than through a widget's submit, which a synthesised key never reaches.
+    TabMenu,
     /// The settings panel.
     Settings,
     /// The document editor, which handles its own keys.
@@ -58,13 +61,14 @@ impl KeyboardOwner {
     /// `match` below: a new variant fails to compile there, in this file, where
     /// this array is the next thing the author reads.
     #[cfg(test)]
-    pub(super) const ALL: [Self; 8] = [
+    pub(super) const ALL: [Self; 9] = [
         Self::TabRename,
         Self::SessionRename,
         Self::Quit,
         Self::TabClose(0),
         Self::Archive,
         Self::ClaudeCommand,
+        Self::TabMenu,
         Self::Settings,
         Self::Doc,
     ];
@@ -78,6 +82,7 @@ impl KeyboardOwner {
             Self::TabClose(_) => "tab-close-confirm",
             Self::Archive => "archive-confirm",
             Self::ClaudeCommand => "claude-command-confirm",
+            Self::TabMenu => "tab-menu",
             Self::Settings => "settings",
             Self::Doc => "doc-editor",
         }
@@ -95,8 +100,8 @@ pub(super) enum Inertia {
     NoSurface,
     /// The action is wired, but refused before acting because a precondition was
     /// absent — no focused session to derive a repo from, no closed tab to
-    /// reopen, no tab to rename, nothing to scroll, nothing selected to copy,
-    /// no agent name, no idle Claude to send a command to.
+    /// reopen, no tab to rename or open a menu on, nothing to scroll, nothing
+    /// selected to copy, no agent name, no idle Claude to send a command to.
     ///
     /// Deliberately narrower than "had no visible effect": an action whose event
     /// `core` applies and absorbs (a tab index past the open tabs) *did* run, and
@@ -175,7 +180,7 @@ pub(super) fn is_enter(event: &keyboard::Event) -> bool {
 /// Modifiers are ignored, so `Shift+Escape` and `Cmd+Escape` leave too. No
 /// platform binds them to anything an overlay could mean, and a caller
 /// fumbling a modifier while trying to escape should still escape.
-fn is_escape(event: &keyboard::Event) -> bool {
+pub(super) fn is_escape(event: &keyboard::Event) -> bool {
     matches!(
         event,
         keyboard::Event::KeyPressed {
@@ -215,6 +220,10 @@ impl Shell {
             Action::RenameTab => self
                 .start_tab_rename(self.core.workspace.active)
                 .ok_or(Inertia::NoContext)?,
+            Action::OpenTabMenu => {
+                self.open_tab_menu().ok_or(Inertia::NoContext)?;
+                Task::none()
+            }
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -348,6 +357,9 @@ impl Shell {
         if self.claude_command.is_some() {
             return Some(KeyboardOwner::ClaudeCommand);
         }
+        if self.live_tab_menu().is_some() {
+            return Some(KeyboardOwner::TabMenu);
+        }
         if self.settings_open {
             return Some(KeyboardOwner::Settings);
         }
@@ -359,23 +371,28 @@ impl Shell {
 
     /// Hand one key press to the overlay that owns the keyboard. The key is
     /// consumed either way — acted on or swallowed — and never leaks to the
-    /// terminal beneath the prompt.
+    /// terminal beneath the prompt. Reported as the overlay's unless the
+    /// overlay ran an action and answers with that action's own verdict.
     fn overlay_key(
         &mut self,
         owner: KeyboardOwner,
         event: &keyboard::Event,
     ) -> (KeyVerdict, Task<Message>) {
-        let task = match owner {
-            KeyboardOwner::TabRename => self.tab_rename_key(event),
-            KeyboardOwner::SessionRename => self.session_rename_key(event),
-            KeyboardOwner::Quit => self.quit_confirm_key(event),
-            KeyboardOwner::TabClose(index) => self.tab_close_confirm_key(event, index),
-            KeyboardOwner::Archive => self.archive_confirm_key(event),
-            KeyboardOwner::ClaudeCommand => return self.claude_command_key(event),
-            KeyboardOwner::Settings => self.settings_key(event),
-            KeyboardOwner::Doc => self.open_doc_key(event),
+        let (verdict, task) = match owner {
+            KeyboardOwner::TabRename => (None, self.tab_rename_key(event)),
+            KeyboardOwner::SessionRename => (None, self.session_rename_key(event)),
+            KeyboardOwner::Quit => (None, self.quit_confirm_key(event)),
+            KeyboardOwner::TabClose(index) => (None, self.tab_close_confirm_key(event, index)),
+            KeyboardOwner::Archive => (None, self.archive_confirm_key(event)),
+            KeyboardOwner::ClaudeCommand => {
+                let (verdict, task) = self.claude_command_key(event);
+                (Some(verdict), task)
+            }
+            KeyboardOwner::TabMenu => self.tab_menu_key(event),
+            KeyboardOwner::Settings => (None, self.settings_key(event)),
+            KeyboardOwner::Doc => (None, self.open_doc_key(event)),
         };
-        (KeyVerdict::Overlay(owner.label()), task)
+        (verdict.unwrap_or(KeyVerdict::Overlay(owner.label())), task)
     }
 
     /// Escape abandons a tab rename; Enter and a blur commit it elsewhere, so
@@ -496,10 +513,16 @@ impl Shell {
         else {
             return (KeyVerdict::Ignored, Task::none());
         };
-        if let Some(chord) = chord_of(&key, &physical_key, modifiers)
-            && let Some(action) = self.keymap.lookup(&chord)
-        {
-            return self.dispatch_action(action);
+        if let Some(chord) = chord_of(&key, &physical_key, modifiers) {
+            if let Some(action) = self.keymap.lookup(&chord) {
+                return self.dispatch_action(action);
+            }
+            // A shortcut that does nothing is otherwise silent, and the chord a
+            // press produces is not always the one its keycap suggests: Shift
+            // never changes the key named, so Cmd+Shift+`;` stays `;`.
+            if chord.mods & !keymap::MOD_SHIFT != 0 {
+                tracing::debug!(key = %chord.key, mods = chord.mods, "chord bound to no action");
+            }
         }
         if self.focus != Focus::Terminal {
             return (KeyVerdict::Ignored, Task::none());

@@ -134,15 +134,21 @@ impl Shell {
             .on_press(on_cancel)
             .style(button::text)
             .padding(6);
-        container(
+        modal_card(
             row![prompt, confirm, cancel]
                 .spacing(12)
                 .align_y(iced::Center),
         )
+    }
+}
+
+/// The card every [`modal`] shows its content on, so the prompts and the tab
+/// menu keep one look.
+pub(super) fn modal_card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content)
         .padding(6)
         .style(container::rounded_box)
         .into()
-    }
 }
 
 /// Overlay `content` as a centred modal over `base`, dimming everything behind

@@ -126,6 +126,9 @@ pub enum Action {
     /// Open the inline rename of the focused tab, seeded with its shown title.
     /// Inert when no tab is open.
     RenameTab,
+    /// Open the focused tab's context menu, whose entries are keymap actions.
+    /// Inert when no tab is open.
+    OpenTabMenu,
     /// Ask to hand the focused Claude session to the Claude desktop app by
     /// typing `/desktop` — behind the same confirmation as every command
     /// termherd types into Claude. Inert unless the focused pane is a Claude
@@ -299,6 +302,15 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::RenameTab,
         name: "rename-tab",
         default_chords: &["mod+shift+i"],
+    },
+    // A letter, not punctuation: a press names its key without Shift, so a
+    // character that takes Shift on some layout (`.` on AZERTY) is unreachable
+    // there. Ctrl+Shift+M is Ctrl+M (Enter) to a legacy terminal, which still
+    // reaches a program in the pane unshifted, as with `rename-tab`.
+    ActionDef {
+        action: Action::OpenTabMenu,
+        name: "open-tab-menu",
+        default_chords: &["mod+shift+m"],
     },
     ActionDef {
         action: Action::NewClaudeSessionHere,
@@ -873,6 +885,22 @@ mod tests {
         assert_eq!(
             Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new("i", MOD_CTRL | MOD_SHIFT)),
             Some(Action::RenameTab)
+        );
+    }
+
+    #[test]
+    fn defaults_bind_open_tab_menu_to_the_primary_modifier_shift_m_on_every_platform() {
+        assert_eq!(
+            Keymap::defaults_for(Platform::MacOs).lookup(&KeyChord::new("m", MOD_CMD | MOD_SHIFT)),
+            Some(Action::OpenTabMenu)
+        );
+        assert_eq!(
+            Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new("m", MOD_CTRL | MOD_SHIFT)),
+            Some(Action::OpenTabMenu)
+        );
+        assert_eq!(
+            Action::from_config_name("open-tab-menu"),
+            Some(Action::OpenTabMenu)
         );
     }
 
