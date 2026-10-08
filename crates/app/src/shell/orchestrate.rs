@@ -379,6 +379,7 @@ impl Shell {
     /// but is still gated on the ladder, so neither tool can reach a state the
     /// keyboard cannot.
     fn press(&mut self, press: Press) -> (PressStep, Task<Message>) {
+        self.drop_stale_tab_menu();
         match press {
             Press::Chord(chord) => match event_of(&chord) {
                 Some(event) => {

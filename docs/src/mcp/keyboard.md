@@ -56,7 +56,7 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing yet (`open-new-session` is the one) | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to | **create it**, then retry |
 
 Each handler that can refuse this way says so at its own refusal site.
 
@@ -72,7 +72,7 @@ selection, and `copy` runs on it.
 
 ## Answering an overlay
 
-`escape` usually cancels; `enter` usually confirms. Three cautions:
+`escape` usually cancels; `enter` usually confirms. Four cautions:
 
 - On **`quit-confirm`**, `enter` quits the app — killing every session and the
   connection you are speaking over.
@@ -84,6 +84,17 @@ selection, and `copy` runs on it.
   over MCP
   is a missing capability, tracked as
   [#246](https://github.com/Termherd/termherd/issues/246).
+- **`tab-menu`** (opened by `open-tab-menu`, or a human's right-click on a
+  tab) answers `up`, `down` and `enter` itself, so unlike the renames it is
+  fully drivable: `enter` closes the menu and runs the selected entry exactly
+  as `run_action` would run that entry's action. The `enter` reports what
+  that action did — `ran` with its name, or `inert` with its reason — and
+  every other press while the menu is open reports `overlay: "tab-menu"`.
+  The entries and their order are on the
+  [tabs page](../workspace/tabs-and-splits.md#tabs); *Copy agent name* is
+  listed only when the focused pane has a named Claude in front of it, which
+  shifts every entry below it by one. The menu closes if its pane loses focus,
+  so a `focus_pane` call while it is open dismisses it.
 - On **`claude-command-confirm`**, `enter` types the slash command the
   prompt names into its Claude session — or answers `refused` with the reason,
   leaving the prompt open, when Claude went busy or a draft appeared meanwhile;

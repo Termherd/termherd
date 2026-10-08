@@ -7,11 +7,12 @@
 use std::time::SystemTime;
 
 use iced::widget::{button, column, container, mouse_area, row, text, text_input, tooltip};
-use iced::{Color, Element};
+use iced::{Color, Element, Fill};
 use termherd_core::workspace::Tab;
 
 use termherd_core::ClaudeColor;
 
+use super::modals::modal_card;
 use super::{
     COLOR_MARK_WIDTH, CardFacts, card_frame, card_secondary_line, claude_color, clip, detail_lines,
     kind_icon, session_card, status_dot,
@@ -113,7 +114,8 @@ impl Shell {
                 let chip = mouse_area(chip)
                     .on_press(Message::TabDragStart(index))
                     .on_enter(Message::TabDragOver(index))
-                    .on_double_click(Message::StartTabRename(index));
+                    .on_double_click(Message::StartTabRename(index))
+                    .on_right_press(Message::OpenTabMenu(index));
                 // The chip clips the title; hovering reveals the fuller
                 // description — the sidebar's session card, plus the live pane facts,
                 // when the tab resumes a browsed session, else a minimal title +
@@ -137,6 +139,35 @@ impl Shell {
         // The release that ends a drag is heard window-wide by the shell's
         // subscription, so the strip carries no release or exit handler.
         Some(bar.into())
+    }
+
+    /// The open tab menu's card: the focused tab's title, then one line per
+    /// entry, the selected one filled. `None` when no menu is open.
+    pub(in crate::shell) fn tab_menu_card(&self) -> Option<Element<'_, Message>> {
+        let menu = self.live_tab_menu()?;
+        let title = self
+            .core
+            .workspace
+            .tabs
+            .get(self.core.workspace.active)
+            .map_or("", Tab::display_title);
+        let mut card = column![text(clip(title, 32)).size(11)]
+            .spacing(2)
+            .width(240);
+        for (position, entry) in menu.entries().enumerate() {
+            let style = if position == menu.selected() {
+                button::primary
+            } else {
+                button::text
+            };
+            let line = button(text(entry.label).size(12))
+                .on_press(Message::RunTabMenuEntry(position))
+                .style(style)
+                .width(Fill)
+                .padding([4, 8]);
+            card = card.push(mouse_area(line).on_enter(Message::HoverTabMenuEntry(position)));
+        }
+        Some(modal_card(card))
     }
 
     /// The hover card for a tab. A tab that resumes a browsed session shows the

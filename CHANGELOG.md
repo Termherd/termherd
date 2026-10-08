@@ -7,6 +7,20 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (a context menu on each tab)
+
+- Right-click a tab, or press `open-tab-menu` (⌘⇧M on macOS, Ctrl+Shift+M on
+  Windows and Linux), for a menu of what can be done to it: rename, copy its agent
+  name (when a named Claude runs in it), a new shell or Claude session beside
+  it, split it, close its pane. Each entry runs the keyboard action of the
+  same name on the focused tab, which a right-click focuses first. The arrows,
+  Enter and Escape drive it, so MCP `press_keys` / `run_action` can too, and
+  Enter reports the verdict of the entry it ran (#340).
+- A shortcut with Cmd, Ctrl or Alt that is bound to nothing is now logged at
+  debug level (`RUST_LOG=termherd=debug`) with the key and modifiers it
+  arrived as, so a binding that never fires can be told apart from one that
+  never reached termherd.
+
 ### Fixed (a working Claude read as idle)
 
 - Claude Code 2.1 marks a working session's title with `◐` / `◑` rather than
