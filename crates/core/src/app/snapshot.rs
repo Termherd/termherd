@@ -264,6 +264,7 @@ mod tests {
             cwd: Some(cwd.to_owned()),
             launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
             title: title.to_owned(),
+            placement: Placement::Foreground,
         }));
         app.workspace
             .focused_session()

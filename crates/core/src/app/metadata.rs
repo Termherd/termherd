@@ -3,31 +3,26 @@
 
 use crate::browser::SessionRecord;
 use crate::metadata::Overlay;
+use termherd_claude::digest::SessionDigest;
+
+use crate::title::{TitleSources, first_present};
 
 use super::*;
 
 impl App {
     /// Set (or clear, when blank) a session's custom title, persisting the
-    /// overlay, and keep a live tab resuming this id in step with the sidebar.
-    /// A non-empty rename wins directly; clearing restores the digest-derived
-    /// name when the session is still in the last scan.
+    /// overlay, and keep a live tab on this conversation in step with the
+    /// sidebar: the tab re-resolves its title from the same sources.
     pub(super) fn rename_session(&mut self, session: String, title: String) -> Vec<Effect> {
         let trimmed = title.trim().to_owned();
-        let effects = self.update_meta(session.clone(), |meta| {
-            meta.title = (!trimmed.is_empty()).then(|| trimmed.clone());
+        let claudes = self
+            .record_for(&session)
+            .and_then(|record| record.digest.custom_title.clone());
+        let effects = self.update_meta(session, |meta| {
+            meta.title = (!trimmed.is_empty()).then_some(trimmed);
+            meta.title_over = meta.title.is_some().then_some(claudes).flatten();
         });
-        if let Some(live) = self.open_session_for(&session) {
-            let next = if trimmed.is_empty() {
-                self.record_for(&session)
-                    .map(|record| self.session_title(record))
-                    .filter(|name| !name.trim().is_empty())
-            } else {
-                Some(trimmed)
-            };
-            if let Some(next) = next {
-                self.workspace.set_session_title(live, next);
-            }
-        }
+        self.retitle_tabs();
         effects
     }
 
@@ -35,10 +30,45 @@ impl App {
     /// the one derived from the digest (`F-session-metadata`).
     #[must_use]
     pub fn session_title(&self, record: &SessionRecord) -> String {
-        self.metadata
-            .get(&record.session_id)
-            .and_then(|meta| meta.title.clone())
-            .unwrap_or_else(|| record.digest.display_title(None).to_owned())
+        let (named, described) = self.recorded_titles(&record.session_id, Some(record));
+        recorded_title(named, described)
+    }
+
+    /// The title a session would show without termherd's own name for it —
+    /// what clearing that name leaves.
+    #[must_use]
+    pub fn session_title_unnamed_here(&self, record: &SessionRecord) -> String {
+        recorded_title(
+            record.digest.custom_title.as_deref(),
+            described(&record.digest),
+        )
+    }
+
+    /// The two tiers of [`TitleSources`] a scan and the metadata overlay
+    /// supply for the Claude conversation `claude_id`: the name it was given,
+    /// and what its transcript says it is about (Claude's AI title, else its
+    /// first prompt).
+    ///
+    /// Of the two names — Claude's `/rename` and termherd's own title — the
+    /// one given later wins. termherd's title stands while Claude's name is
+    /// still the one it was given over (see [`SessionMeta::title_over`]),
+    /// and fills in while Claude has none.
+    pub(super) fn recorded_titles<'a>(
+        &'a self,
+        claude_id: &str,
+        record: Option<&'a SessionRecord>,
+    ) -> (Option<&'a str>, Option<&'a str>) {
+        let meta = self.metadata.get(claude_id);
+        let digest = record.map(|record| &record.digest);
+        let claudes = digest.and_then(|d| d.custom_title.as_deref());
+        let local = meta.and_then(|meta| meta.title.as_deref());
+        let local_is_later = meta.is_some_and(|meta| meta.title_over.as_deref() == claudes);
+        let named = if local_is_later {
+            first_present([local, claudes])
+        } else {
+            first_present([claudes, local])
+        };
+        (named, digest.and_then(described))
     }
 
     /// Whether a session (by Claude id) is starred / archived.
@@ -152,6 +182,22 @@ impl App {
     }
 }
 
+/// What a transcript says its conversation is about: Claude's AI title, else
+/// its first prompt.
+fn described(digest: &SessionDigest) -> Option<&str> {
+    first_present([digest.ai_title.as_deref(), Some(digest.summary.as_str())])
+}
+
+/// The sidebar title of the two recorded tiers, with no live or launch tier.
+fn recorded_title(named: Option<&str>, described: Option<&str>) -> String {
+    crate::title::resolve(&TitleSources {
+        named,
+        described,
+        ..TitleSources::default()
+    })
+    .to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,6 +210,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         assert_eq!(app.open_session_for("abc-123"), Some(id));
@@ -383,6 +430,7 @@ mod tests {
             cwd: Some("/p".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("a".into())),
             title: "derived summary".into(),
+            placement: Placement::Foreground,
         }));
         let session = app.workspace.focused_session().expect("a launched tab");
 
@@ -405,5 +453,25 @@ mod tests {
             Some("derived summary"),
             "clearing the rename restores the digest name on the open tab"
         );
+    }
+
+    #[test]
+    fn the_title_unnamed_here_is_what_clearing_the_sidebar_name_leaves() {
+        let mut app = App::new();
+        let mut r = record("abc", "/repo", "the first prompt");
+        r.digest.custom_title = Some("claude's".into());
+        app.apply(Event::ScanCompleted(vec![r.clone()]));
+        app.apply(Event::RenameSession {
+            session: "abc".into(),
+            title: "mine".into(),
+        });
+        assert_eq!(app.session_title(&r), "mine");
+        assert_eq!(app.session_title_unnamed_here(&r), "claude's");
+
+        app.apply(Event::RenameSession {
+            session: "abc".into(),
+            title: String::new(),
+        });
+        assert_eq!(app.session_title(&r), "claude's");
     }
 }

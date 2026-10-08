@@ -22,7 +22,17 @@ Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 | `new-claude-session-here` | `mod+alt+t` | new Claude session in that directory |
 | `reopen-closed-tab` | `mod+shift+t` | reopen the tab you just closed |
 | `close-focused` | `mod+w` | close the focused pane; a lone pane closes its tab |
+| `rename-tab` | `mod+shift+i` | rename the focused tab, as a double-click does |
 | `open-new-session` | *(unbound)* | reserved — no surface yet |
+
+`rename-tab` opens the same inline field a double-click on the tab opens,
+filled with the tab's current name: <kbd>Enter</kbd> keeps the edit — on a
+Claude tab by asking Claude to `/rename` it, as
+[a double-click does](../workspace/tabs-and-splits.md) — and
+<kbd>Escape</kbd> drops it. Its chord is Terminal.app's *Edit Title* on macOS;
+on Windows and Linux <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> reaches a
+program in the terminal as the same byte as <kbd>Ctrl</kbd>+<kbd>I</kbd>, which
+is <kbd>Tab</kbd>, so claiming it takes nothing away from that program.
 
 `activate-tab-N` is matched by **physical key position**, so it lands on the
 same keys on AZERTY and QWERTZ, where the number row produces `&`, `é`, …
@@ -48,6 +58,7 @@ without Shift.
 | `copy` | `cmd+c` | `ctrl+shift+c` |
 | `paste` | `cmd+v` | `ctrl+v`, `ctrl+shift+v` |
 | `copy-agent-name` | *(unbound)* | *(unbound)* |
+| `send-to-desktop` | *(unbound)* | *(unbound)* |
 | `scroll-top` | `cmd+up` | `ctrl+up` |
 | `scroll-bottom` | `cmd+down` | `ctrl+down` |
 | `zoom-in` | `cmd+=`, `cmd+plus`, `cmd+shift+plus` | `ctrl+…` (same three) |
@@ -64,6 +75,12 @@ as `termherd-b0`. It reads Claude's session file at the moment you press it,
 and does nothing when no Claude runs there or it has not written one yet.
 Windows reports no foreground process to a terminal, so there it never finds
 one. Bind it yourself; it has no default.
+
+`send-to-desktop` asks to type `/desktop` into the Claude in the focused pane,
+which hands the session to the Claude desktop app. A prompt shows the exact line
+first: <kbd>Enter</kbd> types it, <kbd>Escape</kbd> drops it. It does nothing
+unless that Claude is idle with nothing typed in its prompt. Bind it yourself;
+it has no default.
 
 Zoom-in binds three chords because `=` is the unshifted face of the `+` key on
 QWERTY and the unshifted key on AZERTY; between them the same gesture works

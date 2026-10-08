@@ -74,18 +74,54 @@ tool-level error; the text reads keep working.
 
 | Tool | Args | Notes |
 | --- | --- | --- |
-| `open_session` | `project`, `kind` | `kind` is `"shell"` (default) or `"claude"`; omit `project` for the home dir |
+| `open_session` | `project`, `kind`, `background` | `kind` is `"shell"` (default) or `"claude"`; omit `project` for the home dir; `background: true` opens without taking focus |
 | `split_pane` | `direction`, `pane` | `"vertical"` (default) or `"horizontal"`; omit `pane` for the focused one |
 | `focus_pane` | `session` | |
-| `rename_tab` | `tab`, `title` | `tab` is the 0-based index `snapshot` reports; a blank title reverts to the derived one |
-| `close_pane` | `pane` | a lone pane is its whole tab, which closes |
+| `rename_tab` | `tab`, `title` | `tab` is the 0-based index `snapshot` reports; a blank title reverts a shell tab to the derived one. A Claude tab is renamed by arming `/rename <title>` for confirmation, answered as `claude_command` is; a blank title, or the name it already shows, arms nothing and leaves it as it is |
+| `close_pane` | `pane`, `background` | a lone pane is its whole tab, which closes; `background: true` closes `pane` without focusing it first |
 | `run_in_session` | `session`, `text` | include a trailing newline to submit |
 | `mouse_in_session` | `session`, `kind`, `col`, `row`, `button` | a mouse event at a **cell** of the terminal; see below |
 | `add_repo` | `path` | put a repository in the sidebar before it has any session |
 | `forget_repo` | `path` | drop an addition; the row survives on its sessions |
+| `claude_command` | `session`, `command`, `argument` | **arms** a confirmation to type a Claude slash command; see below |
 
 Each returns the resulting `focused_handle` (`null` when the workspace is now
-empty).
+empty). `open_session` also returns `opened_handle`, the new session's handle:
+read the new session from it rather than from `focused_handle`, which names it
+only when the open took focus.
+
+#### Working beside someone who is typing
+
+Every action above moves the keyboard by default: an open activates its new
+tab, and a close focuses its target before closing it. An agent orchestrating
+workers in the same window as a human would send that human's next keys into a
+terminal they did not choose. `background: true` on `open_session` and
+`close_pane` keeps the user where they are:
+
+- A background **open** appends the tab at the end of the strip without
+  activating it. Into an empty workspace it is the only tab, so it is the
+  active one all the same. Its terminal is sized to the tab area at once, so a
+  Claude started there draws its first screen at the size it will be shown.
+- A background **close** closes `pane` wherever it lives, without revealing
+  it, and requires `pane`: the focused pane is the user's, so there is no
+  default to fall back on. The flag means *never take focus*, not *focus
+  cannot move*: closing the pane that holds focus still hands it to its
+  sibling. A lone pane takes its tab with it, onto the reopen stack like any
+  tab close, and a close prompt or tab drag the user has under way stays on
+  the tab it named.
+
+Neither flag lets an agent reach a state the keyboard cannot: a background tab
+is one the user could have opened and then left.
+
+A background session is driven exactly like any other, by handle:
+`run_in_session`, `prompt_in_session`, `wait_for_status`, `read_terminal` and
+`mouse_in_session` all reach a tab nobody has looked at. The terminal fills its
+screen from the program's output, not from being drawn, so `mouse_in_session`
+is bounded as soon as the program has printed something.
+
+An MCP close asks no confirmation, background or not: unlike the keyboard's
+close, it kills a busy pane straight away. Wait for the session to settle with
+`wait_for_status` first when that matters.
 
 The two repo tools answer about a **sidebar row** rather than about focus, so
 they add four fields:
@@ -116,6 +152,69 @@ sent. A path that does not exist, or a relative one, is rejected.
 added is **not** an error, and forgetting one the scan still reports leaves the
 row standing. Read `in_sidebar` to tell the two outcomes apart — `false` means
 it is gone, `true` with `declared: false` means it lives on its sessions.
+
+#### A Claude slash command, confirmed
+
+`claude_command` asks TermHerd to type one of Claude Code's own commands into
+a Claude session — the way TermHerd changes what Claude owns, such as a
+session's name or colour, rather than keeping a rival copy of it. The list is
+closed:
+
+| `command` | `argument` | Types |
+| --- | --- | --- |
+| `rename` | the new name | `/rename <name>` |
+| `color` | `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan` or `default` | `/color <colour>` |
+| `desktop` | none | `/desktop` |
+
+**Nothing is typed by the call.** It arms the same confirmation prompt the
+`send-to-desktop` action arms, naming the exact line, and answers with that
+`line` and the prompt's name, `overlay: "claude-command-confirm"`. The prompt
+then holds the keyboard: `press_keys(["enter"])` types the line,
+`press_keys(["escape"])` drops it, and a human at the window can answer it
+too. The prompt is there for the **human at the window**: it shows them the
+line before it lands. It does not constrain the caller, which can confirm its
+own prompt with `enter` — and could type into the terminal with
+`run_in_session` anyway. What the tool adds over raw typing is the checks
+below, and one write path shared with the keyboard.
+
+It is **refused**, with nothing armed, when:
+
+- the session is not a Claude launch — a shell would run the line as a
+  program;
+- Claude is not idle — busy, starting, or waiting on an answer such as a
+  permission prompt;
+- Claude's prompt holds a **draft** — the error quotes it; the command would
+  be typed into it, and a draft of several lines would be submitted with it as
+  a prompt to the model;
+- Claude's input prompt is **not on screen** — a menu, picker or dialog has the
+  keyboard (Enter would pick an entry), or the view is scrolled away from it;
+- another prompt is already open.
+
+Confirming checks all of it again against the screen as it is then. A refusal
+at that point **keeps the prompt open**, showing why, and `press_keys` reports
+the step as `refused` with the reason rather than `overlay`; `escape` dismisses
+it, `enter` tries again.
+
+The prompt is read off the screen: the row starting with `❯` under a
+horizontal rule, down to the next rule. Its placeholder hint (`Try "…"`) reads
+as empty, so a draft spelling exactly that shape is the one case read wrong.
+
+A prompt armed by this tool **ignores a physical Enter for 600 ms**: someone
+typing in another pane when it appears would otherwise confirm it with the
+Enter that ends their own line. `escape`, and `enter` sent through
+`press_keys`, are never held back.
+
+A name is made safe before it is shown: control characters, line breaks and
+tabs become spaces, invisible formatting characters are dropped, a trailing
+backslash goes (in Claude's prompt, `\` then Enter starts a new line instead of
+submitting), and the result is cut to 80 characters on a character boundary
+— an accent or a flag is never split. Joiners and variation selectors are kept,
+since emoji sequences and Persian or Indic names are spelled with them. A name
+with nothing left is refused.
+
+Confirming sends <kbd>Ctrl</kbd>+<kbd>U</kbd> first — a guard against a key
+landing between the screen read and the write — then the line, then Enter on
+its own.
 
 #### The pointer, inside a terminal
 

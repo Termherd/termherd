@@ -19,6 +19,7 @@ use crate::record::Recording;
 use crate::workspace::{SessionId, Workspace};
 
 mod capture;
+mod command;
 mod effects;
 mod events;
 mod hover;
@@ -27,6 +28,7 @@ mod notify;
 mod open;
 mod pointer;
 mod record;
+mod retitle;
 mod session;
 mod settings;
 mod sidebar;
@@ -37,6 +39,7 @@ mod testsupport;
 
 use settings::FontState;
 
+pub use command::CommandRefusal;
 pub use effects::Effect;
 pub use events::Event;
 pub use hover::{
@@ -48,8 +51,8 @@ pub use pointer::{
     pointer_select,
 };
 pub use session::{
-    ClaudeLaunch, ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus,
-    Sessions, SpawnSpec,
+    ClaudeLaunch, ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, Placement,
+    SessionStatus, Sessions, SpawnSpec,
 };
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
@@ -167,6 +170,7 @@ impl App {
         match event {
             Event::ScanCompleted(records) => {
                 self.sidebar.projects = group_projects(records);
+                self.retitle_tabs();
                 Vec::new()
             }
             Event::SearchChanged(query) => {
@@ -206,7 +210,7 @@ impl App {
             Event::StatusChanged { session, status } => self.status_changed(session, status),
             Event::PtyExited { session, clean } => self.pty_exited(session, clean),
             Event::SessionTitleChanged { session, title } => {
-                self.workspace.set_session_title(session, title);
+                self.workspace.set_live_title(session, title);
                 Vec::new()
             }
             Event::SessionCwdChanged { session, cwd } => {
@@ -230,18 +234,13 @@ impl App {
                 Vec::new()
             }
             Event::ReopenClosedTab { fresh_claude_id } => self.reopen_closed_tab(fresh_claude_id),
-            Event::RenameTab { index, title } => {
-                self.workspace.rename_tab(index, &title);
-                Vec::new()
-            }
+            Event::RenameTab { index, title } => self.rename_tab(index, &title),
             Event::SplitFocused(dir) => self.split_focused(dir),
-            Event::CloseFocusedPane => match self.workspace.close_focused() {
-                Some(id) => {
-                    self.sessions.remove(&id);
-                    vec![Effect::Kill(id)]
-                }
-                None => Vec::new(),
-            },
+            Event::ClosePane(session) => self.close_pane_of(session).unwrap_or_default(),
+            Event::CloseFocusedPane => self
+                .workspace
+                .close_focused()
+                .map_or_else(Vec::new, |id| self.release_closed_pane(id)),
             Event::FocusNextPane => {
                 self.workspace.focus_next();
                 Vec::new()
@@ -265,6 +264,7 @@ impl App {
             Event::MetadataLoaded(overlay) => {
                 self.metadata = overlay.sessions;
                 self.repos = overlay.repos;
+                self.retitle_tabs();
                 Vec::new()
             }
             Event::ToggleStar(session) => {
@@ -308,6 +308,11 @@ impl App {
                 self.window_focused = focused;
                 Vec::new()
             }
+            Event::SendClaudeCommand {
+                session,
+                command,
+                prompt,
+            } => self.send_claude_command(session, &command, &prompt),
         }
     }
 

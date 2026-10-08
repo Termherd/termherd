@@ -63,10 +63,16 @@ impl Shell {
         self.perform(effects)
     }
 
-    /// Size every pane's PTY to its own sub-rect from [`pane_rects`] (FR6): one
-    /// `TerminalResized` per leaf. A single-pane tab is the one-leaf case,
-    /// resized exactly as before.
+    /// Size every pane of the active tab to its own sub-rect (FR6).
     pub(super) fn resize_panes(&mut self) -> Task<Message> {
+        self.resize_tab(self.core.workspace.active)
+    }
+
+    /// Size every pane's PTY in the tab at `index` to its own sub-rect from
+    /// [`pane_rects`] (FR6): one `TerminalResized` per leaf. A single-pane tab
+    /// is the one-leaf case. Every tab shares the one content area, so a tab
+    /// that is not on screen is sized as it will be drawn.
+    pub(super) fn resize_tab(&mut self, index: usize) -> Task<Message> {
         let (width, height) = self.content_size();
         let area = Rectangle {
             x: 0.0,
@@ -78,7 +84,7 @@ impl Shell {
         // borrows the tree, so its owned result must outlive that borrow. Only a
         // split's panes are bordered, so only they lose `PANE_CHROME`.
         let (rects, inset) = {
-            let Some(tab) = self.core.workspace.tabs.get(self.core.workspace.active) else {
+            let Some(tab) = self.core.workspace.tabs.get(index) else {
                 return Task::none();
             };
             let inset = if matches!(tab.root, Pane::Split { .. }) {

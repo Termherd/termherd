@@ -5,7 +5,10 @@
 
 use iced::{Task, window};
 
-use super::{Focus, Message, Shell};
+use termherd_core::Effect;
+use termherd_core::workspace::{SessionId, index_after_removal};
+
+use super::{Focus, Message, Shell, TabDrag};
 
 impl Shell {
     /// Handle a request to close the tab at `index`. The configured `close.tab`
@@ -62,6 +65,78 @@ impl Shell {
         }
         let kill = self.perform(effects);
         Task::batch([kill, self.resize_panes()])
+    }
+
+    /// Where `session`'s pane sits now, captured just before `core` closes it,
+    /// so the shell can follow the strip afterwards.
+    pub(super) fn vanishing_pane(&self, session: SessionId) -> VanishingPane {
+        let workspace = &self.core.workspace;
+        let tab = workspace.tab_of(session);
+        VanishingPane {
+            session,
+            tab,
+            lone: tab
+                .and_then(|index| workspace.tabs.get(index))
+                .is_some_and(|tab| tab.sessions().len() == 1),
+            active: workspace.active,
+        }
+    }
+
+    /// The shell-side follow-up to a pane `core` just closed. Its cached screen
+    /// goes, as `close_tab` drops it. The UI state keyed by tab position — a
+    /// pending close prompt, a tab drag — shifts with the strip when the pane
+    /// took its tab with it, and is dropped only when it named that very tab.
+    /// A pending tab rename anchored on the pane moves to the first pane left
+    /// in the tab. Only a tab whose layout changed is resized: the active one
+    /// when the pane was in it, or the tab behind it whose split collapsed.
+    pub(super) fn after_pane_vanished(&mut self, pane: VanishingPane) -> Task<Message> {
+        self.screens.remove(&pane.session);
+        let survivor = pane.tab.filter(|_| !pane.lone);
+        if let Some(removed) = pane.tab.filter(|_| pane.lone) {
+            self.closing = self
+                .closing
+                .and_then(|index| index_after_removal(index, removed));
+            self.tab_drag = self.tab_drag.and_then(|drag| drag.after_removal(removed));
+        }
+        if let Some((anchor, buffer)) = self.tab_rename.take() {
+            self.tab_rename = if anchor == pane.session {
+                self.first_session_of(survivor).map(|heir| (heir, buffer))
+            } else {
+                Some((anchor, buffer))
+            };
+        }
+        if self
+            .claude_command
+            .as_ref()
+            .is_some_and(|pending| pending.session == pane.session)
+        {
+            self.claude_command = None;
+        }
+        match pane.tab {
+            Some(tab) if tab == pane.active => self.resize_panes(),
+            Some(tab) if !pane.lone => self.resize_tab(tab),
+            _ => Task::none(),
+        }
+    }
+
+    /// Close the focused pane once `prelude` (the reveal that focused it, if
+    /// any) has been performed, then follow the strip as for any pane `core`
+    /// closes. A lone pane takes its tab with it.
+    pub(super) fn close_focused_pane_after(&mut self, mut prelude: Vec<Effect>) -> Task<Message> {
+        let vanishing = self
+            .core
+            .workspace
+            .focused_session()
+            .map(|id| self.vanishing_pane(id));
+        prelude.extend(self.core.apply(termherd_core::Event::CloseFocusedPane));
+        let kill = self.perform(prelude);
+        let follow = vanishing.map_or_else(Task::none, |pane| self.after_pane_vanished(pane));
+        Task::batch([kill, follow])
+    }
+
+    /// The first pane of the tab at `index`, when there is one.
+    fn first_session_of(&self, index: Option<usize>) -> Option<SessionId> {
+        Some(self.core.workspace.tabs.get(index?)?.first_session())
     }
 
     /// Switch to the tab at `index` and return focus to the terminal. Switching
@@ -199,5 +274,39 @@ impl Shell {
     /// Whether a quit is awaiting confirmation (the modal is up).
     pub(super) fn quit_pending(&self) -> bool {
         self.closing_window.is_some()
+    }
+}
+
+/// A pane's place in the strip just before `core` closed it: its tab (when one
+/// hosted it), whether it was that tab's only pane — so the tab went with it —
+/// and which tab was active.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct VanishingPane {
+    session: SessionId,
+    tab: Option<usize>,
+    lone: bool,
+    active: usize,
+}
+
+impl TabDrag {
+    /// The drag once the tab at `removed` is gone: it ends when it was the
+    /// dragged tab, and stops aiming at a slot that vanished under the pointer,
+    /// so a release there is a plain click rather than a move.
+    fn after_removal(self, removed: usize) -> Option<Self> {
+        let from = index_after_removal(self.from, removed)?;
+        let over = index_after_removal(self.over, removed).unwrap_or(from);
+        Some(Self { from, over })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_drag_over_a_vanished_slot_becomes_a_click() {
+        let drag = TabDrag { from: 0, over: 2 };
+        assert_eq!(drag.after_removal(2), Some(TabDrag { from: 0, over: 0 }));
+        assert_eq!(drag.after_removal(0), None, "the dragged tab is gone");
     }
 }
