@@ -21,7 +21,7 @@ use super::{Message, Shell};
 /// once that pane no longer holds focus the picker is gone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ColorPicker {
-    anchor: SessionId,
+    pub(super) anchor: SessionId,
     selected: usize,
     /// Why the last pick for a Claude pane could not be asked of it, shown in
     /// the picker so the user learns it rather than seeing the pick vanish.

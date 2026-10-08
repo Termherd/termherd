@@ -77,9 +77,9 @@ pane's. A shell tab wears the colour picked for it, below.
 
 **TermHerd asks Claude rather than overriding it.** Where a change belongs to
 Claude — handing a session to the desktop app with `send-to-desktop`, or a
-Claude tab's colour from the colour list —
-TermHerd types Claude's own slash command for you, behind a prompt that shows
-the exact line first. <kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops it.
+Claude tab's colour from the colour list below — TermHerd types Claude's own
+slash command for you, behind a prompt that shows the exact line first.
+<kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops it.
 It is offered only while that Claude is idle with nothing typed in its prompt; a
 draft that appears meanwhile keeps the prompt open and says so.
 

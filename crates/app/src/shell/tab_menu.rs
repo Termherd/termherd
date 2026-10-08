@@ -192,12 +192,19 @@ impl Shell {
         }
     }
 
-    /// Forget a menu anchored on `session`, a pane that just closed. Its id is
-    /// never reused, so the anchor check alone would hide the menu for good;
-    /// dropping it here leaves nothing behind to reason about.
-    pub(super) fn forget_tab_menu_on(&mut self, session: SessionId) {
+    /// Forget a menu or a colour picker anchored on `session`, a pane that just
+    /// closed. Its id is never reused, so the anchor check alone would hide the
+    /// list for good; dropping it here leaves nothing behind to reason about.
+    pub(super) fn forget_lists_on(&mut self, session: SessionId) {
         if self.tab_menu.is_some_and(|menu| menu.anchor == session) {
             self.tab_menu = None;
+        }
+        if self
+            .color_picker
+            .as_ref()
+            .is_some_and(|picker| picker.anchor == session)
+        {
+            self.color_picker = None;
         }
     }
 

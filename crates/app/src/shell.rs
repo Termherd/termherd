@@ -2832,6 +2832,35 @@ mod key_routing {
         assert_eq!(shell.tab_menu, None, "forgotten, not merely hidden");
     }
 
+    /// Open the colour list over the focused tab, as the keyboard does.
+    fn open_color_picker(shell: &mut Shell) {
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("pick-tab-color".to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_background_close_elsewhere_leaves_the_colour_picker_open() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        open_color_picker(&mut shell);
+        close_in_background(&mut shell, first);
+        assert!(
+            shell.live_color_picker().is_some(),
+            "its pane still holds focus"
+        );
+    }
+
+    #[test]
+    fn a_background_close_of_the_picker_pane_forgets_the_picker() {
+        let (mut shell, _pty, _first) = shell_with_two_tabs();
+        open_color_picker(&mut shell);
+        let anchor = shell.core.workspace.tabs[1].first_session();
+        close_in_background(&mut shell, anchor.0.get());
+        assert!(shell.color_picker.is_none(), "forgotten, not merely hidden");
+    }
+
     #[test]
     fn a_background_close_shifts_a_tab_drag_with_the_strip() {
         let (mut shell, _pty, first) = shell_with_two_tabs();
