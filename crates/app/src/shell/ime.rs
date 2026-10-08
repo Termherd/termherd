@@ -67,7 +67,7 @@ impl<Message> ImeArea<'_, Message> {
 /// to the focused input field instead of being captured for the PTY. The empty
 /// pre-edit that always precedes a commit is not a commit — we do not render
 /// an on-the-spot pre-edit overlay.
-fn terminal_commit(enabled: bool, event: &Event) -> Option<&str> {
+pub(super) fn terminal_commit(enabled: bool, event: &Event) -> Option<&str> {
     match event {
         Event::InputMethod(input_method::Event::Commit(text)) if enabled && !text.is_empty() => {
             Some(text)
@@ -236,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn a_disabled_area_lets_an_emoji_commit_travel_on_to_the_rename_field() {
+    fn a_disabled_area_takes_no_commit() {
         assert_eq!(terminal_commit(false, &commit("🚀")), None);
     }
 

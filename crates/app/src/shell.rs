@@ -3721,42 +3721,38 @@ mod key_routing {
     }
 
     #[test]
-    fn an_open_tab_rename_hands_input_method_commits_to_its_field_not_the_pty() {
-        // The terminal's IME area is enabled by `accepts_terminal_input`; off,
-        // it leaves a commit (a Character Viewer emoji) for the focused field,
-        // which reports it as the field's next value.
-        let (mut shell, pty) = shell_with_terminal();
+    fn either_rename_leaves_an_input_method_commit_for_its_field() {
+        // The view enables the terminal's IME area with `accepts_terminal_input`.
+        let emoji = iced::Event::InputMethod(iced::advanced::input_method::Event::Commit(
+            "🚀".to_string(),
+        ));
+        let (mut shell, _pty) = shell_with_terminal();
+        let taken = |shell: &Shell| ime::terminal_commit(shell.accepts_terminal_input(), &emoji);
+        assert_eq!(taken(&shell), Some("🚀"));
+
         let current = shell.core.workspace.tabs[0].display_title().to_owned();
         let _ = shell.update(Message::StartTabRename { index: 0, current });
-        assert!(!shell.accepts_terminal_input());
+        assert_eq!(taken(&shell), None, "a tab rename owns the commit");
+        let _ = shell.update(Message::CancelTabRename);
 
-        let _ = shell.update(Message::ImeCommit("🚀".to_string()));
-        let _ = shell.update(Message::TabRenameInput("Build 🚀".to_string()));
-        let _ = shell.update(Message::CommitTabRename);
-
-        assert!(pty.writes().is_empty(), "got {:?}", pty.writes());
-        assert_eq!(shell.core.workspace.tabs[0].display_title(), "Build 🚀");
-    }
-
-    #[test]
-    fn an_open_session_rename_hands_input_method_commits_to_its_field_not_the_pty() {
-        // A pasted emoji arrives through the same `on_input` message as a
-        // committed one, so this covers both ways into the field.
-        let (mut shell, pty) = shell_with_terminal();
         let _ = shell.update(Message::StartRename {
             session: "sid".to_string(),
             current: "build".to_string(),
         });
-        assert!(!shell.accepts_terminal_input());
+        assert_eq!(taken(&shell), None, "a session rename owns the commit");
 
-        let _ = shell.update(Message::ImeCommit("🚀".to_string()));
-        let _ = shell.update(Message::RenameInput("build 🚀".to_string()));
+        let _ = shell.update(Message::CancelRename);
+        assert_eq!(taken(&shell), Some("🚀"));
+    }
 
-        assert!(pty.writes().is_empty(), "got {:?}", pty.writes());
-        assert_eq!(
-            shell.renaming.as_ref().map(|(_, b)| b.as_str()),
-            Some("build 🚀")
-        );
+    #[test]
+    fn an_emoji_typed_into_the_tab_rename_becomes_the_title() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let current = shell.core.workspace.tabs[0].display_title().to_owned();
+        let _ = shell.update(Message::StartTabRename { index: 0, current });
+        let _ = shell.update(Message::TabRenameInput("Build 🚀".to_string()));
+        let _ = shell.update(Message::CommitTabRename);
+        assert_eq!(shell.core.workspace.tabs[0].display_title(), "Build 🚀");
     }
 
     #[test]
