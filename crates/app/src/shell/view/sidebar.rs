@@ -185,14 +185,14 @@ impl Shell {
             .into()
     }
 
-    /// Live activity, keyed by the Claude session id each terminal resumed, so a
+    /// Live activity, keyed by the Claude session id of each terminal, so a
     /// browsed row can show its current status (FR8). If the same session is
     /// open twice, the most urgent status wins.
     fn live_statuses(&self) -> HashMap<&str, SessionStatus> {
         let mut live: HashMap<&str, SessionStatus> = HashMap::new();
         for s in self.core.sessions.values() {
-            if let Some(resume) = s.launch.resume_id() {
-                live.entry(resume)
+            if let Some(claude_id) = s.claude_session_id() {
+                live.entry(claude_id)
                     .and_modify(|cur| {
                         if s.status.urgency() > cur.urgency() {
                             *cur = s.status;

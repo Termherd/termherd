@@ -22,9 +22,9 @@ use std::time::Duration;
 use iced::futures::{SinkExt, Stream};
 use termherd_core::Placement;
 use termherd_core::{
-    Action as KeymapAction, App, ClaudeIdentity, KeyChord, LiveSession, PointerEvent, PointerRoute,
-    SessionKind, SessionStatus, SnapshotFilter, SnapshotInputs, WorkspaceSnapshot, claude_identity,
-    workspace::SplitDir,
+    Action as KeymapAction, App, ClaudeCommand, ClaudeIdentity, KeyChord, LiveSession,
+    PointerEvent, PointerRoute, SessionKind, SessionStatus, SnapshotFilter, SnapshotInputs,
+    WorkspaceSnapshot, claude_identity, workspace::SplitDir,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -140,6 +140,9 @@ pub enum PressStep {
     /// Carries the overlay's name, so a caller learns *why* its chord did
     /// nothing it expected — and that `escape` / `enter` are what move next.
     Overlay(String),
+    /// An overlay's confirmation was refused: the prompt is still open and
+    /// what it promised did not happen. Carries the overlay and why.
+    Refused { overlay: String, reason: String },
     /// Bound to nothing, so it reached the focused terminal as text.
     Typed,
     /// Nothing claimed it: bound to nothing, and no focused terminal to type
@@ -281,6 +284,15 @@ pub enum Action {
     /// Drop a repo's declaration. The row survives on its sessions, if it has
     /// any. → `Event::ForgetRepo`.
     ForgetRepo { path: String },
+    /// Arm the confirmation for typing a Claude slash command into a session —
+    /// the same prompt a keypress arms, so nothing is typed until it is
+    /// answered. Refused before anything applies when the session is not an
+    /// idle Claude, or another prompt is open. → `Event::SendClaudeCommand`,
+    /// once confirmed.
+    ClaudeCommand {
+        session: u64,
+        command: ClaudeCommand,
+    },
 }
 
 /// The result of an [`Action`]. `error` is `Some` only when the action was
@@ -316,6 +328,13 @@ pub enum ActionDetail {
     /// minted. A background open leaves focus elsewhere, so the focused handle
     /// no longer names the new session.
     Opened(Option<String>),
+    /// The confirmation a Claude command armed: the exact line it will type,
+    /// and the overlay now holding the keyboard, which `enter` confirms and
+    /// `escape` cancels.
+    ClaudeCommand {
+        line: String,
+        overlay: &'static str,
+    },
 }
 
 /// What a repo action did, for a caller that cannot see the sidebar. `path` is
@@ -407,7 +426,9 @@ pub struct SessionInfo {
     /// Whether it runs a shell or the Claude CLI.
     pub kind: SessionKind,
     /// The Claude session id this launch resumes, if any — the *unstable* id
-    /// (see the type note); `None` for a shell or a fresh Claude session.
+    /// (see the type note); `None` for a shell or a fresh Claude session, even
+    /// one launched under a minted id. The conversation the pane holds now is
+    /// `identity.session_id`, read from Claude's own session file.
     pub resume_id: Option<String>,
     /// Current activity (FR8).
     pub status: SessionStatus,
@@ -689,7 +710,8 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use termherd_core::{
-        Event, ForegroundJob, Launch, LaunchSpec, SessionStatus, SnapshotFilter, SnapshotInputs,
+        ClaudeLaunch, Event, ForegroundJob, Launch, LaunchSpec, SessionStatus, SnapshotFilter,
+        SnapshotInputs,
     };
 
     /// Open `n` shell tabs in a fresh `App`, so a snapshot has real workspace
@@ -820,9 +842,9 @@ mod tests {
     fn launch_claude(app: &mut App, cwd: &str, title: &str, resume: Option<&str>) -> String {
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some(cwd.to_owned()),
-            launch: Launch::Claude {
-                resume: resume.map(str::to_owned),
-            },
+            launch: Launch::Claude(resume.map_or(ClaudeLaunch::Fresh(None), |id| {
+                ClaudeLaunch::Resume(id.to_owned())
+            })),
             title: title.to_owned(),
             placement: termherd_core::Placement::Foreground,
         }));

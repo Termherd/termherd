@@ -66,15 +66,23 @@ impl App {
         self.repos.get(path).is_some_and(|m| m.declared)
     }
 
-    /// The live session currently resuming the Claude session `claude_id`, if
-    /// one is open. Lets the shell re-focus an existing terminal when its
+    /// The live session whose Claude conversation is `claude_id` (resumed,
+    /// launched under a minted id, or re-keyed to it), if one is open. Lets the shell re-focus an existing terminal when its
     /// sidebar row is clicked again, rather than spawning a duplicate (FR4).
     #[must_use]
     pub fn open_session_for(&self, claude_id: &str) -> Option<SessionId> {
         self.sessions
             .values()
-            .find(|s| s.launch.resume_id() == Some(claude_id))
+            .find(|s| s.claude_session_id() == Some(claude_id))
             .map(|s| s.id)
+    }
+
+    /// The Claude session id of the live pane `session`, as
+    /// [`LiveSession::claude_session_id`] decides it. `None` for an unknown
+    /// session, or one with no Claude conversation to name.
+    #[must_use]
+    pub fn claude_session_id(&self, session: SessionId) -> Option<&str> {
+        self.sessions.get(&session)?.claude_session_id()
     }
 
     /// The browsed record for the Claude session `claude_id`, if the last scan
@@ -154,9 +162,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude {
-                resume: Some("abc-123".into()),
-            },
+            launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
             title: "proj".into(),
             placement: Placement::Foreground,
         }));
@@ -376,9 +382,7 @@ mod tests {
         )]));
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/p".into()),
-            launch: Launch::Claude {
-                resume: Some("a".into()),
-            },
+            launch: Launch::Claude(ClaudeLaunch::Resume("a".into())),
             title: "derived summary".into(),
             placement: Placement::Foreground,
         }));

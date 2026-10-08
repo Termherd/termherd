@@ -15,7 +15,7 @@ session is torn down.
 
 | Tool | Args | Returns |
 | --- | --- | --- |
-| `list_sessions` | — | `{ sessions: [...] }` — each row a live session: stable `handle`, tab title, cwd, kind (`shell` / `claude`), resumed Claude id, status, and Claude's `pid`, `peer_name`, `session_id` |
+| `list_sessions` | — | `{ sessions: [...] }` — each row a live session: stable `handle`, tab title, cwd, kind (`shell` / `claude`), resumed Claude id (`resume_id`, null for a fresh tab — `session_id` is the live one), status, and Claude's `pid`, `peer_name`, `session_id` |
 | `snapshot` | `sections`, `terminals`, `focused_terminal`, `text_lines` | the whole state: config, sidebar, tabs and panes |
 | `read_terminal` | `session`, `lines` | `{ text, rendered }` |
 | `screenshot` | `max_width` | the window as a PNG |
@@ -83,6 +83,7 @@ tool-level error; the text reads keep working.
 | `mouse_in_session` | `session`, `kind`, `col`, `row`, `button` | a mouse event at a **cell** of the terminal; see below |
 | `add_repo` | `path` | put a repository in the sidebar before it has any session |
 | `forget_repo` | `path` | drop an addition; the row survives on its sessions |
+| `claude_command` | `session`, `command`, `argument` | **arms** a confirmation to type a Claude slash command; see below |
 
 Each returns the resulting `focused_handle` (`null` when the workspace is now
 empty). `open_session` also returns `opened_handle`, the new session's handle:
@@ -151,6 +152,69 @@ sent. A path that does not exist, or a relative one, is rejected.
 added is **not** an error, and forgetting one the scan still reports leaves the
 row standing. Read `in_sidebar` to tell the two outcomes apart — `false` means
 it is gone, `true` with `declared: false` means it lives on its sessions.
+
+#### A Claude slash command, confirmed
+
+`claude_command` asks TermHerd to type one of Claude Code's own commands into
+a Claude session — the way TermHerd changes what Claude owns, such as a
+session's name or colour, rather than keeping a rival copy of it. The list is
+closed:
+
+| `command` | `argument` | Types |
+| --- | --- | --- |
+| `rename` | the new name | `/rename <name>` |
+| `color` | `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan` or `default` | `/color <colour>` |
+| `desktop` | none | `/desktop` |
+
+**Nothing is typed by the call.** It arms the same confirmation prompt the
+`send-to-desktop` action arms, naming the exact line, and answers with that
+`line` and the prompt's name, `overlay: "claude-command-confirm"`. The prompt
+then holds the keyboard: `press_keys(["enter"])` types the line,
+`press_keys(["escape"])` drops it, and a human at the window can answer it
+too. The prompt is there for the **human at the window**: it shows them the
+line before it lands. It does not constrain the caller, which can confirm its
+own prompt with `enter` — and could type into the terminal with
+`run_in_session` anyway. What the tool adds over raw typing is the checks
+below, and one write path shared with the keyboard.
+
+It is **refused**, with nothing armed, when:
+
+- the session is not a Claude launch — a shell would run the line as a
+  program;
+- Claude is not idle — busy, starting, or waiting on an answer such as a
+  permission prompt;
+- Claude's prompt holds a **draft** — the error quotes it; the command would
+  be typed into it, and a draft of several lines would be submitted with it as
+  a prompt to the model;
+- Claude's input prompt is **not on screen** — a menu, picker or dialog has the
+  keyboard (Enter would pick an entry), or the view is scrolled away from it;
+- another prompt is already open.
+
+Confirming checks all of it again against the screen as it is then. A refusal
+at that point **keeps the prompt open**, showing why, and `press_keys` reports
+the step as `refused` with the reason rather than `overlay`; `escape` dismisses
+it, `enter` tries again.
+
+The prompt is read off the screen: the row starting with `❯` under a
+horizontal rule, down to the next rule. Its placeholder hint (`Try "…"`) reads
+as empty, so a draft spelling exactly that shape is the one case read wrong.
+
+A prompt armed by this tool **ignores a physical Enter for 600 ms**: someone
+typing in another pane when it appears would otherwise confirm it with the
+Enter that ends their own line. `escape`, and `enter` sent through
+`press_keys`, are never held back.
+
+A name is made safe before it is shown: control characters, line breaks and
+tabs become spaces, invisible formatting characters are dropped, a trailing
+backslash goes (in Claude's prompt, `\` then Enter starts a new line instead of
+submitting), and the result is cut to 80 characters on a character boundary
+— an accent or a flag is never split. Joiners and variation selectors are kept,
+since emoji sequences and Persian or Indic names are spelled with them. A name
+with nothing left is refused.
+
+Confirming sends <kbd>Ctrl</kbd>+<kbd>U</kbd> first — a guard against a key
+landing between the screen read and the write — then the line, then Enter on
+its own.
 
 #### The pointer, inside a terminal
 

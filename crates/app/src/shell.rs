@@ -24,8 +24,8 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    ConfigInput, Keymap, Launch, Overlay, PointerEvent, ScrollTarget, SelectOp, SessionRecord,
-    SessionStatus,
+    ClaudeLaunch, ConfigInput, Keymap, Launch, Overlay, PointerEvent, ScrollTarget, SelectOp,
+    SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
@@ -36,6 +36,7 @@ use crate::window_config::WindowConfig;
 
 mod appearance;
 pub(crate) mod bridge;
+mod claude_command;
 mod docs;
 mod effects;
 mod geometry;
@@ -298,6 +299,10 @@ struct Shell {
     /// process (TerminateProcess / SIGKILL, no graceful shutdown), so a quit
     /// with sessions still running arms this modal first.
     closing_window: Option<window::Id>,
+    /// A Claude slash command awaiting confirmation, and the session it is for.
+    /// The prompt names the exact line, so nothing is typed into Claude that
+    /// the user has not read first.
+    claude_command: Option<claude_command::PendingCommand>,
     /// Whether Ctrl (or Cmd) is currently held — the link-open modifier.
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
@@ -517,6 +522,10 @@ enum Message {
     ConfirmArchive,
     /// Dismiss the archive confirmation without archiving.
     CancelArchive,
+    /// Type the armed Claude slash command into its session.
+    ConfirmClaudeCommand,
+    /// Dismiss the Claude command confirmation without typing anything.
+    CancelClaudeCommand,
     /// Show or hide archived sessions in the browser (F-session-metadata).
     ShowArchived(bool),
     /// Fold or unfold a project's session list in the sidebar, by path.
@@ -747,6 +756,7 @@ impl Shell {
             close_confirm: CloseSettings::default(),
             gestures: ClipboardGestures::default(),
             archiving: None,
+            claude_command: None,
             closing_window: None,
             link_modifier: false,
             shift_modifier: false,
@@ -888,22 +898,21 @@ impl Shell {
                 self.perform(effects)
             }
             Message::LaunchProject(cwd) => self.launch(cwd, Launch::Shell),
-            Message::LaunchClaude(cwd) => self.launch(cwd, Launch::Claude { resume: None }),
+            Message::LaunchClaude(cwd) => {
+                self.launch(cwd, Launch::Claude(ClaudeLaunch::Fresh(None)))
+            }
             Message::LaunchSession { cwd, resume } => {
                 // Re-clicking a session already open in TermHerd re-focuses its
                 // tab instead of spawning a second terminal for the same Claude
-                // session (FR4).
+                // session (FR4). A re-key rewrites the session file under the
+                // same pid, which no job change announces, so read them first.
+                self.refresh_session_files();
                 if let Some(session) = self.core.open_session_for(&resume)
                     && let Some(index) = self.core.workspace.tab_of(session)
                 {
                     return self.activate_tab(index);
                 }
-                self.launch(
-                    cwd,
-                    Launch::Claude {
-                        resume: Some(resume),
-                    },
-                )
+                self.launch(cwd, Launch::Claude(ClaudeLaunch::Resume(resume)))
             }
             Message::PtyOutput { session, screen } => {
                 self.screens.insert(session, screen);
@@ -968,6 +977,9 @@ impl Shell {
                 let modifiers = event_modifiers(&event);
                 self.link_modifier = modifiers.control() || modifiers.logo();
                 self.shift_modifier = modifiers.shift();
+                if self.enter_too_soon(&event, Instant::now()) {
+                    return Task::none();
+                }
                 // A real keypress has no one to report to; the verdict exists
                 // for the MCP press tool, which answers a caller.
                 self.on_key(event).1
@@ -1166,6 +1178,10 @@ impl Shell {
                 self.archiving = None;
                 Task::none()
             }
+            Message::ConfirmClaudeCommand => self
+                .confirm_claude_command()
+                .unwrap_or_else(|_| Task::none()),
+            Message::CancelClaudeCommand => self.cancel_claude_command(),
             Message::ShowArchived(show) => {
                 let effects = self
                     .core
@@ -1347,6 +1363,14 @@ impl Shell {
         let session = self.core.workspace.focused_session()?;
         self.refresh_session_file(session);
         self.core.peer_name(session)
+    }
+
+    /// Re-read the session file of every live pane.
+    fn refresh_session_files(&mut self) {
+        let sessions: Vec<SessionId> = self.core.sessions.values().map(|s| s.id).collect();
+        for session in sessions {
+            self.refresh_session_file(session);
+        }
     }
 
     /// Re-read the session file of every pane in the tab at `index`.
@@ -1735,6 +1759,19 @@ mod key_routing {
         (shell, pty)
     }
 
+    /// The id a fresh Claude launch was minted, when `launch` is one and the id
+    /// is a UUID — the shape `--session-id` takes.
+    fn minted_fresh_claude(launch: Option<&Launch>) -> Option<&str> {
+        match launch {
+            Some(Launch::Claude(ClaudeLaunch::Fresh(Some(id))))
+                if termherd_claude::session_id::is_uuid(id) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        }
+    }
+
     const STARTED: &str = "Wed Oct  7 06:48:07 2026";
 
     /// Write Claude's session file for `pid` under `name` into `dir`.
@@ -1771,6 +1808,31 @@ mod key_routing {
             });
         }
         (shell, session)
+    }
+
+    #[test]
+    fn a_sidebar_click_on_a_re_keyed_session_focuses_its_tab_instead_of_resuming_it() {
+        // `/clear` rewrites the session file under the same pid, so no job
+        // change announces it: the click itself must read the file again.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+        std::fs::write(
+            dir.path().join("4399.json"),
+            format!(r#"{{"pid":4399,"sessionId":"re-keyed","procStart":"{STARTED}"}}"#),
+        )
+        .expect("write session file");
+        let _ = shell.launch("/tmp/other".to_string(), Launch::Shell);
+        assert_eq!(shell.core.workspace.active, 1);
+
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "re-keyed".to_string(),
+        });
+        assert_eq!(shell.core.workspace.tabs.len(), 2, "no duplicate resume");
+        assert_eq!(
+            shell.core.workspace.active, 0,
+            "the hosting tab came forward"
+        );
     }
 
     #[test]
@@ -2024,9 +2086,10 @@ mod key_routing {
             placement: termherd_core::Placement::Foreground,
         });
         assert_eq!(outcome.error, None);
-        assert_eq!(
-            pty.launches(),
-            vec![Launch::Claude { resume: None }],
+        let launches = pty.launches();
+        assert_eq!(launches.len(), 1);
+        assert!(
+            minted_fresh_claude(launches.first()).is_some(),
             "a fresh Claude session, no project → home dir"
         );
     }
@@ -3082,6 +3145,8 @@ mod key_routing {
             (Action::Copy, "copy"),
             // No pane, so no Claude whose name could be copied.
             (Action::CopyAgentName, "copy-agent-name"),
+            // No pane, so no idle Claude to type `/desktop` into.
+            (Action::SendToDesktop, "send-to-desktop"),
         ] {
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
@@ -3550,11 +3615,52 @@ mod key_routing {
         let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
         let launches = pty.launches();
         assert_eq!(launches.len(), before + 1, "one new spawn");
-        assert_eq!(
-            launches.last(),
-            Some(&Launch::Claude { resume: None }),
+        assert!(
+            minted_fresh_claude(launches.last()).is_some(),
             "the bot button starts a fresh Claude session — never a shell, never a resume"
         );
+    }
+
+    #[test]
+    fn a_fresh_claude_tab_knows_the_id_it_was_launched_under() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let launches = pty.launches();
+        let first = minted_fresh_claude(launches.get(1)).expect("a minted id");
+        let second = minted_fresh_claude(launches.get(2)).expect("a minted id");
+        assert_ne!(first, second, "every fresh launch gets its own id");
+        assert_eq!(shell.core.tab_claude_session_id(1), Some(first));
+        assert_eq!(shell.core.tab_claude_session_id(2), Some(second));
+    }
+
+    #[test]
+    fn a_resume_and_a_shell_are_launched_without_a_minted_id() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "abc-123".to_string(),
+        });
+        assert_eq!(
+            pty.launches(),
+            vec![
+                Launch::Shell,
+                Launch::Claude(ClaudeLaunch::Resume("abc-123".to_string()))
+            ]
+        );
+    }
+
+    #[test]
+    fn reopening_a_fresh_claude_tab_mints_it_a_new_id() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let closed = shell.core.tab_claude_session_id(1).map(str::to_owned);
+        let _ = shell.update(Message::CloseTab(1));
+        let _ = shell.reopen_closed_tab().expect("a tab to reopen");
+        let launches = pty.launches();
+        let reopened = minted_fresh_claude(launches.last()).expect("a minted id");
+        assert_ne!(Some(reopened), closed.as_deref());
+        assert_eq!(shell.core.tab_claude_session_id(1), Some(reopened));
     }
 
     #[test]
@@ -4461,6 +4567,341 @@ mod key_routing {
         );
     }
 
+    // ---- Claude slash commands, behind a confirmation ---------------------
+
+    use termherd_core::{ClaudeColor, ClaudeCommand};
+
+    const RULE: &str = "──────────";
+
+    /// A screen of `rows`, as a terminal would report it.
+    fn screen_rows(rows: &[&str]) -> Screen {
+        let width = rows
+            .iter()
+            .map(|row| row.chars().count())
+            .max()
+            .unwrap_or(1);
+        let mut screen = Screen::blank(width as u16, rows.len() as u16);
+        for (line, row) in screen.lines.iter_mut().zip(rows) {
+            for (cell, c) in line.iter_mut().zip(row.chars()) {
+                cell.c = c;
+            }
+        }
+        screen
+    }
+
+    /// Claude's input box as it draws it with nothing typed: the hint shows.
+    fn empty_prompt() -> Screen {
+        screen_rows(&["", RULE, "❯ Try \"fix lint errors\"", RULE, "  status"])
+    }
+
+    /// A shell with one Claude tab open, focused and idle at an empty prompt.
+    fn shell_with_idle_claude() -> (Shell, Arc<RecordingPty>, SessionId) {
+        let (mut shell, pty) = empty_shell();
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(ClaudeLaunch::Fresh(None)),
+        );
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Idle,
+        });
+        shell.screens.insert(session, empty_prompt());
+        (shell, pty, session)
+    }
+
+    #[test]
+    fn a_draft_in_claudes_prompt_refuses_the_command_and_names_the_draft() {
+        // Ctrl+U clears one line; a draft of two would be submitted with the
+        // command as a prompt to the model. So a draft refuses outright.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        shell.screens.insert(
+            session,
+            screen_rows(&[RULE, "❯ fix the\\", "  login bug", RULE]),
+        );
+        let outcome = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some(
+                r#"Claude's prompt holds a draft ("fix the\\\nlogin bug"); clear or send it first"#
+            )
+        );
+        assert!(shell.keyboard_owner().is_none());
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn a_menu_over_claudes_prompt_refuses_the_command() {
+        // Idle, but a picker has the keyboard: Enter would pick an entry.
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        shell.screens.insert(
+            session,
+            screen_rows(&["Select model", "❯ 1. Default", "  2. Opus"]),
+        );
+        let outcome = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("Claude's input prompt is not on screen")),
+            "{:?}",
+            outcome.error
+        );
+
+        shell.screens.insert(
+            session,
+            Screen {
+                scrolled: true,
+                ..empty_prompt()
+            },
+        );
+        let scrolled = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert!(scrolled.error.is_some(), "a view scrolled off the prompt");
+    }
+
+    #[test]
+    fn a_draft_typed_while_the_prompt_was_up_keeps_it_open_and_says_why() {
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        shell
+            .screens
+            .insert(session, screen_rows(&[RULE, "❯ half typed", RULE]));
+
+        let steps = press_all(&mut shell, &["enter"]);
+        assert_eq!(
+            steps,
+            vec![PressStep::Refused {
+                overlay: "claude-command-confirm".to_owned(),
+                reason: "Claude's prompt holds a draft (\"half typed\"); clear or send it first"
+                    .to_owned(),
+            }],
+            "a caller is told nothing was typed, not that the prompt took the key"
+        );
+        assert!(pty.writes().is_empty());
+        assert_eq!(
+            shell.keyboard_owner(),
+            Some(KeyboardOwner::ClaudeCommand),
+            "the prompt stays, showing the refusal"
+        );
+        assert!(
+            shell
+                .claude_command
+                .as_ref()
+                .is_some_and(|pending| pending.refused.is_some())
+        );
+
+        shell.screens.insert(session, empty_prompt());
+        let _ = press_all(&mut shell, &["enter"]);
+        assert_eq!(
+            pty.writes().len(),
+            2,
+            "once the draft is gone, enter types it"
+        );
+    }
+
+    #[test]
+    fn a_physical_enter_right_after_a_remote_arm_is_ignored() {
+        // The user may be typing elsewhere when an agent arms the prompt; the
+        // Enter ending their own line must not confirm what they never read.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+
+        let _ = shell.update(Message::Key(enter.clone()));
+        assert!(pty.writes().is_empty(), "swallowed during the grace");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+
+        if let Some(pending) = shell.claude_command.as_mut() {
+            pending.enter_ignored_until = Some(Instant::now() - std::time::Duration::from_secs(1));
+        }
+        let _ = shell.update(Message::Key(enter));
+        assert_eq!(pty.writes().len(), 2, "after it, enter confirms");
+    }
+
+    #[test]
+    fn only_a_remote_arm_holds_enter_back_and_never_escape() {
+        let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+        let escape = press(Key::Named(Named::Escape), Modifiers::default(), None);
+
+        let (mut local, _pty, _session) = shell_with_idle_claude();
+        let _ = local.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert!(
+            !local.enter_too_soon(&enter, Instant::now()),
+            "the user read it"
+        );
+
+        let (mut remote, _pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut remote, session, ClaudeCommand::Desktop);
+        assert!(remote.enter_too_soon(&enter, Instant::now()));
+        assert!(!remote.enter_too_soon(&escape, Instant::now()));
+    }
+
+    /// Arm `command` for `session` the way the MCP tool does.
+    fn arm_over_bridge(
+        shell: &mut Shell,
+        session: SessionId,
+        command: ClaudeCommand,
+    ) -> super::bridge::ActionOutcome {
+        shell
+            .perform_action(BridgeAction::ClaudeCommand {
+                session: session.0.get(),
+                command,
+            })
+            .0
+    }
+
+    #[test]
+    fn an_armed_claude_command_types_nothing_until_enter_then_clears_and_submits() {
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let command = ClaudeCommand::rename("api work").expect("a name");
+
+        let outcome = arm_over_bridge(&mut shell, session, command);
+        assert_eq!(outcome.error, None);
+        assert_eq!(
+            outcome.detail,
+            Some(super::bridge::ActionDetail::ClaudeCommand {
+                line: "/rename api work".to_owned(),
+                overlay: "claude-command-confirm",
+            }),
+            "the caller is told the exact line and the prompt holding the keyboard"
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+        assert!(pty.writes().is_empty(), "arming types nothing");
+
+        assert_eq!(
+            press_chord(&mut shell, "enter"),
+            PressStep::Overlay("claude-command-confirm".to_owned())
+        );
+        assert_eq!(
+            pty.writes_seen(),
+            vec![
+                (session, b"\x15/rename api work".to_vec()),
+                (session, b"\r".to_vec()),
+            ],
+            "the draft is cleared and the line typed, then Enter on its own"
+        );
+        assert!(shell.keyboard_owner().is_none(), "and the prompt lets go");
+    }
+
+    #[test]
+    fn escape_drops_an_armed_claude_command_without_typing_it() {
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+
+        let _ = press_chord(&mut shell, "escape");
+        assert!(shell.keyboard_owner().is_none());
+        let _ = press_chord(&mut shell, "enter");
+        assert!(
+            pty.writes().iter().all(|bytes| !bytes.starts_with(b"\x15")),
+            "a later enter reaches the terminal, never the dropped command"
+        );
+    }
+
+    #[test]
+    fn a_claude_command_is_refused_for_a_claude_not_idle_or_a_shell() {
+        let (mut shell, pty, claude) = shell_with_idle_claude();
+        let _ = shell.update(Message::PtyStatus {
+            session: claude,
+            status: SessionStatus::Busy,
+        });
+        let busy = arm_over_bridge(&mut shell, claude, ClaudeCommand::Desktop);
+        assert_eq!(
+            busy.error.as_deref(),
+            Some("the session is busy, not idle at its prompt")
+        );
+
+        let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
+        let plain = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session: plain,
+            status: SessionStatus::Idle,
+        });
+        let shell_refusal = arm_over_bridge(&mut shell, plain, ClaudeCommand::Desktop);
+        assert_eq!(
+            shell_refusal.error.as_deref(),
+            Some("the session is not a Claude session")
+        );
+
+        let unknown = shell
+            .perform_action(BridgeAction::ClaudeCommand {
+                session: 999,
+                command: ClaudeCommand::Desktop,
+            })
+            .0;
+        assert!(unknown.error.is_some(), "an unknown handle is refused");
+
+        assert!(shell.keyboard_owner().is_none(), "no refusal arms a prompt");
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn a_command_confirmed_after_claude_turned_busy_is_not_typed() {
+        // The prompt can sit open while Claude starts work; typing then would
+        // queue the line behind it, so the confirmation asks again.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Color(ClaudeColor::Red));
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+
+        let _ = shell.update(Message::ConfirmClaudeCommand);
+        assert!(pty.writes().is_empty());
+        assert_eq!(
+            shell
+                .claude_command
+                .as_ref()
+                .and_then(|p| p.refused.clone()),
+            Some(termherd_core::CommandRefusal::NotIdle(SessionStatus::Busy)),
+            "the prompt stays open and says why"
+        );
+    }
+
+    #[test]
+    fn a_claude_command_is_not_armed_over_another_open_prompt() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        shell.archiving = Some("sess".to_string());
+
+        let outcome = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some("another prompt is open (archive-confirm); answer it first")
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Archive));
+    }
+
+    #[test]
+    fn send_to_desktop_arms_the_prompt_for_the_focused_claude_only() {
+        let (mut shell, pty, _session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("send-to-desktop".to_owned())]
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+        let _ = shell.update(Message::ConfirmClaudeCommand);
+        assert_eq!(pty.writes()[0], b"\x15/desktop");
+
+        let (mut plain, _pty) = shell_with_terminal();
+        let (refused, _task) = plain.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert_eq!(
+            refused.steps,
+            vec![inert("send-to-desktop", "no-context")],
+            "a focused shell has no Claude to send"
+        );
+        assert!(plain.keyboard_owner().is_none());
+    }
+
+    #[test]
+    fn an_armed_claude_command_shows_its_own_modal() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert!(matches!(
+            shell.active_confirmation(),
+            Some((_, Message::CancelClaudeCommand))
+        ));
+    }
+
     fn arm_overlay(shell: &mut Shell, owner: KeyboardOwner) {
         match owner {
             KeyboardOwner::TabRename => {
@@ -4476,6 +4917,15 @@ mod key_routing {
             KeyboardOwner::Quit => shell.closing_window = Some(window::Id::unique()),
             KeyboardOwner::TabClose(index) => shell.closing = Some(index),
             KeyboardOwner::Archive => shell.archiving = Some("sess".to_string()),
+            KeyboardOwner::ClaudeCommand => {
+                let session = shell.core.workspace.focused_session().expect("focused");
+                shell.claude_command = Some(claude_command::PendingCommand {
+                    session,
+                    command: termherd_core::ClaudeCommand::Desktop,
+                    enter_ignored_until: None,
+                    refused: None,
+                });
+            }
             KeyboardOwner::Settings => {
                 let _ = shell.update(Message::ToggleSettings);
             }
@@ -4833,7 +5283,10 @@ mod key_routing {
         // A Claude session is a running foreground process even when idle, so
         // its tab must always confirm before closing.
         let (mut shell, pty) = shell_with_terminal();
-        let _ = shell.launch("/tmp/claude".to_string(), Launch::Claude { resume: None });
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(ClaudeLaunch::Fresh(None)),
+        );
         let claude_tab = shell.core.workspace.active;
         let _ = shell.update(Message::RequestCloseTab(claude_tab));
         assert_eq!(shell.closing, Some(claude_tab), "a Claude tab confirms");
@@ -5096,7 +5549,7 @@ mod key_routing {
             url: "http://127.0.0.1:9/mcp".into(),
         });
         let session = session_id(1);
-        let mut spec = bare_spawn(session, Launch::Claude { resume: None });
+        let mut spec = bare_spawn(session, Launch::Claude(ClaudeLaunch::Fresh(None)));
 
         shell.attach_mcp(&mut spec);
 
@@ -5124,8 +5577,8 @@ mod key_routing {
         shell.mcp_endpoint = Some(crate::mcp::Endpoint {
             url: "http://127.0.0.1:9/mcp".into(),
         });
-        let mut first = bare_spawn(session_id(1), Launch::Claude { resume: None });
-        let mut second = bare_spawn(session_id(2), Launch::Claude { resume: None });
+        let mut first = bare_spawn(session_id(1), Launch::Claude(ClaudeLaunch::Fresh(None)));
+        let mut second = bare_spawn(session_id(2), Launch::Claude(ClaudeLaunch::Fresh(None)));
         shell.attach_mcp(&mut first);
         shell.attach_mcp(&mut second);
         assert_ne!(
@@ -5151,7 +5604,7 @@ mod key_routing {
         // The server failed to bind (or no runtime): `mcp_endpoint` is `None`, so
         // even a Claude launch goes out without the bridge rather than panicking.
         let (mut shell, _pty) = empty_shell();
-        let mut spec = bare_spawn(session_id(1), Launch::Claude { resume: None });
+        let mut spec = bare_spawn(session_id(1), Launch::Claude(ClaudeLaunch::Fresh(None)));
         shell.attach_mcp(&mut spec);
         assert!(spec.mcp.is_none(), "no endpoint → no injection");
     }
@@ -5189,10 +5642,7 @@ mod key_routing {
         let before = pty.spawn_count();
         let _ = shell.run_action(Action::NewClaudeSessionHere);
         assert_eq!(pty.spawn_count(), before + 1);
-        assert_eq!(
-            pty.launches().last(),
-            Some(&Launch::Claude { resume: None })
-        );
+        assert!(minted_fresh_claude(pty.launches().last()).is_some());
         assert_eq!(focused_cwd(&shell).as_deref(), Some("/tmp/project"));
     }
 
@@ -5792,16 +6242,12 @@ mod key_routing {
         let (mut shell, pty) = shell_with_terminal();
         let _ = shell.launch(
             "/tmp/project".to_string(),
-            Launch::Claude {
-                resume: Some("sess".to_string()),
-            },
+            Launch::Claude(ClaudeLaunch::Resume("sess".to_string())),
         );
         let sess_tab = shell.core.workspace.active;
         let _ = shell.launch(
             "/tmp/other".to_string(),
-            Launch::Claude {
-                resume: Some("other".to_string()),
-            },
+            Launch::Claude(ClaudeLaunch::Resume("other".to_string())),
         );
         assert_ne!(
             shell.core.workspace.active, sess_tab,

@@ -5,13 +5,20 @@
 
 use iced::Task;
 use termherd_core::workspace::SessionId;
-use termherd_core::{Effect, Launch, LaunchSpec, Placement};
+use termherd_core::{ClaudeLaunch, Effect, Launch, LaunchSpec, Placement};
 
 use super::{Focus, Message, Shell, home_dir};
 
+/// A new Claude session id: a v4 UUID, the shape `claude --session-id` takes.
+/// Minted in the shell because `core` holds no source of randomness.
+fn mint_session_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 impl Shell {
     /// Launch a terminal: register it in `core`, perform the spawn, focus it,
-    /// and size its PTY to the current pane (FR4).
+    /// and size its PTY to the current pane (FR4). A fresh Claude starts under
+    /// an id minted here, so its transcript is known from the first keystroke.
     pub(super) fn launch(&mut self, cwd: String, launch: Launch) -> Task<Message> {
         self.launch_at(cwd, launch, Placement::Foreground).1
     }
@@ -26,6 +33,7 @@ impl Shell {
         launch: Launch,
         placement: Placement,
     ) -> (Option<SessionId>, Task<Message>) {
+        let launch = launch.with_fresh_id(mint_session_id);
         let title = self.core.tab_title(&cwd, &launch);
         let effects = self
             .core
@@ -81,7 +89,7 @@ impl Shell {
         let root = termherd_scan::repo_root(std::path::Path::new(&cwd))
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or(cwd);
-        Some(self.launch(root, Launch::Claude { resume: None }))
+        Some(self.launch(root, Launch::Claude(ClaudeLaunch::Fresh(None))))
     }
 
     /// Reopen the most recently closed tab, restoring its mode and
@@ -90,7 +98,9 @@ impl Shell {
     /// close stack is empty (`core` yields no effects), so a caller learns there
     /// was nothing to reopen instead of being told a tab came back.
     pub(super) fn reopen_closed_tab(&mut self) -> Option<Task<Message>> {
-        let effects = self.core.apply(termherd_core::Event::ReopenClosedTab);
+        let effects = self.core.apply(termherd_core::Event::ReopenClosedTab {
+            fresh_claude_id: mint_session_id(),
+        });
         if effects.is_empty() {
             return None;
         }
