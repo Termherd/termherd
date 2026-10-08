@@ -17,7 +17,9 @@ use super::{
     COLOR_MARK_WIDTH, CardFacts, card_frame, card_secondary_line, claude_color, clip, detail_lines,
     kind_icon, session_card, status_dot,
 };
+use crate::shell::color_picker::ColorPicker;
 use crate::shell::{Message, Shell, tab_rename_id};
+use crate::strings;
 
 impl Shell {
     /// The tab strip (FR5): one chip per open session, the active one
@@ -149,11 +151,38 @@ impl Shell {
             .entries()
             .map(|entry| text(entry.label).size(12).into());
         Some(list_card(
-            self.active_tab_title(),
+            vec![list_heading(self.active_tab_title())],
             lines,
             menu.selected(),
             Message::RunTabMenuEntry,
             Message::HoverTabMenuEntry,
+        ))
+    }
+
+    /// The open colour picker's card: the focused tab's title, why the last
+    /// pick was refused when it was, then one line per colour with a swatch
+    /// of it beside its name. `None` when no picker is open.
+    pub(in crate::shell) fn color_picker_card(&self) -> Option<Element<'_, Message>> {
+        let picker = self.live_color_picker()?;
+        let mut heading = vec![list_heading(self.active_tab_title())];
+        if let Some(reason) = picker.refused() {
+            heading.push(card_secondary_line(strings::color_pick_refused(reason)));
+        }
+        let lines = ColorPicker::colors().map(|color| {
+            row![
+                color_swatch(color),
+                text(strings::color_choice(color)).size(12)
+            ]
+            .spacing(8)
+            .align_y(iced::Center)
+            .into()
+        });
+        Some(list_card(
+            heading,
+            lines,
+            picker.selected(),
+            Message::PickColorPickerEntry,
+            Message::HoverColorPickerEntry,
         ))
     }
 
@@ -203,19 +232,43 @@ impl Shell {
     }
 }
 
+/// A list's heading: the title of the tab it acts on.
+fn list_heading<'a>(title: &str) -> Element<'a, Message> {
+    text(clip(title, 32)).size(11).into()
+}
+
+/// A square of `color` as the chrome paints it; for `default`, an empty frame,
+/// the absence of a colour it stands for.
+fn color_swatch<'a>(color: ClaudeColor) -> Element<'a, Message> {
+    container(text(""))
+        .width(12)
+        .height(12)
+        .style(move |theme: &iced::Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: claude_color(color, palette.is_dark).map(iced::Background::Color),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                ..container::Style::default()
+            }
+        })
+        .into()
+}
+
 /// A list drawn over the window for the focused tab: its title, then one
 /// line per entry, the `selected` one filled. A click on a line runs it and
 /// hovering selects it, so the pointer moves the selection the arrows move.
 fn list_card<'a>(
-    title: &str,
+    heading: Vec<Element<'a, Message>>,
     lines: impl Iterator<Item = Element<'a, Message>>,
     selected: usize,
     on_run: fn(usize) -> Message,
     on_hover: fn(usize) -> Message,
 ) -> Element<'a, Message> {
-    let mut card = column![text(clip(title, 32)).size(11)]
-        .spacing(2)
-        .width(240);
+    let mut card = column(heading).spacing(2).width(240);
     for (position, label) in lines.enumerate() {
         let style = if position == selected {
             button::primary

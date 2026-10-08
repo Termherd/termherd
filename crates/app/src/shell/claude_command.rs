@@ -2,7 +2,7 @@
 //! into — the one write path for every edit termherd asks Claude to make.
 //!
 //! Every surface arms the same prompt through [`Shell::arm_claude_command`]:
-//! the keymap, the MCP tool, and the rename and colour menus to come. Nothing
+//! the keymap, the MCP tool, the tab colour picker, and the rename to come. Nothing
 //! is typed until the prompt is confirmed, and the confirmation asks `core`
 //! again, against the screen as it is then: the session may have started work,
 //! or a draft may have appeared, while the prompt was up.
@@ -105,7 +105,7 @@ impl Shell {
 
     /// What `session`'s screen shows of Claude's prompt. A session that has
     /// not drawn, or whose view is scrolled back, shows none.
-    fn prompt_input(&self, session: SessionId) -> PromptInput {
+    pub(super) fn prompt_input(&self, session: SessionId) -> PromptInput {
         match self.screens.get(&session) {
             Some(screen) if !screen.scrolled => read_prompt(&screen.text()),
             _ => PromptInput::NotVisible,
