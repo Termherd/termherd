@@ -14,6 +14,23 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   opens, filled with the tab's current name. With no tab open it does nothing,
   and reports `inert` / `no-context` over MCP (#338).
 
+### Changed (fresh Claude sessions start under a known id)
+
+- Every fresh Claude session now starts as `claude --session-id <uuid>`, with
+  an id termherd mints, so a new tab knows its conversation from the first
+  keystroke rather than only once it is resumed (#336). Its sidebar row, once
+  scanned, brings the open tab forward instead of resuming a second copy, and
+  its tab hover shows the same session card. An id Claude's own session file
+  proves wins, and is kept after Claude exits, so a re-key by `/clear` or a
+  plan-accept is followed once termherd next reads that file (a tab hover or a
+  sidebar click). Reopening a closed Claude tab resumes the conversation it
+  held last when the sidebar lists it, else starts a new one under a new id.
+- A resume id outside Claude's charset (or starting with `-`) is no longer
+  typed: the tab opens a bare shell instead.
+- **The Claude Code CLI floor rises from 1.0.61 to 2.0.73**, an estimate:
+  Claude Code's changelog never records when `--session-id` arrived, and
+  2.0.73 is the oldest release whose notes show it in use.
+
 ### Added (copy a session's agent name)
 
 - A `copy-agent-name` action, unbound by default, copies the peer name Claude

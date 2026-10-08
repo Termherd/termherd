@@ -9,6 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use termherd_claude::digest::digest_session;
+use termherd_claude::session_id::is_valid as is_valid_session_id;
 use termherd_core::SessionRecord;
 use termherd_core::ports::ScanError;
 
@@ -49,21 +50,6 @@ pub(crate) fn scan_root(root: &Path, cache: &mut ScanCache) -> Result<ScanOutcom
     Ok(ScanOutcome { records, skipped })
 }
 
-/// Whether `id` is a well-formed Claude session id: the charset Claude Code
-/// mints (`[A-Za-z0-9_-]`), non-empty, and not starting with `-`. The stem of a
-/// session `.jsonl` becomes the `--resume <id>` termherd types into the shell,
-/// so a stem outside this charset is refused at the scan boundary rather than
-/// trusted in a shell grammar that differs per platform — and a leading `-`
-/// (e.g. `--help`, `-rf`) is refused too, since `claude` would parse it as a
-/// flag rather than the resume value.
-fn is_valid_session_id(id: &str) -> bool {
-    !id.is_empty()
-        && !id.starts_with('-')
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-}
-
 /// One project folder → its session records, or `None` when no project
 /// path can be derived. Unchanged files reuse `old`'s digests; whatever this
 /// scan learns lands in `next`.
@@ -96,7 +82,7 @@ fn scan_folder(dir: &Path, old: &ScanCache, next: &mut ScanCache) -> Option<Vec<
             continue;
         };
         // Refused at the same per-file tier as an unparseable transcript below;
-        // see `is_valid_session_id` for why the stem is untrusted.
+        // see `termherd_claude::session_id::is_valid` for why the stem is untrusted.
         if !is_valid_session_id(&session_id) {
             continue;
         }
@@ -235,34 +221,6 @@ mod tests {
             records.is_empty(),
             "a flag-shaped filename must yield no session, got {records:?}"
         );
-    }
-
-    #[test]
-    fn is_valid_session_id_accepts_only_the_claude_charset() {
-        for ok in [
-            "abc",
-            "9f8e7d6c-4b2a-4c1d-8e3f-0123456789ab",
-            "with_underscore",
-            "MiXeD-123",
-        ] {
-            assert!(is_valid_session_id(ok), "{ok:?} is a well-formed id");
-        }
-        for bad in [
-            "",       // empty
-            "a b",    // space
-            "x;rm",   // command separator
-            "x$(id)", // command substitution
-            "a`id`",  // backtick
-            "a|b",    // pipe
-            "a/b",    // path separator
-            "a'b",    // quote
-            "a\nb",   // newline
-            "-rf",    // leading dash → `claude --resume -rf` reads it as a flag
-            "--help", // ditto, a real claude flag
-            "-",      // bare dash
-        ] {
-            assert!(!is_valid_session_id(bad), "{bad:?} must be refused");
-        }
     }
 
     #[test]

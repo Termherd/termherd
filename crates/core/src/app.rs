@@ -19,6 +19,7 @@ use crate::record::Recording;
 use crate::workspace::{SessionId, Workspace};
 
 mod capture;
+mod command;
 mod effects;
 mod events;
 mod hover;
@@ -37,6 +38,7 @@ mod testsupport;
 
 use settings::FontState;
 
+pub use command::CommandRefusal;
 pub use effects::Effect;
 pub use events::Event;
 pub use hover::{
@@ -48,7 +50,8 @@ pub use pointer::{
     pointer_select,
 };
 pub use session::{
-    ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec,
+    ClaudeLaunch, ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus,
+    Sessions, SpawnSpec,
 };
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
@@ -227,7 +230,7 @@ impl App {
                 self.workspace.move_tab(from, to);
                 Vec::new()
             }
-            Event::ReopenClosedTab => self.reopen_closed_tab(),
+            Event::ReopenClosedTab { fresh_claude_id } => self.reopen_closed_tab(fresh_claude_id),
             Event::RenameTab { index, title } => {
                 self.workspace.rename_tab(index, &title);
                 Vec::new()
@@ -306,6 +309,11 @@ impl App {
                 self.window_focused = focused;
                 Vec::new()
             }
+            Event::SendClaudeCommand {
+                session,
+                command,
+                prompt,
+            } => self.send_claude_command(session, &command, &prompt),
         }
     }
 

@@ -187,7 +187,7 @@ impl PtyHost for PtyManager {
             .and_then(|config| write_mcp_config(spec.session, config));
         // A Claude launch also carries the settings overlay that keeps its OSC
         // title — termherd's only status channel for it — switched on.
-        let settings_path = matches!(spec.launch, termherd_core::Launch::Claude { .. })
+        let settings_path = matches!(spec.launch, termherd_core::Launch::Claude(_))
             .then(|| write_title_settings(spec.session))
             .flatten();
         if let Some(command) = launch_command(

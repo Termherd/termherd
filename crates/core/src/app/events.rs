@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 
 use crate::browser::SessionRecord;
+use crate::claude_command::{ClaudeCommand, PromptInput};
 use crate::metadata::Overlay;
 use crate::snapshot::SnapshotInputs;
 use crate::workspace::{Direction, SessionId, SplitDir};
@@ -115,8 +116,12 @@ pub enum Event {
         to: usize,
     },
     /// Reopen the most recently closed tab, restoring its mode and
-    /// directory. A no-op when nothing has been closed.
-    ReopenClosedTab,
+    /// directory. A no-op when nothing has been closed. A fresh Claude tab
+    /// comes back as a new conversation under `fresh_claude_id`, minted by the
+    /// shell: the id it closed with already names a transcript.
+    ReopenClosedTab {
+        fresh_claude_id: String,
+    },
     /// Give the tab at `index` a manual name, overriding its derived title
     /// (FR5). A blank title clears the override; the manual name is never
     /// clobbered by a later OSC/digest update. A pure relabel — no PTY touched.
@@ -236,4 +241,14 @@ pub enum Event {
     /// (skip the OS banner — the per-window suppression the OS itself applies
     /// when unfocused already covers that case).
     WindowFocusChanged(bool),
+    /// The user confirmed typing a Claude slash command into a session. Sent
+    /// only if the session can still take it — see
+    /// [`App::claude_command_check`](super::App::claude_command_check).
+    SendClaudeCommand {
+        session: SessionId,
+        command: ClaudeCommand,
+        /// The session's prompt as its screen shows it now — read again at
+        /// the confirmation, not carried over from the arming.
+        prompt: PromptInput,
+    },
 }

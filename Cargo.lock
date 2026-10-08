@@ -3939,6 +3939,7 @@ dependencies = [
  "proptest",
  "termherd-claude",
  "thiserror 2.0.18",
+ "unicode-segmentation",
 ]
 
 [[package]]

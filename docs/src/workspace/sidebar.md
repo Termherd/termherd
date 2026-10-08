@@ -38,7 +38,10 @@ Toggle it with <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>B</kbd>.
 Click a project to expand it, then a session to resume it in a new tab.
 
 Beside each project row are two launch buttons: **`❯`** opens a plain shell in
-that project's directory, **`✳`** starts a fresh Claude session there. The same
+that project's directory, **`✳`** starts a fresh Claude session there — under a
+session id TermHerd picks (`claude --session-id <uuid>`), so once the session
+shows up in the list, clicking it brings its tab forward instead of resuming
+a second copy. The same
 two actions are on the keyboard as <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>T</kbd>
 and <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>, which use the
 *focused* session's
