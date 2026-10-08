@@ -5,6 +5,8 @@
 
 use std::num::NonZeroU64;
 
+use termherd_claude::color::ClaudeColor;
+
 /// Stable session identifier. Non-zero so `Option<SessionId>` is niche-sized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SessionId(pub NonZeroU64);
@@ -71,6 +73,10 @@ pub struct Tab {
     /// never clobbered by a later derived/OSC update — the manual rename wins.
     /// `None` means "use the derived title"; a rename to blank reverts to it.
     pub custom_title: Option<String>,
+    /// The colour picked for this tab in termherd, for the panes Claude does
+    /// not colour. `Some(Default)` is a pick of "none", which hides even the
+    /// colour of a Claude run by hand in a shell pane; `None` was never picked.
+    pub color: Option<ClaudeColor>,
 }
 
 impl Tab {
@@ -131,6 +137,7 @@ impl Workspace {
             focus: Vec::new(),
             title: title.into(),
             custom_title: None,
+            color: None,
         });
         self.active = self.tabs.len() - 1;
     }

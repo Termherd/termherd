@@ -56,6 +56,7 @@ pub use session::{
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
 pub use snapshot::claude_identity;
+pub use tabs::ColorKeeper;
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -235,6 +236,7 @@ impl App {
                 self.workspace.rename_tab(index, &title);
                 Vec::new()
             }
+            Event::SetTabColor { index, color } => self.set_tab_color(index, color),
             Event::SplitFocused(dir) => self.split_focused(dir),
             Event::CloseFocusedPane => match self.workspace.close_focused() {
                 Some(id) => {
@@ -361,6 +363,10 @@ mod tests {
             Event::RenameTab {
                 index: 0,
                 title: "t".into(),
+            },
+            Event::SetTabColor {
+                index: 0,
+                color: termherd_claude::color::ClaudeColor::Red,
             },
         ];
         for event in effect_free {
