@@ -56,7 +56,7 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing yet (`open-new-session` is the one) | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, colour or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to (or to colour) | **create it**, then retry |
 
 Each handler that can refuse this way says so at its own refusal site.
 
@@ -72,7 +72,7 @@ selection, and `copy` runs on it.
 
 ## Answering an overlay
 
-`escape` usually cancels; `enter` usually confirms. Four cautions:
+`escape` usually cancels; `enter` usually confirms. Six cautions:
 
 - On **`quit-confirm`**, `enter` quits the app — killing every session and the
   connection you are speaking over.
@@ -95,6 +95,14 @@ selection, and `copy` runs on it.
   listed only when the focused pane has a named Claude in front of it, which
   shifts every entry below it by one. The menu closes if its pane loses focus,
   so a `focus_pane` call while it is open dismisses it.
+- **`tab-color-picker`** (opened by `pick-tab-color`, or the tab menu's
+  colour entry) answers `up`, `down` and `enter` like the tab menu; its lines
+  are `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan`,
+  then *None*, and it opens on the colour the tab wears, else on `red`.
+  `enter` on a shell tab sets the colour and closes the list. On a Claude tab
+  it closes the list and opens `claude-command-confirm` for `/color <name>`,
+  so a second `enter` types it; if that Claude cannot take a command any more,
+  `enter` answers `refused` with the reason and the list stays open.
 - On **`claude-command-confirm`**, `enter` types the slash command the
   prompt names into its Claude session — or answers `refused` with the reason,
   leaving the prompt open, when Claude went busy or a draft appeared meanwhile;

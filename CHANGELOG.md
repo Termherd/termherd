@@ -7,6 +7,24 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (pick a tab's colour)
+
+- The tab menu's *Tab colour…*, or a `pick-tab-color` action (unbound by
+  default), opens a list of the eight colours Claude's `/color` takes, and
+  *None*, over the focused tab. On a Claude tab the pick is typed as
+  `/color <name>` behind the slash-command prompt, so Claude keeps the colour
+  and the tab shows it once its transcript records it; the list is offered
+  only while that Claude is idle with an empty prompt. A shell tab keeps the
+  colour itself, until it closes. The arrows, Enter and Escape drive the list,
+  so MCP `press_keys` / `run_action` can too (#343).
+
+### Changed (an agent's key press holds a physical Enter back)
+
+- A slash-command prompt armed through MCP `press_keys` or `run_action` —
+  `send-to-desktop`, or a colour picked for a Claude tab — now ignores a
+  physical Enter for 600 ms, as one armed by the `claude_command` tool already
+  did (#343).
+
 ### Added (a context menu on each tab)
 
 - Right-click a tab, or press `open-tab-menu` (⌘⇧M on macOS, Ctrl+Shift+M on

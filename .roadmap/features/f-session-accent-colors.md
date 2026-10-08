@@ -2,7 +2,7 @@
 id = "F-session-accent-colors"
 type = "feature"
 area = ["workspace", "sidebar"]
-status = "todo"
+status = "done"
 target = ["Could"]
 +++
 
@@ -25,6 +25,12 @@ Slice 1 shipped (#342): the digest keeps the last `agent-color` value, an
 open tab follows it at the next rescan, and the focused pane decides a split
 tab. A Claude tab is outlined and its sidebar row barred in the colour, and
 the hover card names it — the cue for anyone who cannot tell red from green.
-The MCP `snapshot` reports it per pane. The pane border is not coloured yet.
-Slice 2 (#343) is still to do. Torture report:
+The MCP `snapshot` reports it per pane.
+
+Slice 2 shipped (#343): the tab menu's *Tab colour…* and a `pick-tab-color`
+action open the palette, plus *None*, over the focused tab. Who keeps a
+pane's colour is decided by its launch, the rule the slash-command check
+uses: a pick for a Claude pane is typed as `/color` behind the confirmation,
+and a shell tab stores it in `core` until the tab closes. The pane border is
+still not coloured. Torture report:
 `.personal/feature-torture/reports/F-session-accent-colors.md`.
