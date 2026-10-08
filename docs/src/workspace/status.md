@@ -69,7 +69,7 @@ desktop notification titled with the session's tab name and carrying Claude's
 message. None is posted for the pane you are already looking at while the
 TermHerd window has focus.
 
-**Clicking the notification is meant to bring you back to that session**:
+**Clicking the notification brings you back to that session**:
 TermHerd comes to the front — restored first if it was minimised — and
 activates the tab and pane that raised it, the same reveal the MCP
 [`focus_pane`](../mcp/live-bridge.md) tool performs. The notification
@@ -80,12 +80,13 @@ click brings TermHerd forward and changes nothing else; an inline rename is
 dismissed, as any click elsewhere dismisses it. Dismissing the notification
 does nothing.
 
-> **Not yet confirmed on any OS.** No real click has been tried; what follows
-> is read from the notification libraries' sources.
+> **Confirmed on macOS only.** A real click brought the right tab forward. The
+> minimised-window and open-prompt cases, and the Linux and Windows rows, are
+> read from the notification libraries' sources.
 
 | OS | Click reaches TermHerd | Window comes forward |
 | --- | --- | --- |
-| macOS | ❓ expected, while the banner is still in the notification centre | ❓ |
+| macOS | ✅ while the banner is still in the notification centre | ✅ |
 | Linux | ⚠️ only if the notification server supports actions | ❓ Wayland may refuse |
 | Windows | ⚠️ only while the toast is on screen — once it times out into the action centre, the click is lost | ❓ may only flash the taskbar |
 
