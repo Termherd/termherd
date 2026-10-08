@@ -91,14 +91,17 @@ selection, and `copy` runs on it.
   that action did — `ran` with its name, or `inert` with its reason — and
   every other press while the menu is open reports `overlay: "tab-menu"`.
   The entries and their order are on the
-  [tabs page](../workspace/tabs-and-splits.md#tabs); *Copy agent name* is
-  listed only when the focused pane has a named Claude in front of it, which
-  shifts every entry below it by one. The menu closes if its pane loses focus,
-  so a `focus_pane` call while it is open dismisses it.
+  [tabs page](../workspace/tabs-and-splits.md#tabs). Two are listed only
+  when they could work: *Tab colour…* when a colour can be picked for the
+  focused pane (not on a busy Claude), *Copy agent name* when a named Claude
+  is in front of it. Each one left out shifts every entry below it by one.
+  The menu closes if its pane loses focus, so a `focus_pane` call while it is
+  open dismisses it.
 - **`tab-color-picker`** (opened by `pick-tab-color`, or the tab menu's
   colour entry) answers `up`, `down` and `enter` like the tab menu; its lines
   are `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan`,
-  then *None*, and it opens on the colour the tab wears, else on `red`.
+  then *None*, and it opens on the colour the tab wears — on *None* when it
+  wears none, so an immediate `enter` leaves it uncoloured.
   `enter` on a shell tab sets the colour and closes the list. On a Claude tab
   it closes the list and opens `claude-command-confirm` for `/color <name>`,
   so a second `enter` types it; if that Claude cannot take a command any more,
