@@ -109,6 +109,12 @@ pub enum Event {
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.
     CloseTab(usize),
+    /// Close the pane hosting `SessionId` wherever it lives, killing its PTY,
+    /// without bringing it into view first: the active tab and the focus stay
+    /// unless the closed pane held the focus, which then passes to its
+    /// sibling. A lone pane closes its tab, which goes on the reopen stack as
+    /// any tab close does. Unknown sessions are ignored.
+    ClosePane(SessionId),
     /// The user dragged the tab at `from` to rest at index `to` (FR5). A
     /// pure reorder: no PTY is touched, so it yields no effects.
     MoveTab {

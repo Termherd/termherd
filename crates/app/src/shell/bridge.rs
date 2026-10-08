@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use iced::futures::{SinkExt, Stream};
+use termherd_core::Placement;
 use termherd_core::{
     Action as KeymapAction, App, ClaudeCommand, ClaudeIdentity, KeyChord, LiveSession,
     PointerEvent, PointerRoute, SessionKind, SessionStatus, SnapshotFilter, SnapshotInputs,
@@ -245,10 +246,12 @@ impl fmt::Debug for ShotResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
     /// Open a new session in `project` (or the home dir when `None`), running
-    /// `kind`. → `Event::LaunchSession`, via the shell's own launch path.
+    /// `kind`; a background `placement` appends its tab without taking focus.
+    /// → `Event::LaunchSession`, via the shell's own launch path.
     Open {
         project: Option<String>,
         kind: SessionKind,
+        placement: Placement,
     },
     /// Split a pane, opening a fresh session beside it. Splits the focused pane,
     /// or `pane` when given (revealed first, so a pane in another tab is
@@ -262,8 +265,9 @@ pub enum Action {
     Rename { tab: usize, title: String },
     /// Close a pane — the focused one, or `pane` when given (revealed first). A
     /// lone pane closes its whole tab (core collapses to `close_tab`, killing the
-    /// PTY). → `[RevealPane +] CloseFocusedPane`.
-    Close { pane: Option<u64> },
+    /// PTY). → `[RevealPane +] CloseFocusedPane`. With `background`, `pane` is
+    /// required and closed where it lives, never revealed. → `ClosePane`.
+    Close { pane: Option<u64>, background: bool },
     /// Type `bytes` into a session's PTY without waiting; a caller that needs
     /// to synchronise follows with [`Request::WaitForStatus`].
     /// → `Event::TerminalInput`.
@@ -320,6 +324,10 @@ pub enum ActionDetail {
     /// `Nothing` the gesture drove nothing and retrying it changes nothing.
     /// `core`'s own route, as read off the session's last rendered screen.
     Pointer(PointerRoute),
+    /// The handle of the session an open created, `None` when none could be
+    /// minted. A background open leaves focus elsewhere, so the focused handle
+    /// no longer names the new session.
+    Opened(Option<String>),
     /// The confirmation a Claude command armed: the exact line it will type,
     /// and the overlay now holding the keyboard, which `enter` confirms and
     /// `escape` cancels.
@@ -715,6 +723,7 @@ mod tests {
                 cwd: Some(format!("/tmp/p{i}")),
                 launch: Launch::Shell,
                 title: format!("tab {i}"),
+                placement: termherd_core::Placement::Foreground,
             }));
         }
         app
@@ -837,6 +846,7 @@ mod tests {
                 ClaudeLaunch::Resume(id.to_owned())
             })),
             title: title.to_owned(),
+            placement: termherd_core::Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         id.0.get().to_string()

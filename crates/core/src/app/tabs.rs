@@ -48,10 +48,7 @@ impl App {
         };
         let title = tab.title.clone();
         let custom_title = tab.custom_title.clone();
-        let Some(first) = self.tab_first_session(index) else {
-            return;
-        };
-        let Some(session) = self.sessions.get(&first) else {
+        let Some(session) = self.sessions.get(&tab.first_session()) else {
             return;
         };
         let launch = self.reopen_launch(session);
@@ -93,6 +90,7 @@ impl App {
             cwd: closed.cwd,
             launch: closed.launch.with_fresh_id(|| fresh_claude_id),
             title: closed.title,
+            placement: Placement::Foreground,
         });
         // Restore the manual name on top of the derived title. `launch` opens
         // the reopened tab as the new active one, so its index is `active` — but
@@ -111,9 +109,11 @@ impl App {
     /// reports only its own product name as an OSC title, which the decoder
     /// discards as naming the program rather than the session, so without this
     /// every resumed tab in a repo would read alike — else the project label.
-    /// A fresh or unscanned session keeps the project label; an OSC title
-    /// still wins later. The kind is not part of the title: the tab chip shows
-    /// it from [`App::tab_kind`], so no retitle or rename can lose it.
+    /// A fresh or unscanned session keeps the project label. This is only the
+    /// label the tab opens with: the tab then follows its conversation's
+    /// scanned and live titles, as [`crate::title`] ranks them. The kind is
+    /// not part of the title: the tab chip shows it from [`App::tab_kind`], so
+    /// no retitle or rename can lose it.
     #[must_use]
     pub fn tab_title(&self, cwd: &str, launch: &Launch) -> String {
         launch
@@ -130,13 +130,7 @@ impl App {
     /// one the last scan has not found yet.
     #[must_use]
     pub fn tab_record(&self, index: usize) -> Option<&SessionRecord> {
-        self.session_record(self.tab_first_session(index)?)
-    }
-
-    /// The first pane of the tab at `index` — the one a tab is named after.
-    #[must_use]
-    pub fn tab_first_session(&self, index: usize) -> Option<SessionId> {
-        self.workspace.tabs.get(index)?.sessions().first().copied()
+        self.record_for(self.tab_claude_session_id(index)?)
     }
 
     /// The Claude session id of the tab at `index`: its first pane's, as
@@ -144,7 +138,7 @@ impl App {
     /// first pane, so that pane's conversation is the one the tab stands for.
     #[must_use]
     pub fn tab_claude_session_id(&self, index: usize) -> Option<&str> {
-        self.claude_session_id(self.tab_first_session(index)?)
+        self.claude_session_id(self.workspace.tabs.get(index)?.first_session())
     }
 
     /// The activity status to badge on the tab at `index` (FR8): the most
@@ -260,6 +254,7 @@ mod tests {
             cwd: Some("/repo".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("abc".into())),
             title: "repo".into(),
+            placement: Placement::Foreground,
         }));
         let original = app.workspace.focused_session().expect("focused");
         app.apply(Event::CloseTab(0));
@@ -339,6 +334,7 @@ mod tests {
                 cwd: Some(dir.into()),
                 launch: Launch::Shell,
                 title: dir.into(),
+                placement: Placement::Foreground,
             }));
         };
         open(&mut app, "/a");
@@ -445,12 +441,14 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         // Tab 1: a plain shell — no resume id, so no record.
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         assert_eq!(
             app.tab_record(0).map(|r| r.session_id.as_str()),
@@ -468,6 +466,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         assert!(app.tab_record(0).is_none(), "nothing scanned yet");
         app.apply(Event::ScanCompleted(vec![record(
@@ -488,6 +487,7 @@ mod tests {
             cwd: Some("/repo".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("before".into())),
             title: "repo".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("focused");
         let started = Some("Wed Oct  7 06:48:07 2026".to_owned());
@@ -529,6 +529,7 @@ mod tests {
             cwd: Some("/repo".into()),
             launch: Launch::Claude(ClaudeLaunch::Fresh(Some("first".into()))),
             title: "repo".into(),
+            placement: Placement::Foreground,
         }));
         app.apply(Event::CloseTab(0));
         let effects = app.apply(Event::ReopenClosedTab {
@@ -558,6 +559,7 @@ mod tests {
                 cwd: Some("/proj".into()),
                 launch: Launch::Claude(ClaudeLaunch::Resume(id.into())),
                 title: "proj".into(),
+                placement: Placement::Foreground,
             }))
             .as_slice()
         {
@@ -601,6 +603,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         app.apply(Event::ScanCompleted(vec![coloured(
             minted,
@@ -635,7 +638,7 @@ mod tests {
         )]));
         let first = resume(&mut app, "abc");
         app.apply(Event::SplitFocused(SplitDir::Vertical));
-        assert_eq!(app.tab_first_session(0), Some(first));
+        assert_eq!(app.workspace.tabs[0].first_session(), first);
         assert_eq!(
             app.tab_record(0).and_then(|r| r.digest.agent_color),
             Some(ClaudeColor::Red)

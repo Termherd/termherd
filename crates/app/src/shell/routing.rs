@@ -95,8 +95,8 @@ pub(super) enum Inertia {
     NoSurface,
     /// The action is wired, but refused before acting because a precondition was
     /// absent — no focused session to derive a repo from, no closed tab to
-    /// reopen, nothing to scroll, nothing selected to copy, no agent name, no
-    /// idle Claude to send a command to.
+    /// reopen, no tab to rename, nothing to scroll, nothing selected to copy,
+    /// no agent name, no idle Claude to send a command to.
     ///
     /// Deliberately narrower than "had no visible effect": an action whose event
     /// `core` applies and absorbs (a tab index past the open tabs) *did* run, and
@@ -212,6 +212,9 @@ impl Shell {
             Action::NextTab => self.cycle_tab(1).ok_or(Inertia::NoContext)?,
             Action::PrevTab => self.cycle_tab(-1).ok_or(Inertia::NoContext)?,
             Action::CloseFocused => self.close_focused_pane().ok_or(Inertia::NoContext)?,
+            Action::RenameTab => self
+                .start_tab_rename(self.core.workspace.active)
+                .ok_or(Inertia::NoContext)?,
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -289,8 +292,7 @@ impl Shell {
             .get(self.core.workspace.active)
             .is_some_and(|tab| tab.sessions().len() > 1);
         if in_split {
-            let effects = self.core.apply(termherd_core::Event::CloseFocusedPane);
-            Some(Task::batch([self.perform(effects), self.resize_panes()]))
+            Some(self.close_focused_pane_after(Vec::new()))
         } else {
             self.request_close(self.core.workspace.active)
         }

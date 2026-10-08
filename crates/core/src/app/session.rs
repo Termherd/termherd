@@ -50,6 +50,11 @@ pub struct LiveSession {
     /// Outlives the Claude that wrote it, so a conversation re-keyed by
     /// `/clear` is still known by its new id once that Claude has exited.
     pub proven_session_id: Option<String>,
+    /// Whether the adapter has ever reported a job in front of this pane's
+    /// shell. Until it has, an empty [`Self::foreground`] proves nothing —
+    /// ConPTY never reports one — so only after it does can an empty one mean
+    /// the program in front has exited.
+    pub foreground_reported: bool,
 }
 
 /// The job in front of a session's shell, as the PTY adapter reads it.
@@ -90,6 +95,24 @@ impl LiveSession {
         {
             self.proven_session_id = Some(id.to_owned());
         }
+    }
+
+    /// Whether this pane was launched to run Claude — the panes whose name and
+    /// colour belong to Claude, and that take a typed slash command. A shell
+    /// in which someone started `claude` by hand is not one: the line typed
+    /// into it would reach whichever program is in front.
+    #[must_use]
+    pub fn is_claude_launch(&self) -> bool {
+        matches!(self.launch, Launch::Claude(_))
+    }
+
+    /// Whether Claude is still what this pane runs: a Claude launch whose
+    /// Claude has not been seen to leave. Once a reported foreground job has
+    /// gone, the pane is back at the shell `claude` was typed into, and a line
+    /// typed there would run as a command.
+    #[must_use]
+    pub fn runs_claude(&self) -> bool {
+        self.is_claude_launch() && (self.foreground.is_some() || !self.foreground_reported)
     }
 
     /// Whether this session still holds a **running foreground process** whose
@@ -234,6 +257,19 @@ pub struct LaunchSpec {
     pub launch: Launch,
     /// Tab title to show.
     pub title: String,
+    /// Whether the new tab comes to the front.
+    pub placement: Placement,
+}
+
+/// Where a launched tab lands relative to the user's focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Placement {
+    /// Activated, taking focus — what every gesture of the user's own does.
+    #[default]
+    Foreground,
+    /// Appended without being activated, so the focused pane keeps the
+    /// keyboard: an agent's worker opened beside a human who is typing.
+    Background,
 }
 
 /// How a launched Claude session reaches termherd's in-process MCP server: the
@@ -366,8 +402,15 @@ impl App {
             foreground: None,
             session_file: None,
             proven_session_id: None,
+            foreground_reported: false,
         });
-        self.workspace.open(id, spec.title);
+        match spec.placement {
+            Placement::Foreground => self.workspace.open(id, spec.title),
+            Placement::Background => {
+                self.workspace.append(id, spec.title);
+            }
+        }
+        self.retitle_tabs();
         vec![Effect::Spawn(SpawnSpec {
             session: id,
             cwd: spec.cwd,
@@ -403,6 +446,7 @@ impl App {
             foreground: None,
             session_file: None,
             proven_session_id: None,
+            foreground_reported: false,
         });
         vec![Effect::Spawn(SpawnSpec {
             session: id,
@@ -412,6 +456,13 @@ impl App {
             rows: DEFAULT_ROWS,
             mcp: None,
         })]
+    }
+
+    /// Forget the session whose pane the workspace just closed and kill its
+    /// PTY.
+    pub(super) fn release_closed_pane(&mut self, id: SessionId) -> Vec<Effect> {
+        self.sessions.remove(&id);
+        vec![Effect::Kill(id)]
     }
 
     /// Record `session`'s new activity. An exited session stays exited: a late
@@ -437,9 +488,11 @@ impl App {
         job: Option<ForegroundJob>,
     ) -> Vec<Effect> {
         if let Some(live) = self.sessions.get_mut(&session) {
+            live.foreground_reported |= job.is_some();
             live.foreground = job;
             live.remember_proven_id();
         }
+        self.retitle_tabs();
         Vec::new()
     }
 
@@ -454,6 +507,8 @@ impl App {
             live.session_file = file;
             live.remember_proven_id();
         }
+        // A re-key moves the pane onto another transcript, and its name with it.
+        self.retitle_tabs();
         Vec::new()
     }
 
@@ -478,7 +533,7 @@ impl App {
     pub(super) fn pty_exited(&mut self, session: SessionId, clean: bool) -> Vec<Effect> {
         if clean
             && self.sessions.contains_key(&session)
-            && let Some(effects) = self.auto_close_pane(session)
+            && let Some(effects) = self.close_pane_of(session)
         {
             return effects;
         }
@@ -491,14 +546,15 @@ impl App {
         Vec::new()
     }
 
-    /// Close the pane hosting `session` after its clean exit: the whole tab
-    /// (snapshotted onto the reopen stack, like a manual close) when it is the
-    /// tab's only pane, else just its leaf, collapsing the split. The emptied
-    /// workspace stays open — a clean exit never quits the app. The `Kill`
-    /// still goes out for an already-dead process: it releases the adapter's
-    /// PTY handles. `None` when no tab hosts the session — the caller falls
-    /// back to recording the exit.
-    pub(super) fn auto_close_pane(&mut self, session: SessionId) -> Option<Vec<Effect>> {
+    /// Close the pane hosting `session` wherever it lives, without bringing it
+    /// into view: the whole tab (snapshotted onto the reopen stack, like a
+    /// manual close) when it is the tab's only pane, else just its leaf,
+    /// collapsing the split. The one meaning of "close this session's pane",
+    /// shared by a clean shell exit and [`Event::ClosePane`]. The emptied
+    /// workspace stays open. The `Kill` still goes out for an already-dead
+    /// process: it releases the adapter's PTY handles. `None` when no tab
+    /// hosts the session.
+    pub(super) fn close_pane_of(&mut self, session: SessionId) -> Option<Vec<Effect>> {
         let index = self.workspace.tab_of(session)?;
         let only_pane = self
             .workspace
@@ -508,9 +564,8 @@ impl App {
         if only_pane {
             return Some(self.close_tab(index));
         }
-        self.workspace.close_pane_of(session)?;
-        self.sessions.remove(&session);
-        Some(vec![Effect::Kill(session)])
+        let closed = self.workspace.close_pane_of(session)?;
+        Some(self.release_closed_pane(closed))
     }
 
     /// Whether closing the tab at `index` would kill a running foreground
@@ -572,6 +627,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
 
         assert_eq!(app.sessions.len(), 1);
@@ -597,6 +653,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         let op = SelectOp::Start {
@@ -626,6 +683,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         let pointer = PointerEvent::left(PointerKind::Press, 3, 1);
@@ -665,6 +723,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         assert_eq!(app.sessions[&id].launch.resume_id(), Some("abc-123"));
@@ -678,6 +737,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }
     }
 
@@ -824,6 +884,27 @@ mod tests {
     }
 
     #[test]
+    fn a_re_key_retitles_the_tab_after_the_new_conversation() {
+        let mut app = App::new();
+        let mut renamed = record("re-keyed", "/proj", "after the clear");
+        renamed.digest.custom_title = Some("second act".into());
+        app.apply(Event::ScanCompleted(vec![renamed]));
+        app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
+        let id = app.workspace.focused_session().expect("a focused session");
+        assert_eq!(app.workspace.tabs[0].title, "proj");
+
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: Some(claude_job(42)),
+        });
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: Some(file_naming(42, "re-keyed")),
+        });
+        assert_eq!(app.workspace.tabs[0].title, "second act");
+    }
+
+    #[test]
     fn a_file_proved_only_once_its_job_is_known_is_still_remembered() {
         let mut app = App::new();
         app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
@@ -896,11 +977,13 @@ mod tests {
             cwd: None,
             launch: Launch::Shell,
             title: "a".into(),
+            placement: Placement::Foreground,
         }));
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: None,
             launch: Launch::Shell,
             title: "b".into(),
+            placement: Placement::Foreground,
         }));
         assert_eq!(app.sessions.len(), 2);
     }
@@ -912,6 +995,7 @@ mod tests {
             cwd: None,
             launch: Launch::Shell,
             title: "a".into(),
+            placement: Placement::Foreground,
         }));
         let id = match spawn.as_slice() {
             [Effect::Spawn(spec)] => spec.session,
@@ -959,6 +1043,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         let effects = app.apply(Event::SplitFocused(SplitDir::Vertical));
         // A new session spawns in the same directory and is focused.
@@ -984,6 +1069,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         let effects = app.apply(Event::SessionCwdChanged {
@@ -1006,6 +1092,7 @@ mod tests {
             cwd: None,
             launch: Launch::Shell,
             title: "a".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         app.apply(Event::SessionCwdChanged {
@@ -1039,6 +1126,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         app.apply(Event::SessionCwdChanged {
@@ -1064,6 +1152,7 @@ mod tests {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
             title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         let id = app.workspace.focused_session().expect("a focused session");
         app.apply(Event::SessionCwdChanged {
@@ -1228,6 +1317,7 @@ mod tests {
                 cwd: Some("/proj".into()),
                 launch: Launch::Shell,
                 title: "shell".into(),
+                placement: Placement::Foreground,
             }))
             .as_slice()
         {
@@ -1382,6 +1472,7 @@ mod tests {
             cwd: None,
             launch: Launch::Shell,
             title: "a".into(),
+            placement: Placement::Foreground,
         }));
         let id = match spawn.as_slice() {
             [Effect::Spawn(spec)] => spec.session,
@@ -1403,5 +1494,163 @@ mod tests {
             status: SessionStatus::Idle,
         });
         assert_eq!(app.sessions[&id].status, SessionStatus::Exited);
+    }
+
+    /// Launch a shell at `placement` and return its id.
+    fn launch_at(app: &mut App, placement: Placement) -> SessionId {
+        match app
+            .apply(Event::LaunchSession(LaunchSpec {
+                cwd: None,
+                launch: Launch::Shell,
+                title: "worker".into(),
+                placement,
+            }))
+            .as_slice()
+        {
+            [Effect::Spawn(spec)] => spec.session,
+            other => panic!("expected Spawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_background_launch_appends_a_tab_and_leaves_focus_where_it_was() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        launch(&mut app, "b");
+        app.apply(Event::ActivateTab(0));
+        let worker = launch_at(&mut app, Placement::Background);
+        assert_eq!(app.workspace.active, 0, "the active tab stays");
+        assert_eq!(app.workspace.focused_session(), Some(first));
+        assert_eq!(app.workspace.tab_of(worker), Some(2), "appended last");
+        assert!(app.sessions.contains_key(&worker), "registered as live");
+    }
+
+    #[test]
+    fn a_background_launch_into_an_empty_workspace_is_the_only_tab() {
+        // Nothing held focus to keep, so the lone tab is the active one.
+        let mut app = App::new();
+        let worker = launch_at(&mut app, Placement::Background);
+        assert_eq!(app.workspace.focused_session(), Some(worker));
+    }
+
+    #[test]
+    fn closing_a_pane_by_session_in_an_inactive_tab_keeps_the_active_tab() {
+        // The closed tab precedes the active one: the index shifts down, the
+        // tab the user is in does not change.
+        let mut app = App::new();
+        let worker = launch(&mut app, "worker");
+        let human = launch(&mut app, "human");
+        let effects = app.apply(Event::ClosePane(worker));
+        assert!(matches!(effects.as_slice(), [Effect::Kill(id)] if *id == worker));
+        assert_eq!(app.workspace.focused_session(), Some(human));
+        assert_eq!(app.workspace.tabs.len(), 1);
+        assert!(!app.sessions.contains_key(&worker));
+    }
+
+    #[test]
+    fn closing_an_unfocused_pane_by_session_in_the_active_tab_keeps_focus() {
+        let mut app = App::new();
+        let left = launch(&mut app, "a");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        let right = app.workspace.focused_session().expect("the split's pane");
+        app.apply(Event::FocusPrevPane);
+        assert_eq!(app.workspace.focused_session(), Some(left));
+        let effects = app.apply(Event::ClosePane(right));
+        assert!(matches!(effects.as_slice(), [Effect::Kill(id)] if *id == right));
+        assert_eq!(app.workspace.focused_session(), Some(left));
+    }
+
+    #[test]
+    fn closing_the_focused_pane_by_session_moves_focus_to_its_sibling() {
+        let mut app = App::new();
+        let left = launch(&mut app, "a");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        let right = app.workspace.focused_session().expect("the split's pane");
+        app.apply(Event::ClosePane(right));
+        assert_eq!(app.workspace.focused_session(), Some(left));
+    }
+
+    #[test]
+    fn closing_a_lone_pane_by_session_can_be_reopened_like_any_tab_close() {
+        let mut app = App::new();
+        launch(&mut app, "human");
+        let worker = launch_at(&mut app, Placement::Background);
+        app.apply(Event::ClosePane(worker));
+        let reopened = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
+        assert!(
+            matches!(reopened.as_slice(), [Effect::Spawn(_)]),
+            "the closed tab is on the reopen stack, got {reopened:?}"
+        );
+    }
+
+    #[test]
+    fn closing_a_pane_by_an_unknown_session_does_nothing() {
+        let mut app = App::new();
+        let only = launch(&mut app, "a");
+        assert!(app.apply(Event::ClosePane(sid(99))).is_empty());
+        assert_eq!(app.workspace.focused_session(), Some(only));
+    }
+
+    /// One step of the background property: a foreground launch or tab switch
+    /// to move focus around, or a background launch or close to test.
+    #[derive(Debug, Clone)]
+    enum Step {
+        Foreground,
+        Activate(usize),
+        Split,
+        Background,
+        Close(usize),
+    }
+
+    fn step() -> impl proptest::strategy::Strategy<Value = Step> {
+        use proptest::prelude::*;
+        prop_oneof![
+            Just(Step::Foreground),
+            (0..8usize).prop_map(Step::Activate),
+            Just(Step::Split),
+            Just(Step::Background),
+            (0..16usize).prop_map(Step::Close),
+        ]
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn a_background_open_or_close_never_moves_focus_off_a_pane_it_kept(
+            steps in proptest::collection::vec(step(), 1..40),
+        ) {
+            let mut app = App::new();
+            for step in steps {
+                let before = app.workspace.focused_session();
+                match step {
+                    Step::Foreground => {
+                        launch_at(&mut app, Placement::Foreground);
+                    }
+                    Step::Activate(index) => {
+                        app.apply(Event::ActivateTab(index));
+                    }
+                    Step::Split => {
+                        app.apply(Event::SplitFocused(SplitDir::Vertical));
+                    }
+                    Step::Background => {
+                        let opened = launch_at(&mut app, Placement::Background);
+                        let after = app.workspace.focused_session();
+                        proptest::prop_assert_eq!(after, before.or(Some(opened)));
+                    }
+                    Step::Close(pick) => {
+                        let mut live: Vec<SessionId> = app.sessions.values().map(|s| s.id).collect();
+                        live.sort_by_key(|id| id.0);
+                        let Some(target) = live.get(pick % live.len().max(1)).copied() else {
+                            continue;
+                        };
+                        app.apply(Event::ClosePane(target));
+                        if before != Some(target) {
+                            proptest::prop_assert_eq!(app.workspace.focused_session(), before);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
