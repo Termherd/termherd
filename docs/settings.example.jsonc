@@ -186,7 +186,7 @@
   //   activate-tab-1 … -9       mod+1 … mod+9 (physical number-row keys)
   //   close-focused             mod+W
   //   rename-tab                mod+Shift+I (inline rename of the focused tab)
-  //   open-tab-menu             mod+. / mod+Shift+. (the focused tab's menu)
+  //   open-tab-menu             mod+Shift+M (the focused tab's menu)
   //   reopen-closed-tab         mod+Shift+T
   //   new-shell-here            mod+T
   //   new-claude-session-here   mod+Alt+T

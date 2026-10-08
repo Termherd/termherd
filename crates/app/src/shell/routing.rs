@@ -7,7 +7,7 @@ use iced::advanced::widget::{operate, operation::focusable};
 use iced::keyboard::{Key, key::Named};
 use iced::{Task, keyboard};
 use termherd_core::workspace::{Direction, SplitDir};
-use termherd_core::{Action, ClaudeCommand, ScrollTarget};
+use termherd_core::{Action, ClaudeCommand, ScrollTarget, keymap};
 use termherd_pty::TermKey;
 
 use super::input::{chord_of, key_mods, numpad_char, to_term_key};
@@ -513,10 +513,16 @@ impl Shell {
         else {
             return (KeyVerdict::Ignored, Task::none());
         };
-        if let Some(chord) = chord_of(&key, &physical_key, modifiers)
-            && let Some(action) = self.keymap.lookup(&chord)
-        {
-            return self.dispatch_action(action);
+        if let Some(chord) = chord_of(&key, &physical_key, modifiers) {
+            if let Some(action) = self.keymap.lookup(&chord) {
+                return self.dispatch_action(action);
+            }
+            // A shortcut that does nothing is otherwise silent, and the chord a
+            // press produces is not always the one its keycap suggests: Shift
+            // never changes the key named, so Cmd+Shift+`;` stays `;`.
+            if chord.mods & !keymap::MOD_SHIFT != 0 {
+                tracing::debug!(key = %chord.key, mods = chord.mods, "chord bound to no action");
+            }
         }
         if self.focus != Focus::Terminal {
             return (KeyVerdict::Ignored, Task::none());

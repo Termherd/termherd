@@ -7099,7 +7099,7 @@ mod key_routing {
             let mut shell = shell_with_three_tabs();
             let _ = shell.activate_tab(1);
 
-            let step = press_chord(&mut shell, &mod_spec("."));
+            let step = press_chord(&mut shell, &mod_spec("shift+m"));
 
             assert_eq!(step, PressStep::Ran("open-tab-menu".to_owned()));
             assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
