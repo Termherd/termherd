@@ -383,12 +383,14 @@ impl TermherdMcp {
                        commands into a Claude session: `rename` (a name), \
                        `color` (red, blue, green, yellow, purple, orange, pink, \
                        cyan or default) or `desktop`. Nothing is typed yet: \
-                       this arms the same confirmation prompt a keypress arms, \
-                       naming the exact line, and the prompt then holds the \
-                       keyboard: `press_keys([\"enter\"])` types it, \
+                       this arms the confirmation prompt that shows the human \
+                       at the window the exact line; it holds the keyboard \
+                       until answered: `press_keys([\"enter\"])` types it \
+                       (a `refused` step means it typed nothing and says why), \
                        `press_keys([\"escape\"])` drops it, or the user \
-                       answers. Refused when the session is not a Claude idle \
-                       at its prompt, or another prompt is open. Control \
+                       answers. Refused unless the session is a Claude idle at \
+                       an empty input prompt on screen (no draft, no menu), and \
+                       no other prompt is open. Control \
                        characters in a name become spaces. Args: `session` \
                        (handle), `command`, `argument` (the name or colour). \
                        Returns `{ line, overlay, focused_handle }`."
@@ -1297,6 +1299,9 @@ struct PressStepDto {
     /// was absent, which the caller can go and create).
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
+    /// Why a confirmation typed nothing, for `"refused"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<String>,
 }
 
 impl PressStepDto {
@@ -1304,14 +1309,21 @@ impl PressStepDto {
     /// fields are per-outcome, so each is omitted where it means nothing rather
     /// than sent as a null the caller has to interpret.
     fn new(press: &str, step: &PressStep) -> Self {
-        let (result, action, overlay, reason) = match step {
-            PressStep::Ran(name) => ("ran", Some(name.clone()), None, None),
+        let (result, action, overlay, reason, refusal) = match step {
+            PressStep::Ran(name) => ("ran", Some(name.clone()), None, None, None),
             PressStep::Inert { action, reason } => {
-                ("inert", Some(action.clone()), None, Some(*reason))
+                ("inert", Some(action.clone()), None, Some(*reason), None)
             }
-            PressStep::Overlay(name) => ("overlay", None, Some(name.clone()), None),
-            PressStep::Typed => ("typed", None, None, None),
-            PressStep::Unbound => ("unbound", None, None, None),
+            PressStep::Overlay(name) => ("overlay", None, Some(name.clone()), None, None),
+            PressStep::Refused { overlay, reason } => (
+                "refused",
+                None,
+                Some(overlay.clone()),
+                None,
+                Some(reason.clone()),
+            ),
+            PressStep::Typed => ("typed", None, None, None, None),
+            PressStep::Unbound => ("unbound", None, None, None, None),
         };
         Self {
             press: press.to_owned(),
@@ -1319,6 +1331,7 @@ impl PressStepDto {
             action,
             overlay,
             reason,
+            refusal,
         }
     }
 }
@@ -1607,6 +1620,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_refused_confirmation_is_reported_apart_from_an_overlay() {
+        let refused = PressStepDto::new(
+            "enter",
+            &PressStep::Refused {
+                overlay: "claude-command-confirm".into(),
+                reason: "the session is busy, not idle at its prompt".into(),
+            },
+        );
+        assert_eq!(
+            serde_json::to_value(&refused).expect("json"),
+            serde_json::json!({
+                "press": "enter",
+                "result": "refused",
+                "overlay": "claude-command-confirm",
+                "refusal": "the session is busy, not idle at its prompt",
+            })
+        );
+        let consumed = PressStepDto::new("x", &PressStep::Overlay("settings".into()));
+        assert_eq!(
+            serde_json::to_value(&consumed).expect("json"),
+            serde_json::json!({ "press": "x", "result": "overlay", "overlay": "settings" }),
+            "no refusal field where nothing was refused"
+        );
+    }
+
     #[tokio::test]
     async fn claude_command_arms_over_the_bridge_and_reports_the_line() {
         let (handle, requests) = channel();
@@ -1701,8 +1740,9 @@ mod tests {
 
     /// The replies the shell must give for `tool`, and the call that drives it.
     ///
-    /// One `match` states the tool list once, so a tool the sweep does not know
-    /// panics here rather than being skipped in silence.
+    /// Every tool lands in the `match` below or in one of the two pre-checks
+    /// above it, and anything else panics, so a tool the sweep does not know
+    /// fails here rather than being skipped in silence.
     fn sweep_case<'a>(mcp: &'a TermherdMcp, tool: &str) -> (Vec<Reply>, SweepCall<'a>) {
         use crate::shell::bridge::{ActionOutcome, ShotResult, TerminalRead, WaitOutcome};
 

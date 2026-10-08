@@ -308,9 +308,11 @@ impl App {
                 self.window_focused = focused;
                 Vec::new()
             }
-            Event::SendClaudeCommand { session, command } => {
-                self.send_claude_command(session, &command)
-            }
+            Event::SendClaudeCommand {
+                session,
+                command,
+                prompt,
+            } => self.send_claude_command(session, &command, &prompt),
         }
     }
 

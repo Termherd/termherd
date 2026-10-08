@@ -985,6 +985,9 @@ impl Shell {
                 let modifiers = event_modifiers(&event);
                 self.link_modifier = modifiers.control() || modifiers.logo();
                 self.shift_modifier = modifiers.shift();
+                if self.enter_too_soon(&event, Instant::now()) {
+                    return Task::none();
+                }
                 // A real keypress has no one to report to; the verdict exists
                 // for the MCP press tool, which answers a caller.
                 self.on_key(event).1
@@ -1183,7 +1186,9 @@ impl Shell {
                 self.archiving = None;
                 Task::none()
             }
-            Message::ConfirmClaudeCommand => self.confirm_claude_command(),
+            Message::ConfirmClaudeCommand => self
+                .confirm_claude_command()
+                .unwrap_or_else(|_| Task::none()),
             Message::CancelClaudeCommand => self.cancel_claude_command(),
             Message::ShowArchived(show) => {
                 let effects = self
@@ -4254,7 +4259,30 @@ mod key_routing {
 
     use termherd_core::{ClaudeColor, ClaudeCommand};
 
-    /// A shell with one Claude tab open, focused and idle at its prompt.
+    const RULE: &str = "──────────";
+
+    /// A screen of `rows`, as a terminal would report it.
+    fn screen_rows(rows: &[&str]) -> Screen {
+        let width = rows
+            .iter()
+            .map(|row| row.chars().count())
+            .max()
+            .unwrap_or(1);
+        let mut screen = Screen::blank(width as u16, rows.len() as u16);
+        for (line, row) in screen.lines.iter_mut().zip(rows) {
+            for (cell, c) in line.iter_mut().zip(row.chars()) {
+                cell.c = c;
+            }
+        }
+        screen
+    }
+
+    /// Claude's input box as it draws it with nothing typed: the hint shows.
+    fn empty_prompt() -> Screen {
+        screen_rows(&["", RULE, "❯ Try \"fix lint errors\"", RULE, "  status"])
+    }
+
+    /// A shell with one Claude tab open, focused and idle at an empty prompt.
     fn shell_with_idle_claude() -> (Shell, Arc<RecordingPty>, SessionId) {
         let (mut shell, pty) = empty_shell();
         let _ = shell.launch("/tmp/claude".to_string(), Launch::Claude { resume: None });
@@ -4263,7 +4291,134 @@ mod key_routing {
             session,
             status: SessionStatus::Idle,
         });
+        shell.screens.insert(session, empty_prompt());
         (shell, pty, session)
+    }
+
+    #[test]
+    fn a_draft_in_claudes_prompt_refuses_the_command_and_names_the_draft() {
+        // Ctrl+U clears one line; a draft of two would be submitted with the
+        // command as a prompt to the model. So a draft refuses outright.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        shell.screens.insert(
+            session,
+            screen_rows(&[RULE, "❯ fix the\\", "  login bug", RULE]),
+        );
+        let outcome = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some(
+                r#"Claude's prompt holds a draft ("fix the\\\nlogin bug"); clear or send it first"#
+            )
+        );
+        assert!(shell.keyboard_owner().is_none());
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn a_menu_over_claudes_prompt_refuses_the_command() {
+        // Idle, but a picker has the keyboard: Enter would pick an entry.
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        shell.screens.insert(
+            session,
+            screen_rows(&["Select model", "❯ 1. Default", "  2. Opus"]),
+        );
+        let outcome = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("Claude's input prompt is not on screen")),
+            "{:?}",
+            outcome.error
+        );
+
+        shell.screens.insert(
+            session,
+            Screen {
+                scrolled: true,
+                ..empty_prompt()
+            },
+        );
+        let scrolled = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert!(scrolled.error.is_some(), "a view scrolled off the prompt");
+    }
+
+    #[test]
+    fn a_draft_typed_while_the_prompt_was_up_keeps_it_open_and_says_why() {
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        shell
+            .screens
+            .insert(session, screen_rows(&[RULE, "❯ half typed", RULE]));
+
+        let steps = press_all(&mut shell, &["enter"]);
+        assert_eq!(
+            steps,
+            vec![PressStep::Refused {
+                overlay: "claude-command-confirm".to_owned(),
+                reason: "Claude's prompt holds a draft (\"half typed\"); clear or send it first"
+                    .to_owned(),
+            }],
+            "a caller is told nothing was typed, not that the prompt took the key"
+        );
+        assert!(pty.writes().is_empty());
+        assert_eq!(
+            shell.keyboard_owner(),
+            Some(KeyboardOwner::ClaudeCommand),
+            "the prompt stays, showing the refusal"
+        );
+        assert!(
+            shell
+                .claude_command
+                .as_ref()
+                .is_some_and(|pending| pending.refused.is_some())
+        );
+
+        shell.screens.insert(session, empty_prompt());
+        let _ = press_all(&mut shell, &["enter"]);
+        assert_eq!(
+            pty.writes().len(),
+            2,
+            "once the draft is gone, enter types it"
+        );
+    }
+
+    #[test]
+    fn a_physical_enter_right_after_a_remote_arm_is_ignored() {
+        // The user may be typing elsewhere when an agent arms the prompt; the
+        // Enter ending their own line must not confirm what they never read.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+
+        let _ = shell.update(Message::Key(enter.clone()));
+        assert!(pty.writes().is_empty(), "swallowed during the grace");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+
+        if let Some(pending) = shell.claude_command.as_mut() {
+            pending.enter_ignored_until = Some(Instant::now() - std::time::Duration::from_secs(1));
+        }
+        let _ = shell.update(Message::Key(enter));
+        assert_eq!(pty.writes().len(), 2, "after it, enter confirms");
+    }
+
+    #[test]
+    fn only_a_remote_arm_holds_enter_back_and_never_escape() {
+        let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+        let escape = press(Key::Named(Named::Escape), Modifiers::default(), None);
+
+        let (mut local, _pty, _session) = shell_with_idle_claude();
+        let _ = local.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert!(
+            !local.enter_too_soon(&enter, Instant::now()),
+            "the user read it"
+        );
+
+        let (mut remote, _pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut remote, session, ClaudeCommand::Desktop);
+        assert!(remote.enter_too_soon(&enter, Instant::now()));
+        assert!(!remote.enter_too_soon(&escape, Instant::now()));
     }
 
     /// Arm `command` for `session` the way the MCP tool does.
@@ -4377,7 +4532,14 @@ mod key_routing {
 
         let _ = shell.update(Message::ConfirmClaudeCommand);
         assert!(pty.writes().is_empty());
-        assert!(shell.keyboard_owner().is_none(), "the prompt still closes");
+        assert_eq!(
+            shell
+                .claude_command
+                .as_ref()
+                .and_then(|p| p.refused.clone()),
+            Some(termherd_core::CommandRefusal::NotIdle(SessionStatus::Busy)),
+            "the prompt stays open and says why"
+        );
     }
 
     #[test]
@@ -4445,6 +4607,8 @@ mod key_routing {
                 shell.claude_command = Some(claude_command::PendingCommand {
                     session,
                     command: termherd_core::ClaudeCommand::Desktop,
+                    enter_ignored_until: None,
+                    refused: None,
                 });
             }
             KeyboardOwner::Settings => {

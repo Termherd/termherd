@@ -139,6 +139,9 @@ pub enum PressStep {
     /// Carries the overlay's name, so a caller learns *why* its chord did
     /// nothing it expected — and that `escape` / `enter` are what move next.
     Overlay(String),
+    /// An overlay's confirmation was refused: the prompt is still open and
+    /// what it promised did not happen. Carries the overlay and why.
+    Refused { overlay: String, reason: String },
     /// Bound to nothing, so it reached the focused terminal as text.
     Typed,
     /// Nothing claimed it: bound to nothing, and no focused terminal to type
