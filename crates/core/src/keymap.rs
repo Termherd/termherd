@@ -25,11 +25,7 @@ pub const NUMBER_ROW_TABS: usize = 9;
 /// is the modifier the number-row tab jumps bind to by default.
 #[must_use]
 pub const fn primary_mod() -> u8 {
-    if cfg!(target_os = "macos") {
-        MOD_CMD
-    } else {
-        MOD_CTRL
-    }
+    Platform::current().primary_mod()
 }
 
 /// A key plus its modifiers — the left-hand side of a binding. `key` is a
@@ -127,6 +123,14 @@ pub enum Action {
     /// Copy the focused Claude's peer name, the one other Claude sessions
     /// address it by. Inert when no Claude in front of it has written one.
     CopyAgentName,
+    /// Open the inline rename of the focused tab, seeded with its shown title.
+    /// Inert when no tab is open.
+    RenameTab,
+    /// Ask to hand the focused Claude session to the Claude desktop app by
+    /// typing `/desktop` — behind the same confirmation as every command
+    /// termherd types into Claude. Inert unless the focused pane is a Claude
+    /// idle at its prompt.
+    SendToDesktop,
     /// Jump the focused terminal's viewport to the top of its scrollback.
     ScrollTop,
     /// Jump the focused terminal's viewport back to the live bottom.
@@ -269,6 +273,11 @@ const ACTIONS: &[ActionDef] = &[
         default_chords: &[],
     },
     ActionDef {
+        action: Action::SendToDesktop,
+        name: "send-to-desktop",
+        default_chords: &[],
+    },
+    ActionDef {
         action: Action::ScrollTop,
         name: "scroll-top",
         default_chords: &["mod+up"],
@@ -282,6 +291,14 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::NewShellHere,
         name: "new-shell-here",
         default_chords: &["mod+t"],
+    },
+    // Terminal.app binds its "Edit Title" to ⌘⇧I. Elsewhere Ctrl+Shift+I
+    // reaches a legacy-encoded program as the same byte as Ctrl+I (Tab), so
+    // claiming it takes no key away from anything running in a pane.
+    ActionDef {
+        action: Action::RenameTab,
+        name: "rename-tab",
+        default_chords: &["mod+shift+i"],
     },
     ActionDef {
         action: Action::NewClaudeSessionHere,
@@ -413,13 +430,91 @@ fn activate_tab_from_config_name(name: &str) -> Option<Action> {
 /// platform primary modifier so one spec serves both ⌘ and Ctrl. Returns `None`
 /// on a malformed spec; specs are authored in-tree and a test asserts they all
 /// parse, so `None` never reaches a real keymap (and `core` forbids panicking).
-fn default_chord(spec: &str) -> Option<KeyChord> {
-    let primary = if cfg!(target_os = "macos") {
-        "cmd"
-    } else {
-        "ctrl"
-    };
-    KeyChord::parse(&spec.replace("mod", primary)).ok()
+fn default_chord(spec: &str, platform: Platform) -> Option<KeyChord> {
+    KeyChord::parse(&spec.replace("mod", platform.primary_name())).ok()
+}
+
+/// Which family of default bindings to build. A parameter rather than a
+/// `cfg!` read inside [`Keymap::defaults`], so a test on one OS can check the
+/// other's bindings too — a chord collision on Windows is otherwise invisible
+/// from a Mac.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    /// ⌘ is the primary modifier.
+    MacOs,
+    /// Windows and Linux: Ctrl is the primary modifier.
+    Other,
+}
+
+impl Platform {
+    /// Every family, for a check that must hold wherever termherd runs.
+    pub const ALL: [Platform; 2] = [Platform::MacOs, Platform::Other];
+
+    /// The family this build runs on.
+    #[must_use]
+    pub const fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Other
+        }
+    }
+
+    const fn primary_mod(self) -> u8 {
+        match self {
+            Self::MacOs => MOD_CMD,
+            Self::Other => MOD_CTRL,
+        }
+    }
+
+    /// [`Self::primary_mod`] as chord syntax spells it.
+    const fn primary_name(self) -> &'static str {
+        match self {
+            Self::MacOs => "cmd",
+            Self::Other => "ctrl",
+        }
+    }
+}
+
+/// Every built-in binding on `platform`, one pair per chord. Regular actions
+/// come straight from the [`ACTIONS`] table's default chords. Copy/paste are
+/// the exception — the other platforms keep plain Ctrl+C/V as the terminal
+/// interrupt/literal and use Ctrl+Shift+C for copy — so they are listed
+/// explicitly here, as is the parameterized number row.
+///
+/// A list rather than a map, so a chord claimed twice stays visible to a test
+/// instead of being settled silently by whichever pair came last.
+#[must_use]
+pub fn default_bindings(platform: Platform) -> Vec<(KeyChord, Action)> {
+    let mut pairs: Vec<(KeyChord, Action)> = ACTIONS
+        .iter()
+        .flat_map(|def| {
+            def.default_chords
+                .iter()
+                .filter_map(move |spec| default_chord(spec, platform))
+                .map(move |chord| (chord, def.action))
+        })
+        .collect();
+    match platform {
+        Platform::MacOs => pairs.extend([
+            (KeyChord::new("c", MOD_CMD), Action::Copy),
+            (KeyChord::new("v", MOD_CMD), Action::Paste),
+        ]),
+        Platform::Other => pairs.extend([
+            (KeyChord::new("c", MOD_CTRL | MOD_SHIFT), Action::Copy),
+            (KeyChord::new("v", MOD_CTRL), Action::Paste),
+            (KeyChord::new("v", MOD_CTRL | MOD_SHIFT), Action::Paste),
+        ]),
+    }
+    // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9. The digit is
+    // 1-based for the user; the action carries the 0-based index.
+    pairs.extend((1..=NUMBER_ROW_TABS).map(|n| {
+        (
+            KeyChord::new(n.to_string(), platform.primary_mod()),
+            Action::ActivateTab(n - 1),
+        )
+    }));
+    pairs
 }
 
 /// Resolves a [`KeyChord`] to its [`Action`]. Built from platform-aware
@@ -436,49 +531,16 @@ impl Default for Keymap {
 }
 
 impl Keymap {
-    /// The built-in bindings. Regular actions come straight from the [`ACTIONS`]
-    /// table's default chords. Copy/paste are the exception — the other
-    /// platforms keep plain Ctrl+C/V as the terminal interrupt/literal and use
-    /// Ctrl+Shift+C for copy — so they are bound explicitly here.
+    /// The built-in bindings of the platform this build runs on — see
+    /// [`default_bindings`].
     pub fn defaults() -> Self {
-        let mut map = Keymap {
-            bindings: HashMap::new(),
-        };
-        // Regular actions: their default chords are data in the table.
-        for def in ACTIONS {
-            let chords: Vec<KeyChord> = def
-                .default_chords
-                .iter()
-                .copied()
-                .filter_map(default_chord)
-                .collect();
-            if !chords.is_empty() {
-                map.set(def.action, chords);
-            }
+        Self::defaults_for(Platform::current())
+    }
+
+    fn defaults_for(platform: Platform) -> Self {
+        Keymap {
+            bindings: default_bindings(platform).into_iter().collect(),
         }
-        // Copy/paste are platform-irregular: see the note above.
-        if cfg!(target_os = "macos") {
-            map.set(Action::Copy, [KeyChord::new("c", MOD_CMD)]);
-            map.set(Action::Paste, [KeyChord::new("v", MOD_CMD)]);
-        } else {
-            map.set(Action::Copy, [KeyChord::new("c", MOD_CTRL | MOD_SHIFT)]);
-            map.set(
-                Action::Paste,
-                [
-                    KeyChord::new("v", MOD_CTRL),
-                    KeyChord::new("v", MOD_CTRL | MOD_SHIFT),
-                ],
-            );
-        }
-        // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9. The
-        // digit is 1-based for the user; the action carries the 0-based index.
-        for n in 1..=NUMBER_ROW_TABS {
-            map.set(
-                Action::ActivateTab(n - 1),
-                [KeyChord::new(n.to_string(), primary_mod())],
-            );
-        }
-        map
     }
 
     /// Bind `action` to exactly `chords`, dropping any chords previously bound
@@ -647,13 +709,15 @@ mod tests {
         // The specs are authored in-tree; a typo would silently drop a default
         // binding (defaults() skips unparsable specs to keep core panic-free).
         // Fail here instead so it never ships.
-        for def in ACTIONS {
-            for spec in def.default_chords {
-                assert!(
-                    default_chord(spec).is_some(),
-                    "default chord spec `{spec}` for {:?} must parse",
-                    def.action
-                );
+        for platform in Platform::ALL {
+            for def in ACTIONS {
+                for spec in def.default_chords {
+                    assert!(
+                        default_chord(spec, platform).is_some(),
+                        "default chord spec `{spec}` for {:?} must parse on {platform:?}",
+                        def.action
+                    );
+                }
             }
         }
     }
@@ -798,6 +862,35 @@ mod tests {
             Action::from_config_name("toggle-record"),
             Some(Action::ToggleRecord)
         );
+    }
+
+    #[test]
+    fn defaults_bind_rename_tab_to_the_primary_modifier_shift_i_on_every_platform() {
+        assert_eq!(
+            Keymap::defaults_for(Platform::MacOs).lookup(&KeyChord::new("i", MOD_CMD | MOD_SHIFT)),
+            Some(Action::RenameTab)
+        );
+        assert_eq!(
+            Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new("i", MOD_CTRL | MOD_SHIFT)),
+            Some(Action::RenameTab)
+        );
+    }
+
+    #[test]
+    fn no_default_chord_is_claimed_by_two_actions_on_either_platform() {
+        // The keymap is a map, so a collision would be settled silently by
+        // whichever binding came last. Both platforms, because a Ctrl-only
+        // collision is invisible from a Mac.
+        for platform in Platform::ALL {
+            let mut seen: HashMap<KeyChord, Action> = HashMap::new();
+            for (chord, action) in default_bindings(platform) {
+                let earlier = seen.insert(chord.clone(), action);
+                assert_eq!(
+                    earlier, None,
+                    "{chord:?} is also bound to {action:?} on {platform:?}"
+                );
+            }
+        }
     }
 
     #[test]

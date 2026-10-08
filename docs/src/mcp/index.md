@@ -13,7 +13,7 @@ depends on how the session started.
  loopback │  └───────────▲────────────┘  │
    ┌──────┼──────────────┘               │
    │      │   the LIVE BRIDGE            │
-   │      │   19 tools · the running     │
+   │      │   20 tools · the running     │
    │      │   workspace + settings.json  │
    │      └──────────────────────────────┘
    │
@@ -37,7 +37,7 @@ depends on how the session started.
 | Setup | none — wired in at spawn | you register `termherd-mcp` yourself |
 | Available to | sessions launched from TermHerd | any Claude session |
 | Transport | in-process, loopback, per-session bearer token | JSON-RPC over stdio |
-| Surface | 19 tools | 2 tools + 2 resources |
+| Surface | 20 tools | 2 tools + 2 resources |
 | Needs the app running | ✅ yes | ❌ no |
 
 ## The gap between them

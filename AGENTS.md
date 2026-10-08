@@ -161,9 +161,11 @@ into its `mcpServers` at spawn (loopback, per-session token) — so it can read
 and drive the workspace it runs in. This is the richer sibling of the capture
 dump above: same `WorkspaceSnapshot` model, live instead of a file.
 
-**Settled.** Nineteen tools: `list_sessions` + `snapshot`
+**Settled.** Twenty tools: `list_sessions` + `snapshot`
 (perception), `open_session` / `split_pane` / `focus_pane` / `rename_tab` /
 `close_pane` / `run_in_session` / `mouse_in_session` (action),
+`claude_command` (arms the confirmation for a slash command typed into an
+idle Claude — the one write path for edits Claude owns),
 `wait_for_status` + `read_terminal` (synchronisation), `screenshot` (pixels),
 `press_keys` + `run_action` (the app's own keyboard), `add_repo` +
 `forget_repo` (membership — what the sidebar *contains*, as against what the
@@ -185,8 +187,9 @@ shell-integration snippet — with the PTY's foreground process group standing i
 where the snippet cannot apply, and nothing at all under ConPTY; and a
 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` in the user's own `~/.claude/settings.json`
 silenced the Claude channel outright, which a private `--settings` overlay on
-the launch line now outranks. That overlay is why termherd needs **Claude Code
-1.0.61 or newer** — an older CLI rejects the flag and the launch fails.
+the launch line now outranks. That overlay needs Claude Code 1.0.61; the
+floor termherd states is higher, **2.0.73**, for the `--session-id` a fresh
+launch carries — an older CLI rejects either flag and the launch fails.
 
 The same stuck status also kept a close confirmation from arming for a *shell*
 (`has_running_process` needs `Busy` or `Attention`); that follows from the fix
@@ -234,11 +237,11 @@ got.
 responses: `no-surface` means the action is wired to nothing, so retrying is
 pointless (`open-new-session` is the one), while `no-context` means a
 precondition was absent — nothing focused to derive a repo from, no closed tab
-to reopen, nothing to scroll, nothing selected to copy, no Claude agent name to
-copy — which the caller can go and *create* before trying again (except the
-agent name on Windows, where none is ever found). Every handler that can refuse
-that way says so at its own refusal (they return `Option`), so no predicate
-here has to re-derive the list.
+to reopen, no tab to rename, nothing to scroll, nothing selected to copy, no
+Claude agent name to copy — which the caller can go and *create* before trying
+again (except the agent name on Windows, where none is ever found). Every
+handler that can refuse that way says so at its own refusal (they return
+`Option`), so no predicate here has to re-derive the list.
 
 The line is whether the shell refused, **not** whether the effect was
 interesting: `activate-tab-9` on a single-tab workspace reports `ran`, because

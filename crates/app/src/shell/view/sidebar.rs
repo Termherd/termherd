@@ -185,14 +185,14 @@ impl Shell {
             .into()
     }
 
-    /// Live activity, keyed by the Claude session id each terminal resumed, so a
+    /// Live activity, keyed by the Claude session id of each terminal, so a
     /// browsed row can show its current status (FR8). If the same session is
     /// open twice, the most urgent status wins.
     fn live_statuses(&self) -> HashMap<&str, SessionStatus> {
         let mut live: HashMap<&str, SessionStatus> = HashMap::new();
         for s in self.core.sessions.values() {
-            if let Some(resume) = s.launch.resume_id() {
-                live.entry(resume)
+            if let Some(claude_id) = s.claude_session_id() {
+                live.entry(claude_id)
                     .and_modify(|cur| {
                         if s.status.urgency() > cur.urgency() {
                             *cur = s.status;
@@ -429,7 +429,9 @@ impl Shell {
         // clickable title that resumes the session.
         let middle: Element<'_, Message> = if renaming_this {
             let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
-            text_input(strings::RENAME_PLACEHOLDER, buffer)
+            // The hint is what a blank commit leaves: it clears only the
+            // sidebar's own name.
+            text_input(&self.core.session_title_unnamed_here(s), buffer)
                 .id(rename_id())
                 .on_input(Message::RenameInput)
                 .on_submit(Message::CommitRename)

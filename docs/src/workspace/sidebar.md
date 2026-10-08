@@ -38,7 +38,10 @@ Toggle it with <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>B</kbd>.
 Click a project to expand it, then a session to resume it in a new tab.
 
 Beside each project row are two launch buttons: **`❯`** opens a plain shell in
-that project's directory, **`✳`** starts a fresh Claude session there. The same
+that project's directory, **`✳`** starts a fresh Claude session there — under a
+session id TermHerd picks (`claude --session-id <uuid>`), so once the session
+shows up in the list, clicking it brings its tab forward instead of resuming
+a second copy. The same
 two actions are on the keyboard as <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>T</kbd>
 and <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>, which use the
 *focused* session's
@@ -110,7 +113,14 @@ Three buttons on each session row:
 
 All three are an **overlay**: they are written to
 `~/.termherd/metadata.json`, never under `~/.claude`. Nothing you do in the
-sidebar changes what the Claude CLI sees.
+sidebar changes what the Claude CLI sees, with one exception: renaming a
+session that is **open in a Claude tab** asks Claude to rename it, with
+`/rename`, exactly as renaming its tab does (see
+[Tabs and splits](./tabs-and-splits.md)). Clearing the field still only
+removes the sidebar's own name, and the greyed-out hint shows the title that
+leaves. Between a name given here and Claude's own `/rename`, the later one
+shows: a rename here outranks the name Claude had, until Claude is renamed
+again.
 
 ## Density
 

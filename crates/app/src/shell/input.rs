@@ -259,7 +259,7 @@ mod tests {
     use super::*;
     use iced::keyboard::key::{Code, Named, Physical};
     use iced::keyboard::{Key, Modifiers};
-    use termherd_core::keymap::action_catalog;
+    use termherd_core::keymap::{Platform, default_bindings};
 
     /// The chord a synthesised event reads back as, or `None` when the chord
     /// could not be synthesised at all — the whole round trip in one call.
@@ -413,20 +413,13 @@ mod tests {
         // The defaults are the chords that must work on day one. A chord that
         // does not round-trip is a binding `press_keys` silently cannot reach —
         // exactly the silent-drop this rung exists to avoid.
-        let primary = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
-        for entry in action_catalog() {
-            for spec in entry.default_chords {
-                let chord = KeyChord::parse(&spec.replace("mod", primary))
-                    .expect("a shipped default chord spec parses");
+        // Every platform's, so a Windows-only chord is checked from a Mac.
+        for platform in Platform::ALL {
+            for (chord, action) in default_bindings(platform) {
                 assert_eq!(
                     round_trip(&chord).as_ref(),
                     Some(&chord),
-                    "default chord `{spec}` for {} must round-trip",
-                    entry.name
+                    "default chord {chord:?} for {action:?} on {platform:?} must round-trip"
                 );
             }
         }

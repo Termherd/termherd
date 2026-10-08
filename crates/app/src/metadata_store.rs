@@ -23,6 +23,8 @@ struct MetaDto {
     archived: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title_over: Option<String>,
 }
 
 /// On-disk shape of one repo entry.
@@ -100,6 +102,7 @@ fn from_dto(dto: OverlayDto) -> Overlay {
                         starred: m.starred,
                         archived: m.archived,
                         title: m.title,
+                        title_over: m.title_over,
                     },
                 )
             })
@@ -132,6 +135,7 @@ fn to_dto(overlay: &Overlay) -> OverlayDto {
                         starred: m.starred,
                         archived: m.archived,
                         title: m.title.clone(),
+                        title_over: m.title_over.clone(),
                     },
                 )
             })
@@ -205,6 +209,8 @@ mod tests {
             "s1".into(),
             SessionMeta {
                 starred: true,
+                title: Some("mine".into()),
+                title_over: Some("claude's".into()),
                 ..Default::default()
             },
         );
@@ -218,6 +224,11 @@ mod tests {
         let json = serde_json::to_string(&to_dto(&overlay)).unwrap();
         let back = parse(&json).unwrap();
         assert!(back.sessions["s1"].starred);
+        assert_eq!(
+            back.sessions["s1"].title_over.as_deref(),
+            Some("claude's"),
+            "without it, a name given over Claude's loses to it at restart"
+        );
         assert!(back.repos["/p"].starred);
         assert!(
             back.repos["/p"].declared,
