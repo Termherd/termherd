@@ -4156,8 +4156,8 @@ mod key_routing {
         let taken = |shell: &Shell| ime::terminal_commit(shell.accepts_terminal_input(), &emoji);
         assert_eq!(taken(&shell), Some("🚀"));
 
-        let current = shell.core.workspace.tabs[0].display_title().to_owned();
-        let _ = shell.update(Message::StartTabRename { index: 0, current });
+        let _ = shell.update(Message::StartTabRename(0));
+        assert!(shell.tab_rename.is_some());
         assert_eq!(taken(&shell), None, "a tab rename owns the commit");
         let _ = shell.update(Message::CancelTabRename);
 
@@ -4174,8 +4174,7 @@ mod key_routing {
     #[test]
     fn an_emoji_typed_into_the_tab_rename_becomes_the_title() {
         let (mut shell, _pty) = shell_with_terminal();
-        let current = shell.core.workspace.tabs[0].display_title().to_owned();
-        let _ = shell.update(Message::StartTabRename { index: 0, current });
+        let _ = shell.update(Message::StartTabRename(0));
         let _ = shell.update(Message::TabRenameInput("Build 🚀".to_string()));
         let _ = shell.update(Message::CommitTabRename);
         assert_eq!(shell.core.workspace.tabs[0].display_title(), "Build 🚀");
