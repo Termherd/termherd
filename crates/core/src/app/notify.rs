@@ -44,7 +44,11 @@ impl App {
         } else {
             body
         };
-        vec![Effect::Notify { title, body }]
+        vec![Effect::Notify {
+            session,
+            title,
+            body,
+        }]
     }
 }
 
@@ -70,6 +74,25 @@ mod tests {
         assert_eq!(
             notify_effect(&effects),
             Some(("myproj", "Claude needs your attention"))
+        );
+    }
+
+    #[test]
+    fn a_notification_carries_the_session_a_click_brings_back() {
+        let mut app = App::new();
+        let first = launch(&mut app, "same");
+        let second = launch(&mut app, "same");
+
+        // Two tabs share a title, so only the handle can tell a click on one
+        // notification from a click on the other.
+        let effects = app.apply(Event::SessionNotified {
+            session: first,
+            body: "ping".into(),
+        });
+
+        assert!(
+            matches!(effects.as_slice(), [Effect::Notify { session, .. }] if *session == first),
+            "expected a notification for {first:?}, not {second:?}: {effects:?}"
         );
     }
 

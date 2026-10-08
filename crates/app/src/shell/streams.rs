@@ -70,18 +70,31 @@ pub(super) fn pty_message(event: PtyEvent) -> Message {
     }
 }
 
-/// One PTY-output stream: drains the receiver into [`Message`]s. The receiver
-/// is taken on first run; a duplicated subscription (there is only ever one)
-/// would idle forever rather than steal events.
+/// One PTY-output stream: drains the receiver into [`Message`]s.
 pub(super) fn pty_stream(output: &PtyOutput) -> impl Stream<Item = Message> + use<> {
-    let taken = output.take();
+    drain_stream(output, 64, pty_message)
+}
+
+/// Drain a single-consumer channel into the subscription, one [`Message`] per
+/// item. The receiver is taken on first run; a duplicated subscription (there
+/// is only ever one) idles forever rather than stealing items.
+pub(super) fn drain_stream<R, T>(
+    source: &TakeOnceSource<R>,
+    buffer: usize,
+    to_message: fn(T) -> Message,
+) -> impl Stream<Item = Message> + use<R, T>
+where
+    R: Stream<Item = T> + Unpin + Send + 'static,
+    T: Send + 'static,
+{
+    let taken = source.take();
     iced::stream::channel(
-        64,
-        |mut out: iced::futures::channel::mpsc::Sender<Message>| async move {
+        buffer,
+        move |mut out: iced::futures::channel::mpsc::Sender<Message>| async move {
             match taken {
                 Some(mut rx) => {
-                    while let Some(event) = rx.next().await {
-                        if out.send(pty_message(event)).await.is_err() {
+                    while let Some(item) = rx.next().await {
+                        if out.send(to_message(item)).await.is_err() {
                             break;
                         }
                     }

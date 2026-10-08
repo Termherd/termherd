@@ -173,16 +173,22 @@ impl Shell {
     /// lives in another one — and hand the keyboard to the terminal. Rejects a
     /// handle no open pane hosts.
     fn act_focus(&mut self, session: u64) -> (ActionOutcome, Task<Message>) {
-        let id = match self.resolve_pane(session) {
-            Ok(id) => id,
-            Err(outcome) => return (outcome, Task::none()),
-        };
+        match NonZeroU64::new(session).and_then(|id| self.reveal_session(SessionId(id))) {
+            Some(task) => (self.applied(), task),
+            None => (unhosted_handle(session), Task::none()),
+        }
+    }
+
+    /// Bring a session's pane into view and hand it the keyboard — the one
+    /// reveal both `focus_pane` and a clicked notification run. `None`, with
+    /// nothing touched, when no open pane hosts the session.
+    pub(super) fn reveal_session(&mut self, id: SessionId) -> Option<Task<Message>> {
+        self.core.workspace.tab_of(id)?;
         self.focus = Focus::Terminal;
         let effects = self.core.apply(Event::RevealPane(id));
         // A reveal may activate another tab, whose panes were last sized for a
         // different layout — resize like `activate_tab` does.
-        let task = Task::batch([self.perform(effects), self.resize_panes()]);
-        (self.applied(), task)
+        Some(Task::batch([self.perform(effects), self.resize_panes()]))
     }
 
     /// Rename the tab at `tab`. A blank title reverts to the derived name

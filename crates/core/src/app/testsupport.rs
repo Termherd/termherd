@@ -80,7 +80,7 @@ pub(crate) fn launch_claude(app: &mut App) -> SessionId {
 pub(crate) fn notify_effect(effects: &[Effect]) -> Option<(&str, &str)> {
     match effects {
         [] => None,
-        [Effect::Notify { title, body }] => Some((title, body)),
+        [Effect::Notify { title, body, .. }] => Some((title, body)),
         other => panic!("expected at most one Notify, got {other:?}"),
     }
 }
