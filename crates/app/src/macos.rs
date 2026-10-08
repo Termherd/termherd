@@ -1,7 +1,7 @@
 //! macOS AppKit glue — the single audited `unsafe` module in the workspace.
 //!
-//! Two repairs to what winit 0.30 does on macOS, both *mechanism only*: the
-//! policy each one feeds stays in the safe, headless-tested shell.
+//! Repairs to what winit 0.30 does on macOS, all *mechanism only*: the policy
+//! each one feeds stays in the safe, headless-tested shell.
 //!
 //! **Cmd+Q.** winit installs a default application menu whose **Quit** item
 //! invokes AppKit's `terminate:` (⌘Q). `terminate:` ends the process *before*
@@ -11,6 +11,10 @@
 //! `windowShouldClose:` and reaches the shell as a `CloseRequested` event — the
 //! very seam the window-close button already uses (see
 //! `shell::Shell::request_quit`).
+//!
+//! **Ctrl+Cmd+Space.** winit's default menu has no Edit menu, which is where
+//! AppKit's **Emoji & Symbols** item and its shortcut live, so the chord
+//! opened nothing and typed a space. [`add_character_palette_item`] adds one.
 //!
 //! **Text inserted outside a keystroke.** winit's `insertText:replacementRange:`
 //! only reports text while a composition (marked text) is in progress, and
@@ -37,8 +41,8 @@ use std::ffi::{c_char, c_void};
 use objc2::ffi;
 use objc2::runtime::{AnyClass, AnyObject, Imp, Method, Sel};
 use objc2::{msg_send, sel};
-use objc2_app_kit::NSApplication;
-use objc2_foundation::{MainThreadMarker, NSNotFound, NSRange, NSString, NSUInteger};
+use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
+use objc2_foundation::{MainThreadMarker, NSNotFound, NSRange, NSString, NSUInteger, ns_string};
 
 /// Repoint the app-menu **Quit** item from `terminate:` to `performClose:` so
 /// quitting flows through the iced runtime instead of AppKit terminating the
@@ -107,6 +111,62 @@ pub fn route_quit_through_close(mtm: MainThreadMarker) {
         }
         tracing::warn!("Quit menu item not found; Cmd+Q stays on terminate:");
     }
+}
+
+/// Give the menu bar the Edit menu winit's default menu lacks, holding only
+/// **Emoji & Symbols** (`orderFrontCharacterPalette:`, Ctrl+Cmd+Space).
+/// AppKit offers that item, and its shortcut, only through an app's menu; with
+/// no item to claim it, the chord fell through to the key handlers and typed
+/// a space. A menu key equivalent is matched before `keyDown:`, so the chord
+/// now opens the Character Viewer and never reaches a terminal.
+///
+/// Cut, Copy and Paste are deliberately absent: as menu key equivalents they
+/// would take Cmd+X/C/V away from termherd's own rebindable keymap.
+/// Fire-once like the Quit reroute; a menu already holding the item is left
+/// alone.
+pub fn add_character_palette_item(mtm: MainThreadMarker) {
+    let app = NSApplication::sharedApplication(mtm);
+    let palette = sel!(orderFrontCharacterPalette:);
+    let control_command = NSEventModifierFlags::NSEventModifierFlagControl
+        | NSEventModifierFlags::NSEventModifierFlagCommand;
+    // SAFETY: plain AppKit menu reads and construction on the main thread
+    // (`mtm`), as in `route_quit_through_close`. Each initialiser receives a
+    // fresh allocation and live strings, and the action is a selector
+    // NSApplication implements, reached through the responder chain from a nil
+    // target.
+    unsafe {
+        let Some(menubar) = app.mainMenu() else {
+            tracing::warn!("no main menu; Ctrl+Cmd+Space opens no Character Viewer");
+            return;
+        };
+        let mut actions = Vec::new();
+        for top in menubar.itemArray().iter() {
+            if let Some(submenu) = top.submenu() {
+                actions.extend(submenu.itemArray().iter().map(|item| item.action()));
+            }
+        }
+        if !lacks_action(&actions, palette) {
+            return;
+        }
+        let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            mtm.alloc(),
+            ns_string!("Emoji & Symbols"),
+            Some(palette),
+            ns_string!(" "),
+        );
+        item.setKeyEquivalentModifierMask(control_command);
+        let edit = NSMenu::initWithTitle(mtm.alloc(), ns_string!("Edit"));
+        edit.addItem(&item);
+        let edit_item = NSMenuItem::new(mtm);
+        edit_item.setSubmenu(Some(&edit));
+        menubar.addItem(&edit_item);
+    }
+    tracing::info!("added Emoji & Symbols (Ctrl+Cmd+Space) to an Edit menu");
+}
+
+/// Whether no menu item among `actions` already sends `action`.
+fn lacks_action(actions: &[Option<Sel>], action: Sel) -> bool {
+    !actions.contains(&Some(action))
 }
 
 /// The class winit declares for the window's content view — the
@@ -316,7 +376,20 @@ unsafe extern "C" fn insert_text(
 
 #[cfg(test)]
 mod tests {
-    use super::{Insertion, replays_as_composition};
+    use super::{Insertion, lacks_action, replays_as_composition};
+    use objc2::sel;
+
+    #[test]
+    fn a_menu_without_the_palette_item_gets_one() {
+        let palette = sel!(orderFrontCharacterPalette:);
+        assert!(lacks_action(&[None, Some(sel!(performClose:))], palette));
+    }
+
+    #[test]
+    fn a_menu_already_holding_the_palette_item_is_left_alone() {
+        let palette = sel!(orderFrontCharacterPalette:);
+        assert!(!lacks_action(&[Some(sel!(hide:)), Some(palette)], palette));
+    }
 
     /// A Character Viewer pick: no composition, no key press, no range.
     const PICKED: Insertion = Insertion {

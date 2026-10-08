@@ -167,8 +167,9 @@ impl Shell {
         match event {
             window::Event::Opened { .. } => {
                 // Reroute the macOS menu Quit item (and ⌘Q) through the iced
-                // runtime, and Character Viewer text winit would drop through
-                // the input method. Done here, not in the boot closure: iced
+                // runtime, give Ctrl+Cmd+Space its Character Viewer menu item,
+                // and route the text it inserts, which winit would drop,
+                // through the input method. Done here, not in the boot closure: iced
                 // constructs the app state *before* `run_app`, so the boot
                 // closure runs ahead of winit's `applicationDidFinishLaunching`
                 // (where the default menu is installed) and ahead of the
@@ -179,6 +180,7 @@ impl Shell {
                 match objc2_foundation::MainThreadMarker::new() {
                     Some(mtm) => {
                         crate::macos::route_quit_through_close(mtm);
+                        crate::macos::add_character_palette_item(mtm);
                         crate::macos::route_stray_text_through_ime(mtm);
                     }
                     // We expect to be on the main thread here; if not, skipping
