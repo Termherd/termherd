@@ -6,6 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
+use termherd_claude::session_id::{is_uuid, is_valid};
 use termherd_core::workspace::SessionId;
 use termherd_core::{ClaudeLaunch, Launch, McpConfig};
 
@@ -19,7 +20,8 @@ use crate::integration::{SHELL_DIR_PREFIX, integration_for};
 /// the path is on argv, but the token inside the file is not. `settings` is the
 /// [`write_title_settings`] overlay that keeps the status channel open. A fresh
 /// launch's minted id goes on as `--session-id` only when it is UUID-shaped:
-/// anything else is dropped, and Claude picks its own. Pure so
+/// anything else is dropped, and Claude picks its own. A resume id outside
+/// Claude's charset types nothing at all. Pure so
 /// the command contract is unit-tested without a real PTY.
 pub(crate) fn launch_command(
     launch: &Launch,
@@ -39,6 +41,9 @@ pub(crate) fn launch_command(
         Launch::Claude(ClaudeLaunch::Fresh(Some(id))) if is_uuid(id) => {
             Some(format!("claude{flags} --session-id {id}\r"))
         }
+        // Production ids are minted as UUIDs, so this arm guards the seam rather
+        // than a known path. `core` still records the id it was given; that
+        // disagreement only costs a transcript lookup that finds nothing.
         Launch::Claude(ClaudeLaunch::Fresh(Some(id))) => {
             tracing::warn!(
                 id,
@@ -46,22 +51,16 @@ pub(crate) fn launch_command(
             );
             Some(format!("claude{flags}\r"))
         }
-        Launch::Claude(ClaudeLaunch::Resume(id)) => Some(format!("claude{flags} --resume {id}\r")),
+        Launch::Claude(ClaudeLaunch::Resume(id)) if is_valid(id) => {
+            Some(format!("claude{flags} --resume {id}\r"))
+        }
+        // A resume cannot go ahead without its id, and a fresh conversation in
+        // its place would pass for the one asked for: the shell is left bare.
+        Launch::Claude(ClaudeLaunch::Resume(id)) => {
+            tracing::warn!(id, "refusing to resume a malformed session id");
+            None
+        }
     }
-}
-
-/// Whether `id` has the shape `--session-id` takes: a hyphenated UUID, and so
-/// nothing a shell would split or Claude would read as a flag.
-fn is_uuid(id: &str) -> bool {
-    const HYPHENS: [usize; 4] = [8, 13, 18, 23];
-    id.len() == 36
-        && id.bytes().enumerate().all(|(index, byte)| {
-            if HYPHENS.contains(&index) {
-                byte == b'-'
-            } else {
-                byte.is_ascii_hexdigit()
-            }
-        })
 }
 
 /// Write the settings overlay a Claude launch passes to `--settings`, and return
@@ -630,14 +629,18 @@ mod tests {
         }
     }
 
-    proptest::proptest! {
-        #[test]
-        fn every_minted_shape_is_accepted_and_nothing_flag_shaped_is(
-            id in "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
-            junk in "-.*",
-        ) {
-            proptest::prop_assert!(is_uuid(&id));
-            proptest::prop_assert!(!is_uuid(&junk));
+    #[test]
+    fn a_malformed_resume_id_is_never_typed() {
+        for bad in ["--help", "-rf", "abc; rm -rf ~", ""] {
+            assert_eq!(
+                launch_command(
+                    &Launch::Claude(ClaudeLaunch::Resume(bad.to_owned())),
+                    None,
+                    None
+                ),
+                None,
+                "{bad:?} must leave the shell bare"
+            );
         }
     }
 }

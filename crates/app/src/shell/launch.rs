@@ -19,7 +19,7 @@ impl Shell {
     /// and size its PTY to the current pane (FR4). A fresh Claude starts under
     /// an id minted here, so its transcript is known from the first keystroke.
     pub(super) fn launch(&mut self, cwd: String, launch: Launch) -> Task<Message> {
-        let launch = launch.with_fresh_id(mint_session_id());
+        let launch = launch.with_fresh_id(mint_session_id);
         let title = self.core.tab_title(&cwd, &launch);
         let effects = self
             .core

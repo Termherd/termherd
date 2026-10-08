@@ -894,7 +894,9 @@ impl Shell {
             Message::LaunchSession { cwd, resume } => {
                 // Re-clicking a session already open in TermHerd re-focuses its
                 // tab instead of spawning a second terminal for the same Claude
-                // session (FR4).
+                // session (FR4). A re-key rewrites the session file under the
+                // same pid, which no job change announces, so read them first.
+                self.refresh_session_files();
                 if let Some(session) = self.core.open_session_for(&resume)
                     && let Some(index) = self.core.workspace.tab_of(session)
                 {
@@ -1353,6 +1355,14 @@ impl Shell {
         self.core.peer_name(session)
     }
 
+    /// Re-read the session file of every live pane.
+    fn refresh_session_files(&mut self) {
+        let sessions: Vec<SessionId> = self.core.sessions.values().map(|s| s.id).collect();
+        for session in sessions {
+            self.refresh_session_file(session);
+        }
+    }
+
     /// Re-read the session file of every pane in the tab at `index`.
     fn refresh_tab_session_files(&mut self, index: usize) {
         let sessions = self
@@ -1744,7 +1754,7 @@ mod key_routing {
     fn minted_fresh_claude(launch: Option<&Launch>) -> Option<&str> {
         match launch {
             Some(Launch::Claude(ClaudeLaunch::Fresh(Some(id))))
-                if uuid::Uuid::parse_str(id).is_ok() =>
+                if termherd_claude::session_id::is_uuid(id) =>
             {
                 Some(id)
             }
@@ -1788,6 +1798,31 @@ mod key_routing {
             });
         }
         (shell, session)
+    }
+
+    #[test]
+    fn a_sidebar_click_on_a_re_keyed_session_focuses_its_tab_instead_of_resuming_it() {
+        // `/clear` rewrites the session file under the same pid, so no job
+        // change announces it: the click itself must read the file again.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+        std::fs::write(
+            dir.path().join("4399.json"),
+            format!(r#"{{"pid":4399,"sessionId":"re-keyed","procStart":"{STARTED}"}}"#),
+        )
+        .expect("write session file");
+        let _ = shell.launch("/tmp/other".to_string(), Launch::Shell);
+        assert_eq!(shell.core.workspace.active, 1);
+
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "re-keyed".to_string(),
+        });
+        assert_eq!(shell.core.workspace.tabs.len(), 2, "no duplicate resume");
+        assert_eq!(
+            shell.core.workspace.active, 0,
+            "the hosting tab came forward"
+        );
     }
 
     #[test]

@@ -8,8 +8,9 @@ newer** on your `PATH`.
 That floor is the CLI's `--session-id` flag. TermHerd starts every fresh Claude
 session under an id it chooses itself, so a new tab knows its conversation from
 the first keystroke. Claude Code's changelog never records when the flag
-arrived; 2.0.73 is the oldest release whose notes show it working, so it is the
-oldest TermHerd can vouch for.
+arrived, so the floor is an **estimate**: 2.0.73 is the oldest release whose
+notes show the flag working. An older CLI may well accept it too; one that does
+not refuses the launch, and TermHerd has no fallback for it.
 
 The next flag down is `--settings` (1.0.61), which TermHerd also puts on every
 Claude launch. It re-enables the CLI's terminal title *for that session
