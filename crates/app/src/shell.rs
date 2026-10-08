@@ -6963,7 +6963,7 @@ mod key_routing {
         fn pick_by_keys(shell: &mut Shell, color: ClaudeColor) -> Vec<PressStep> {
             let _ = shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
             let from = shell.live_color_picker().map_or(0, ColorPicker::selected);
-            let palette = ColorPicker::colors();
+            let palette = ClaudeColor::ALL;
             let at = palette
                 .iter()
                 .position(|listed| *listed == color)
@@ -6983,9 +6983,8 @@ mod key_routing {
             let (mut shell, _pty) = shell_with_terminal();
             let _ = shell.dispatch_action(Action::PickTabColor);
             let picker = shell.live_color_picker().expect("open");
-            assert_eq!(ColorPicker::colors(), ClaudeColor::ALL);
             assert_eq!(
-                ColorPicker::colors()[picker.selected()],
+                ClaudeColor::ALL[picker.selected()],
                 ClaudeColor::Default,
                 "an uncoloured tab opens on None, so Enter changes nothing"
             );
@@ -7148,7 +7147,7 @@ mod key_routing {
             );
             let _ = shell.update(Message::PickColorPickerEntry(1));
 
-            assert_eq!(shell.core.tab_color(0), Some(ColorPicker::colors()[1]));
+            assert_eq!(shell.core.tab_color(0), Some(ClaudeColor::ALL[1]));
             assert!(shell.keyboard_owner().is_none());
         }
 
@@ -7157,7 +7156,7 @@ mod key_routing {
             let (mut shell, _pty) = shell_with_terminal();
             let _ = shell.dispatch_action(Action::PickTabColor);
 
-            let _ = shell.update(Message::PickColorPickerEntry(ColorPicker::colors().len()));
+            let _ = shell.update(Message::PickColorPickerEntry(ClaudeColor::ALL.len()));
 
             assert!(shell.keyboard_owner().is_none());
             assert_eq!(shell.core.tab_color(0), None);

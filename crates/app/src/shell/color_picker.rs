@@ -29,12 +29,6 @@ pub(super) struct ColorPicker {
 }
 
 impl ColorPicker {
-    /// What the picker offers, in order: the palette `/color` takes. Every
-    /// reader of a position in the list reads it here.
-    pub(super) fn colors() -> &'static [ClaudeColor] {
-        &ClaudeColor::ALL
-    }
-
     pub(super) fn selected(&self) -> usize {
         self.selected
     }
@@ -58,14 +52,9 @@ impl Shell {
     /// opens and by the tab menu before it offers the picker, so neither
     /// offers a list that cannot work.
     pub(super) fn color_pickable(&self, session: SessionId) -> bool {
-        match self.core.color_keeper(session) {
-            Some(ColorKeeper::Termherd) => true,
-            Some(ColorKeeper::Claude) => self
-                .core
-                .claude_command_check(session, &self.prompt_input(session))
-                .is_ok(),
-            None => false,
-        }
+        self.core
+            .color_pick(session, &self.prompt_input(session))
+            .is_ok()
     }
 
     /// Open the focused tab's picker on the colour it wears — *None* for an
@@ -81,7 +70,7 @@ impl Shell {
             .core
             .session_color(anchor)
             .unwrap_or(ClaudeColor::Default);
-        let selected = ColorPicker::colors()
+        let selected = ClaudeColor::ALL
             .iter()
             .position(|color| *color == worn)
             .unwrap_or(0);
@@ -107,7 +96,7 @@ impl Shell {
         let Some(selected) = self.live_color_picker().map(ColorPicker::selected) else {
             return (None, Task::none());
         };
-        let len = ColorPicker::colors().len();
+        let len = ClaudeColor::ALL.len();
         match key {
             ListKey::Up => self.select_color(step(selected, len, false)),
             ListKey::Down => self.select_color(step(selected, len, true)),
@@ -129,23 +118,22 @@ impl Shell {
     /// take it, the picker stays open naming why, and the verdict says the pick
     /// was refused rather than letting a caller believe it was asked.
     pub(super) fn pick_color(&mut self, position: usize) -> (Option<KeyVerdict>, Task<Message>) {
-        let anchor = self.live_color_picker().map(|picker| picker.anchor);
-        self.color_picker = None;
-        let (Some(anchor), Some(color)) = (anchor, ColorPicker::colors().get(position).copied())
+        let live = self.live_color_picker().is_some();
+        let picker = self.color_picker.take().filter(|_| live);
+        let (Some(mut picker), Some(color)) = (picker, ClaudeColor::ALL.get(position).copied())
         else {
             return (None, Task::none());
         };
+        let anchor = picker.anchor;
         if self.core.color_keeper(anchor) == Some(ColorKeeper::Claude) {
             return match self.arm_claude_command(anchor, ClaudeCommand::Color(color)) {
                 Ok(_) => (None, Task::none()),
                 Err(refusal) => {
                     let reason = refusal.to_string();
                     tracing::info!(%reason, "tab colour not asked of Claude");
-                    self.color_picker = Some(ColorPicker {
-                        anchor,
-                        selected: position,
-                        refused: Some(reason.clone()),
-                    });
+                    picker.selected = position;
+                    picker.refused = Some(reason.clone());
+                    self.color_picker = Some(picker);
                     let label = KeyboardOwner::ColorPicker.label();
                     (Some(KeyVerdict::Refused(label, reason)), Task::none())
                 }

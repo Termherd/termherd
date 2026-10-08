@@ -29,10 +29,10 @@ impl Shell {
     /// resize). A handle that resolves to no live session — or an out-of-range
     /// tab — is rejected before any state is touched.
     pub(super) fn perform_action(&mut self, action: Action) -> (ActionOutcome, Task<Message>) {
-        self.for_a_remote_caller(|shell| shell.perform_action_unguarded(action))
+        self.for_a_remote_caller(|shell| shell.act(action))
     }
 
-    fn perform_action_unguarded(&mut self, action: Action) -> (ActionOutcome, Task<Message>) {
+    fn act(&mut self, action: Action) -> (ActionOutcome, Task<Message>) {
         match action {
             Action::Open { project, kind } => self.act_open(project, kind),
             Action::Split { pane, dir } => self.act_split(pane, dir),
@@ -306,11 +306,13 @@ impl Shell {
     pub(super) fn perform_presses(&mut self, presses: Vec<Press>) -> (PressOutcome, Task<Message>) {
         let mut steps = Vec::with_capacity(presses.len());
         let mut tasks = Vec::with_capacity(presses.len());
-        for press in presses {
-            let (step, task) = self.press(press);
-            steps.push(step);
-            tasks.push(task);
-        }
+        self.for_a_remote_caller(|shell| {
+            for press in presses {
+                let (step, task) = shell.press(press);
+                steps.push(step);
+                tasks.push(task);
+            }
+        });
         let outcome = PressOutcome {
             steps,
             focused: self.focused_handle(),
@@ -328,10 +330,6 @@ impl Shell {
     /// keyboard cannot.
     fn press(&mut self, press: Press) -> (PressStep, Task<Message>) {
         self.drop_stale_lists();
-        self.for_a_remote_caller(|shell| shell.press_unguarded(press))
-    }
-
-    fn press_unguarded(&mut self, press: Press) -> (PressStep, Task<Message>) {
         match press {
             Press::Chord(chord) => match event_of(&chord) {
                 Some(event) => {
