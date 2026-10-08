@@ -32,15 +32,20 @@ This is an early scaffold. Status, scope, and design live in:
 
 ### Requirements
 
-A shell, and — to launch Claude sessions — the **Claude Code CLI, 1.0.61 or
+A shell, and — to launch Claude sessions — the **Claude Code CLI, 2.0.73 or
 newer**, on your `PATH`.
 
-That floor is the `--settings` flag, which arrived in 1.0.61 and which termherd
-puts on every Claude launch. It re-enables the CLI's terminal title for that
-session only, and the title is where a Claude session's activity comes from —
-without it, a `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` anywhere in your own settings
-would leave every session reading `starting` forever. An older CLI would reject
-the flag and fail to start; termherd's other flag, `--mcp-config` (the live
+That floor is the `--session-id` flag: termherd starts every fresh Claude
+session under an id it mints, so a new tab knows its conversation from the
+first keystroke. Claude Code's changelog never records when the flag arrived,
+so the floor is an estimate: 2.0.73 is the oldest release whose notes show it
+in use, and an older CLI without it fails the launch. Below it sits
+`--settings` (1.0.61), which termherd also puts on every Claude launch. It
+re-enables the CLI's terminal title for that session only, and the title is
+where a Claude session's activity comes from — without it, a
+`CLAUDE_CODE_DISABLE_TERMINAL_TITLE` anywhere in your own settings would leave
+every session reading `starting` forever. An older CLI would reject
+either flag and fail to start; termherd's other flag, `--mcp-config` (the live
 bridge), has been available since 0.2.75.
 
 A plain shell needs nothing: its activity comes from an OSC 133

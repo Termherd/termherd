@@ -399,7 +399,9 @@ pub struct SessionInfo {
     /// Whether it runs a shell or the Claude CLI.
     pub kind: SessionKind,
     /// The Claude session id this launch resumes, if any — the *unstable* id
-    /// (see the type note); `None` for a shell or a fresh Claude session.
+    /// (see the type note); `None` for a shell or a fresh Claude session, even
+    /// one launched under a minted id. The conversation the pane holds now is
+    /// `identity.session_id`, read from Claude's own session file.
     pub resume_id: Option<String>,
     /// Current activity (FR8).
     pub status: SessionStatus,
@@ -681,7 +683,8 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use termherd_core::{
-        Event, ForegroundJob, Launch, LaunchSpec, SessionStatus, SnapshotFilter, SnapshotInputs,
+        ClaudeLaunch, Event, ForegroundJob, Launch, LaunchSpec, SessionStatus, SnapshotFilter,
+        SnapshotInputs,
     };
 
     /// Open `n` shell tabs in a fresh `App`, so a snapshot has real workspace
@@ -811,9 +814,9 @@ mod tests {
     fn launch_claude(app: &mut App, cwd: &str, title: &str, resume: Option<&str>) -> String {
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some(cwd.to_owned()),
-            launch: Launch::Claude {
-                resume: resume.map(str::to_owned),
-            },
+            launch: Launch::Claude(resume.map_or(ClaudeLaunch::Fresh(None), |id| {
+                ClaudeLaunch::Resume(id.to_owned())
+            })),
             title: title.to_owned(),
         }));
         let id = app.workspace.focused_session().expect("a focused session");
