@@ -50,6 +50,11 @@ pub struct LiveSession {
     /// Outlives the Claude that wrote it, so a conversation re-keyed by
     /// `/clear` is still known by its new id once that Claude has exited.
     pub proven_session_id: Option<String>,
+    /// Whether the adapter has ever reported a job in front of this pane's
+    /// shell. Until it has, an empty [`Self::foreground`] proves nothing —
+    /// ConPTY never reports one — so only after it does can an empty one mean
+    /// the program in front has exited.
+    pub foreground_reported: bool,
 }
 
 /// The job in front of a session's shell, as the PTY adapter reads it.
@@ -90,6 +95,24 @@ impl LiveSession {
         {
             self.proven_session_id = Some(id.to_owned());
         }
+    }
+
+    /// Whether this pane was launched to run Claude — the panes whose name and
+    /// colour belong to Claude, and that take a typed slash command. A shell
+    /// in which someone started `claude` by hand is not one: the line typed
+    /// into it would reach whichever program is in front.
+    #[must_use]
+    pub fn is_claude_launch(&self) -> bool {
+        matches!(self.launch, Launch::Claude(_))
+    }
+
+    /// Whether Claude is still what this pane runs: a Claude launch whose
+    /// Claude has not been seen to leave. Once a reported foreground job has
+    /// gone, the pane is back at the shell `claude` was typed into, and a line
+    /// typed there would run as a command.
+    #[must_use]
+    pub fn runs_claude(&self) -> bool {
+        self.is_claude_launch() && (self.foreground.is_some() || !self.foreground_reported)
     }
 
     /// Whether this session still holds a **running foreground process** whose
@@ -379,6 +402,7 @@ impl App {
             foreground: None,
             session_file: None,
             proven_session_id: None,
+            foreground_reported: false,
         });
         match spec.placement {
             Placement::Foreground => self.workspace.open(id, spec.title),
@@ -386,6 +410,7 @@ impl App {
                 self.workspace.append(id, spec.title);
             }
         }
+        self.retitle_tabs();
         vec![Effect::Spawn(SpawnSpec {
             session: id,
             cwd: spec.cwd,
@@ -421,6 +446,7 @@ impl App {
             foreground: None,
             session_file: None,
             proven_session_id: None,
+            foreground_reported: false,
         });
         vec![Effect::Spawn(SpawnSpec {
             session: id,
@@ -462,9 +488,11 @@ impl App {
         job: Option<ForegroundJob>,
     ) -> Vec<Effect> {
         if let Some(live) = self.sessions.get_mut(&session) {
+            live.foreground_reported |= job.is_some();
             live.foreground = job;
             live.remember_proven_id();
         }
+        self.retitle_tabs();
         Vec::new()
     }
 
@@ -479,6 +507,8 @@ impl App {
             live.session_file = file;
             live.remember_proven_id();
         }
+        // A re-key moves the pane onto another transcript, and its name with it.
+        self.retitle_tabs();
         Vec::new()
     }
 
@@ -851,6 +881,27 @@ mod tests {
             file: None,
         });
         assert_eq!(app.claude_session_id(id), Some("re-keyed"));
+    }
+
+    #[test]
+    fn a_re_key_retitles_the_tab_after_the_new_conversation() {
+        let mut app = App::new();
+        let mut renamed = record("re-keyed", "/proj", "after the clear");
+        renamed.digest.custom_title = Some("second act".into());
+        app.apply(Event::ScanCompleted(vec![renamed]));
+        app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
+        let id = app.workspace.focused_session().expect("a focused session");
+        assert_eq!(app.workspace.tabs[0].title, "proj");
+
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: Some(claude_job(42)),
+        });
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: Some(file_naming(42, "re-keyed")),
+        });
+        assert_eq!(app.workspace.tabs[0].title, "second act");
     }
 
     #[test]

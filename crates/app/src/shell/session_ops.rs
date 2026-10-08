@@ -105,6 +105,13 @@ impl Shell {
                 Some((anchor, buffer))
             };
         }
+        if self
+            .claude_command
+            .as_ref()
+            .is_some_and(|pending| pending.session == pane.session)
+        {
+            self.claude_command = None;
+        }
         match pane.tab {
             Some(tab) if tab == pane.active => self.resize_panes(),
             Some(tab) if !pane.lone => self.resize_tab(tab),
@@ -129,8 +136,7 @@ impl Shell {
 
     /// The first pane of the tab at `index`, when there is one.
     fn first_session_of(&self, index: Option<usize>) -> Option<SessionId> {
-        let tab = self.core.workspace.tabs.get(index?)?;
-        tab.sessions().first().copied()
+        Some(self.core.workspace.tabs.get(index?)?.first_session())
     }
 
     /// Switch to the tab at `index` and return focus to the terminal. Switching

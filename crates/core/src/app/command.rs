@@ -75,7 +75,7 @@ impl App {
             .sessions
             .get(&session)
             .ok_or(CommandRefusal::UnknownSession)?;
-        if !matches!(live.launch, Launch::Claude { .. }) {
+        if !live.runs_claude() {
             return Err(CommandRefusal::NotClaude);
         }
         if live.status != SessionStatus::Idle {
