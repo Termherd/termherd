@@ -116,7 +116,7 @@ impl Shell {
             SessionKind::Claude => Launch::Claude { resume: None },
         };
         let (opened, task) = self.launch_at(project.unwrap_or_else(home_dir), launch, placement);
-        let opened = opened.map(|id| id.0.get().to_string());
+        let opened = opened.map(handle_of);
         (
             self.applied().with_detail(ActionDetail::Opened(opened)),
             task,
@@ -174,12 +174,11 @@ impl Shell {
         if background {
             return self.act_close_in_background(pane);
         }
-        let mut effects = match self.retarget(pane) {
+        let reveal = match self.retarget(pane) {
             Ok(effects) => effects,
             Err(outcome) => return (outcome, Task::none()),
         };
-        effects.extend(self.core.apply(Event::CloseFocusedPane));
-        let task = Task::batch([self.perform(effects), self.resize_panes()]);
+        let task = self.close_focused_pane_after(reveal);
         (self.applied(), task)
     }
 
@@ -370,10 +369,7 @@ impl Shell {
     /// The stable handle of the session holding focus, as an external caller
     /// spells it — `None` when the workspace is empty.
     fn focused_handle(&self) -> Option<String> {
-        self.core
-            .workspace
-            .focused_session()
-            .map(|id| id.0.get().to_string())
+        self.core.workspace.focused_session().map(handle_of)
     }
 }
 
@@ -404,4 +400,9 @@ fn unknown_handle(handle: u64) -> ActionOutcome {
 /// whatever happens to hold focus.
 fn unhosted_handle(handle: u64) -> ActionOutcome {
     ActionOutcome::rejected(format!("no open pane hosts handle {handle}"))
+}
+
+/// A session's stable handle as an external caller spells it.
+fn handle_of(id: SessionId) -> String {
+    id.0.get().to_string()
 }

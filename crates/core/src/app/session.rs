@@ -360,11 +360,8 @@ impl App {
     }
 
     /// Forget the session whose pane the workspace just closed and kill its
-    /// PTY. `None` — nothing was closed — yields no effects.
-    pub(super) fn release_closed_pane(&mut self, closed: Option<SessionId>) -> Vec<Effect> {
-        let Some(id) = closed else {
-            return Vec::new();
-        };
+    /// PTY.
+    pub(super) fn release_closed_pane(&mut self, id: SessionId) -> Vec<Effect> {
         self.sessions.remove(&id);
         vec![Effect::Kill(id)]
     }
@@ -463,7 +460,7 @@ impl App {
             return Some(self.close_tab(index));
         }
         let closed = self.workspace.close_pane_of(session)?;
-        Some(self.release_closed_pane(Some(closed)))
+        Some(self.release_closed_pane(closed))
     }
 
     /// Whether closing the tab at `index` would kill a running foreground

@@ -2689,8 +2689,8 @@ mod key_routing {
         close_in_background(&mut shell, right.0.get());
         assert_eq!(
             pty.resizes()[resized..],
-            [lone, lone],
-            "the active tab and the surviving sibling are both sized"
+            [lone],
+            "the surviving sibling grows to the tab; the user's tab is untouched"
         );
     }
 

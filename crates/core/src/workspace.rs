@@ -262,13 +262,8 @@ impl Workspace {
             return Vec::new();
         }
         let sessions = self.tabs.remove(index).sessions();
-        if self.tabs.is_empty() {
-            self.active = 0;
-        } else if self.active > index {
-            self.active -= 1;
-        } else if self.active == index {
-            self.active = self.active.min(self.tabs.len() - 1);
-        }
+        let last = self.tabs.len().saturating_sub(1);
+        self.active = index_after_removal(self.active, index).unwrap_or(index.min(last));
         sessions
     }
 
@@ -448,6 +443,19 @@ impl Workspace {
     }
 }
 
+/// Where a tab index lands once the tab at `removed` is gone: unchanged
+/// before it, one down after it, and `None` for the removed tab itself. The
+/// one rule every index kept across a tab removal follows, in `core` and in
+/// the shell's own tab-keyed state alike.
+#[must_use]
+pub fn index_after_removal(index: usize, removed: usize) -> Option<usize> {
+    match index.cmp(&removed) {
+        std::cmp::Ordering::Less => Some(index),
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => Some(index - 1),
+    }
+}
+
 /// Where an index `i` ends up after the tab at `from` is removed and
 /// reinserted at `to` (see [`Workspace::move_tab`]). The moved tab lands on
 /// `to`; every other index is mapped through the remove-then-insert shift.
@@ -456,7 +464,7 @@ fn shift_index(i: usize, from: usize, to: usize) -> usize {
         return to;
     }
     // After removing `from`, indices past it slide down one…
-    let after_remove = if i > from { i - 1 } else { i };
+    let after_remove = index_after_removal(i, from).unwrap_or(i);
     // …then inserting at `to` pushes indices at or beyond it up one.
     if after_remove >= to {
         after_remove + 1
@@ -845,6 +853,25 @@ mod tests {
             ws.open(sid(n as u64 + 1), format!("t{n}"));
         }
         ws
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn an_index_keeps_naming_its_tab_across_a_removal(
+            len in 1usize..12,
+            seed in 0usize..1000,
+            removed_seed in 0usize..1000,
+        ) {
+            let tabs: Vec<usize> = (0..len).collect();
+            let index = seed % len;
+            let removed = removed_seed % len;
+            let mut after = tabs.clone();
+            after.remove(removed);
+            match index_after_removal(index, removed) {
+                Some(shifted) => proptest::prop_assert_eq!(after[shifted], tabs[index]),
+                None => proptest::prop_assert_eq!(index, removed),
+            }
+        }
     }
 
     proptest::proptest! {

@@ -235,10 +235,10 @@ impl App {
             }
             Event::SplitFocused(dir) => self.split_focused(dir),
             Event::ClosePane(session) => self.close_pane_of(session).unwrap_or_default(),
-            Event::CloseFocusedPane => {
-                let closed = self.workspace.close_focused();
-                self.release_closed_pane(closed)
-            }
+            Event::CloseFocusedPane => self
+                .workspace
+                .close_focused()
+                .map_or_else(Vec::new, |id| self.release_closed_pane(id)),
             Event::FocusNextPane => {
                 self.workspace.focus_next();
                 Vec::new()

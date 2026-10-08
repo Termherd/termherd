@@ -269,8 +269,7 @@ impl Shell {
             .get(self.core.workspace.active)
             .is_some_and(|tab| tab.sessions().len() > 1);
         if in_split {
-            let effects = self.core.apply(termherd_core::Event::CloseFocusedPane);
-            Some(Task::batch([self.perform(effects), self.resize_panes()]))
+            Some(self.close_focused_pane_after(Vec::new()))
         } else {
             self.request_close(self.core.workspace.active)
         }
