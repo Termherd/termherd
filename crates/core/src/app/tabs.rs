@@ -53,16 +53,31 @@ impl App {
         let Some(session) = self.sessions.get(&first) else {
             return;
         };
+        let launch = self.reopen_launch(session);
         self.closed_tabs.push(ClosedTab {
             title,
             custom_title,
             cwd: session.cwd.clone(),
-            launch: session.launch.clone(),
+            launch,
         });
         // Keep only the most recent entries; drop the oldest past the cap.
         if self.closed_tabs.len() > MAX_CLOSED_TABS {
             self.closed_tabs.remove(0);
         }
+    }
+
+    /// How a closed Claude tab comes back: resuming the conversation it held
+    /// last, re-key included, when the scan has its transcript; otherwise as it
+    /// was launched. A fresh tab whose transcript was never written then
+    /// starts a new conversation, since there is nothing to resume.
+    fn reopen_launch(&self, session: &LiveSession) -> Launch {
+        if let Launch::Claude(_) = session.launch
+            && let Some(id) = session.claude_session_id()
+            && self.record_for(id).is_some()
+        {
+            return Launch::Claude(ClaudeLaunch::Resume(id.to_owned()));
+        }
+        session.launch.clone()
     }
 
     /// Reopen the most recently closed tab, relaunching it in the mode and
@@ -75,7 +90,7 @@ impl App {
         let custom_title = closed.custom_title;
         let effects = self.launch(LaunchSpec {
             cwd: closed.cwd,
-            launch: closed.launch.with_fresh_id(fresh_claude_id),
+            launch: closed.launch.with_fresh_id(|| fresh_claude_id),
             title: closed.title,
         });
         // Restore the manual name on top of the derived title. `launch` opens
@@ -101,7 +116,7 @@ impl App {
     #[must_use]
     pub fn tab_title(&self, cwd: &str, launch: &Launch) -> String {
         launch
-            .resume_id()
+            .claude_id()
             .and_then(|claude_id| self.record_for(claude_id))
             .map(|record| self.session_title(record))
             .filter(|name| !name.trim().is_empty())
@@ -435,6 +450,48 @@ mod tests {
         assert_eq!(
             app.tab_record(0).map(|r| r.session_id.as_str()),
             Some(minted)
+        );
+    }
+
+    #[test]
+    fn reopening_a_claude_tab_resumes_the_conversation_it_held_last() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/repo".into()),
+            launch: Launch::Claude(ClaudeLaunch::Resume("before".into())),
+            title: "repo".into(),
+        }));
+        let id = app.workspace.focused_session().expect("focused");
+        let started = Some("Wed Oct  7 06:48:07 2026".to_owned());
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: Some(ForegroundJob {
+                pid: 42,
+                started: started.clone(),
+            }),
+        });
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: Some(termherd_claude::session_file::SessionFile {
+                pid: 42,
+                name: None,
+                session_id: Some("after".into()),
+                proc_start: started,
+                version: None,
+            }),
+        });
+        app.apply(Event::ScanCompleted(vec![record("after", "/repo", "x")]));
+        app.apply(Event::CloseTab(0));
+        let effects = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "unused".into(),
+        });
+        let [Effect::Spawn(spec)] = effects.as_slice() else {
+            panic!("expected one Spawn, got {effects:?}");
+        };
+        assert_eq!(
+            spec.launch,
+            Launch::Claude(ClaudeLaunch::Resume("after".into())),
+            "the re-keyed conversation, whose transcript the scan has"
         );
     }
 

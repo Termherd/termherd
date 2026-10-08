@@ -399,7 +399,9 @@ pub struct SessionInfo {
     /// Whether it runs a shell or the Claude CLI.
     pub kind: SessionKind,
     /// The Claude session id this launch resumes, if any — the *unstable* id
-    /// (see the type note); `None` for a shell or a fresh Claude session.
+    /// (see the type note); `None` for a shell or a fresh Claude session, even
+    /// one launched under a minted id. The conversation the pane holds now is
+    /// `identity.session_id`, read from Claude's own session file.
     pub resume_id: Option<String>,
     /// Current activity (FR8).
     pub status: SessionStatus,

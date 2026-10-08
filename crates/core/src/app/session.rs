@@ -47,6 +47,10 @@ pub struct LiveSession {
     /// ([`Event::SessionFileRead`]). Only a cache: whether it names this job
     /// is decided on every read, so a stale one names nobody.
     pub session_file: Option<SessionFile>,
+    /// The session id the last session file that proved its writer named.
+    /// Outlives the Claude that wrote it, so a conversation re-keyed by
+    /// `/clear` is still known by its new id once that Claude has exited.
+    pub proven_session_id: Option<String>,
     /// When the shell spawned this pane's PTY ([`Event::SessionSpawned`]).
     /// The shell's clock, not core's: core only keeps the stamp.
     pub spawned_at: Option<SystemTime>,
@@ -66,20 +70,30 @@ impl LiveSession {
     /// The Claude session id this pane's conversation lives under — the one
     /// accessor every reader of "this pane's transcript" goes through.
     ///
-    /// The cached session file wins when it proves the Claude in front (see
-    /// [`identity_of`]): Claude rewrites it when `/clear` or a plan-accept
-    /// re-keys the conversation, which the launch line cannot follow. Without
-    /// that proof, the id the pane was launched under (minted or resumed). The
-    /// cache is only as fresh as the shell's last read of the file.
+    /// Claude rewrites its session file when `/clear` or a plan-accept re-keys
+    /// the conversation, which the launch line cannot follow, so an id a file
+    /// proved — kept after its Claude exits — outranks the one the pane was
+    /// launched under (minted or resumed). The proof is only as fresh as the
+    /// shell's last read of the file.
     #[must_use]
     pub fn claude_session_id(&self) -> Option<&str> {
-        session_id_by_precedence(self.live_session_id(), self.launch.claude_id())
+        self.proven_session_id
+            .as_deref()
+            .or(self.launch.claude_id())
     }
 
-    /// The session id the cached session file names, if it proves the job in
-    /// front of this pane is the Claude that wrote it.
-    fn live_session_id(&self) -> Option<&str> {
-        self.proven_session_file()?.session_id.as_deref()
+    /// Record the id the cached session file names, if it proves the job in
+    /// front of this pane is the Claude that wrote it. Called whenever either
+    /// side of the proof changes.
+    fn remember_proven_id(&mut self) {
+        let (Some(job), Some(file)) = (&self.foreground, &self.session_file) else {
+            return;
+        };
+        if let Some(id) = file.session_id.as_deref().filter(|_| proves(job, file))
+            && self.proven_session_id.as_deref() != Some(id)
+        {
+            self.proven_session_id = Some(id.to_owned());
+        }
     }
 
     /// The Claude Code version the cached session file states, if it proves
@@ -115,16 +129,6 @@ impl LiveSession {
             },
         }
     }
-}
-
-/// Which id names a pane's conversation, given the one Claude's live session
-/// file states and the one the pane was launched under: the live one, since
-/// only it follows a re-key.
-fn session_id_by_precedence<'a>(
-    live: Option<&'a str>,
-    launched: Option<&'a str>,
-) -> Option<&'a str> {
-    live.or(launched)
 }
 
 /// Which Claude Code version a pane runs, given the one its live session file
@@ -223,14 +227,17 @@ impl Launch {
         }
     }
 
-    /// This launch with a fresh Claude conversation started under `id` in
+    /// This launch with a fresh Claude conversation started under an id from
+    /// `mint`, called only then, in
     /// place of any id it carried; a shell or a resume is returned as is. A
     /// minted id names one conversation only: a second Claude launched under
     /// it would collide with the first one's transcript.
     #[must_use]
-    pub fn with_fresh_id(self, id: String) -> Self {
+    pub fn with_fresh_id(self, mint: impl FnOnce() -> String) -> Self {
         match self {
-            Launch::Claude(ClaudeLaunch::Fresh(_)) => Launch::Claude(ClaudeLaunch::Fresh(Some(id))),
+            Launch::Claude(ClaudeLaunch::Fresh(_)) => {
+                Launch::Claude(ClaudeLaunch::Fresh(Some(mint())))
+            }
             other => other,
         }
     }
@@ -386,6 +393,7 @@ impl App {
             status: SessionStatus::Starting,
             foreground: None,
             session_file: None,
+            proven_session_id: None,
             spawned_at: None,
         });
         self.workspace.open(id, spec.title);
@@ -423,6 +431,7 @@ impl App {
             status: SessionStatus::Starting,
             foreground: None,
             session_file: None,
+            proven_session_id: None,
             spawned_at: None,
         });
         vec![Effect::Spawn(SpawnSpec {
@@ -459,6 +468,7 @@ impl App {
     ) -> Vec<Effect> {
         if let Some(live) = self.sessions.get_mut(&session) {
             live.foreground = job;
+            live.remember_proven_id();
         }
         Vec::new()
     }
@@ -472,6 +482,7 @@ impl App {
     ) -> Vec<Effect> {
         if let Some(live) = self.sessions.get_mut(&session) {
             live.session_file = file;
+            live.remember_proven_id();
         }
         Vec::new()
     }
@@ -736,17 +747,18 @@ mod tests {
         Launch::Claude(ClaudeLaunch::Fresh(id.map(str::to_owned)))
     }
 
-    fn live(launch: Launch, job: Option<ForegroundJob>, file: Option<SessionFile>) -> LiveSession {
-        LiveSession {
-            id: SessionId(NonZeroU64::new(1).expect("nonzero")),
-            cwd: None,
-            launch_cwd: None,
-            launch,
-            status: SessionStatus::Idle,
-            foreground: job,
-            session_file: file,
-            spawned_at: None,
-        }
+    /// A pane launched as `launch`, told of `job` in front and then of `file`.
+    fn pane(
+        launch: Launch,
+        job: Option<ForegroundJob>,
+        file: Option<SessionFile>,
+    ) -> (App, SessionId) {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(launch_spec(launch)));
+        let id = app.workspace.focused_session().expect("a focused session");
+        app.apply(Event::ForegroundJobChanged { session: id, job });
+        app.apply(Event::SessionFileRead { session: id, file });
+        (app, id)
     }
 
     fn claude_job(pid: u32) -> ForegroundJob {
@@ -785,17 +797,17 @@ mod tests {
     #[test]
     fn a_fresh_id_replaces_only_a_fresh_claude_launch() {
         assert_eq!(
-            fresh(None).with_fresh_id(MINTED.into()),
+            fresh(None).with_fresh_id(|| MINTED.into()),
             fresh(Some(MINTED))
         );
         assert_eq!(
-            fresh(Some("old")).with_fresh_id(MINTED.into()),
+            fresh(Some("old")).with_fresh_id(|| MINTED.into()),
             fresh(Some(MINTED)),
             "a minted id is never launched twice"
         );
         let resume = Launch::Claude(ClaudeLaunch::Resume("abc".into()));
-        assert_eq!(resume.clone().with_fresh_id(MINTED.into()), resume);
-        assert_eq!(Launch::Shell.with_fresh_id(MINTED.into()), Launch::Shell);
+        assert_eq!(resume.clone().with_fresh_id(|| MINTED.into()), resume);
+        assert_eq!(Launch::Shell.with_fresh_id(|| MINTED.into()), Launch::Shell);
     }
 
     #[test]
@@ -824,12 +836,12 @@ mod tests {
 
     #[test]
     fn the_live_session_file_outranks_the_launch_id_after_a_re_key() {
-        let session = live(
+        let (app, id) = pane(
             fresh(Some(MINTED)),
             Some(claude_job(42)),
             Some(file_naming(42, "re-keyed")),
         );
-        assert_eq!(session.claude_session_id(), Some("re-keyed"));
+        assert_eq!(app.claude_session_id(id), Some("re-keyed"));
     }
 
     #[test]
@@ -839,35 +851,82 @@ mod tests {
             version: None,
             ..file_naming(42, "stale")
         };
-        let session = live(fresh(Some(MINTED)), Some(claude_job(42)), Some(stale));
-        assert_eq!(session.claude_session_id(), Some(MINTED));
-        let gone = live(fresh(Some(MINTED)), None, Some(file_naming(42, "gone")));
+        let (app, id) = pane(fresh(Some(MINTED)), Some(claude_job(42)), Some(stale));
+        assert_eq!(app.claude_session_id(id), Some(MINTED));
+        let (gone, id) = pane(fresh(Some(MINTED)), None, Some(file_naming(42, "gone")));
         assert_eq!(
-            gone.claude_session_id(),
+            gone.claude_session_id(id),
             Some(MINTED),
             "no job in front, so the cached file proves nothing"
         );
     }
 
     #[test]
+    fn a_re_keyed_id_outlives_the_claude_that_proved_it() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
+        let id = app.workspace.focused_session().expect("a focused session");
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: Some(claude_job(42)),
+        });
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: Some(file_naming(42, "re-keyed")),
+        });
+        // Claude exits: the prompt is back, and the shell's next read of the
+        // file it left behind proves nothing.
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: None,
+        });
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: None,
+        });
+        assert_eq!(app.claude_session_id(id), Some("re-keyed"));
+    }
+
+    #[test]
+    fn a_file_proved_only_once_its_job_is_known_is_still_remembered() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(launch_spec(fresh(Some(MINTED)))));
+        let id = app.workspace.focused_session().expect("a focused session");
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: Some(file_naming(42, "re-keyed")),
+        });
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: Some(claude_job(42)),
+        });
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: None,
+        });
+        assert_eq!(app.claude_session_id(id), Some("re-keyed"));
+    }
+
+    #[test]
     fn a_shell_pane_running_claude_by_hand_is_known_by_its_session_file() {
-        let session = live(
+        let (app, id) = pane(
             Launch::Shell,
             Some(claude_job(7)),
             Some(file_naming(7, "typed")),
         );
-        assert_eq!(session.claude_session_id(), Some("typed"));
+        assert_eq!(app.claude_session_id(id), Some("typed"));
     }
 
     proptest::proptest! {
         #[test]
-        fn a_proven_file_id_wins_else_the_launch_id(
+        fn a_proven_file_id_wins_then_the_last_proven_then_the_launch_id(
             launched in proptest::option::of("[a-z]{1,8}"),
             resumed in proptest::bool::ANY,
             file_id in proptest::option::of("[A-Z]{1,8}"),
             job_pid in 1u32..4,
             file_pid in 1u32..4,
             same_start in proptest::bool::ANY,
+            last_proven in proptest::option::of("[0-9]{1,8}"),
         ) {
             let launch = match (&launched, resumed) {
                 (Some(id), true) => Launch::Claude(ClaudeLaunch::Resume(id.clone())),
@@ -880,10 +939,18 @@ mod tests {
                 proc_start: Some(if same_start { STARTED.into() } else { "other".into() }),
                 version: None,
             };
-            let session = live(launch, Some(claude_job(job_pid)), Some(file));
+            // An earlier Claude in the pane, pid 9, proved `last_proven`.
+            let earlier = last_proven.as_deref().map(|id| file_naming(9, id));
+            let (mut app, id) = pane(launch, Some(claude_job(9)), earlier);
+            app.apply(Event::ForegroundJobChanged { session: id, job: Some(claude_job(job_pid)) });
+            app.apply(Event::SessionFileRead { session: id, file: Some(file) });
             let proven = job_pid == file_pid && same_start;
-            let expected = file_id.as_deref().filter(|_| proven).or(launched.as_deref());
-            proptest::prop_assert_eq!(session.claude_session_id(), expected);
+            let expected = file_id
+                .as_deref()
+                .filter(|_| proven)
+                .or(last_proven.as_deref())
+                .or(launched.as_deref());
+            proptest::prop_assert_eq!(app.claude_session_id(id), expected);
         }
     }
 

@@ -10,3 +10,4 @@ pub mod jsonl;
 pub mod osc;
 pub mod path;
 pub mod session_file;
+pub mod session_id;
