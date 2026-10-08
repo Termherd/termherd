@@ -4372,7 +4372,10 @@ mod key_routing {
     /// A shell with one Claude tab open, focused and idle at an empty prompt.
     fn shell_with_idle_claude() -> (Shell, Arc<RecordingPty>, SessionId) {
         let (mut shell, pty) = empty_shell();
-        let _ = shell.launch("/tmp/claude".to_string(), Launch::Claude(ClaudeLaunch::Fresh(None)));
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(ClaudeLaunch::Fresh(None)),
+        );
         let session = shell.core.workspace.focused_session().expect("focused");
         let _ = shell.update(Message::PtyStatus {
             session,
