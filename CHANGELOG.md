@@ -7,6 +7,60 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (emoji from the Character Viewer)
+
+- On macOS, Ctrl+Cmd+Space opens the Character Viewer from a new Edit →
+  *Emoji & Symbols* menu item, instead of typing a space into the terminal,
+  and a character picked there now reaches the tab and session rename fields
+  as well as the terminal (#349).
+
+### Added (a notification click opens its tab)
+
+- Clicking a desktop notification raised by a tab brings TermHerd forward on
+  that tab and pane, restoring a minimised window first. An open prompt keeps
+  its screen. Confirmed by a real click on macOS; Linux and Windows are read
+  from the notification libraries' sources (#352).
+
+### Added (a richer tab hover card)
+
+- The tab hover card shows the model and effort, the Claude Code version and
+  how long the tab has run, beside the agent name (#344).
+
+### Added (Claude's `/color` on tabs)
+
+- A Claude tab is outlined, and its sidebar row marked, in the colour its
+  `/color` set, read from the session's transcript; the hover card names the
+  colour (#342).
+
+### Added (MCP background tabs)
+
+- `open_session` and `close_pane` take `background: true` to open or close a
+  tab without moving the user's focus, and every `open_session` reply carries
+  `opened_handle` (#363).
+
+### Added (the tab follows Claude's name)
+
+- A Claude tab takes the name Claude gives its session, and renaming a Claude
+  tab asks Claude to `/rename` rather than overriding it (#119).
+
+### Added (typed slash commands)
+
+- termherd can type a confirmed slash command into an idle Claude session —
+  `send-to-desktop`, and the MCP `claude_command` tool — behind a prompt that
+  shows the exact line first (#337).
+
+### Added (earlier, since 0.1.0-prerelease.5)
+
+- A tab shows its kind beside its status dot rather than in its title (#341).
+- The MCP snapshot reports each Claude pane's pid, peer name and session id
+  (#333).
+- A settings panel, live reload of `settings.json`, and the options on the
+  live bridge (#292, #297, #298).
+
+### Fixed (a tab drag lost off the strip)
+
+- A tab drag stays alive when the pointer leaves the tab strip (#348).
+
 ### Added (pick a tab's colour)
 
 - The tab menu's *Tab colour…*, or a `pick-tab-color` action (unbound by
