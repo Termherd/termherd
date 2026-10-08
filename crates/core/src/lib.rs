@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod browser;
+pub mod claude_command;
 pub mod docscope;
 pub mod keymap;
 pub mod links;
@@ -17,13 +18,14 @@ pub mod snapshot;
 pub mod workspace;
 
 pub use app::{
-    App, ClaudeLaunch, DEFAULT_FONT_SIZE, Effect, Event, ForegroundJob, HoverTarget, Launch,
-    LaunchSpec, LiveSession, McpConfig, MouseReporting, PathPurpose, PathRequest, PathRoots,
-    PointerButton, PointerEvent, PointerKind, PointerRoute, ProbeKind, ResolvedPath, ScrollTarget,
-    SelectOp, SelectSide, SessionStatus, SidebarFold, SpawnSpec, TargetProbe, TermHover, Zoom,
-    claude_identity, grid_line, pointer_select,
+    App, ClaudeLaunch, CommandRefusal, DEFAULT_FONT_SIZE, Effect, Event, ForegroundJob,
+    HoverTarget, Launch, LaunchSpec, LiveSession, McpConfig, MouseReporting, PathPurpose,
+    PathRequest, PathRoots, PointerButton, PointerEvent, PointerKind, PointerRoute, ProbeKind,
+    ResolvedPath, ScrollTarget, SelectOp, SelectSide, SessionStatus, SidebarFold, SpawnSpec,
+    TargetProbe, TermHover, Zoom, claude_identity, grid_line, pointer_select,
 };
 pub use browser::{ProjectGroup, SessionRecord};
+pub use claude_command::{ClaudeColor, ClaudeCommand, CommandArgument, CommandError};
 pub use keymap::{Action, ActionBinding, ChordError, KeyChord, Keymap, action_catalog};
 pub use metadata::{Overlay, RepoMeta, SessionMeta};
 pub use open::{OpenCommand, OpenCommandError, OpenTarget};

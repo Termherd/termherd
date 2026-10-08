@@ -30,8 +30,8 @@ use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
 use termherd_core::{
-    Action as KeymapAction, KeyChord, PointerButton, PointerEvent, PointerKind, PointerRoute,
-    Section, SessionKind, SessionStatus, SnapshotFilter, TerminalScope,
+    Action as KeymapAction, ClaudeColor, ClaudeCommand, KeyChord, PointerButton, PointerEvent,
+    PointerKind, PointerRoute, Section, SessionKind, SessionStatus, SnapshotFilter, TerminalScope,
 };
 use termherd_mcp::file::SetAtError;
 
@@ -374,6 +374,32 @@ impl TermherdMcp {
             bytes: args.text.into_bytes(),
         })
         .await
+    }
+
+    /// Arm the confirmation for a Claude slash command. → `claude_command`.
+    #[tool(
+        name = "claude_command",
+        description = "Ask termherd to type one of Claude Code's own slash \
+                       commands into a Claude session: `rename` (a name), \
+                       `color` (red, blue, green, yellow, purple, orange, pink, \
+                       cyan or default) or `desktop`. Nothing is typed yet: \
+                       this arms the same confirmation prompt a keypress arms, \
+                       naming the exact line, and the prompt then holds the \
+                       keyboard: `press_keys([\"enter\"])` types it, \
+                       `press_keys([\"escape\"])` drops it, or the user \
+                       answers. Refused when the session is not a Claude idle \
+                       at its prompt, or another prompt is open. Control \
+                       characters in a name become spaces. Args: `session` \
+                       (handle), `command`, `argument` (the name or colour). \
+                       Returns `{ line, overlay, focused_handle }`."
+    )]
+    async fn claude_command(
+        &self,
+        Parameters(args): Parameters<ClaudeCommandArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+        let command = parse_claude_command(&args.command, args.argument.as_deref())?;
+        self.act(Action::ClaudeCommand { session, command }).await
     }
 
     /// Place a pointer event at a cell of a session's terminal — the pointer
@@ -863,6 +889,10 @@ impl TermherdMcp {
                 ActionDetail::Pointer(pointer) => {
                     object.insert("pointer".into(), pointer_str(pointer).into());
                 }
+                ActionDetail::ClaudeCommand { line, overlay } => {
+                    object.insert("line".into(), line.into());
+                    object.insert("overlay".into(), overlay.into());
+                }
             }
         }
         structured(value)
@@ -1046,6 +1076,46 @@ struct CloseArgs {
     /// Session handle to close. Omit for the focused pane.
     #[serde(default)]
     pane: Option<String>,
+}
+
+/// Arguments for `claude_command`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct ClaudeCommandArgs {
+    /// The stable handle of the target Claude session.
+    session: String,
+    /// `rename`, `color` or `desktop`.
+    command: String,
+    /// The new name for `rename`, the colour for `color`; none for `desktop`.
+    argument: Option<String>,
+}
+
+/// The catalogue entry a caller named, with its argument checked. A command
+/// outside the catalogue, a missing or surplus argument, a colour outside the
+/// palette and a name with nothing typeable in it are all refused here, before
+/// anything reaches the shell.
+fn parse_claude_command(command: &str, argument: Option<&str>) -> Result<ClaudeCommand, ErrorData> {
+    let invalid = |message: String| ErrorData::invalid_params(message, None);
+    match (command, argument) {
+        ("rename", Some(name)) => {
+            ClaudeCommand::rename(name).map_err(|error| invalid(format!("rename: {error}")))
+        }
+        ("color", Some(name)) => ClaudeColor::from_name(name)
+            .map(ClaudeCommand::Color)
+            .ok_or_else(|| {
+                let palette: Vec<_> = ClaudeColor::ALL.iter().map(|c| c.name()).collect();
+                invalid(format!(
+                    "unknown colour {name:?}; expected one of {}",
+                    palette.join(", ")
+                ))
+            }),
+        ("desktop", None) => Ok(ClaudeCommand::Desktop),
+        ("rename" | "color", None) => Err(invalid(format!("{command} needs an `argument`"))),
+        ("desktop", Some(_)) => Err(invalid("desktop takes no `argument`".to_owned())),
+        (other, _) => Err(invalid(format!(
+            "unknown command {other:?}; expected rename, color or desktop"
+        ))),
+    }
 }
 
 /// Arguments for `run_in_session`.
@@ -1508,6 +1578,73 @@ mod tests {
     }
 
     #[test]
+    fn claude_command_reads_the_catalogue_and_refuses_what_is_outside_it() {
+        let parsed = |command: &str, argument: Option<&str>| {
+            parse_claude_command(command, argument).map(|command| command.line())
+        };
+        assert_eq!(
+            parsed("rename", Some("api\nwork")).ok().as_deref(),
+            Some("/rename api work")
+        );
+        assert_eq!(
+            parsed("color", Some("Cyan")).ok().as_deref(),
+            Some("/color cyan")
+        );
+        assert_eq!(parsed("desktop", None).ok().as_deref(), Some("/desktop"));
+        for (command, argument) in [
+            ("rename", None),
+            ("rename", Some(" \t ")),
+            ("color", Some("magenta")),
+            ("color", None),
+            ("desktop", Some("now")),
+            ("exit", None),
+            ("clear", Some("x")),
+        ] {
+            assert!(
+                parse_claude_command(command, argument).is_err(),
+                "{command} {argument:?} must be refused"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn claude_command_arms_over_the_bridge_and_reports_the_line() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(
+            requests,
+            Reply::Acted(ActionOutcome::applied(Some("3".into())).with_detail(
+                ActionDetail::ClaudeCommand {
+                    line: "/color red".into(),
+                    overlay: "claude-command-confirm",
+                },
+            )),
+        );
+        let result = TermherdMcp::new(handle)
+            .claude_command(Parameters(ClaudeCommandArgs {
+                session: "3".into(),
+                command: "color".into(),
+                argument: Some("red".into()),
+            }))
+            .await
+            .expect("the tool answers");
+        assert_eq!(
+            shell.await.expect("shell task"),
+            Request::Act(Action::ClaudeCommand {
+                session: 3,
+                command: ClaudeCommand::Color(ClaudeColor::Red),
+            })
+        );
+        assert_eq!(
+            result.structured_content.expect("structured json"),
+            serde_json::json!({
+                "focused_handle": "3",
+                "line": "/color red",
+                "overlay": "claude-command-confirm",
+            })
+        );
+    }
+
+    #[test]
     fn structured_refuses_a_payload_that_is_not_an_object() {
         let error = structured(serde_json::json!([1, 2, 3]))
             .expect_err("a bare array is not valid structuredContent");
@@ -1535,6 +1672,33 @@ mod tests {
         }
     }
 
+    /// The sweep's Claude command tool, apart so the main table stays within
+    /// the function-length gate.
+    fn claude_command_sweep_case<'a>(
+        mcp: &'a TermherdMcp,
+        tool: &str,
+    ) -> Option<(Vec<Reply>, SweepCall<'a>)> {
+        use crate::shell::bridge::ActionOutcome;
+
+        (tool == "claude_command").then(|| {
+            (
+                vec![Reply::Acted(
+                    ActionOutcome::applied(Some("1".into())).with_detail(
+                        ActionDetail::ClaudeCommand {
+                            line: "/desktop".into(),
+                            overlay: "claude-command-confirm",
+                        },
+                    ),
+                )],
+                Box::pin(mcp.claude_command(Parameters(ClaudeCommandArgs {
+                    session: "1".into(),
+                    command: "desktop".into(),
+                    argument: None,
+                }))) as SweepCall<'a>,
+            )
+        })
+    }
+
     /// The replies the shell must give for `tool`, and the call that drives it.
     ///
     /// One `match` states the tool list once, so a tool the sweep does not know
@@ -1544,6 +1708,9 @@ mod tests {
 
         if let Some(call) = options_sweep_case(mcp, tool) {
             return (Vec::new(), call);
+        }
+        if let Some(case) = claude_command_sweep_case(mcp, tool) {
+            return case;
         }
 
         let acted = || Reply::Acted(ActionOutcome::applied(Some("1".into())));

@@ -1,5 +1,5 @@
-//! Confirmation modals and the scrim that hosts them. Quit, tab-close and
-//! archive all confirm through the one centred [`modal`] overlay (so the three
+//! Confirmation modals and the scrim that hosts them. Quit, tab-close,
+//! archive and a Claude command all confirm through the one centred [`modal`] overlay (so the three
 //! flows look and behave alike), driven by [`Shell::active_confirmation`] which
 //! picks the single armed confirmation in priority order.
 
@@ -27,6 +27,10 @@ impl Shell {
             .or_else(|| {
                 self.archive_confirmation()
                     .map(|card| (card, Message::CancelArchive))
+            })
+            .or_else(|| {
+                self.claude_command_confirmation()
+                    .map(|card| (card, Message::CancelClaudeCommand))
             })
     }
 
@@ -80,6 +84,24 @@ impl Shell {
             button::primary,
             Message::ConfirmArchive,
             Message::CancelArchive,
+        ))
+    }
+
+    /// The card naming the exact line about to be typed into a Claude session,
+    /// and the tab it lands in. `None` when no command is armed.
+    fn claude_command_confirmation(&self) -> Option<Element<'_, Message>> {
+        let pending = self.claude_command.as_ref()?;
+        let workspace = &self.core.workspace;
+        let title = workspace
+            .tab_of(pending.session)
+            .and_then(|index| workspace.tabs.get(index))
+            .map_or("", |tab| tab.display_title());
+        Some(Self::confirmation_bar(
+            strings::claude_command_prompt(&pending.command.line(), &clip(title, 24)),
+            strings::SEND,
+            button::primary,
+            Message::ConfirmClaudeCommand,
+            Message::CancelClaudeCommand,
         ))
     }
 

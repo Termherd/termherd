@@ -83,6 +83,7 @@ tool-level error; the text reads keep working.
 | `mouse_in_session` | `session`, `kind`, `col`, `row`, `button` | a mouse event at a **cell** of the terminal; see below |
 | `add_repo` | `path` | put a repository in the sidebar before it has any session |
 | `forget_repo` | `path` | drop an addition; the row survives on its sessions |
+| `claude_command` | `session`, `command`, `argument` | **arms** a confirmation to type a Claude slash command; see below |
 
 Each returns the resulting `focused_handle` (`null` when the workspace is now
 empty).
@@ -116,6 +117,44 @@ sent. A path that does not exist, or a relative one, is rejected.
 added is **not** an error, and forgetting one the scan still reports leaves the
 row standing. Read `in_sidebar` to tell the two outcomes apart — `false` means
 it is gone, `true` with `declared: false` means it lives on its sessions.
+
+#### A Claude slash command, confirmed
+
+`claude_command` asks TermHerd to type one of Claude Code's own commands into
+a Claude session — the way TermHerd changes what Claude owns, such as a
+session's name or colour, rather than keeping a rival copy of it. The list is
+closed:
+
+| `command` | `argument` | Types |
+| --- | --- | --- |
+| `rename` | the new name | `/rename <name>` |
+| `color` | `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan` or `default` | `/color <colour>` |
+| `desktop` | none | `/desktop` |
+
+**Nothing is typed by the call.** It arms the same confirmation prompt the
+`send-to-desktop` action arms, naming the exact line, and answers with that
+`line` and the prompt's name, `overlay: "claude-command-confirm"`. The prompt
+then holds the keyboard: `press_keys(["enter"])` types the line,
+`press_keys(["escape"])` drops it, and a human at the window can answer it
+too. The caller goes through the prompt rather than around it so that every
+command typed into Claude passes one gate, whoever asked, and so that a human
+watching the window always sees the line before it lands.
+
+It is **refused**, with nothing armed, when the session is not a Claude launch
+(a shell would run the line as a program), when Claude is not idle at its
+prompt — busy, starting, or waiting on an answer such as a permission prompt —
+or when another prompt is already open. Confirming re-checks: a Claude that
+started work while the prompt was up gets nothing typed.
+
+A name is made safe before it is shown: control characters, line breaks and
+tabs become spaces, invisible formatting characters are dropped, a trailing
+backslash goes (in Claude's prompt, `\` then Enter starts a new line instead of
+submitting), and the result is cut to 80 characters. A name with nothing left
+is refused.
+
+Confirming sends <kbd>Ctrl</kbd>+<kbd>U</kbd> first, which clears a one-line
+draft left in Claude's prompt, then the line, then Enter on its own. A draft of
+several lines is cleared only on the line the cursor is on.
 
 #### The pointer, inside a terminal
 

@@ -36,6 +36,7 @@ use crate::window_config::WindowConfig;
 
 mod appearance;
 pub(crate) mod bridge;
+mod claude_command;
 mod docs;
 mod effects;
 mod geometry;
@@ -298,6 +299,10 @@ struct Shell {
     /// process (TerminateProcess / SIGKILL, no graceful shutdown), so a quit
     /// with sessions still running arms this modal first.
     closing_window: Option<window::Id>,
+    /// A Claude slash command awaiting confirmation, and the session it is for.
+    /// The prompt names the exact line, so nothing is typed into Claude that
+    /// the user has not read first.
+    claude_command: Option<claude_command::PendingCommand>,
     /// Whether Ctrl (or Cmd) is currently held — the link-open modifier.
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
@@ -517,6 +522,10 @@ enum Message {
     ConfirmArchive,
     /// Dismiss the archive confirmation without archiving.
     CancelArchive,
+    /// Type the armed Claude slash command into its session.
+    ConfirmClaudeCommand,
+    /// Dismiss the Claude command confirmation without typing anything.
+    CancelClaudeCommand,
     /// Show or hide archived sessions in the browser (F-session-metadata).
     ShowArchived(bool),
     /// Fold or unfold a project's session list in the sidebar, by path.
@@ -747,6 +756,7 @@ impl Shell {
             close_confirm: CloseSettings::default(),
             gestures: ClipboardGestures::default(),
             archiving: None,
+            claude_command: None,
             closing_window: None,
             link_modifier: false,
             shift_modifier: false,
@@ -1170,6 +1180,8 @@ impl Shell {
                 self.archiving = None;
                 Task::none()
             }
+            Message::ConfirmClaudeCommand => self.confirm_claude_command(),
+            Message::CancelClaudeCommand => self.cancel_claude_command(),
             Message::ShowArchived(show) => {
                 let effects = self
                     .core
@@ -2868,6 +2880,8 @@ mod key_routing {
             (Action::Copy, "copy"),
             // No pane, so no Claude whose name could be copied.
             (Action::CopyAgentName, "copy-agent-name"),
+            // No pane, so no idle Claude to type `/desktop` into.
+            (Action::SendToDesktop, "send-to-desktop"),
         ] {
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
@@ -4288,6 +4302,181 @@ mod key_routing {
         );
     }
 
+    // ---- Claude slash commands, behind a confirmation ---------------------
+
+    use termherd_core::{ClaudeColor, ClaudeCommand};
+
+    /// A shell with one Claude tab open, focused and idle at its prompt.
+    fn shell_with_idle_claude() -> (Shell, Arc<RecordingPty>, SessionId) {
+        let (mut shell, pty) = empty_shell();
+        let _ = shell.launch("/tmp/claude".to_string(), Launch::Claude(ClaudeLaunch::Fresh(None)));
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Idle,
+        });
+        (shell, pty, session)
+    }
+
+    /// Arm `command` for `session` the way the MCP tool does.
+    fn arm_over_bridge(
+        shell: &mut Shell,
+        session: SessionId,
+        command: ClaudeCommand,
+    ) -> super::bridge::ActionOutcome {
+        shell
+            .perform_action(BridgeAction::ClaudeCommand {
+                session: session.0.get(),
+                command,
+            })
+            .0
+    }
+
+    #[test]
+    fn an_armed_claude_command_types_nothing_until_enter_then_clears_and_submits() {
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let command = ClaudeCommand::rename("api work").expect("a name");
+
+        let outcome = arm_over_bridge(&mut shell, session, command);
+        assert_eq!(outcome.error, None);
+        assert_eq!(
+            outcome.detail,
+            Some(super::bridge::ActionDetail::ClaudeCommand {
+                line: "/rename api work".to_owned(),
+                overlay: "claude-command-confirm",
+            }),
+            "the caller is told the exact line and the prompt holding the keyboard"
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+        assert!(pty.writes().is_empty(), "arming types nothing");
+
+        assert_eq!(
+            press_chord(&mut shell, "enter"),
+            PressStep::Overlay("claude-command-confirm".to_owned())
+        );
+        assert_eq!(
+            pty.writes_seen(),
+            vec![
+                (session, b"\x15/rename api work".to_vec()),
+                (session, b"\r".to_vec()),
+            ],
+            "the draft is cleared and the line typed, then Enter on its own"
+        );
+        assert!(shell.keyboard_owner().is_none(), "and the prompt lets go");
+    }
+
+    #[test]
+    fn escape_drops_an_armed_claude_command_without_typing_it() {
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+
+        let _ = press_chord(&mut shell, "escape");
+        assert!(shell.keyboard_owner().is_none());
+        let _ = press_chord(&mut shell, "enter");
+        assert!(
+            pty.writes().iter().all(|bytes| !bytes.starts_with(b"\x15")),
+            "a later enter reaches the terminal, never the dropped command"
+        );
+    }
+
+    #[test]
+    fn a_claude_command_is_refused_for_a_claude_not_idle_or_a_shell() {
+        let (mut shell, pty, claude) = shell_with_idle_claude();
+        let _ = shell.update(Message::PtyStatus {
+            session: claude,
+            status: SessionStatus::Busy,
+        });
+        let busy = arm_over_bridge(&mut shell, claude, ClaudeCommand::Desktop);
+        assert_eq!(
+            busy.error.as_deref(),
+            Some("the session is busy, not idle at its prompt")
+        );
+
+        let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
+        let plain = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session: plain,
+            status: SessionStatus::Idle,
+        });
+        let shell_refusal = arm_over_bridge(&mut shell, plain, ClaudeCommand::Desktop);
+        assert_eq!(
+            shell_refusal.error.as_deref(),
+            Some("the session is not a Claude session")
+        );
+
+        let unknown = shell
+            .perform_action(BridgeAction::ClaudeCommand {
+                session: 999,
+                command: ClaudeCommand::Desktop,
+            })
+            .0;
+        assert!(unknown.error.is_some(), "an unknown handle is refused");
+
+        assert!(shell.keyboard_owner().is_none(), "no refusal arms a prompt");
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn a_command_confirmed_after_claude_turned_busy_is_not_typed() {
+        // The prompt can sit open while Claude starts work; typing then would
+        // queue the line behind it, so the confirmation asks again.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Color(ClaudeColor::Red));
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+
+        let _ = shell.update(Message::ConfirmClaudeCommand);
+        assert!(pty.writes().is_empty());
+        assert!(shell.keyboard_owner().is_none(), "the prompt still closes");
+    }
+
+    #[test]
+    fn a_claude_command_is_not_armed_over_another_open_prompt() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        shell.archiving = Some("sess".to_string());
+
+        let outcome = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some("another prompt is open (archive-confirm); answer it first")
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Archive));
+    }
+
+    #[test]
+    fn send_to_desktop_arms_the_prompt_for_the_focused_claude_only() {
+        let (mut shell, pty, _session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("send-to-desktop".to_owned())]
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+        let _ = shell.update(Message::ConfirmClaudeCommand);
+        assert_eq!(pty.writes()[0], b"\x15/desktop");
+
+        let (mut plain, _pty) = shell_with_terminal();
+        let (refused, _task) = plain.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert_eq!(
+            refused.steps,
+            vec![inert("send-to-desktop", "no-context")],
+            "a focused shell has no Claude to send"
+        );
+        assert!(plain.keyboard_owner().is_none());
+    }
+
+    #[test]
+    fn an_armed_claude_command_shows_its_own_modal() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert!(matches!(
+            shell.active_confirmation(),
+            Some((_, Message::CancelClaudeCommand))
+        ));
+    }
+
     fn arm_overlay(shell: &mut Shell, owner: KeyboardOwner) {
         match owner {
             KeyboardOwner::TabRename => {
@@ -4303,6 +4492,13 @@ mod key_routing {
             KeyboardOwner::Quit => shell.closing_window = Some(window::Id::unique()),
             KeyboardOwner::TabClose(index) => shell.closing = Some(index),
             KeyboardOwner::Archive => shell.archiving = Some("sess".to_string()),
+            KeyboardOwner::ClaudeCommand => {
+                let session = shell.core.workspace.focused_session().expect("focused");
+                shell.claude_command = Some(claude_command::PendingCommand {
+                    session,
+                    command: termherd_core::ClaudeCommand::Desktop,
+                });
+            }
             KeyboardOwner::Settings => {
                 let _ = shell.update(Message::ToggleSettings);
             }
