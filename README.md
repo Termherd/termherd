@@ -168,6 +168,7 @@ session stars / archives / custom titles — and the repositories you added by
 hand — to `~/.termherd/metadata.json` (an overlay — TermHerd never writes under
 `~/.claude`). Star (★), archive (⊟) and rename (✎) are buttons on each sidebar
 row; a hand-added repository also carries a ✕ that takes it back out.
+Renaming a session open in a Claude tab asks Claude itself, with `/rename`.
 
 ## Shortcuts
 
@@ -246,7 +247,7 @@ nothing to configure. It exposes the running workspace:
 | --- | --- |
 | `list_sessions` | every live session with its stable `handle` |
 | `snapshot` | the whole state — config, sidebar, tabs and panes; filterable, no terminal text by default |
-| `open_session` · `split_pane` · `focus_pane` · `rename_tab` · `close_pane` | workspace actions, each reporting the resulting focus |
+| `open_session` · `split_pane` · `focus_pane` · `rename_tab` · `close_pane` | workspace actions, each reporting the resulting focus — renaming a Claude tab asks Claude, with `/rename` |
 | `run_in_session` | type into a terminal (returns immediately) |
 | `wait_for_status` | block until a session goes idle / wants attention |
 | `read_terminal` | one pane's visible text |

@@ -13,7 +13,6 @@ pub const NO_SESSIONS: &str = "No sessions found.";
 pub const NO_RESULTS: &str = "No results.";
 pub const PLANS_AND_MEMORY: &str = "Plans & memory";
 pub const FAVORITES: &str = "★ Favorites";
-pub const RENAME_PLACEHOLDER: &str = "title…";
 pub const SIDEBAR_LAUNCH_SHELL: &str = "Open a shell here";
 pub const SIDEBAR_LAUNCH_CLAUDE: &str = "Start a fresh Claude session";
 pub const SIDEBAR_SHOW_LESS: &str = "show less";
@@ -99,6 +98,12 @@ pub fn claude_command_prompt(line: &str, title: &str) -> String {
     } else {
         format!("Type “{line}” into “{title}”?")
     }
+}
+
+/// Why a rename asked of Claude was not sent, under the tab strip.
+#[must_use]
+pub fn rename_refused(why: &str) -> String {
+    format!("Claude was not renamed: {why}.")
 }
 
 /// Close-a-tab confirmation prompt.

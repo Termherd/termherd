@@ -113,7 +113,14 @@ Three buttons on each session row:
 
 All three are an **overlay**: they are written to
 `~/.termherd/metadata.json`, never under `~/.claude`. Nothing you do in the
-sidebar changes what the Claude CLI sees.
+sidebar changes what the Claude CLI sees, with one exception: renaming a
+session that is **open in a Claude tab** asks Claude to rename it, with
+`/rename`, exactly as renaming its tab does (see
+[Tabs and splits](./tabs-and-splits.md)). Clearing the field still only
+removes the sidebar's own name, and the greyed-out hint shows the title that
+leaves. Between a name given here and Claude's own `/rename`, the later one
+shows: a rename here outranks the name Claude had, until Claude is renamed
+again.
 
 ## Density
 

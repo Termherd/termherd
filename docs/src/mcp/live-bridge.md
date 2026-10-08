@@ -77,7 +77,7 @@ tool-level error; the text reads keep working.
 | `open_session` | `project`, `kind` | `kind` is `"shell"` (default) or `"claude"`; omit `project` for the home dir |
 | `split_pane` | `direction`, `pane` | `"vertical"` (default) or `"horizontal"`; omit `pane` for the focused one |
 | `focus_pane` | `session` | |
-| `rename_tab` | `tab`, `title` | `tab` is the 0-based index `snapshot` reports; a blank title reverts to the derived one |
+| `rename_tab` | `tab`, `title` | `tab` is the 0-based index `snapshot` reports; a blank title reverts a shell tab to the derived one. A Claude tab is renamed by arming `/rename <title>` for confirmation, answered as `claude_command` is; a blank title, or the name it already shows, arms nothing and leaves it as it is |
 | `close_pane` | `pane` | a lone pane is its whole tab, which closes |
 | `run_in_session` | `session`, `text` | include a trailing newline to submit |
 | `mouse_in_session` | `session`, `kind`, `col`, `row`, `button` | a mouse event at a **cell** of the terminal; see below |

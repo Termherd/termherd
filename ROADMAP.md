@@ -103,7 +103,6 @@ issues #18–#29.
 | [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ☐ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
 | [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ☐ | The tab hover card shows agent name, model, effort, version and elapsed time. |
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
-| [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ☐ | A Claude tab's title follows the session name Claude holds. |
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
 | [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ✅ | A `rename-tab` keymap action opening the focused tab's inline rename. |
@@ -119,6 +118,7 @@ issues #18–#29.
 | [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) | feature | mcp, workspace | ✅ | One model, two readers: the capture dump is now the MCP snapshot. |
 | [F-mcp-terminal-sync](#f-mcp-terminal-sync) | feature | mcp, terminal | ✅ | The wait rung: block until a session's status settles, then read its text. |
 | [F-tab-kind-icon](#f-tab-kind-icon) | feature | workspace | ✅ | A kind mark beside each tab's status dot, instead of a glyph in its title. |
+| [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ✅ | A Claude tab's title follows the session name Claude holds. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
 
 ## Backlog
@@ -1265,20 +1265,6 @@ session asking for attention reactivates it; dragging a tab into the parked
 zone parks it. A natural entry for [F-tab-context-menu](#f-tab-context-menu).
 Torture report: `.personal/feature-torture/reports/F-tab-park.md`.
 
-<a id="f-tab-title-sync"></a>
-
-### F-tab-title-sync
-
-A Claude tab's title follows the session name Claude holds.
-
-The tab title follows Claude's own `/rename` and session name until the user
-renames the tab by hand; clearing a manual name re-seeds the field with the
-session name and resumes following (#119). Renaming a Claude tab sends
-`/rename` through [F-claude-command](#f-claude-command) rather than keeping a
-local copy that disagrees with Claude. Needs
-[F-session-id-at-launch](#f-session-id-at-launch) for fresh tabs. Torture
-report: `.personal/feature-torture/reports/F-tab-title-sync.md`.
-
 <a id="f-claude-command"></a>
 
 ### F-claude-command
@@ -1680,6 +1666,28 @@ that opens a tab shows what the tab will. Lands ahead of
 [F-tab-title-sync](#f-tab-title-sync), which rewrites the same title policy.
 Torture report:
 `.personal/feature-torture/reports/F-tab-kind-icon.md`.
+
+<a id="f-tab-title-sync"></a>
+
+### F-tab-title-sync
+
+A Claude tab's title follows the session name Claude holds.
+
+Shipped in #119. One resolver in `core` ranks a tab's title sources —
+the session's name (Claude's `/rename` or a name kept in the sidebar,
+whichever was given last) >
+the live OSC title > Claude's AI title or first prompt > the launch label —
+and every open tab re-resolves on a rescan, a metadata load, a sidebar
+rename and a re-key. That reaches fresh tabs too, through the id minted by
+[F-session-id-at-launch](#f-session-id-at-launch).
+
+Renaming a Claude tab (double-click, the MCP `rename_tab`, or the sidebar ✎
+on an open session) arms `/rename` through
+[F-claude-command](#f-claude-command) rather than keeping a local copy that
+disagrees with Claude; a refusal shows a notice under the tab strip. A shell
+tab keeps its local name (#145), and so does a Claude tab whose Claude has
+exited. Once cleared, the rename field shows the name a blank commit leaves.
+The "follow by default" setting was dropped as YAGNI. Torture report: `.personal/feature-torture/reports/F-tab-title-sync.md`.
 
 <a id="f-terminal-palette"></a>
 
