@@ -11,6 +11,7 @@ use crate::snapshot::{
     tail_lines,
 };
 use std::collections::BTreeMap;
+use termherd_claude::color::ClaudeColor;
 use termherd_claude::session_file::SessionFile;
 
 use super::*;
@@ -145,9 +146,13 @@ impl App {
                     // A pane always hosts a registered session (the workspace
                     // invariant); a stray id is dropped rather than panicked on.
                     .filter_map(|id| {
-                        self.sessions
-                            .get(id)
-                            .map(|session| pane_snapshot(session, &inputs.session_files))
+                        self.sessions.get(id).map(|session| {
+                            pane_snapshot(
+                                session,
+                                &inputs.session_files,
+                                self.session_color(session.id),
+                            )
+                        })
                     })
                     .collect(),
             })
@@ -184,6 +189,7 @@ impl App {
 fn pane_snapshot(
     session: &LiveSession,
     session_files: &BTreeMap<u32, SessionFile>,
+    color: Option<ClaudeColor>,
 ) -> PaneSnapshot {
     PaneSnapshot {
         handle: session.id.0.get(),
@@ -191,6 +197,7 @@ fn pane_snapshot(
         cwd: session.cwd.clone(),
         status: session.status,
         identity: claude_identity(session, session_files),
+        color,
     }
 }
 
@@ -606,6 +613,25 @@ mod tests {
         assert_eq!(pane.identity.pid, Some(4399));
         assert_eq!(pane.identity.peer_name.as_deref(), Some("proj-35"));
         assert_eq!(pane.identity.session_id.as_deref(), Some("7eff"));
+    }
+
+    #[test]
+    fn a_pane_reports_the_colour_its_transcript_set_and_a_shell_none() {
+        let minted = "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f9012";
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
+            title: "work".into(),
+        }));
+        launch(&mut app, "shell");
+        let mut coloured = record(minted, "/proj", "prompt");
+        coloured.digest.agent_color = Some(ClaudeColor::Yellow);
+        app.apply(Event::ScanCompleted(vec![coloured]));
+
+        let panes = panes(&app, &SnapshotInputs::default());
+        assert_eq!(panes[0].color, Some(ClaudeColor::Yellow));
+        assert_eq!(panes[1].color, None);
     }
 
     #[test]
