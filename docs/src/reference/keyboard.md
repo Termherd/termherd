@@ -110,8 +110,10 @@ unless that Claude is idle with nothing typed in its prompt. Bind it yourself;
 it has no default.
 
 Zoom-in binds three chords because `=` is the unshifted face of the `+` key on
-QWERTY and the unshifted key on AZERTY; between them the same gesture works
-across layouts.
+QWERTY and the unshifted key on AZERTY. On the main keyboard only the first,
+`mod+=`, is known to reach the action: there the two `plus` spellings need Shift,
+and a chord is matched on the key before Shift applies (see above), so they never
+match. That is tracked as #370.
 
 ### App
 
