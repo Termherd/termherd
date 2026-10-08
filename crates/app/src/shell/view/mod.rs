@@ -8,7 +8,7 @@
 use std::time::SystemTime;
 
 use iced::widget::canvas::Canvas;
-use iced::widget::{button, column, container, mouse_area, row, text};
+use iced::widget::{Column, button, column, container, mouse_area, row, text};
 use iced::{Border, Color, Element, Fill, Length, Size};
 use termherd_core::SessionRecord;
 use termherd_core::browser::relative_age;
@@ -262,21 +262,48 @@ impl Shell {
     }
 }
 
-/// The hover-card line naming a tab's Claude, dimmed like the other
-/// secondary lines.
-pub(super) fn agent_line(name: &str) -> Element<'static, Message> {
-    text(strings::agent_name(name))
-        .size(10)
-        .style(card_secondary_text)
+/// What a hover card shows about a session beyond its transcript: the facts
+/// only a live pane can tell. The sidebar, which has no pane, passes the
+/// default.
+#[derive(Debug, Default)]
+pub(super) struct CardFacts {
+    /// The peer name other Claude sessions address the pane's Claude by.
+    pub agent: Option<String>,
+}
+
+/// The dimmed detail lines both hover cards show under their title, in order;
+/// a fact nobody knows is a line left out rather than a blank one.
+pub(super) fn detail_lines(facts: &CardFacts) -> Vec<String> {
+    facts
+        .agent
+        .as_deref()
+        .map(strings::agent_name)
+        .into_iter()
+        .collect()
+}
+
+/// One dimmed hover-card line. The title inherits the card's text colour;
+/// both colours come from the theme palette (see `card_style`).
+pub(super) fn secondary_line(line: String) -> Element<'static, Message> {
+    text(line).size(10).style(card_secondary_text).into()
+}
+
+/// The frame both hover cards share, so the two surfaces read alike.
+pub(super) fn card_frame(card: Column<'static, Message>) -> Element<'static, Message> {
+    container(card)
+        .padding(8)
+        .max_width(360.0)
+        .style(card_style)
         .into()
 }
 
 /// The hover card for a session row: full title, a muted line with relative
-/// last activity and message count, then the last few transcript lines so a
-/// duplicate-looking session is recognisable without opening it.
+/// last activity and message count, the [`detail_lines`], then the last few
+/// transcript lines so a duplicate-looking session is recognisable without
+/// opening it.
 pub(super) fn session_card(
     title: String,
-    agent: Option<String>,
+    facts: &CardFacts,
     session: &SessionRecord,
     now: SystemTime,
 ) -> Element<'static, Message> {
@@ -288,26 +315,12 @@ pub(super) fn session_card(
         .map(relative_age);
     let meta = strings::session_meta(age.as_deref(), count);
 
-    // Title inherits the card's text colour; secondary lines are dimmed. Both
-    // colours come from the theme palette (see `card_style`), never hardcoded.
-    let mut card = column![
-        text(title).size(12),
-        text(meta).size(10).style(card_secondary_text)
-    ]
-    .spacing(4);
-    if let Some(agent) = agent {
-        card = card.push(agent_line(&agent));
+    let mut card = column![text(title).size(12), secondary_line(meta)].spacing(4);
+    for line in detail_lines(facts) {
+        card = card.push(secondary_line(line));
     }
     for line in &session.digest.tail {
-        card = card.push(
-            text(format!("› {line}"))
-                .size(10)
-                .style(card_secondary_text),
-        );
+        card = card.push(secondary_line(format!("› {line}")));
     }
-    container(card)
-        .padding(8)
-        .max_width(360.0)
-        .style(card_style)
-        .into()
+    card_frame(card)
 }

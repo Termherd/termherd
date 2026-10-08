@@ -10,7 +10,7 @@
 //! deviation from upstream) lives in [`crate::jsonl`].
 
 /// What the browser and the FTS index need from one session JSONL.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionDigest {
     /// First real user prompt, truncated to 120 UTF-16 units.
     pub summary: String,

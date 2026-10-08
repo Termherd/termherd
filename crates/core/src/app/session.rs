@@ -75,12 +75,15 @@ impl LiveSession {
     /// The session id the cached session file names, if it proves the job in
     /// front of this pane is the Claude that wrote it.
     fn live_session_id(&self) -> Option<&str> {
+        self.proven_session_file()?.session_id.as_deref()
+    }
+
+    /// The cached session file, only when it proves the job in front of this
+    /// pane is the Claude that wrote it.
+    fn proven_session_file(&self) -> Option<&SessionFile> {
         let job = self.foreground.as_ref()?;
         let file = self.session_file.as_ref()?;
-        if !proves(job, file) {
-            return None;
-        }
-        file.session_id.as_deref()
+        proves(job, file).then_some(file)
     }
 
     /// Whether this session still holds a **running foreground process** whose

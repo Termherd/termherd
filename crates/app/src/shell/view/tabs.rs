@@ -10,7 +10,9 @@ use iced::widget::{button, column, container, mouse_area, row, text, text_input,
 use iced::{Color, Element};
 use termherd_core::workspace::Tab;
 
-use super::{card_secondary_text, card_style, clip, kind_icon, session_card, status_dot};
+use super::{
+    CardFacts, card_frame, clip, detail_lines, kind_icon, secondary_line, session_card, status_dot,
+};
 use crate::shell::{Message, Shell, tab_rename_id};
 
 impl Shell {
@@ -140,14 +142,16 @@ impl Shell {
         now: SystemTime,
     ) -> Element<'static, Message> {
         let first = tab.sessions().first().copied();
-        let agent = first.and_then(|id| self.core.peer_name(id));
+        let facts = CardFacts {
+            agent: first.and_then(|id| self.core.peer_name(id)),
+        };
         match self.core.tab_record(index) {
-            Some(record) => session_card(self.core.session_title(record), agent, record, now),
+            Some(record) => session_card(self.core.session_title(record), &facts, record, now),
             None => {
                 let cwd = first
                     .and_then(|id| self.core.sessions.get(&id))
                     .and_then(|s| s.cwd.clone());
-                tab_card(tab.display_title().to_owned(), agent, cwd)
+                tab_card(tab.display_title().to_owned(), &facts, cwd)
             }
         }
     }
@@ -205,21 +209,13 @@ fn insertion_caret<'a>() -> Element<'a, Message> {
 /// The minimal hover card for a tab with no browsed record — a shell or a fresh
 /// session: the full, untruncated title and the working directory it runs
 /// in. Styled like [`session_card`] so the two hover surfaces read alike.
-fn tab_card(
-    title: String,
-    agent: Option<String>,
-    cwd: Option<String>,
-) -> Element<'static, Message> {
+fn tab_card(title: String, facts: &CardFacts, cwd: Option<String>) -> Element<'static, Message> {
     let mut card = column![text(title).size(12)].spacing(4);
-    if let Some(agent) = agent {
-        card = card.push(super::agent_line(&agent));
+    for line in detail_lines(facts) {
+        card = card.push(secondary_line(line));
     }
     if let Some(cwd) = cwd {
-        card = card.push(text(cwd).size(10).style(card_secondary_text));
+        card = card.push(secondary_line(cwd));
     }
-    container(card)
-        .padding(8)
-        .max_width(360.0)
-        .style(card_style)
-        .into()
+    card_frame(card)
 }

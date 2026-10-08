@@ -2340,11 +2340,7 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "hello".to_owned(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         }
@@ -3417,11 +3413,8 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: summary.to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
                 custom_title: custom.map(str::to_string),
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
@@ -3444,11 +3437,7 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "shared title".to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
@@ -5513,11 +5502,7 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "a session".to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };

@@ -274,11 +274,7 @@ mod tests {
             digest: SessionDigest {
                 summary: format!("prompt {id}"),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..SessionDigest::default()
             },
             modified: Some(UNIX_EPOCH + Duration::from_secs(age_secs)),
         }
