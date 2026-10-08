@@ -85,6 +85,12 @@ Hovering a session shows a card with its fuller description — relative last
 activity and message count (`3h ago · 214 messages`). A tab shows the same
 card on hover, plus an `Agent:` line when a Claude runs in it.
 
+A session given a colour with Claude Code's `/color` shows a thin bar of that
+colour at the start of its row, whether or not it is open, and its card names
+the colour (`Colour: green`) for anyone who cannot tell the bars apart. The
+colour comes from the session's transcript, so a `/color` in an open session
+reaches its row at the next rescan.
+
 ## Search
 
 <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>F</kbd> focuses the search box. Search runs

@@ -54,6 +54,20 @@ runs in it, the card also names its agent (`Agent: termherd-b0`), the peer
 name other Claude sessions address it by; the `copy-agent-name` action puts
 it on the clipboard. In a split tab, the card names the first pane's agent.
 
+**A Claude tab wears the colour its `/color` set.** Run `/color green` in a
+Claude session and its tab is outlined in green, and its sidebar row gets a
+green bar, within about half a second — the time the sidebar takes to notice
+the transcript changed. `/color default` takes the colour away again. The
+colour is Claude's, read from the session's transcript: there is no setting
+for it and no way to override it from TermHerd. In a split tab the focused
+pane decides, as it does for the kind mark, so a shell focused beside a
+coloured Claude leaves the tab uncoloured.
+
+The eight colours are tuned for each theme, but red and green are both among
+them, so the colour is never the only cue: the hover card names it
+(`Colour: green`) — in a split, the colour the outline shows, the focused
+pane's. A shell tab has no colour yet.
+
 **TermHerd asks Claude rather than overriding it.** Where a change belongs to
 Claude — today, handing a session to the desktop app with `send-to-desktop` —
 TermHerd types Claude's own slash command for you, behind a prompt that shows

@@ -18,8 +18,8 @@ own.
 `capture-<ts>.json` is a diffable dump of the whole workspace: focus, the
 resolved config, the sidebar, every tab with its panes (each pane's stable
 handle, kind, cwd, status, and the `pid`, `peer_name` and `session_id` of
-the Claude running in it, all three `null` when none is), and the focused
-terminal's visible text.
+the Claude running in it, all three `null` when none is, and the `color`
+its `/color` set), and the focused terminal's visible text.
 
 It is **the same model** the MCP [`snapshot`](../mcp/live-bridge.md) tool
 reports, taken under a fixed full filter — one model, two readers, so a field
