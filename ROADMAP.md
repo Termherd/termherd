@@ -85,7 +85,6 @@ issues #18–#29.
 | [F-activity-stats](#f-activity-stats) | feature | sessions | ☐ | Aggregate what the sessions have been doing — counts, durations, activity. |
 | [F-capture](#f-capture) | feature | workspace | ☐ | Capture termherd along a fidelity ladder: debug dumps, promo, bug repros. |
 | [F-file-browser](#f-file-browser) | feature | workspace, sidebar | ☐ | A file tree for the focused repository, floating or as a right pane. |
-| [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ☐ | A `rename-tab` keymap action opening the focused tab's inline rename. |
 | [F-launch-profiles](#f-launch-profiles) | feature | sessions | ☐ | Persistent per-project `--add-dir`, applied to fresh and resumed launches. |
 | [F-mcp-attach](#f-mcp-attach) | feature | mcp, workspace | ☐ | The attach rung: reach the live bridge from outside a spawned session. |
 | [F-mcp-control-surface](#f-mcp-control-surface) | feature | mcp | ☐ | Termherd exposes its own control and orchestration surface as an MCP server. |
@@ -106,6 +105,7 @@ issues #18–#29.
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
+| [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ✅ | A `rename-tab` keymap action opening the focused tab's inline rename. |
 | [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
 | [F-mcp-background-tab](#f-mcp-background-tab) | feature | mcp, workspace | ✅ | Open and close a tab over MCP without moving the user's focus. |
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
@@ -860,16 +860,6 @@ Markdown docs). Adjacent to `F-repo-view` (#148) — both answer "show me this
 repo", one by session, one by file — and worth shaping together rather than
 twice
 
-<a id="f-keymap-rename-tab"></a>
-
-### F-keymap-rename-tab
-
-A `rename-tab` keymap action opening the focused tab's inline rename.
-
-Rename is double-click only today, so neither the keyboard, the
-[F-tab-context-menu](#f-tab-context-menu) nor MCP `run_action` can reach it
-(#338).
-
 <a id="f-launch-profiles"></a>
 
 ### F-launch-profiles
@@ -1330,6 +1320,23 @@ Not shipped: Windows. ConPTY reports no foreground process, so no pid leads to
 a session file and nothing is ever named there; finding the Claude pid another
 way is #357. Nor does a build launched from inside a Claude session name
 anything, since its PTYs inherit that session's `CLAUDE*` environment (#356).
+
+<a id="f-keymap-rename-tab"></a>
+
+### F-keymap-rename-tab
+
+A `rename-tab` keymap action opening the focused tab's inline rename.
+
+Rename was double-click only, so neither the keyboard, the
+[F-tab-context-menu](#f-tab-context-menu) nor MCP `run_action` could reach it
+(#338).
+
+Shipped (#338): `rename-tab`, bound to ⌘⇧I on macOS (Terminal.app's *Edit
+Title*) and Ctrl+Shift+I elsewhere, a chord a legacy-encoded terminal program
+cannot tell from Ctrl+I (Tab). It opens the field a double-click opens, filled
+with the tab's current name, and reports `inert` / `no-context` with no tab
+open. Over MCP the field can be opened and abandoned with `escape`, not
+committed: `enter` on a rename is #246.
 
 <a id="f-mcp-agent-loop"></a>
 

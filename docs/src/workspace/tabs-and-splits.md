@@ -28,6 +28,7 @@ terminal, or many, split vertically and horizontally.
 | New Claude session here | <kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> |
 | Reopen the tab you closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 | Close focused pane | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>W</kbd> |
+| Rename the focused tab | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> |
 
 **Jump-to-tab is matched by physical key position**, not by the character the
 key produces. On AZERTY and QWERTZ, where the number row produces `&`, `é`, …
@@ -75,7 +76,13 @@ included, since TermHerd starts it under a session id of its own. A
 conversation with no prompt yet has nothing to rescan, so a rename typed
 before the first prompt shows once that prompt is sent.
 
-**Double-click a tab to rename it.** The field opens on the current name; clear
+**Double-click a tab to rename it**, or press the `rename-tab` chord to rename
+the focused one; both open the same field and end the same way. The tab strip
+does not scroll yet: with more tabs than fit, the focused one can sit past its
+right edge, and the chord then opens a field you cannot see. It still holds the
+keyboard, so <kbd>Escape</kbd> leaves it.
+
+The field opens on the current name; clear
 it and it shows, greyed out, the name <kbd>Enter</kbd> would then leave. For a
 shell tab, the name you type is the tab's own and stays until you clear it,
 which reverts the tab to the name it would have without one. For a Claude

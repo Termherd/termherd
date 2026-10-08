@@ -7,6 +7,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (rename a tab from the keyboard)
+
+- A `rename-tab` action, bound to ⌘⇧I on macOS and Ctrl+Shift+I on Windows
+  and Linux, opens the focused tab's inline rename — the field a double-click
+  opens, filled with the tab's current name. With no tab open it does nothing,
+  and reports `inert` / `no-context` over MCP (#338).
+
 ### Changed (fresh Claude sessions start under a known id)
 
 - Every fresh Claude session now starts as `claude --session-id <uuid>`, with
