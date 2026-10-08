@@ -727,6 +727,35 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_turn_as_claude_code_2_1_titles_it_reads_busy_until_it_settles() {
+        // The title sequence a recorded Claude Code 2.1.294 turn wrote under
+        // termherd's environment: `✳` at its prompt, `◐`/`◑` alternating
+        // while it works — tool calls included — then `✳` again, and the
+        // waiting-for-input ping once it has sat idle for a minute. The next
+        // turn must clear that ping: only work does.
+        assert_eq!(
+            statuses_reported(&[
+                "\u{1b}]0;\u{2733} Claude Code\u{07}",
+                "\u{1b}]0;\u{25D0} Claude Code\u{07}",
+                "\u{1b}]0;\u{25D0} Sleep command test\u{07}",
+                "\u{1b}]0;\u{25D1} Sleep command test\u{07}",
+                "\u{1b}]0;\u{2733} Sleep command test\u{07}",
+                "\u{1b}]9;Claude is waiting for your input\u{07}",
+                "\u{1b}]0;\u{25D0} Sleep command test\u{07}",
+                "\u{1b}]0;\u{2733} Sleep command test\u{07}",
+            ]),
+            vec![
+                SessionStatus::Idle,
+                SessionStatus::Busy,
+                SessionStatus::Idle,
+                SessionStatus::Attention,
+                SessionStatus::Busy,
+                SessionStatus::Idle,
+            ]
+        );
+    }
+
+    #[test]
     fn a_background_colour_query_is_answered_from_the_palette() {
         // A CLI's theme auto-detection (Claude's `theme: auto`) sends OSC 11
         // and picks light or dark from the reply; unanswered, it assumes

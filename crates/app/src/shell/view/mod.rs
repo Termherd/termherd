@@ -11,9 +11,9 @@ use iced::widget::canvas::Canvas;
 use iced::widget::{Column, button, column, container, mouse_area, row, text};
 use iced::{Border, Color, Element, Fill, Length, Size};
 use termherd_claude::digest::SessionDigest;
-use termherd_core::SessionRecord;
 use termherd_core::browser::{compact_elapsed, relative_age};
 use termherd_core::workspace::{Pane, SessionId, SplitDir};
+use termherd_core::{ClaudeColor, SessionRecord};
 
 use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD};
 use super::ime::ime_area;
@@ -31,8 +31,8 @@ mod tabs;
 use doc_editor::doc_editor;
 use modals::modal;
 use style::{
-    card_secondary_text, card_style, clip, kind_glyph, kind_icon, mix, sidebar_secondary_text,
-    status_dot,
+    COLOR_MARK_WIDTH, card_secondary_text, card_style, claude_color, clip, color_bar, kind_glyph,
+    kind_icon, mix, sidebar_secondary_text, status_dot,
 };
 
 impl Shell {
@@ -289,6 +289,8 @@ impl Shell {
 pub(super) struct CardFacts {
     /// The peer name other Claude sessions address the pane's Claude by.
     pub agent: Option<String>,
+    /// The colour `/color` gave the session.
+    pub color: Option<ClaudeColor>,
     /// The Claude Code version the running Claude reports
     /// ([`termherd_core::App::live_claude_version`]).
     pub version: Option<String>,
@@ -297,8 +299,8 @@ pub(super) struct CardFacts {
 }
 
 /// The dimmed detail lines both hover cards show under their title, in order:
-/// agent, model and effort (from the transcript `digest`), version, running
-/// time. A fact nobody knows is a line left out rather than a blank one.
+/// agent, colour, model and effort (from the transcript `digest`), version,
+/// running time. A fact nobody knows is a line left out rather than a blank one.
 ///
 /// The version is the running Claude's when a pane knows it, else the one the
 /// transcript last recorded: the transcript is only as fresh as the last scan,
@@ -312,6 +314,9 @@ pub(super) fn detail_lines(facts: &CardFacts, digest: Option<&SessionDigest>) ->
         .or_else(|| digest.and_then(|d| d.version.as_deref()));
     [
         facts.agent.as_deref().map(strings::agent_name),
+        facts
+            .color
+            .map(|color| strings::session_color(color.name())),
         strings::model_and_effort(model, effort),
         version.map(strings::claude_version),
         facts
@@ -325,7 +330,7 @@ pub(super) fn detail_lines(facts: &CardFacts, digest: Option<&SessionDigest>) ->
 
 /// One dimmed hover-card line. The title inherits the card's text colour;
 /// both colours come from the theme palette (see `card_style`).
-pub(super) fn secondary_line(line: String) -> Element<'static, Message> {
+pub(super) fn card_secondary_line(line: String) -> Element<'static, Message> {
     text(line).size(10).style(card_secondary_text).into()
 }
 
@@ -356,12 +361,12 @@ pub(super) fn session_card(
         .map(relative_age);
     let meta = strings::session_meta(age.as_deref(), count);
 
-    let mut card = column![text(title).size(12), secondary_line(meta)].spacing(4);
+    let mut card = column![text(title).size(12), card_secondary_line(meta)].spacing(4);
     for line in detail_lines(facts, Some(&session.digest)) {
-        card = card.push(secondary_line(line));
+        card = card.push(card_secondary_line(line));
     }
     for line in &session.digest.tail {
-        card = card.push(secondary_line(format!("› {line}")));
+        card = card.push(card_secondary_line(format!("› {line}")));
     }
     card_frame(card)
 }
@@ -381,6 +386,7 @@ mod tests {
     fn every_fact() -> CardFacts {
         CardFacts {
             agent: Some("termherd-b0".to_owned()),
+            color: Some(ClaudeColor::Purple),
             version: Some("2.1.294".to_owned()),
             running_for: Some(Duration::from_secs(3600 + 12 * 60)),
         }
@@ -393,6 +399,7 @@ mod tests {
             detail_lines(&every_fact(), Some(&known)),
             vec![
                 strings::agent_name("termherd-b0"),
+                strings::session_color(ClaudeColor::Purple.name()),
                 strings::model_and_effort(Some("claude-opus-5-5"), Some("medium")).expect("a line"),
                 strings::claude_version("2.1.294"),
                 strings::running_for("1h 12m"),
@@ -413,14 +420,22 @@ mod tests {
                 known(),
                 0,
             ),
-            (every_fact(), digest(None, None), 1),
+            (
+                CardFacts {
+                    color: None,
+                    ..every_fact()
+                },
+                known(),
+                1,
+            ),
+            (every_fact(), digest(None, None), 2),
             (
                 CardFacts {
                     version: None,
                     ..every_fact()
                 },
                 known(),
-                2,
+                3,
             ),
             (
                 CardFacts {
@@ -428,7 +443,7 @@ mod tests {
                     ..every_fact()
                 },
                 known(),
-                3,
+                4,
             ),
         ];
         for (facts, digest, missing) in cases {
@@ -466,7 +481,7 @@ mod tests {
 
     #[test]
     fn a_card_with_no_transcript_still_shows_the_live_facts() {
-        assert_eq!(detail_lines(&every_fact(), None).len(), 3);
+        assert_eq!(detail_lines(&every_fact(), None).len(), 4);
         assert!(detail_lines(&CardFacts::default(), None).is_empty());
     }
 }

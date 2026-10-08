@@ -9,6 +9,8 @@
 //! Malformed lines are skipped, not fatal — the policy (a deliberate
 //! deviation from upstream) lives in [`crate::jsonl`].
 
+use crate::color::ClaudeColor;
+
 /// What the browser and the FTS index need from one session JSONL.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionDigest {
@@ -40,6 +42,10 @@ pub struct SessionDigest {
     /// `effort`, else `perTurnEffort`. Neither is documented, and older
     /// Claude Code versions write neither.
     pub effort: Option<String>,
+    /// The colour `/color` last set (`agent-color` entry); the last one wins.
+    /// Never [`ClaudeColor::Default`]: resetting leaves the session with no
+    /// colour of its own, which is `None`.
+    pub agent_color: Option<ClaudeColor>,
 }
 
 impl SessionDigest {
@@ -95,6 +101,7 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
     let mut ai_title: Option<String> = None;
     let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
     let mut run = RunFacts::default();
+    let mut agent_color: Option<ClaudeColor> = None;
 
     for entry in crate::jsonl::entries(content) {
         if slug.is_none()
@@ -115,6 +122,9 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
             && let Some(t) = non_empty_str(&entry, "aiTitle")
         {
             ai_title = Some(t.to_owned());
+        }
+        if entry_type == Some("agent-color") {
+            agent_color = agent_color_of(&entry);
         }
 
         let is_user =
@@ -173,6 +183,7 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         version: run.version,
         model: run.model,
         effort: run.effort,
+        agent_color,
     })
 }
 
@@ -220,6 +231,18 @@ fn keep_latest(slot: &mut Option<String>, seen: Option<&str>) {
     {
         *slot = Some(seen.to_owned());
     }
+}
+
+/// The colour an `agent-color` entry sets. The key is undocumented, so a
+/// value that cannot be read — renamed key, non-string, a word outside the
+/// palette — reads as no colour: the entry says the colour changed, and
+/// keeping the previous one would claim a colour the session no longer has.
+fn agent_color_of(entry: &serde_json::Value) -> Option<ClaudeColor> {
+    entry
+        .get("agentColor")
+        .and_then(serde_json::Value::as_str)
+        .and_then(ClaudeColor::from_name)
+        .filter(|color| *color != ClaudeColor::Default)
 }
 
 /// First line of `text` with surrounding whitespace stripped, skipping leading
@@ -484,7 +507,111 @@ mod tests {
         );
     }
 
+    fn color_line(value: &serde_json::Value) -> String {
+        serde_json::json!({"type": "agent-color", "agentColor": value, "sessionId": "s"})
+            .to_string()
+    }
+
+    fn color_after(lines: &[String]) -> Option<ClaudeColor> {
+        let mut all = vec![user_line("prompt")];
+        all.extend_from_slice(lines);
+        digest_session(&all.join("\n")).unwrap().agent_color
+    }
+
+    #[test]
+    fn a_session_nobody_coloured_has_no_colour() {
+        assert_eq!(color_after(&[]), None);
+    }
+
+    #[test]
+    fn the_last_agent_color_entry_wins() {
+        let lines = [
+            color_line(&"red".into()),
+            user_line("more"),
+            color_line(&"green".into()),
+            color_line(&"cyan".into()),
+        ];
+        assert_eq!(color_after(&lines), Some(ClaudeColor::Cyan));
+    }
+
+    #[test]
+    fn default_clears_an_earlier_colour() {
+        let lines = [color_line(&"purple".into()), color_line(&"default".into())];
+        assert_eq!(color_after(&lines), None);
+    }
+
+    #[test]
+    fn a_colour_set_before_the_first_prompt_still_counts() {
+        let jsonl = [color_line(&"pink".into()), user_line("prompt")].join("\n");
+        assert_eq!(
+            digest_session(&jsonl).unwrap().agent_color,
+            Some(ClaudeColor::Pink)
+        );
+    }
+
+    #[test]
+    fn a_name_outside_the_palette_leaves_no_colour_rather_than_a_stale_one() {
+        // The session has a colour termherd cannot draw; showing the one
+        // before it would claim a colour the session no longer has.
+        let lines = [color_line(&"blue".into()), color_line(&"magenta".into())];
+        assert_eq!(color_after(&lines), None);
+    }
+
+    #[test]
+    fn an_entry_whose_value_cannot_be_read_leaves_no_colour() {
+        // A renamed key or a non-string value: the entry still says the colour
+        // changed, only not to what, so no colour is the honest reading.
+        for garbled in [
+            serde_json::json!({"type": "agent-color", "color": "red"}).to_string(),
+            color_line(&serde_json::json!(3)),
+            color_line(&serde_json::Value::Null),
+        ] {
+            let lines = [color_line(&"blue".into()), garbled.clone()];
+            assert_eq!(color_after(&lines), None, "{garbled}");
+        }
+    }
+
+    #[test]
+    fn a_torn_line_is_skipped_and_the_colour_before_it_stands() {
+        let lines = [
+            color_line(&"orange".into()),
+            r#"{"type":"agent-col"#.to_owned(),
+        ];
+        assert_eq!(color_after(&lines), Some(ClaudeColor::Orange));
+    }
+
+    #[test]
+    fn agent_color_on_another_entry_type_is_not_a_colour_change() {
+        let stray = serde_json::json!({"type": "user", "agentColor": "red", "message": "x"});
+        assert_eq!(color_after(&[stray.to_string()]), None);
+    }
+
+    /// One `/color` transcript entry as the proptest draws it: a palette name
+    /// (`default` included), an unknown word, or an unreadable value.
+    fn color_entry() -> impl Strategy<Value = serde_json::Value> {
+        prop_oneof![
+            proptest::sample::select(ClaudeColor::ALL.map(ClaudeColor::name).to_vec())
+                .prop_map(serde_json::Value::from),
+            "[a-z]{1,8}".prop_map(serde_json::Value::from),
+            Just(serde_json::Value::Null),
+            any::<i64>().prop_map(serde_json::Value::from),
+        ]
+    }
+
     proptest! {
+        #[test]
+        fn the_colour_is_whatever_the_last_entry_says(
+            entries in proptest::collection::vec(color_entry(), 0..8),
+        ) {
+            let lines: Vec<String> = entries.iter().map(color_line).collect();
+            let expected = entries
+                .last()
+                .and_then(serde_json::Value::as_str)
+                .and_then(ClaudeColor::from_name)
+                .filter(|color| *color != ClaudeColor::Default);
+            prop_assert_eq!(color_after(&lines), expected);
+        }
+
         #[test]
         fn digest_never_panics(input in any::<String>()) {
             let _ = digest_session(&input);

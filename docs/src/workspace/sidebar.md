@@ -90,6 +90,12 @@ not record it: older Claude Code versions write no effort. A tab shows the same
 card on hover, plus the live facts described in
 [Tabs and splits](tabs-and-splits.md).
 
+A session given a colour with Claude Code's `/color` shows a thin bar of that
+colour at the start of its row, whether or not it is open, and its card names
+the colour (`Colour: green`) for anyone who cannot tell the bars apart. The
+colour comes from the session's transcript, so a `/color` in an open session
+reaches its row at the next rescan.
+
 ## Search
 
 <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>F</kbd> focuses the search box. Search runs

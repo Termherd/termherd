@@ -3,6 +3,7 @@
 
 use crate::browser::{SessionRecord, project_label};
 use crate::snapshot::SessionKind;
+use termherd_claude::color::ClaudeColor;
 
 use super::*;
 
@@ -156,8 +157,31 @@ impl App {
     /// pane's launch so a split mixing kinds shows the one being worked in.
     #[must_use]
     pub fn tab_kind(&self, index: usize) -> Option<SessionKind> {
-        let focused = self.workspace.tabs.get(index)?.focused_session()?;
+        let focused = self.tab_focused_session(index)?;
         self.sessions.get(&focused).map(|s| s.launch.kind())
+    }
+
+    /// The focused pane of the tab at `index` — the one whose kind and colour
+    /// the tab shows.
+    #[must_use]
+    pub fn tab_focused_session(&self, index: usize) -> Option<SessionId> {
+        self.workspace.tabs.get(index)?.focused_session()
+    }
+
+    /// The colour `/color` gave the conversation in the live pane `session`, as
+    /// the last scan read it from the transcript. `None` for a shell, an
+    /// unscanned conversation, or one with no colour of its own.
+    #[must_use]
+    pub fn session_color(&self, session: SessionId) -> Option<ClaudeColor> {
+        self.session_record(session)?.digest.agent_color
+    }
+
+    /// The colour the tab at `index` wears: its focused pane's, so a split
+    /// shows the colour of the conversation being worked in — the rule
+    /// [`Self::tab_kind`] follows.
+    #[must_use]
+    pub fn tab_color(&self, index: usize) -> Option<ClaudeColor> {
+        self.session_color(self.tab_focused_session(index)?)
     }
 
     /// Count of sessions whose PTY is still running — the ones a quit would
@@ -521,6 +545,116 @@ mod tests {
             "the closed tab's id already names a transcript"
         );
         assert_eq!(app.tab_claude_session_id(0), Some("second"));
+    }
+
+    /// A scanned record for `id` whose transcript last set `color`.
+    fn coloured(id: &str, color: Option<ClaudeColor>) -> SessionRecord {
+        let mut r = record(id, "/proj", "prompt");
+        r.digest.agent_color = color;
+        r
+    }
+
+    fn resume(app: &mut App, id: &str) -> SessionId {
+        match app
+            .apply(Event::LaunchSession(LaunchSpec {
+                cwd: Some("/proj".into()),
+                launch: Launch::Claude(ClaudeLaunch::Resume(id.into())),
+                title: "proj".into(),
+                placement: Placement::Foreground,
+            }))
+            .as_slice()
+        {
+            [Effect::Spawn(spec)] => spec.session,
+            other => panic!("expected Spawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_claude_tab_wears_the_colour_its_transcript_set() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "abc",
+            Some(ClaudeColor::Green),
+        )]));
+        let pane = resume(&mut app, "abc");
+        assert_eq!(app.session_color(pane), Some(ClaudeColor::Green));
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Green));
+    }
+
+    #[test]
+    fn a_rescan_recolours_an_open_tab() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![coloured("abc", None)]));
+        resume(&mut app, "abc");
+        assert_eq!(app.tab_color(0), None, "not coloured yet");
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "abc",
+            Some(ClaudeColor::Purple),
+        )]));
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Purple));
+        app.apply(Event::ScanCompleted(vec![coloured("abc", None)]));
+        assert_eq!(app.tab_color(0), None, "/color default clears it");
+    }
+
+    #[test]
+    fn a_fresh_tab_is_coloured_through_its_minted_id() {
+        let minted = "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f9012";
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
+            title: "proj".into(),
+            placement: Placement::Foreground,
+        }));
+        app.apply(Event::ScanCompleted(vec![coloured(
+            minted,
+            Some(ClaudeColor::Cyan),
+        )]));
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Cyan));
+    }
+
+    #[test]
+    fn the_focused_pane_decides_a_split_tabs_colour() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "abc",
+            Some(ClaudeColor::Red),
+        )]));
+        resume(&mut app, "abc");
+        // A split opens a shell beside the Claude pane and focuses it.
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        assert_eq!(app.tab_color(0), None, "the focused shell has no colour");
+        app.apply(Event::FocusPrevPane);
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Red));
+    }
+
+    #[test]
+    fn a_split_tabs_colour_is_its_focused_panes_even_when_its_record_is_coloured() {
+        // The hover card describes the first pane's record but must name the
+        // colour the outline shows, which is the focused pane's.
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "abc",
+            Some(ClaudeColor::Red),
+        )]));
+        let first = resume(&mut app, "abc");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        assert_eq!(app.workspace.tabs[0].first_session(), first);
+        assert_eq!(
+            app.tab_record(0).and_then(|r| r.digest.agent_color),
+            Some(ClaudeColor::Red)
+        );
+        assert_eq!(app.tab_color(0), None);
+    }
+
+    #[test]
+    fn a_shell_an_unknown_pane_and_an_unknown_tab_have_no_colour() {
+        let mut app = App::new();
+        let shell = launch(&mut app, "sh");
+        assert_eq!(app.session_color(shell), None);
+        assert_eq!(app.session_color(sid(99)), None);
+        assert_eq!(app.tab_color(0), None);
+        assert_eq!(app.tab_color(9), None);
     }
 
     #[test]

@@ -10,8 +10,11 @@ use iced::widget::{button, column, container, mouse_area, row, text, text_input,
 use iced::{Color, Element};
 use termherd_core::workspace::Tab;
 
+use termherd_core::ClaudeColor;
+
 use super::{
-    CardFacts, card_frame, clip, detail_lines, kind_icon, secondary_line, session_card, status_dot,
+    COLOR_MARK_WIDTH, CardFacts, card_frame, card_secondary_line, claude_color, clip, detail_lines,
+    kind_icon, session_card, status_dot,
 };
 use crate::shell::{Message, Shell, tab_rename_id};
 
@@ -43,6 +46,7 @@ impl Shell {
             // The carried tab fades to a ghost; the drop point is shown by the
             // insertion bar between chips, not on the chip itself.
             let dragging_this = drag.is_some_and(|(from, _)| from == index);
+            let color = self.core.tab_color(index);
 
             // Double-clicking a chip opens an inline field over it; while that
             // field is up the chip is the editor, not a draggable button — so it
@@ -80,7 +84,7 @@ impl Shell {
                 );
                 container(inner)
                     .padding(6)
-                    .style(move |theme: &iced::Theme| tab_chip_style(theme, active, false))
+                    .style(move |theme: &iced::Theme| tab_chip_style(theme, active, false, color))
                     .into()
             } else {
                 inner = inner.push(text(clip(tab.display_title(), 24)).size(12));
@@ -98,7 +102,9 @@ impl Shell {
                 );
                 let chip = container(inner)
                     .padding(6)
-                    .style(move |theme: &iced::Theme| tab_chip_style(theme, active, dragging_this));
+                    .style(move |theme: &iced::Theme| {
+                        tab_chip_style(theme, active, dragging_this, color)
+                    });
                 // A press starts a drag; entering another chip moves the drop
                 // slot; a double-click opens the inline rename. The release is
                 // heard by the shell's window-wide listener, which runs after this
@@ -114,7 +120,7 @@ impl Shell {
                 // cwd card.
                 tooltip(
                     chip,
-                    self.tab_hover_card(index, tab, now),
+                    self.tab_hover_card(index, tab, color, now),
                     tooltip::Position::Bottom,
                 )
                 .into()
@@ -144,11 +150,16 @@ impl Shell {
         &self,
         index: usize,
         tab: &Tab,
+        // The colour the outline shows (the focused pane's), not the record's:
+        // in a split the two can differ, and the name is the cue that must
+        // match what is drawn.
+        color: Option<ClaudeColor>,
         now: SystemTime,
     ) -> Element<'static, Message> {
         let first = tab.first_session();
         let facts = CardFacts {
             agent: self.core.peer_name(first),
+            color,
             version: self.core.live_claude_version(first).map(str::to_owned),
             running_for: self
                 .core
@@ -179,19 +190,31 @@ fn tab_chip_text(theme: &iced::Theme, active: bool) -> Color {
 /// A tab chip's look, now a styled container rather than a button (the
 /// drag needs `mouse_area` to see press *and* release, which a button would
 /// capture). `active` paints the primary fill; `dragging` fades the tab being
-/// carried to a ghost. All colours come from the theme palette — never
-/// hardcoded.
-fn tab_chip_style(theme: &iced::Theme, active: bool, dragging: bool) -> container::Style {
+/// carried to a ghost; `color`, the one `/color` set, outlines the chip — an
+/// outline rather than a fill, so it reads against the strip whichever fill the
+/// chip has. All colours but that one come from the theme palette.
+fn tab_chip_style(
+    theme: &iced::Theme,
+    active: bool,
+    dragging: bool,
+    color: Option<ClaudeColor>,
+) -> container::Style {
     let palette = theme.extended_palette();
+    let outline = color.and_then(|c| claude_color(c, palette.is_dark));
     let bg = active.then_some(palette.primary.base.color);
     let fg = tab_chip_text(theme, active);
     let fade = |c: Color| super::mix(c, palette.background.base.color, 0.55);
+    let (outline_color, outline_width) = match outline {
+        Some(c) => (if dragging { fade(c) } else { c }, COLOR_MARK_WIDTH),
+        None => (Color::TRANSPARENT, 0.0),
+    };
     container::Style {
         background: bg.map(|c| iced::Background::Color(if dragging { fade(c) } else { c })),
         text_color: Some(if dragging { fade(fg) } else { fg }),
         border: iced::Border {
+            color: outline_color,
+            width: outline_width,
             radius: 4.0.into(),
-            ..iced::Border::default()
         },
         ..container::Style::default()
     }
@@ -216,14 +239,15 @@ fn insertion_caret<'a>() -> Element<'a, Message> {
 
 /// The minimal hover card for a tab with no browsed record — a shell or a fresh
 /// session: the full, untruncated title, the live [`CardFacts`] and the
-/// working directory it runs in. Styled like [`session_card`] so the two hover surfaces read alike.
+/// working directory it runs in. Styled like [`session_card`] so the two
+/// hover surfaces read alike.
 fn tab_card(title: String, facts: &CardFacts, cwd: Option<String>) -> Element<'static, Message> {
     let mut card = column![text(title).size(12)].spacing(4);
     for line in detail_lines(facts, None) {
-        card = card.push(secondary_line(line));
+        card = card.push(card_secondary_line(line));
     }
     if let Some(cwd) = cwd {
-        card = card.push(secondary_line(cwd));
+        card = card.push(card_secondary_line(cwd));
     }
     card_frame(card)
 }
