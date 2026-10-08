@@ -112,7 +112,7 @@ impl Shell {
         {
             self.claude_command = None;
         }
-        self.forget_tab_menu_on(pane.session);
+        self.forget_lists_on(pane.session);
         match pane.tab {
             Some(tab) if tab == pane.active => self.resize_panes(),
             Some(tab) if !pane.lone => self.resize_tab(tab),
