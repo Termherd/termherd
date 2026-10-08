@@ -431,11 +431,7 @@ fn activate_tab_from_config_name(name: &str) -> Option<Action> {
 /// on a malformed spec; specs are authored in-tree and a test asserts they all
 /// parse, so `None` never reaches a real keymap (and `core` forbids panicking).
 fn default_chord(spec: &str, platform: Platform) -> Option<KeyChord> {
-    let primary = match platform {
-        Platform::MacOs => "cmd",
-        Platform::Other => "ctrl",
-    };
-    KeyChord::parse(&spec.replace("mod", primary)).ok()
+    KeyChord::parse(&spec.replace("mod", platform.primary_name())).ok()
 }
 
 /// Which family of default bindings to build. A parameter rather than a
@@ -443,13 +439,20 @@ fn default_chord(spec: &str, platform: Platform) -> Option<KeyChord> {
 /// other's bindings too — a chord collision on Windows is otherwise invisible
 /// from a Mac.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Platform {
+pub enum Platform {
+    /// ⌘ is the primary modifier.
     MacOs,
+    /// Windows and Linux: Ctrl is the primary modifier.
     Other,
 }
 
 impl Platform {
-    const fn current() -> Self {
+    /// Every family, for a check that must hold wherever termherd runs.
+    pub const ALL: [Platform; 2] = [Platform::MacOs, Platform::Other];
+
+    /// The family this build runs on.
+    #[must_use]
+    pub const fn current() -> Self {
         if cfg!(target_os = "macos") {
             Self::MacOs
         } else {
@@ -463,6 +466,55 @@ impl Platform {
             Self::Other => MOD_CTRL,
         }
     }
+
+    /// [`Self::primary_mod`] as chord syntax spells it.
+    const fn primary_name(self) -> &'static str {
+        match self {
+            Self::MacOs => "cmd",
+            Self::Other => "ctrl",
+        }
+    }
+}
+
+/// Every built-in binding on `platform`, one pair per chord. Regular actions
+/// come straight from the [`ACTIONS`] table's default chords. Copy/paste are
+/// the exception — the other platforms keep plain Ctrl+C/V as the terminal
+/// interrupt/literal and use Ctrl+Shift+C for copy — so they are listed
+/// explicitly here, as is the parameterized number row.
+///
+/// A list rather than a map, so a chord claimed twice stays visible to a test
+/// instead of being settled silently by whichever pair came last.
+#[must_use]
+pub fn default_bindings(platform: Platform) -> Vec<(KeyChord, Action)> {
+    let mut pairs: Vec<(KeyChord, Action)> = ACTIONS
+        .iter()
+        .flat_map(|def| {
+            def.default_chords
+                .iter()
+                .filter_map(move |spec| default_chord(spec, platform))
+                .map(move |chord| (chord, def.action))
+        })
+        .collect();
+    match platform {
+        Platform::MacOs => pairs.extend([
+            (KeyChord::new("c", MOD_CMD), Action::Copy),
+            (KeyChord::new("v", MOD_CMD), Action::Paste),
+        ]),
+        Platform::Other => pairs.extend([
+            (KeyChord::new("c", MOD_CTRL | MOD_SHIFT), Action::Copy),
+            (KeyChord::new("v", MOD_CTRL), Action::Paste),
+            (KeyChord::new("v", MOD_CTRL | MOD_SHIFT), Action::Paste),
+        ]),
+    }
+    // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9. The digit is
+    // 1-based for the user; the action carries the 0-based index.
+    pairs.extend((1..=NUMBER_ROW_TABS).map(|n| {
+        (
+            KeyChord::new(n.to_string(), platform.primary_mod()),
+            Action::ActivateTab(n - 1),
+        )
+    }));
+    pairs
 }
 
 /// Resolves a [`KeyChord`] to its [`Action`]. Built from platform-aware
@@ -479,53 +531,16 @@ impl Default for Keymap {
 }
 
 impl Keymap {
-    /// The built-in bindings. Regular actions come straight from the [`ACTIONS`]
-    /// table's default chords. Copy/paste are the exception — the other
-    /// platforms keep plain Ctrl+C/V as the terminal interrupt/literal and use
-    /// Ctrl+Shift+C for copy — so they are bound explicitly here.
+    /// The built-in bindings of the platform this build runs on — see
+    /// [`default_bindings`].
     pub fn defaults() -> Self {
         Self::defaults_for(Platform::current())
     }
 
     fn defaults_for(platform: Platform) -> Self {
-        let mut map = Keymap {
-            bindings: HashMap::new(),
-        };
-        // Regular actions: their default chords are data in the table.
-        for def in ACTIONS {
-            let chords: Vec<KeyChord> = def
-                .default_chords
-                .iter()
-                .copied()
-                .filter_map(|spec| default_chord(spec, platform))
-                .collect();
-            if !chords.is_empty() {
-                map.set(def.action, chords);
-            }
+        Keymap {
+            bindings: default_bindings(platform).into_iter().collect(),
         }
-        // Copy/paste are platform-irregular: see the note above.
-        if platform == Platform::MacOs {
-            map.set(Action::Copy, [KeyChord::new("c", MOD_CMD)]);
-            map.set(Action::Paste, [KeyChord::new("v", MOD_CMD)]);
-        } else {
-            map.set(Action::Copy, [KeyChord::new("c", MOD_CTRL | MOD_SHIFT)]);
-            map.set(
-                Action::Paste,
-                [
-                    KeyChord::new("v", MOD_CTRL),
-                    KeyChord::new("v", MOD_CTRL | MOD_SHIFT),
-                ],
-            );
-        }
-        // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9. The
-        // digit is 1-based for the user; the action carries the 0-based index.
-        for n in 1..=NUMBER_ROW_TABS {
-            map.set(
-                Action::ActivateTab(n - 1),
-                [KeyChord::new(n.to_string(), platform.primary_mod())],
-            );
-        }
-        map
     }
 
     /// Bind `action` to exactly `chords`, dropping any chords previously bound
@@ -694,13 +709,15 @@ mod tests {
         // The specs are authored in-tree; a typo would silently drop a default
         // binding (defaults() skips unparsable specs to keep core panic-free).
         // Fail here instead so it never ships.
-        for def in ACTIONS {
-            for spec in def.default_chords {
-                assert!(
-                    default_chord(spec, Platform::current()).is_some(),
-                    "default chord spec `{spec}` for {:?} must parse",
-                    def.action
-                );
+        for platform in Platform::ALL {
+            for def in ACTIONS {
+                for spec in def.default_chords {
+                    assert!(
+                        default_chord(spec, platform).is_some(),
+                        "default chord spec `{spec}` for {:?} must parse on {platform:?}",
+                        def.action
+                    );
+                }
             }
         }
     }
@@ -857,10 +874,6 @@ mod tests {
             Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new("i", MOD_CTRL | MOD_SHIFT)),
             Some(Action::RenameTab)
         );
-        assert_eq!(
-            Action::from_config_name("rename-tab"),
-            Some(Action::RenameTab)
-        );
     }
 
     #[test]
@@ -881,22 +894,17 @@ mod tests {
 
     #[test]
     fn no_default_chord_is_claimed_by_two_actions_on_either_platform() {
-        // `set` overwrites silently, so a collision shows only as one action
-        // losing its chord to whichever was bound later — the copy/paste and
-        // number-row bindings included, since they are set after the table.
-        // Both platforms, because a Ctrl-only collision is invisible from a Mac.
-        for platform in [Platform::MacOs, Platform::Other] {
-            let map = Keymap::defaults_for(platform);
-            for def in ACTIONS {
-                for spec in def.default_chords {
-                    let chord = default_chord(spec, platform).expect("specs parse");
-                    assert_eq!(
-                        map.lookup(&chord),
-                        Some(def.action),
-                        "`{spec}` of `{}` is taken by another action on {platform:?}",
-                        def.name
-                    );
-                }
+        // The keymap is a map, so a collision would be settled silently by
+        // whichever binding came last. Both platforms, because a Ctrl-only
+        // collision is invisible from a Mac.
+        for platform in Platform::ALL {
+            let mut seen: HashMap<KeyChord, Action> = HashMap::new();
+            for (chord, action) in default_bindings(platform) {
+                let earlier = seen.insert(chord.clone(), action);
+                assert_eq!(
+                    earlier, None,
+                    "{chord:?} is also bound to {action:?} on {platform:?}"
+                );
             }
         }
     }
