@@ -286,7 +286,10 @@ impl TermherdMcp {
         name = "rename_tab",
         description = "Give the tab at `tab` (0-based index, as `snapshot` reports \
                        tab order) a manual name. A blank `title` reverts to the \
-                       derived title. Returns the current `focused_handle`."
+                       derived title. A Claude tab's name is Claude's: it arms \
+                       `/rename <title>` for confirmation instead, as \
+                       `claude_command` does, and is refused when that Claude \
+                       is not idle. Returns the current `focused_handle`."
     )]
     async fn rename_tab(
         &self,

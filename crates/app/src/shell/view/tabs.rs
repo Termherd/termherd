@@ -61,7 +61,7 @@ impl Shell {
             let chip: Element<'_, Message> = if renaming_this {
                 let buffer = self.tab_rename.as_ref().map_or("", |(_, b)| b.as_str());
                 inner = inner.push(
-                    text_input("", buffer)
+                    text_input(tab.display_title(), buffer)
                         .id(tab_rename_id())
                         .on_input(Message::TabRenameInput)
                         .on_submit(Message::CommitTabRename)

@@ -163,13 +163,26 @@ impl Shell {
     }
 
     /// Rename the tab at `tab`. A blank title reverts to the derived name
-    /// (core's rule). Rejects an index past the open tabs.
+    /// (core's rule). A Claude tab is renamed by asking Claude, so the caller
+    /// gets the armed `/rename` line, or why it could not be armed. Rejects an
+    /// index past the open tabs.
     fn act_rename(&mut self, tab: usize, title: String) -> (ActionOutcome, Task<Message>) {
         if self.core.workspace.tabs.get(tab).is_none() {
             return (
                 ActionOutcome::rejected(format!("no tab at index {tab}")),
                 Task::none(),
             );
+        }
+        if let Some((session, current)) = self.claude_named_tab(tab) {
+            let outcome = match self.ask_claude_to_rename(session, &title, &current) {
+                Ok(Some(line)) => self.applied().with_detail(ActionDetail::ClaudeCommand {
+                    line,
+                    overlay: KeyboardOwner::ClaudeCommand.label(),
+                }),
+                Ok(None) => self.applied(),
+                Err(why) => ActionOutcome::rejected(why),
+            };
+            return (outcome, Task::none());
         }
         let effects = self.core.apply(Event::RenameTab { index: tab, title });
         (self.applied(), self.perform(effects))

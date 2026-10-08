@@ -429,7 +429,7 @@ impl Shell {
         // clickable title that resumes the session.
         let middle: Element<'_, Message> = if renaming_this {
             let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
-            text_input(strings::RENAME_PLACEHOLDER, buffer)
+            text_input(&title, buffer)
                 .id(rename_id())
                 .on_input(Message::RenameInput)
                 .on_submit(Message::CommitRename)
