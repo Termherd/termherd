@@ -4416,7 +4416,7 @@ mod key_routing {
         let (mut shell, pty) = empty_shell();
         let _ = shell.launch(
             "/tmp/claude".to_string(),
-            Launch::Claude(termherd_core::ClaudeLaunch::Fresh(None)),
+            Launch::Claude(ClaudeLaunch::Fresh(None)),
         );
         let session = shell.core.workspace.focused_session().expect("focused");
         let _ = shell.update(Message::PtyStatus {
