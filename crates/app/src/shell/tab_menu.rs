@@ -81,6 +81,38 @@ pub(super) fn entries(agent_named: bool) -> impl Iterator<Item = &'static Entry>
         .filter(move |entry| agent_named || entry.offered == Offered::OnEveryTab)
 }
 
+/// What a key does to a list drawn over the window: the tab menu and the
+/// lists it leads to answer the same four keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ListKey {
+    Up,
+    Down,
+    Run,
+    Leave,
+    /// Swallowed, so nothing reaches the keymap or the terminal beneath.
+    Other,
+}
+
+impl ListKey {
+    pub(super) fn of(event: &keyboard::Event) -> Self {
+        if is_escape(event) {
+            return Self::Leave;
+        }
+        match event {
+            keyboard::Event::KeyPressed {
+                key: Key::Named(named),
+                ..
+            } => match named {
+                Named::ArrowUp => Self::Up,
+                Named::ArrowDown => Self::Down,
+                Named::Enter => Self::Run,
+                _ => Self::Other,
+            },
+            _ => Self::Other,
+        }
+    }
+}
+
 /// The selection one entry down (or up) a list of `len`, wrapping at either
 /// end. The list is never empty: every tab is offered the entries that need
 /// no agent name.
@@ -178,26 +210,20 @@ impl Shell {
         &mut self,
         event: &keyboard::Event,
     ) -> (Option<KeyVerdict>, Task<Message>) {
-        if is_escape(event) {
+        let key = ListKey::of(event);
+        if key == ListKey::Leave {
             self.tab_menu = None;
             return (None, Task::none());
         }
-        let (
-            keyboard::Event::KeyPressed {
-                key: Key::Named(named),
-                ..
-            },
-            Some(menu),
-        ) = (event, self.live_tab_menu())
-        else {
+        let Some(menu) = self.live_tab_menu() else {
             return (None, Task::none());
         };
         let len = menu.entries().count();
-        match named {
-            Named::ArrowUp => self.select_tab_menu_entry(step(menu.selected, len, false)),
-            Named::ArrowDown => self.select_tab_menu_entry(step(menu.selected, len, true)),
-            Named::Enter => return self.run_tab_menu_entry(menu.selected),
-            _ => {}
+        match key {
+            ListKey::Up => self.select_tab_menu_entry(step(menu.selected, len, false)),
+            ListKey::Down => self.select_tab_menu_entry(step(menu.selected, len, true)),
+            ListKey::Run => return self.run_tab_menu_entry(menu.selected),
+            ListKey::Leave | ListKey::Other => {}
         }
         (None, Task::none())
     }
