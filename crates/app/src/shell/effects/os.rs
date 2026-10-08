@@ -6,6 +6,8 @@
 
 use termherd_core::ports::PtyError;
 
+use super::super::notify_click::ClickSlot;
+
 /// macOS bundle identifier (matches `Cargo.toml`'s packager `identifier`).
 /// Used to attribute desktop notifications to TermHerd; see [`notify`].
 #[cfg(target_os = "macos")]
@@ -106,19 +108,31 @@ const OPEN_ACTION_LABEL: &str = "Show";
 /// a notification backend that's unavailable must not take a session down.
 /// `title`/`body` come pre-derived from `core` (which session, what message).
 pub(super) fn notify(title: &str, body: &str) -> Result<(), PtyError> {
-    post(title, body, None::<fn()>)
+    spawn(title, body, |title, body| {
+        notify_rust::Notification::new()
+            .summary(&title)
+            .body(&body)
+            .show()
+            .map(drop)
+    })
 }
 
-/// [`notify`], then wait on the same thread for the user's answer and run
-/// `on_click` if they clicked the notification. A dismissal or an expiry runs
-/// nothing; `on_click` is dropped with the thread either way, which is what
-/// lets its owner count how many waits are still parked.
-pub(super) fn notify_clickable(
-    title: &str,
-    body: &str,
-    on_click: impl FnOnce() + Send + 'static,
-) -> Result<(), PtyError> {
-    post(title, body, Some(on_click))
+/// [`notify`], then wait on the same thread for the user's answer and hand a
+/// click to `slot`. A dismissal or an expiry clicks nothing; the slot drops
+/// with the thread either way.
+pub(super) fn notify_clickable(title: &str, body: &str, slot: ClickSlot) -> Result<(), PtyError> {
+    spawn(title, body, move |title, body| {
+        show_and_wait(&title, &body, slot)
+    })
+}
+
+/// Replace the notification the OS knows as `id` — one whose waiter is still
+/// parked, and carries this one's click too. Only XDG ever hands out such an
+/// id (see [`ClickSlot::shown`]).
+pub(super) fn notify_replacing(title: &str, body: &str, id: u32) -> Result<(), PtyError> {
+    spawn(title, body, move |title, body| {
+        clickable(&title, &body).id(id).show().map(drop)
+    })
 }
 
 /// **Why a thread, not a direct call:** on macOS the backend (`NSUserNotification`
@@ -129,10 +143,10 @@ pub(super) fn notify_clickable(
 /// both crash-safe and non-blocking for the UI — and the same off-main wait is
 /// what lets a clickable notification block until it is answered, with winit's
 /// own run loop delivering the click.
-fn post(
+fn spawn(
     title: &str,
     body: &str,
-    on_click: Option<impl FnOnce() + Send + 'static>,
+    job: impl FnOnce(String, String) -> notify_rust::error::Result<()> + Send + 'static,
 ) -> Result<(), PtyError> {
     // Attribute notifications to our bundle once, before the first send, so the
     // macOS backend doesn't AppleScript-probe for a placeholder app and pop a
@@ -150,32 +164,7 @@ fn post(
     std::thread::Builder::new()
         .name("os-notify".to_owned())
         .spawn(move || {
-            let mut notification = notify_rust::Notification::new();
-            notification.summary(&title).body(&body);
-            // Only XDG needs the action declared for a body click to be
-            // reported at all. macOS and Windows report the click without it,
-            // and both would draw any declared action as a visible button.
-            #[cfg(all(unix, not(target_os = "macos")))]
-            if on_click.is_some() {
-                notification.action("default", OPEN_ACTION_LABEL);
-            }
-            let handle = match notification.show() {
-                Ok(handle) => handle,
-                Err(error) => {
-                    tracing::warn!(%error, "desktop notification failed");
-                    return;
-                }
-            };
-            let Some(on_click) = on_click else {
-                return;
-            };
-            let waited =
-                handle.wait_for_response(|response: &notify_rust::NotificationResponse| {
-                    if response.is_default_action() {
-                        on_click();
-                    }
-                });
-            if let Err(error) = waited {
+            if let Err(error) = job(title, body) {
                 tracing::warn!(%error, "desktop notification failed");
             }
         })
@@ -183,9 +172,98 @@ fn post(
         .map_err(|e| PtyError::Io(e.to_string()))
 }
 
+/// A notification whose body click is reported. Only XDG needs the action
+/// declared for that; macOS and Windows report the click without it, and both
+/// would draw a declared action as a visible button.
+fn clickable(title: &str, body: &str) -> notify_rust::Notification {
+    let mut notification = notify_rust::Notification::new();
+    notification.summary(title).body(body);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    notification.action("default", OPEN_ACTION_LABEL);
+    notification
+}
+
+/// Whether the user's answer is a click on the notification itself — the one
+/// answer that brings its session back. A button, a reply or a close is not.
+fn is_click(response: &notify_rust::NotificationResponse) -> bool {
+    response.is_default_action()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_and_wait(title: &str, body: &str, slot: ClickSlot) -> notify_rust::error::Result<()> {
+    let handle = clickable(title, body).show()?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    slot.shown(handle.id());
+    handle.wait_for_response(|response: &notify_rust::NotificationResponse| {
+        if is_click(response) {
+            slot.clicked();
+        }
+    })
+}
+
+/// macOS goes to `mac-notification-sys` directly: notify-rust 4.18's
+/// `wait_for_response` sends with neither a button nor `wait_for_click`, which
+/// the backend reads as nothing to wait for, so it answered "expired" at once
+/// and a click never arrived.
+#[cfg(target_os = "macos")]
+fn show_and_wait(title: &str, body: &str, slot: ClickSlot) -> notify_rust::error::Result<()> {
+    let mut notification = mac_notification_sys::Notification::new();
+    notification.title(title).message(body).wait_for_click(true);
+    if is_click(&from_mac(notification.send()?)) {
+        slot.clicked();
+    }
+    Ok(())
+}
+
+/// The macOS backend's answer in notify-rust's terms, mapped as notify-rust
+/// maps it itself, so [`is_click`] is the one decision on every OS.
+#[cfg(target_os = "macos")]
+fn from_mac(
+    response: mac_notification_sys::NotificationResponse,
+) -> notify_rust::NotificationResponse {
+    use mac_notification_sys::NotificationResponse as Mac;
+    use notify_rust::{CloseReason, NotificationResponse as Answer};
+    match response {
+        Mac::Click => Answer::Default,
+        Mac::ActionButton(label) => Answer::Action(label),
+        Mac::Reply(text) => Answer::Reply(text),
+        Mac::CloseButton(_) => Answer::Closed(CloseReason::Dismissed),
+        Mac::None => Answer::Closed(CloseReason::Expired),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify_rust::{CloseReason, NotificationResponse};
+
+    #[test]
+    fn only_a_click_on_the_notification_counts_as_a_click() {
+        assert!(is_click(&NotificationResponse::Default));
+        for other in [
+            NotificationResponse::Action("show".to_owned()),
+            NotificationResponse::Reply("ok".to_owned()),
+            NotificationResponse::Closed(CloseReason::Dismissed),
+            NotificationResponse::Closed(CloseReason::Expired),
+        ] {
+            assert!(!is_click(&other), "{other:?} is not a click");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_answer_reaches_the_shared_click_decision() {
+        use mac_notification_sys::NotificationResponse as Mac;
+        assert!(is_click(&from_mac(Mac::Click)));
+        for other in [
+            Mac::None,
+            Mac::CloseButton("Close".to_owned()),
+            Mac::ActionButton("Show".to_owned()),
+            Mac::Reply("ok".to_owned()),
+        ] {
+            assert!(!is_click(&from_mac(other)));
+        }
+    }
 
     /// A program every host has, told to copy `from` to `to` — so the test can
     /// prove the *arguments* arrived, not merely that something started. The

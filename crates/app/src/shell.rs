@@ -638,6 +638,7 @@ impl Message {
                 | Self::LaunchSession { .. }
                 | Self::FocusSearch
                 | Self::FocusPane(_)
+                | Self::NotificationClicked(_)
                 | Self::TermScroll { .. }
                 | Self::Paste(_)
                 | Self::RequestPaste { .. }
@@ -2588,15 +2589,14 @@ mod key_routing {
     fn a_clicked_notification_reveals_its_background_tab() {
         let (mut shell, _pty, first) = shell_with_two_tabs();
         shell.focus = Focus::Search;
-        let session = SessionId(std::num::NonZeroU64::new(first).expect("non-zero"));
+        let session = session_id(first);
 
         // The whole seam the OS thread uses: a slot reserved by the effect
         // executor, clicked, drained by the subscription, then dispatched.
-        shell
-            .notification_clicks
-            .reserve(session)
-            .expect("a free slot")
-            .clicked();
+        match shell.notification_clicks.posting(session) {
+            notify_click::Posting::Wait(slot) => slot.clicked(),
+            _ => panic!("a fresh shell has a free waiter"),
+        }
         let mut stream = Box::pin(notify_click::click_stream(&shell.notification_clicked));
         let message =
             iced::futures::executor::block_on(iced::futures::StreamExt::next(&mut stream))
@@ -2620,13 +2620,40 @@ mod key_routing {
             focused(&shell),
         );
 
-        let session = SessionId(std::num::NonZeroU64::new(first).expect("non-zero"));
+        let session = session_id(first);
         let _ = shell.update(Message::NotificationClicked(session));
 
         assert_eq!(shell.core.workspace.tabs.len(), tabs);
         assert_eq!(shell.core.workspace.active, active);
         assert_eq!(focused(&shell), before);
         assert_eq!(shell.focus, Focus::Search, "keyboard focus is untouched");
+    }
+
+    #[test]
+    fn a_notification_click_reveals_past_a_rename_but_not_past_a_prompt() {
+        for owner in KeyboardOwner::ALL {
+            let (mut shell, _pty, first) = shell_with_two_tabs();
+            arm_overlay(&mut shell, owner);
+            assert_eq!(shell.keyboard_owner(), Some(owner), "{owner:?} armed");
+
+            let session = session_id(first);
+            let _ = shell.update(Message::NotificationClicked(session));
+
+            // A rename is dismissed by any click elsewhere, this one included,
+            // so nothing is left editing a tab the click may switch away from.
+            // A prompt keeps the screen it is about.
+            let renames = matches!(
+                owner,
+                KeyboardOwner::TabRename | KeyboardOwner::SessionRename
+            );
+            if renames {
+                assert_eq!(shell.keyboard_owner(), None, "{owner:?} was dismissed");
+                assert_eq!(shell.core.workspace.active, 0, "{owner:?}: revealed");
+            } else {
+                assert_eq!(shell.keyboard_owner(), Some(owner), "{owner:?} stays open");
+                assert_eq!(shell.core.workspace.active, 1, "{owner:?}: not revealed");
+            }
+        }
     }
 
     #[test]
