@@ -26,7 +26,9 @@ pub use app::{
     TargetProbe, TermHover, Zoom, claude_identity, grid_line, pointer_select,
 };
 pub use browser::{ProjectGroup, SessionRecord};
-pub use claude_command::{ClaudeColor, ClaudeCommand, CommandArgument, CommandError};
+pub use claude_command::{
+    ClaudeColor, ClaudeCommand, CommandArgument, CommandError, PromptInput, read_prompt,
+};
 pub use keymap::{Action, ActionBinding, ChordError, KeyChord, Keymap, action_catalog};
 pub use metadata::{Overlay, RepoMeta, SessionMeta};
 pub use open::{OpenCommand, OpenCommandError, OpenTarget};

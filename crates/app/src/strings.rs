@@ -83,6 +83,12 @@ pub const ARCHIVE: &str = "Archive";
 pub const QUIT: &str = "Quit";
 pub const SEND: &str = "Send";
 
+/// The same prompt after a confirmation typed nothing: the line, and why.
+#[must_use]
+pub fn claude_command_refused(line: &str, reason: &str) -> String {
+    format!("“{line}” was not typed: {reason}.")
+}
+
 /// Confirmation before termherd types a slash command into a Claude session.
 /// Quotes the exact line, so what the user approves is what is typed.
 #[must_use]

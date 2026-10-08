@@ -74,7 +74,7 @@ mod tests {
     use super::*;
     use crate::app::testsupport::*;
     use crate::browser::SessionRecord;
-    use crate::claude_command::ClaudeCommand;
+    use crate::claude_command::{ClaudeCommand, PromptInput};
 
     /// Open a Claude tab launched as `launch`, labelled `repo`.
     fn open_claude(app: &mut App, launch: ClaudeLaunch) -> SessionId {
@@ -234,6 +234,7 @@ mod tests {
         let effects = app.apply(Event::SendClaudeCommand {
             session,
             command: ClaudeCommand::rename("from claude").expect("a name"),
+            prompt: PromptInput::Empty,
         });
         assert!(
             effects
@@ -268,6 +269,7 @@ mod tests {
         let effects = app.apply(Event::SendClaudeCommand {
             session,
             command: ClaudeCommand::rename("from claude").expect("a name"),
+            prompt: PromptInput::Empty,
         });
         assert!(effects.is_empty());
         assert_eq!(title(&app), "local");
@@ -288,6 +290,7 @@ mod tests {
         app.apply(Event::SendClaudeCommand {
             session,
             command: ClaudeCommand::Desktop,
+            prompt: PromptInput::Empty,
         });
         assert_eq!(title(&app), "local");
     }

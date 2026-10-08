@@ -55,8 +55,9 @@ it on the clipboard. In a split tab, the card names the first pane's agent.
 **TermHerd asks Claude rather than overriding it.** Where a change belongs to
 Claude — today, handing a session to the desktop app with `send-to-desktop` —
 TermHerd types Claude's own slash command for you, behind a prompt that shows
-the exact line first. <kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops
-it. It is offered only while that Claude is idle at its prompt.
+the exact line first. <kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops it.
+It is offered only while that Claude is idle with nothing typed in its prompt; a
+draft that appears meanwhile keeps the prompt open and says so.
 
 **A Claude tab goes by the name Claude gives its session.** The title is the
 first of these that exists:

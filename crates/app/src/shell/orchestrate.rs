@@ -52,10 +52,13 @@ impl Shell {
             return unknown_handle(session);
         };
         match self.arm_claude_command(id, command) {
-            Ok(line) => self.applied().with_detail(ActionDetail::ClaudeCommand {
-                line,
-                overlay: KeyboardOwner::ClaudeCommand.label(),
-            }),
+            Ok(line) => {
+                self.hold_enter_after_remote_arm();
+                self.applied().with_detail(ActionDetail::ClaudeCommand {
+                    line,
+                    overlay: KeyboardOwner::ClaudeCommand.label(),
+                })
+            }
             Err(refusal) => ActionOutcome::rejected(refusal.to_string()),
         }
     }
@@ -377,6 +380,10 @@ impl Shell {
 fn step_of(verdict: KeyVerdict) -> PressStep {
     match verdict {
         KeyVerdict::Overlay(name) => PressStep::Overlay(name.to_owned()),
+        KeyVerdict::Refused(name, reason) => PressStep::Refused {
+            overlay: name.to_owned(),
+            reason,
+        },
         KeyVerdict::Ran(name) => PressStep::Ran(name),
         KeyVerdict::Inert(name, inertia) => PressStep::Inert {
             action: name,

@@ -136,25 +136,50 @@ closed:
 `line` and the prompt's name, `overlay: "claude-command-confirm"`. The prompt
 then holds the keyboard: `press_keys(["enter"])` types the line,
 `press_keys(["escape"])` drops it, and a human at the window can answer it
-too. The caller goes through the prompt rather than around it so that every
-command typed into Claude passes one gate, whoever asked, and so that a human
-watching the window always sees the line before it lands.
+too. The prompt is there for the **human at the window**: it shows them the
+line before it lands. It does not constrain the caller, which can confirm its
+own prompt with `enter` — and could type into the terminal with
+`run_in_session` anyway. What the tool adds over raw typing is the checks
+below, and one write path shared with the keyboard.
 
-It is **refused**, with nothing armed, when the session is not a Claude launch
-(a shell would run the line as a program), when Claude is not idle at its
-prompt — busy, starting, or waiting on an answer such as a permission prompt —
-or when another prompt is already open. Confirming re-checks: a Claude that
-started work while the prompt was up gets nothing typed.
+It is **refused**, with nothing armed, when:
+
+- the session is not a Claude launch — a shell would run the line as a
+  program;
+- Claude is not idle — busy, starting, or waiting on an answer such as a
+  permission prompt;
+- Claude's prompt holds a **draft** — the error quotes it; the command would
+  be typed into it, and a draft of several lines would be submitted with it as
+  a prompt to the model;
+- Claude's input prompt is **not on screen** — a menu, picker or dialog has the
+  keyboard (Enter would pick an entry), or the view is scrolled away from it;
+- another prompt is already open.
+
+Confirming checks all of it again against the screen as it is then. A refusal
+at that point **keeps the prompt open**, showing why, and `press_keys` reports
+the step as `refused` with the reason rather than `overlay`; `escape` dismisses
+it, `enter` tries again.
+
+The prompt is read off the screen: the row starting with `❯` under a
+horizontal rule, down to the next rule. Its placeholder hint (`Try "…"`) reads
+as empty, so a draft spelling exactly that shape is the one case read wrong.
+
+A prompt armed by this tool **ignores a physical Enter for 600 ms**: someone
+typing in another pane when it appears would otherwise confirm it with the
+Enter that ends their own line. `escape`, and `enter` sent through
+`press_keys`, are never held back.
 
 A name is made safe before it is shown: control characters, line breaks and
 tabs become spaces, invisible formatting characters are dropped, a trailing
 backslash goes (in Claude's prompt, `\` then Enter starts a new line instead of
-submitting), and the result is cut to 80 characters. A name with nothing left
-is refused.
+submitting), and the result is cut to 80 characters on a character boundary
+— an accent or a flag is never split. Joiners and variation selectors are kept,
+since emoji sequences and Persian or Indic names are spelled with them. A name
+with nothing left is refused.
 
-Confirming sends <kbd>Ctrl</kbd>+<kbd>U</kbd> first, which clears a one-line
-draft left in Claude's prompt, then the line, then Enter on its own. A draft of
-several lines is cleared only on the line the cursor is on.
+Confirming sends <kbd>Ctrl</kbd>+<kbd>U</kbd> first — a guard against a key
+landing between the screen read and the write — then the line, then Enter on
+its own.
 
 #### The pointer, inside a terminal
 
