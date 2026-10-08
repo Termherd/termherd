@@ -23,8 +23,10 @@ file `~/.claude/sessions/<pid>.json`, the reader
 it proves the Claude in front, since Claude rewrites it on a re-key. One
 accessor, `LiveSession::claude_session_id` (with `App::claude_session_id` and
 `App::tab_claude_session_id`), is what every reader of a pane's transcript
-goes through. Reopening a closed fresh tab mints a new id. The CLI floor rose
-to 2.0.73, the oldest release whose changelog shows `--session-id` in use.
+goes through; the last id a file proved outlives the Claude that wrote it.
+Reopening a closed Claude tab resumes its last conversation when the scan has
+it, else starts a new one under a new id. The CLI floor rose to 2.0.73, an
+estimate: the oldest release whose changelog shows `--session-id` in use.
 
 Not verified: whether `/clear` or a plan-accept re-keys a session started with
 `--session-id`. If it does, the session file is what follows it.
