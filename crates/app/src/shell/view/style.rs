@@ -49,6 +49,12 @@ fn status_color(status: SessionStatus, dark_surface: bool) -> Color {
         SessionStatus::Attention => Color::from_rgb(0.95, 0.35, 0.35),
         SessionStatus::Exited => Color::from_rgb(0.5, 0.5, 0.5),
     };
+    on_surface(hue, dark_surface)
+}
+
+/// A hue tuned against a dark surface, darkened on a light one so it keeps
+/// its contrast without changing which hue means what.
+fn on_surface(hue: Color, dark_surface: bool) -> Color {
     if dark_surface {
         hue
     } else {
@@ -75,11 +81,7 @@ pub(super) fn claude_color(color: ClaudeColor, dark_surface: bool) -> Option<Col
         ClaudeColor::Cyan => Color::from_rgb(0.24, 0.80, 0.86),
         ClaudeColor::Default => return None,
     };
-    Some(if dark_surface {
-        hue
-    } else {
-        mix(hue, Color::BLACK, LIGHT_SURFACE_DARKEN)
-    })
+    Some(on_surface(hue, dark_surface))
 }
 
 /// The width of a session colour's mark: a chip's outline, a sidebar bar.
@@ -89,7 +91,9 @@ pub(super) const COLOR_MARK_WIDTH: f32 = 2.0;
 /// `None` when the session has none. A bar rather than a tinted title, so the
 /// title keeps the contrast the theme gave it.
 pub(super) fn color_bar<'a, M: 'a>(color: ClaudeColor) -> Option<container::Container<'a, M>> {
-    claude_color(color, true)?;
+    if color == ClaudeColor::Default {
+        return None;
+    }
     Some(
         container(text(""))
             .width(COLOR_MARK_WIDTH + 1.0)
@@ -226,16 +230,13 @@ mod tests {
         }
     }
 
-    const PALETTE: [ClaudeColor; 8] = [
-        ClaudeColor::Red,
-        ClaudeColor::Blue,
-        ClaudeColor::Green,
-        ClaudeColor::Yellow,
-        ClaudeColor::Purple,
-        ClaudeColor::Orange,
-        ClaudeColor::Pink,
-        ClaudeColor::Cyan,
-    ];
+    /// The colours that paint: every `/color` name but `default`.
+    fn painted_colors() -> Vec<ClaudeColor> {
+        ClaudeColor::ALL
+            .into_iter()
+            .filter(|c| *c != ClaudeColor::Default)
+            .collect()
+    }
 
     #[test]
     fn default_paints_nothing_and_every_other_name_paints() {
@@ -245,7 +246,7 @@ mod tests {
             .into_iter()
             .filter(|c| claude_color(*c, true).is_some())
             .collect::<Vec<_>>();
-        assert_eq!(painted, PALETTE.to_vec());
+        assert_eq!(painted, painted_colors());
     }
 
     #[test]
@@ -256,7 +257,7 @@ mod tests {
         for theme in crate::settings::ThemeChoice::ALL.map(crate::settings::ThemeChoice::to_iced) {
             let palette = theme.extended_palette();
             for surface in [palette.background.base.color, palette.background.weak.color] {
-                for color in PALETTE {
+                for color in painted_colors() {
                     let paint = claude_color(color, palette.is_dark).expect("painted");
                     let ratio = contrast(paint, surface);
                     assert!(ratio >= FLOOR, "{color:?} on {theme}: {ratio:.2}");
@@ -268,8 +269,9 @@ mod tests {
     #[test]
     fn no_two_session_colours_paint_alike() {
         for dark in [true, false] {
-            for (i, a) in PALETTE.iter().enumerate() {
-                for b in &PALETTE[i + 1..] {
+            let palette = painted_colors();
+            for (i, a) in palette.iter().enumerate() {
+                for b in &palette[i + 1..] {
                     let (pa, pb) = (
                         claude_color(*a, dark).expect("painted"),
                         claude_color(*b, dark).expect("painted"),

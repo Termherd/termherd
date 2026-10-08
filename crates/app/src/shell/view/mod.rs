@@ -265,18 +265,17 @@ impl Shell {
 /// The hover-card line naming a tab's Claude, dimmed like the other
 /// secondary lines.
 pub(super) fn agent_line(name: &str) -> Element<'static, Message> {
-    text(strings::agent_name(name))
-        .size(10)
-        .style(card_secondary_text)
-        .into()
+    card_secondary_line(strings::agent_name(name))
+}
+
+/// A dimmed secondary line on a hover card.
+pub(super) fn card_secondary_line(line: String) -> Element<'static, Message> {
+    text(line).size(10).style(card_secondary_text).into()
 }
 
 /// The hover-card line naming a session's colour, dimmed like the agent line.
 pub(super) fn color_line(color: ClaudeColor) -> Element<'static, Message> {
-    text(strings::session_color(color.name()))
-        .size(10)
-        .style(card_secondary_text)
-        .into()
+    card_secondary_line(strings::session_color(color.name()))
 }
 
 /// The hover card for a session row: full title, a muted line with relative

@@ -1103,13 +1103,7 @@ impl Shell {
                 // Anchor on the tab's first session so the edit survives a
                 // reorder; every tab hosts at least one, so this is `Some` for a
                 // valid index.
-                if let Some(anchor) = self
-                    .core
-                    .workspace
-                    .tabs
-                    .get(index)
-                    .and_then(|tab| tab.sessions().first().copied())
-                {
+                if let Some(anchor) = self.core.tab_first_session(index) {
                     self.tab_rename = Some((anchor, current));
                     return operate(focusable::focus(tab_rename_id()));
                 }

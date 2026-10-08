@@ -2,8 +2,8 @@
 //! status / record read models.
 
 use crate::browser::{SessionRecord, project_label};
-use crate::claude_command::ClaudeColor;
 use crate::snapshot::SessionKind;
+use termherd_claude::color::ClaudeColor;
 
 use super::*;
 
@@ -48,7 +48,7 @@ impl App {
         };
         let title = tab.title.clone();
         let custom_title = tab.custom_title.clone();
-        let Some(first) = tab.sessions().first().copied() else {
+        let Some(first) = self.tab_first_session(index) else {
             return;
         };
         let Some(session) = self.sessions.get(&first) else {
@@ -163,8 +163,15 @@ impl App {
     /// pane's launch so a split mixing kinds shows the one being worked in.
     #[must_use]
     pub fn tab_kind(&self, index: usize) -> Option<SessionKind> {
-        let focused = self.workspace.tabs.get(index)?.focused_session()?;
+        let focused = self.tab_focused_session(index)?;
         self.sessions.get(&focused).map(|s| s.launch.kind())
+    }
+
+    /// The focused pane of the tab at `index` — the one whose kind and colour
+    /// the tab shows.
+    #[must_use]
+    pub fn tab_focused_session(&self, index: usize) -> Option<SessionId> {
+        self.workspace.tabs.get(index)?.focused_session()
     }
 
     /// The colour `/color` gave the conversation in the live pane `session`, as
@@ -180,8 +187,7 @@ impl App {
     /// [`Self::tab_kind`] follows.
     #[must_use]
     pub fn tab_color(&self, index: usize) -> Option<ClaudeColor> {
-        let focused = self.workspace.tabs.get(index)?.focused_session()?;
-        self.session_color(focused)
+        self.session_color(self.tab_focused_session(index)?)
     }
 
     /// Count of sessions whose PTY is still running — the ones a quit would

@@ -13,8 +13,7 @@ use termherd_core::workspace::Tab;
 use termherd_core::ClaudeColor;
 
 use super::{
-    COLOR_MARK_WIDTH, card_secondary_text, card_style, claude_color, clip, kind_icon, session_card,
-    status_dot,
+    COLOR_MARK_WIDTH, card_style, claude_color, clip, kind_icon, session_card, status_dot,
 };
 use crate::shell::{Message, Shell, tab_rename_id};
 
@@ -116,7 +115,7 @@ impl Shell {
                 // cwd card.
                 tooltip(
                     chip,
-                    self.tab_hover_card(index, tab, now),
+                    self.tab_hover_card(index, tab, color, now),
                     tooltip::Position::Bottom,
                 )
                 .into()
@@ -145,14 +144,14 @@ impl Shell {
         &self,
         index: usize,
         tab: &Tab,
+        // The colour the outline shows (the focused pane's), not the record's:
+        // in a split the two can differ, and the name is the cue that must
+        // match what is drawn.
+        color: Option<ClaudeColor>,
         now: SystemTime,
     ) -> Element<'static, Message> {
         let first = self.core.tab_first_session(index);
         let agent = first.and_then(|id| self.core.peer_name(id));
-        // The colour the outline shows (the focused pane's), not the record's:
-        // in a split the two can differ, and the name is the cue that must
-        // match what is drawn.
-        let color = self.core.tab_color(index);
         match self.core.tab_record(index) {
             Some(record) => {
                 session_card(self.core.session_title(record), agent, color, record, now)
@@ -195,16 +194,16 @@ fn tab_chip_style(
     let bg = active.then_some(palette.primary.base.color);
     let fg = tab_chip_text(theme, active);
     let fade = |c: Color| super::mix(c, palette.background.base.color, 0.55);
+    let (outline_color, outline_width) = match outline {
+        Some(c) => (if dragging { fade(c) } else { c }, COLOR_MARK_WIDTH),
+        None => (Color::TRANSPARENT, 0.0),
+    };
     container::Style {
         background: bg.map(|c| iced::Background::Color(if dragging { fade(c) } else { c })),
         text_color: Some(if dragging { fade(fg) } else { fg }),
         border: iced::Border {
-            color: outline.map_or(Color::TRANSPARENT, |c| if dragging { fade(c) } else { c }),
-            width: if outline.is_some() {
-                COLOR_MARK_WIDTH
-            } else {
-                0.0
-            },
+            color: outline_color,
+            width: outline_width,
             radius: 4.0.into(),
         },
         ..container::Style::default()
@@ -245,7 +244,7 @@ fn tab_card(
         card = card.push(super::color_line(color));
     }
     if let Some(cwd) = cwd {
-        card = card.push(text(cwd).size(10).style(card_secondary_text));
+        card = card.push(super::card_secondary_line(cwd));
     }
     container(card)
         .padding(8)
