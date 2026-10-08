@@ -68,14 +68,14 @@ impl App {
     /// Reopen the most recently closed tab, relaunching it in the mode and
     /// directory it was closed in. Re-closing then reopening walks the stack in
     /// LIFO order. No effects when the stack is empty.
-    pub(super) fn reopen_closed_tab(&mut self) -> Vec<Effect> {
+    pub(super) fn reopen_closed_tab(&mut self, fresh_claude_id: String) -> Vec<Effect> {
         let Some(closed) = self.closed_tabs.pop() else {
             return Vec::new();
         };
         let custom_title = closed.custom_title;
         let effects = self.launch(LaunchSpec {
             cwd: closed.cwd,
-            launch: closed.launch,
+            launch: closed.launch.with_fresh_id(fresh_claude_id),
             title: closed.title,
         });
         // Restore the manual name on top of the derived title. `launch` opens
@@ -108,16 +108,23 @@ impl App {
             .unwrap_or_else(|| project_label(cwd).to_owned())
     }
 
-    /// The browsed record for the tab at `index` — the sidebar entry its first
-    /// pane resumes, so a tab hover can show the same session card. `None`
-    /// for an out-of-range index, or a tab whose first pane is a shell or a
-    /// fresh, not-yet-scanned session (no resume id / no record).
+    /// The browsed record for the tab at `index` — the sidebar entry for its
+    /// Claude conversation, so a tab hover can show the same session card.
+    /// `None` for an out-of-range index, a tab with no Claude session id, or
+    /// one the last scan has not found yet.
     #[must_use]
     pub fn tab_record(&self, index: usize) -> Option<&SessionRecord> {
+        self.record_for(self.tab_claude_session_id(index)?)
+    }
+
+    /// The Claude session id of the tab at `index`: its first pane's, as
+    /// [`LiveSession::claude_session_id`] decides it. A tab is named after its
+    /// first pane, so that pane's conversation is the one the tab stands for.
+    #[must_use]
+    pub fn tab_claude_session_id(&self, index: usize) -> Option<&str> {
         let tab = self.workspace.tabs.get(index)?;
         let first = tab.sessions().first().copied()?;
-        let claude_id = self.sessions.get(&first)?.launch.resume_id()?;
-        self.record_for(claude_id)
+        self.claude_session_id(first)
     }
 
     /// The activity status to badge on the tab at `index` (FR8): the most
@@ -208,16 +215,16 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/repo".into()),
-            launch: Launch::Claude {
-                resume: Some("abc".into()),
-            },
+            launch: Launch::Claude(ClaudeLaunch::Resume("abc".into())),
             title: "repo".into(),
         }));
         let original = app.workspace.focused_session().expect("focused");
         app.apply(Event::CloseTab(0));
         assert!(app.workspace.tabs.is_empty());
 
-        let effects = app.apply(Event::ReopenClosedTab);
+        let effects = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
         let spec = match effects.as_slice() {
             [Effect::Spawn(spec)] => spec,
             other => panic!("expected one Spawn, got {other:?}"),
@@ -226,9 +233,7 @@ mod tests {
         assert_eq!(spec.cwd.as_deref(), Some("/repo"));
         assert_eq!(
             spec.launch,
-            Launch::Claude {
-                resume: Some("abc".into())
-            }
+            Launch::Claude(ClaudeLaunch::Resume("abc".into()))
         );
         assert_eq!(app.workspace.tabs.len(), 1);
         assert_eq!(app.workspace.tabs[0].title, "repo");
@@ -244,7 +249,9 @@ mod tests {
         });
         app.apply(Event::CloseTab(0));
 
-        let effects = app.apply(Event::ReopenClosedTab);
+        let effects = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
         let new_id = match effects.as_slice() {
             [Effect::Spawn(spec)] => spec.session,
             other => panic!("expected one Spawn, got {other:?}"),
@@ -264,10 +271,20 @@ mod tests {
     #[test]
     fn reopen_with_nothing_closed_is_a_noop() {
         let mut app = App::new();
-        assert!(app.apply(Event::ReopenClosedTab).is_empty());
+        assert!(
+            app.apply(Event::ReopenClosedTab {
+                fresh_claude_id: "minted".into(),
+            })
+            .is_empty()
+        );
         // Even after a launch with no close, there is nothing on the stack.
         launch(&mut app, "a");
-        assert!(app.apply(Event::ReopenClosedTab).is_empty());
+        assert!(
+            app.apply(Event::ReopenClosedTab {
+                fresh_claude_id: "minted".into(),
+            })
+            .is_empty()
+        );
     }
 
     #[test]
@@ -288,8 +305,12 @@ mod tests {
         app.apply(Event::CloseTab(0));
         assert!(app.workspace.tabs.is_empty());
 
-        let first = app.apply(Event::ReopenClosedTab);
-        let second = app.apply(Event::ReopenClosedTab);
+        let first = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
+        let second = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
         let cwd_of = |effects: &[Effect]| match effects {
             [Effect::Spawn(spec)] => spec.cwd.clone(),
             other => panic!("expected one Spawn, got {other:?}"),
@@ -298,7 +319,12 @@ mod tests {
         assert_eq!(cwd_of(&first).as_deref(), Some("/a"));
         assert_eq!(cwd_of(&second).as_deref(), Some("/b"));
         // Stack drained.
-        assert!(app.apply(Event::ReopenClosedTab).is_empty());
+        assert!(
+            app.apply(Event::ReopenClosedTab {
+                fresh_claude_id: "minted".into(),
+            })
+            .is_empty()
+        );
     }
 
     #[test]
@@ -332,7 +358,7 @@ mod tests {
         let mut app = App::new();
         assert_eq!(app.tab_title("/home/me/proj", &Launch::Shell), "proj");
         assert_eq!(
-            app.tab_title("/home/me/proj", &Launch::Claude { resume: None }),
+            app.tab_title("/home/me/proj", &Launch::Claude(ClaudeLaunch::Fresh(None))),
             "proj"
         );
 
@@ -346,9 +372,7 @@ mod tests {
         assert_eq!(
             app.tab_title(
                 "/home/me/proj",
-                &Launch::Claude {
-                    resume: Some("abc-123".into())
-                },
+                &Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
             ),
             "fix the login bug"
         );
@@ -357,9 +381,7 @@ mod tests {
         assert_eq!(
             app.tab_title(
                 "/home/me/proj",
-                &Launch::Claude {
-                    resume: Some("not-scanned".into())
-                },
+                &Launch::Claude(ClaudeLaunch::Resume("not-scanned".into())),
             ),
             "proj"
         );
@@ -378,9 +400,7 @@ mod tests {
         // Tab 0: a resumed Claude session that the scan knows.
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude {
-                resume: Some("abc-123".into()),
-            },
+            launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
             title: "proj".into(),
         }));
         // Tab 1: a plain shell — no resume id, so no record.
@@ -395,6 +415,50 @@ mod tests {
         );
         assert!(app.tab_record(1).is_none(), "a shell tab has no record");
         assert!(app.tab_record(9).is_none(), "an out-of-range index is None");
+    }
+
+    #[test]
+    fn tab_record_resolves_a_fresh_tab_by_its_minted_id() {
+        let minted = "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f9012";
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
+            title: "proj".into(),
+        }));
+        assert!(app.tab_record(0).is_none(), "nothing scanned yet");
+        app.apply(Event::ScanCompleted(vec![record(
+            minted,
+            "/proj",
+            "first prompt",
+        )]));
+        assert_eq!(
+            app.tab_record(0).map(|r| r.session_id.as_str()),
+            Some(minted)
+        );
+    }
+
+    #[test]
+    fn reopening_a_fresh_claude_tab_starts_a_new_conversation_under_the_given_id() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/repo".into()),
+            launch: Launch::Claude(ClaudeLaunch::Fresh(Some("first".into()))),
+            title: "repo".into(),
+        }));
+        app.apply(Event::CloseTab(0));
+        let effects = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "second".into(),
+        });
+        let [Effect::Spawn(spec)] = effects.as_slice() else {
+            panic!("expected one Spawn, got {effects:?}");
+        };
+        assert_eq!(
+            spec.launch,
+            Launch::Claude(ClaudeLaunch::Fresh(Some("second".into()))),
+            "the closed tab's id already names a transcript"
+        );
+        assert_eq!(app.tab_claude_session_id(0), Some("second"));
     }
 
     #[test]

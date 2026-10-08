@@ -185,8 +185,9 @@ shell-integration snippet — with the PTY's foreground process group standing i
 where the snippet cannot apply, and nothing at all under ConPTY; and a
 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` in the user's own `~/.claude/settings.json`
 silenced the Claude channel outright, which a private `--settings` overlay on
-the launch line now outranks. That overlay is why termherd needs **Claude Code
-1.0.61 or newer** — an older CLI rejects the flag and the launch fails.
+the launch line now outranks. That overlay needs Claude Code 1.0.61; the
+floor termherd states is higher, **2.0.73**, for the `--session-id` a fresh
+launch carries — an older CLI rejects either flag and the launch fails.
 
 The same stuck status also kept a close confirmation from arming for a *shell*
 (`has_running_process` needs `Busy` or `Attention`); that follows from the fix

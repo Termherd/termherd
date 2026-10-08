@@ -115,8 +115,12 @@ pub enum Event {
         to: usize,
     },
     /// Reopen the most recently closed tab, restoring its mode and
-    /// directory. A no-op when nothing has been closed.
-    ReopenClosedTab,
+    /// directory. A no-op when nothing has been closed. A fresh Claude tab
+    /// comes back as a new conversation under `fresh_claude_id`, minted by the
+    /// shell: the id it closed with already names a transcript.
+    ReopenClosedTab {
+        fresh_claude_id: String,
+    },
     /// Give the tab at `index` a manual name, overriding its derived title
     /// (FR5). A blank title clears the override; the manual name is never
     /// clobbered by a later OSC/digest update. A pure relabel — no PTY touched.

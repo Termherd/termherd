@@ -69,12 +69,12 @@ issues #18–#29.
 | [F-fork-detection](#f-fork-detection) | feature | sessions | ☐ | Detect a forked or plan-accepted session — blocked, the signals do not exist. |
 | [F-jsonl-viewer](#f-jsonl-viewer) | feature | sessions | ☐ | Render a Claude session's JSONL transcript as readable messages, not raw lines. |
 | [F-notification-focus-tab](#f-notification-focus-tab) | feature | workspace, sessions | ☐ | Clicking a tab's desktop notification brings termherd forward on that tab. |
-| [F-session-id-at-launch](#f-session-id-at-launch) | feature | sessions | ☐ | A fresh Claude tab knows its session id from the first keystroke. |
 | [F-store-cache](#f-store-cache) | feature | sessions | ☐ | A SQLite digest cache with an FTS5 index, replacing the in-memory scan. |
 | [F-terminal-images](#f-terminal-images) | feature | terminal | ☐ | Render images inline in the terminal — parked, no demand and no cheap slice. |
 | [F-terminal-split](#f-terminal-split) | feature | workspace, keymap | ☐ | Split panes with directional focus; drag-resize is what remains. |
 | [F-close-on-exit](#f-close-on-exit) | feature | terminal, workspace | ✅ | A pane whose shell exits cleanly closes itself; a failed one stays readable. |
 | [F-repo-add](#f-repo-add) | feature | sidebar, sessions | ✅ | Declare a repository in the sidebar, before it has any session. |
+| [F-session-id-at-launch](#f-session-id-at-launch) | feature | sessions | ✅ | A fresh Claude tab knows its session id from the first keystroke. |
 | [F-settings-panel](#f-settings-panel) | feature | workspace | ✅ | An in-app settings panel — appearance first, applied live and saved on pick. |
 | [F-terminal-cwd](#f-terminal-cwd) | feature | terminal, mcp, sessions | ✅ | The shell announces the directory it is in, so a session's `cwd` follows a `cd`. |
 
@@ -532,24 +532,6 @@ attributes the toast to PowerShell until termherd registers an application id.
 Builds on [F-status-notifications](#f-status-notifications). Torture report:
 `.personal/feature-torture/reports/F-notification-focus-tab.md`.
 
-<a id="f-session-id-at-launch"></a>
-
-### F-session-id-at-launch
-
-A fresh Claude tab knows its session id from the first keystroke.
-
-Today a fresh tab carries no Claude id, so every feature that reads a
-session's JSONL — [F-tab-title-sync](#f-tab-title-sync),
-[F-session-accent-colors](#f-session-accent-colors),
-[F-tab-hover-details](#f-tab-hover-details),
-[F-prompt-history](#f-prompt-history), [F-session-reveal](#f-session-reveal) —
-does nothing there (#336). Two sources: launch with
-`claude --session-id <uuid>`, or read the `sessionId` Claude Code writes to
-`~/.claude/sessions/<pid>.json`, through the reader #333 built. The session
-file also carries the agent name `/list-agents` shows, which favours it: each
-pane already caches that file for [F-copy-agent-name](#f-copy-agent-name). To
-settle before building.
-
 <a id="f-store-cache"></a>
 
 ### F-store-cache
@@ -721,6 +703,33 @@ read as one that never had any and was pinned to the top as freshly added.
 
 Adjacent: [F-repo-view](#f-repo-view) (#148) takes the other end — this is
 about a repository *existing* in the sidebar, that one about *viewing* it.
+
+<a id="f-session-id-at-launch"></a>
+
+### F-session-id-at-launch
+
+A fresh Claude tab knows its session id from the first keystroke.
+
+Before, a fresh tab carried no Claude id, so every feature that reads a
+session's JSONL — [F-tab-title-sync](#f-tab-title-sync),
+[F-session-accent-colors](#f-session-accent-colors),
+[F-tab-hover-details](#f-tab-hover-details),
+[F-prompt-history](#f-prompt-history), [F-session-reveal](#f-session-reveal) —
+did nothing there (#336).
+
+**Shipped in #336, both sources, layered.** The shell mints a v4 UUID for every
+fresh launch and the launch line gains `claude --session-id <uuid>` (validated
+at the argv seam: a non-UUID is dropped, never typed). The per-pane session
+file `~/.claude/sessions/<pid>.json`, the reader
+[F-copy-agent-name](#f-copy-agent-name) built, outranks the minted id whenever
+it proves the Claude in front, since Claude rewrites it on a re-key. One
+accessor, `LiveSession::claude_session_id` (with `App::claude_session_id` and
+`App::tab_claude_session_id`), is what every reader of a pane's transcript
+goes through. Reopening a closed fresh tab mints a new id. The CLI floor rose
+to 2.0.73, the oldest release whose changelog shows `--session-id` in use.
+
+Not verified: whether `/clear` or a plan-accept re-keys a session started with
+`--session-id`. If it does, the session file is what follows it.
 
 <a id="f-settings-panel"></a>
 
