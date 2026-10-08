@@ -42,6 +42,9 @@ pub(super) enum KeyboardOwner {
     TabClose(usize),
     /// The archive confirmation.
     Archive,
+    /// The tab context menu, which answers the arrows and Enter itself rather
+    /// than through a widget's submit, which a synthesised key never reaches.
+    TabMenu,
     /// The settings panel.
     Settings,
     /// The document editor, which handles its own keys.
@@ -56,12 +59,13 @@ impl KeyboardOwner {
     /// `match` below: a new variant fails to compile there, in this file, where
     /// this array is the next thing the author reads.
     #[cfg(test)]
-    pub(super) const ALL: [Self; 7] = [
+    pub(super) const ALL: [Self; 8] = [
         Self::TabRename,
         Self::SessionRename,
         Self::Quit,
         Self::TabClose(0),
         Self::Archive,
+        Self::TabMenu,
         Self::Settings,
         Self::Doc,
     ];
@@ -74,6 +78,7 @@ impl KeyboardOwner {
             Self::Quit => "quit-confirm",
             Self::TabClose(_) => "tab-close-confirm",
             Self::Archive => "archive-confirm",
+            Self::TabMenu => "tab-menu",
             Self::Settings => "settings",
             Self::Doc => "doc-editor",
         }
@@ -195,6 +200,7 @@ impl Shell {
             Action::RenameTab => self
                 .start_tab_rename(self.core.workspace.active)
                 .ok_or(Inertia::NoContext)?,
+            Action::OpenTabMenu => self.open_tab_menu().ok_or(Inertia::NoContext)?,
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -329,6 +335,9 @@ impl Shell {
         if self.archiving.is_some() {
             return Some(KeyboardOwner::Archive);
         }
+        if self.tab_menu.is_some() {
+            return Some(KeyboardOwner::TabMenu);
+        }
         if self.settings_open {
             return Some(KeyboardOwner::Settings);
         }
@@ -348,6 +357,7 @@ impl Shell {
             KeyboardOwner::Quit => self.quit_confirm_key(event),
             KeyboardOwner::TabClose(index) => self.tab_close_confirm_key(event, index),
             KeyboardOwner::Archive => self.archive_confirm_key(event),
+            KeyboardOwner::TabMenu => self.tab_menu_key(event),
             KeyboardOwner::Settings => self.settings_key(event),
             KeyboardOwner::Doc => self.open_doc_key(event),
         }

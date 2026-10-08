@@ -77,6 +77,15 @@ pub fn agent_name(name: &str) -> String {
     format!("Agent: {name}")
 }
 
+// --- Tab context menu ---
+pub const TAB_MENU_RENAME: &str = "Rename tab";
+pub const TAB_MENU_COPY_AGENT_NAME: &str = "Copy agent name";
+pub const TAB_MENU_NEW_SHELL: &str = "New shell here";
+pub const TAB_MENU_NEW_CLAUDE: &str = "New Claude session here";
+pub const TAB_MENU_SPLIT_RIGHT: &str = "Split right";
+pub const TAB_MENU_SPLIT_DOWN: &str = "Split down";
+pub const TAB_MENU_CLOSE: &str = "Close pane";
+
 // --- Confirmations ---
 pub const CANCEL: &str = "Cancel";
 pub const CLOSE: &str = "Close";

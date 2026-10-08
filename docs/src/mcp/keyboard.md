@@ -55,7 +55,7 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing yet (`open-new-session` is the one) | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, nothing to scroll, nothing selected to copy, no Claude agent name to copy | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy | **create it**, then retry |
 
 Each handler that can refuse this way says so at its own refusal site.
 
@@ -71,7 +71,7 @@ selection, and `copy` runs on it.
 
 ## Answering an overlay
 
-`escape` usually cancels; `enter` usually confirms. Three cautions:
+`escape` usually cancels; `enter` usually confirms. Four cautions:
 
 - On **`quit-confirm`**, `enter` quits the app — killing every session and the
   connection you are speaking over.
@@ -83,6 +83,15 @@ selection, and `copy` runs on it.
   over MCP
   is a missing capability, tracked as
   [#246](https://github.com/Termherd/termherd/issues/246).
+- **`tab-menu`** (opened by `open-tab-menu`, or a human's right-click on a
+  tab) answers `up`, `down` and `enter` itself, so unlike the renames it is
+  fully drivable: `enter` closes the menu and runs the selected entry exactly
+  as `run_action` would run that entry's action. Every press while it is open
+  reports `overlay: "tab-menu"` — including the `enter`, so read the effect
+  back with `snapshot` rather than from the step. The entries and their order
+  are on the [tabs page](../workspace/tabs-and-splits.md#tabs); *Copy agent
+  name* is listed only when the focused pane runs Claude, which shifts every
+  entry below it by one.
 - Every other overlay is exitable from the keyboard, and a test sweep derived
   from the overlay enumeration — not a hand-written list — is what keeps it
   that way. A new overlay added without an exit fails there.

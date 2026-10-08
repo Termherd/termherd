@@ -23,6 +23,7 @@ Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 | `reopen-closed-tab` | `mod+shift+t` | reopen the tab you just closed |
 | `close-focused` | `mod+w` | close the focused pane; a lone pane closes its tab |
 | `rename-tab` | `mod+shift+i` | rename the focused tab, as a double-click does |
+| `open-tab-menu` | `mod+.` | open the focused tab's menu, as a right-click does |
 | `open-new-session` | *(unbound)* | reserved — no surface yet |
 
 `rename-tab` opens the same inline field a double-click on the tab opens,
@@ -31,6 +32,12 @@ filled with the tab's current name: <kbd>Enter</kbd> keeps the edit,
 on Windows and Linux <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> reaches a
 program in the terminal as the same byte as <kbd>Ctrl</kbd>+<kbd>I</kbd>, which
 is <kbd>Tab</kbd>, so claiming it takes nothing away from that program.
+
+`open-tab-menu` opens the [tab menu](../workspace/tabs-and-splits.md#tabs) a
+right-click opens; every entry in it is one of the actions on this page. On
+Windows and Linux <kbd>Ctrl</kbd>+<kbd>.</kbd> has no control code of its own,
+so a program in the terminal loses nothing to it either. With no tab open it
+does nothing.
 
 `activate-tab-N` is matched by **physical key position**, so it lands on the
 same keys on AZERTY and QWERTZ, where the number row produces `&`, `é`, …
@@ -92,8 +99,10 @@ across layouts.
 | Gesture | Does |
 | --- | --- |
 | <kbd>Ctrl</kbd>+<kbd>C</kbd> | interrupt (`SIGINT`) — passed through to the program |
-| <kbd>Escape</kbd> | cancel an open prompt, rename or doc pane |
-| <kbd>Enter</kbd> | confirm an open prompt |
+| <kbd>Escape</kbd> | cancel an open prompt, rename, tab menu or doc pane |
+| <kbd>Enter</kbd> | confirm an open prompt; run the selected tab-menu entry |
+| <kbd>↑</kbd> / <kbd>↓</kbd> in the tab menu | move the selection |
+| Right-click a tab | focus it and open its menu |
 | Drag a selection | select; copies too with `terminal.copy_on_select` (off by default) |
 | Right-click | paste, with `terminal.paste_on_right_click` (off by default) |
 | Wheel | scroll back through history, or the wheel event to a program reading the mouse |

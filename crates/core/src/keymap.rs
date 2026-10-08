@@ -126,6 +126,9 @@ pub enum Action {
     /// Open the inline rename of the focused tab, seeded with its shown title.
     /// Inert when no tab is open.
     RenameTab,
+    /// Open the focused tab's context menu, whose entries are keymap actions.
+    /// Inert when no tab is open.
+    OpenTabMenu,
     /// Jump the focused terminal's viewport to the top of its scrollback.
     ScrollTop,
     /// Jump the focused terminal's viewport back to the live bottom.
@@ -289,6 +292,13 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::RenameTab,
         name: "rename-tab",
         default_chords: &["mod+shift+i"],
+    },
+    // Ctrl+. has no control byte in a legacy terminal encoding, so on
+    // Windows/Linux the chord takes no key a program in a pane could receive.
+    ActionDef {
+        action: Action::OpenTabMenu,
+        name: "open-tab-menu",
+        default_chords: &["mod+."],
     },
     ActionDef {
         action: Action::NewClaudeSessionHere,
@@ -850,6 +860,22 @@ mod tests {
         assert_eq!(
             Action::from_config_name("rename-tab"),
             Some(Action::RenameTab)
+        );
+    }
+
+    #[test]
+    fn defaults_bind_open_tab_menu_to_the_primary_modifier_period_on_every_platform() {
+        assert_eq!(
+            Keymap::defaults_for(Platform::MacOs).lookup(&KeyChord::new(".", MOD_CMD)),
+            Some(Action::OpenTabMenu)
+        );
+        assert_eq!(
+            Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new(".", MOD_CTRL)),
+            Some(Action::OpenTabMenu)
+        );
+        assert_eq!(
+            Action::from_config_name("open-tab-menu"),
+            Some(Action::OpenTabMenu)
         );
     }
 

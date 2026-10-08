@@ -29,6 +29,7 @@ terminal, or many, split vertically and horizontally.
 | Reopen the tab you closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 | Close focused pane | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>W</kbd> |
 | Rename the focused tab | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> |
+| Open the focused tab's menu | <kbd>Cmd</kbd>+<kbd>.</kbd> | <kbd>Ctrl</kbd>+<kbd>.</kbd> |
 
 **Jump-to-tab is matched by physical key position**, not by the character the
 key produces. On AZERTY and QWERTZ, where the number row produces `&`, `é`, …
@@ -49,6 +50,28 @@ it on the clipboard. In a split tab, the card names the first pane's agent.
 focused one. Either opens an inline field holding the tab's current name;
 <kbd>Enter</kbd> or a click elsewhere keeps the edit, <kbd>Escape</kbd> drops
 it, and an empty name gives the tab back its derived title.
+
+**Right-click a tab for its menu**, or press `open-tab-menu` for the focused
+one. A right-click focuses the tab first, because every entry acts on the
+focused tab:
+
+| Entry | Runs | Shown on |
+| --- | --- | --- |
+| Rename tab | `rename-tab` | every tab |
+| Copy agent name | `copy-agent-name` | a tab whose focused pane runs Claude |
+| New shell here | `new-shell-here` | every tab |
+| New Claude session here | `new-claude-session-here` | every tab |
+| Split right | `split-vertical` | every tab |
+| Split down | `split-horizontal` | every tab |
+| Close pane | `close-focused` | every tab |
+
+Each entry is the keyboard action of the same name, so it does exactly what
+that action's chord does — *Close pane* closes the focused pane of a split and
+the whole tab otherwise, asking first as the chord does. <kbd>↑</kbd> and
+<kbd>↓</kbd> move the selection, <kbd>Enter</kbd> runs it, <kbd>Escape</kbd> or
+a click outside the menu closes it without running anything. The menu opens in
+the middle of the window rather than beside the tab, and screen readers do not
+see it: it is drawn by termherd, not by the operating system.
 
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on
