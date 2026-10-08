@@ -621,6 +621,24 @@ exists). Do not relax them locally.
   justifies an exemption, or drop the exemption and write the case a fixture.
   (Review caught this inside #302 and it was squashed away, so `git log` on
   `main` will not show it — the PR is where the evidence is.)
+- **Two pull requests can each be green and merge red together.** Branch
+  protection here is not strict, so a PR whose checks ran against an older
+  `main` merges without re-running them. #369 and #359 both extended a sweep
+  over `KeyboardOwner::ALL`: #359 asserted that no prompt lets a notification
+  click switch tabs, and #369's shared `arm_overlay` opened the tab menu on tab
+  0, which focuses that tab before the click. Each PR passed alone, and `main`
+  failed the moment both had landed (fixed in #376). When two open PRs touch
+  the same sweep or the same shared test helper, update the second with `main`
+  and wait for its checks before merging it. And a helper that arms a state
+  for a sweep must not change what the sweep then asserts on.
+- **Claude Code's screen is matched on bytes, and its bytes drift.** Three
+  shapes termherd read off Claude's terminal broke in one day, each passing
+  tests built on what we assumed Claude draws: the `◐` / `◑` busy glyphs of
+  Claude Code 2.1 (#371), a no-break space after the `❯` prompt marker, and
+  the session name written into the rule above the prompt (#374). A
+  screenshot cannot show the no-break space. Build the fixture from a capture
+  of the live pane instead: `⌘⇧S` writes the visible text to
+  `~/.termherd/captures/`, and `xxd` on that row shows the bytes.
 
 ## Conventions
 
