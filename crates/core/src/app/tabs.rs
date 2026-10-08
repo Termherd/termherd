@@ -2,6 +2,7 @@
 //! status / record read models.
 
 use crate::browser::{SessionRecord, project_label};
+use crate::claude_command::PromptInput;
 use crate::snapshot::SessionKind;
 use termherd_claude::color::ClaudeColor;
 
@@ -197,16 +198,46 @@ impl App {
     /// `None` when there is none.
     #[must_use]
     pub fn session_color(&self, session: SessionId) -> Option<ClaudeColor> {
+        let picked = self
+            .workspace
+            .tab_of(session)
+            .and_then(|index| self.workspace.tabs.get(index)?.color);
+        self.pane_color(session, picked)
+    }
+
+    /// [`Self::session_color`] for a pane whose tab's pick the caller already
+    /// holds, so a caller that knows the tab need not search for it.
+    fn pane_color(&self, session: SessionId, picked: Option<ClaudeColor>) -> Option<ClaudeColor> {
         let transcript = || self.session_record(session)?.digest.agent_color;
         let color = match self.color_keeper(session)? {
             ColorKeeper::Claude => transcript(),
-            ColorKeeper::Termherd => self
-                .workspace
-                .tab_of(session)
-                .and_then(|index| self.workspace.tabs.get(index)?.color)
-                .or_else(transcript),
+            ColorKeeper::Termherd => picked.or_else(transcript),
         };
         color.filter(|color| *color != ClaudeColor::Default)
+    }
+
+    /// Whether a colour can be picked for `session` now, and who would keep
+    /// it: termherd always can; Claude only while it could take `/color`, its
+    /// prompt being `prompt` as the screen shows it.
+    ///
+    /// # Errors
+    ///
+    /// The [`CommandRefusal`] that keeps a Claude from taking `/color` now, or
+    /// [`CommandRefusal::UnknownSession`].
+    pub fn color_pick(
+        &self,
+        session: SessionId,
+        prompt: &PromptInput,
+    ) -> Result<ColorKeeper, CommandRefusal> {
+        match self
+            .color_keeper(session)
+            .ok_or(CommandRefusal::UnknownSession)?
+        {
+            ColorKeeper::Claude => self
+                .claude_command_check(session, prompt)
+                .map(|()| ColorKeeper::Claude),
+            ColorKeeper::Termherd => Ok(ColorKeeper::Termherd),
+        }
     }
 
     /// Store `color` on the tab at `index` if termherd keeps its focused
@@ -229,7 +260,8 @@ impl App {
     /// [`Self::tab_kind`] follows.
     #[must_use]
     pub fn tab_color(&self, index: usize) -> Option<ClaudeColor> {
-        self.session_color(self.tab_focused_session(index)?)
+        let tab = self.workspace.tabs.get(index)?;
+        self.pane_color(tab.focused_session()?, tab.color)
     }
 
     /// Count of sessions whose PTY is still running — the ones a quit would
@@ -745,6 +777,28 @@ mod tests {
         assert_eq!(app.color_keeper(pane), Some(ColorKeeper::Termherd));
         pick(&mut app, 0, ClaudeColor::Green);
         assert_eq!(app.tab_color(0), Some(ClaudeColor::Green));
+    }
+
+    #[test]
+    fn a_colour_can_be_picked_for_a_shell_always_and_a_claude_only_when_it_takes_commands() {
+        let mut app = App::new();
+        let shell = launch(&mut app, "sh");
+        let claude = launch_claude(&mut app);
+        let empty = PromptInput::Empty;
+        assert_eq!(app.color_pick(shell, &empty), Ok(ColorKeeper::Termherd));
+        assert_eq!(
+            app.color_pick(claude, &empty),
+            Err(CommandRefusal::NotIdle(SessionStatus::Starting))
+        );
+        app.apply(Event::StatusChanged {
+            session: claude,
+            status: SessionStatus::Idle,
+        });
+        assert_eq!(app.color_pick(claude, &empty), Ok(ColorKeeper::Claude));
+        assert_eq!(
+            app.color_pick(sid(99), &empty),
+            Err(CommandRefusal::UnknownSession)
+        );
     }
 
     #[test]

@@ -14,10 +14,9 @@ use termherd_core::ClaudeColor;
 
 use super::modals::modal_card;
 use super::{
-    COLOR_MARK_WIDTH, CardFacts, card_frame, card_secondary_line, claude_color, clip, detail_lines,
-    kind_icon, session_card, status_dot,
+    COLOR_MARK_WIDTH, CardFacts, card_frame, card_secondary_line, claude_color, clip, color_swatch,
+    detail_lines, kind_icon, session_card, status_dot,
 };
-use crate::shell::color_picker::ColorPicker;
 use crate::shell::{Message, Shell, tab_rename_id};
 use crate::strings;
 
@@ -168,7 +167,7 @@ impl Shell {
         if let Some(reason) = picker.refused() {
             heading.push(card_secondary_line(strings::color_pick_refused(reason)));
         }
-        let lines = ColorPicker::colors().iter().map(|&color| {
+        let lines = ClaudeColor::ALL.into_iter().map(|color| {
             row![
                 color_swatch(color),
                 text(strings::color_choice(color)).size(12)
@@ -235,27 +234,6 @@ impl Shell {
 /// A list's heading: the title of the tab it acts on.
 fn list_heading<'a>(title: &str) -> Element<'a, Message> {
     text(clip(title, 32)).size(11).into()
-}
-
-/// A square of `color` as the chrome paints it; for `default`, an empty frame,
-/// the absence of a colour it stands for.
-fn color_swatch<'a>(color: ClaudeColor) -> Element<'a, Message> {
-    container(text(""))
-        .width(12)
-        .height(12)
-        .style(move |theme: &iced::Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: claude_color(color, palette.is_dark).map(iced::Background::Color),
-                border: iced::Border {
-                    color: palette.background.strong.color,
-                    width: 1.0,
-                    radius: 2.0.into(),
-                },
-                ..container::Style::default()
-            }
-        })
-        .into()
 }
 
 /// A list drawn over the window for the focused tab: its title, then one

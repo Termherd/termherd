@@ -4,9 +4,9 @@
 //! colour is pulled from the theme palette rather than hardcoded, so the whole
 //! view tracks the theme system once it lands.
 
-use iced::Color;
 use iced::widget::text::Text;
 use iced::widget::{container, text};
+use iced::{Color, Element};
 use termherd_core::{ClaudeColor, SessionKind, SessionStatus};
 
 /// The mark for what a session runs, shared by the sidebar's launch buttons
@@ -86,6 +86,27 @@ pub(super) fn claude_color(color: ClaudeColor, dark_surface: bool) -> Option<Col
 
 /// The width of a session colour's mark: a chip's outline, a sidebar bar.
 pub(super) const COLOR_MARK_WIDTH: f32 = 2.0;
+
+/// A square of `color` as the chrome paints it; for `default`, an empty frame,
+/// the absence of a colour it stands for.
+pub(super) fn color_swatch<'a, M: 'a>(color: ClaudeColor) -> Element<'a, M> {
+    container(text(""))
+        .width(12)
+        .height(12)
+        .style(move |theme: &iced::Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                background: claude_color(color, palette.is_dark).map(iced::Background::Color),
+                border: iced::Border {
+                    color: palette.background.strong.color,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                ..container::Style::default()
+            }
+        })
+        .into()
+}
 
 /// The sidebar row's colour mark: a thin bar in the colour `/color` set, or
 /// `None` when the session has none. A bar rather than a tinted title, so the

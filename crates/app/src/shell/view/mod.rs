@@ -31,8 +31,8 @@ mod tabs;
 use doc_editor::doc_editor;
 use modals::modal;
 use style::{
-    COLOR_MARK_WIDTH, card_secondary_text, card_style, claude_color, clip, color_bar, kind_glyph,
-    kind_icon, mix, sidebar_secondary_text, status_dot,
+    COLOR_MARK_WIDTH, card_secondary_text, card_style, claude_color, clip, color_bar, color_swatch,
+    kind_glyph, kind_icon, mix, sidebar_secondary_text, status_dot,
 };
 
 impl Shell {

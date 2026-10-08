@@ -124,18 +124,14 @@ pub const TAB_MENU_CLOSE: &str = "Close pane";
 /// A colour as the picker lists it. `default` is listed as the absence of a
 /// colour it gives the tab, not as a colour of its own.
 #[must_use]
-pub const fn color_choice(color: ClaudeColor) -> &'static str {
-    match color {
-        ClaudeColor::Red => "Red",
-        ClaudeColor::Blue => "Blue",
-        ClaudeColor::Green => "Green",
-        ClaudeColor::Yellow => "Yellow",
-        ClaudeColor::Purple => "Purple",
-        ClaudeColor::Orange => "Orange",
-        ClaudeColor::Pink => "Pink",
-        ClaudeColor::Cyan => "Cyan",
-        ClaudeColor::Default => "None",
+pub fn color_choice(color: ClaudeColor) -> String {
+    if color == ClaudeColor::Default {
+        return "None".to_owned();
     }
+    let mut chars = color.name().chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
 }
 
 /// The picker's line after a pick for a Claude pane could not be asked of it.
