@@ -23,7 +23,8 @@ still wins where a Claude does emit a real title: the `osc` decoder carries the
 title text, the `pty` reader forwards a change as `PtyEvent::Title`, and
 `Workspace::set_session_title` relabels the hosting tab — which also lets a
 sidebar rename retitle the open tab live. Reflecting Claude's *own* `/rename`
-and live task name is tracked as #119. Hovering a tab shows the session's
+and live task name shipped in #119, see
+[F-tab-title-sync](#f-tab-title-sync). Hovering a tab shows the session's
 fuller description — the same hover card the sidebar uses for a resumed
 session, a title + cwd card otherwise (#76, `App::tab_record` resolves the
 record so the two surfaces stay single-sourced). Drag-reorder (FR5) — whose

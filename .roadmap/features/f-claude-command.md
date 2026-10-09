@@ -29,7 +29,9 @@ line, then Enter on its own. A prompt the MCP tool arms ignores a physical Enter
 for 600 ms.
 
 Checked against a live Claude Code: the shape of the empty prompt (its `Try "…"`
-hint) and of a two-line draft. Not checked: whether the line and its Enter,
-written back to back, always submit rather than read as a paste, and whether an
-`@` in a name opens the file autocomplete. The rename and colour surfaces that
-use this path are #119 and #343.
+hint) and of a two-line draft. That check missed two shapes Claude Code 2.1 also
+draws, a no-break space after `❯` and the session name inside the rule above the
+prompt; both read as "prompt not on screen" until #374. Not checked: whether the
+line and its Enter, written back to back, always submit rather than read as a
+paste, and whether an `@` in a name opens the file autocomplete. The rename and
+colour surfaces that use this path are #119 and #343.

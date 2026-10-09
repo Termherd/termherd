@@ -17,8 +17,8 @@ Shipped (#339): a `copy-agent-name` action, unbound by default and reachable
 through `run_action`, which re-reads the file on every press and is inert
 (`no-context`) when no Claude in front has written one; and an `Agent:` line
 in the tab hover card, read from a cache refreshed when the foreground job
-changes and when the pointer enters the tab. The tab menu entry waits
-for #340.
+changes and when the pointer enters the tab. The tab menu entry shipped
+with #340.
 
 Not shipped: Windows. ConPTY reports no foreground process, so no pid leads to
 a session file and nothing is ever named there; finding the Claude pid another
