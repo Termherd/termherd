@@ -38,10 +38,10 @@ Both speak the option **id** — a stable, dotted name:
 
 | id | Kind | Writable | Values |
 | --- | --- | --- | --- |
-| `theme` | enum | yes | `dark`, `light`, `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |
+| `theme` | enum | yes | `dark`, `light`, and the 20 named themes listed under [`theme`](../reference/settings.md#theme) |
 | `shell.program` | string | **no** | unset means the platform default login shell |
 | `shell.args` | array | **no** | |
-| `terminal.colors.scheme` | enum | yes | `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |
+| `terminal.colors.scheme` | enum | yes | the 18 `theme` values marked ✓ under [`theme`](../reference/settings.md#theme) |
 | `terminal.colors.foreground` | string | yes | `"#rrggbb"` |
 | `terminal.colors.background` | string | yes | `"#rrggbb"` |
 | `terminal.colors.cursor` | string | yes | `"#rrggbb"` |

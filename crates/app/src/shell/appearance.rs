@@ -29,7 +29,7 @@ impl SchemeChoice {
     /// The default palette, then every named scheme.
     pub(super) fn all() -> Vec<Self> {
         std::iter::once(Self(None))
-            .chain(Palette::SCHEMES.into_iter().map(|name| Self(Some(name))))
+            .chain(Palette::schemes().map(|name| Self(Some(name))))
             .collect()
     }
 
@@ -41,22 +41,17 @@ impl SchemeChoice {
     }
 }
 
-/// `solarized-light` reads as `Solarized Light`, as the chrome themes do.
+/// A scheme reads as the chrome theme of the same name, so the two pickers
+/// label one theme alike (`Catppuccin Frappé`, accent included).
 impl fmt::Display for SchemeChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some(name) = self.0 else {
             return f.write_str(crate::strings::SETTINGS_SCHEME_BUILTIN);
         };
-        let words: Vec<String> = name
-            .split('-')
-            .map(|word| {
-                let mut chars = word.chars();
-                chars.next().map_or_else(String::new, |first| {
-                    first.to_uppercase().chain(chars).collect()
-                })
-            })
-            .collect();
-        f.write_str(&words.join(" "))
+        match serde_json::from_value::<ThemeChoice>(name.into()) {
+            Ok(theme) => theme.fmt(f),
+            Err(_) => f.write_str(name),
+        }
     }
 }
 
@@ -97,7 +92,21 @@ mod tests {
                 "Solarized Dark",
                 "Solarized Light",
                 "Gruvbox Dark",
-                "Gruvbox Light"
+                "Gruvbox Light",
+                "Dracula",
+                "Nord",
+                "Catppuccin Latte",
+                "Catppuccin Frappé",
+                "Catppuccin Macchiato",
+                "Catppuccin Mocha",
+                "Tokyo Night",
+                "Tokyo Night Storm",
+                "Tokyo Night Light",
+                "Kanagawa Wave",
+                "Kanagawa Dragon",
+                "Moonfly",
+                "Nightfly",
+                "Oxocarbon"
             ]
         );
         for choice in SchemeChoice::all() {

@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (every iced theme, with matching terminal colours)
+
+- The interface theme offers all 22 themes iced ships — Dracula, Nord,
+  Catppuccin, Tokyo Night, Kanagawa, Moonfly, Nightfly, Oxocarbon and Ferra
+  join Solarized and Gruvbox — and 14 of the new ones come with a terminal
+  colour scheme of the same name, taken from alacritty-theme. The session
+  status dots and `/color` marks are shaded per theme so they stay legible on
+  every surface.
+
 ### Added (emoji from the Character Viewer)
 
 - On macOS, Ctrl+Cmd+Space opens the Character Viewer from a new Edit →

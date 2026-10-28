@@ -34,9 +34,12 @@
 
   // ── Theme ────────────────────────────────────────────────────────────────
   // GUI chrome theme (sidebar, tab strip, buttons): "dark" (default),
-  // "light", "solarized-dark", "solarized-light", "gruvbox-dark" or
-  // "gruvbox-light". The terminal grid keeps its own colours — pair a named
-  // theme with the same `terminal.colors.scheme` for a matching chrome.
+  // "light", or one of iced's named themes: "solarized-dark" / "-light",
+  // "gruvbox-dark" / "-light", "dracula", "nord", "catppuccin-latte" /
+  // "-frappe" / "-macchiato" / "-mocha", "tokyo-night" / "-storm" / "-light",
+  // "kanagawa-wave" / "-dragon" / "-lotus", "moonfly", "nightfly",
+  // "oxocarbon", "ferra". The terminal grid keeps its own colours — pair a
+  // named theme with the same `terminal.colors.scheme` for a matching chrome.
   "theme": "dark",
 
   // ── Close confirmation ──────────────────────────────────────────────────
@@ -123,8 +126,8 @@
     // individual slots; every field is optional and a malformed colour
     // degrades to its default alone.
     "colors": {
-      // Built-in scheme the overrides start from: "solarized-dark",
-      // "solarized-light", "gruvbox-dark" or "gruvbox-light".
+      // Built-in scheme the overrides start from: any named `theme` above
+      // but "kanagawa-lotus" and "ferra", which publish no terminal palette.
       // Omit for the built-in default scheme.
       "scheme": "solarized-dark",
       // Default text / background / cursor-block colours, "#rrggbb"

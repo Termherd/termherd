@@ -16,6 +16,8 @@ path = "src/main.rs"
 # via dist (GitHub Releases) — opt it in explicitly.
 [package.metadata.dist]
 dist = true
+# The licences of the embedded colour schemes travel with the binary.
+include = ["../../THIRD_PARTY_NOTICES.md"]
 
 # Desktop installer bundles (cargo-packager). `dist` (above) ships the bare
 # binary + curl|sh / powershell installers for CLI-style installs; this
@@ -35,6 +37,8 @@ and search, on macOS, Windows and Linux."""
 homepage = "https://github.com/Termherd/termherd"
 authors = ["TermHerd contributors"]
 license-file = "../../LICENSE"
+# The licences of the embedded colour schemes travel with the bundle.
+resources = ["../../THIRD_PARTY_NOTICES.md"]
 icons = [
     "icons/icon.icns",
     "icons/icon.ico",

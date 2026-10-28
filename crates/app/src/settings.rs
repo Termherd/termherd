@@ -376,8 +376,10 @@ impl TerminalSettings {
 }
 
 /// Which iced theme dresses the GUI chrome (sidebar, tab strip, buttons).
-/// The named variants mirror the built-in `terminal.colors.scheme` presets,
-/// so the chrome can match the grid it frames.
+/// One variant per iced built-in theme. Every named variant but Kanagawa Lotus
+/// and Ferra shares its settings name with a `terminal.colors.scheme` preset,
+/// so the chrome can match the grid it frames; those two have no published
+/// terminal palette to pair with.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThemeChoice {
@@ -394,6 +396,38 @@ pub enum ThemeChoice {
     GruvboxDark,
     /// Gruvbox Light chrome.
     GruvboxLight,
+    /// Dracula chrome.
+    Dracula,
+    /// Nord chrome.
+    Nord,
+    /// Catppuccin Latte chrome.
+    CatppuccinLatte,
+    /// Catppuccin Frappé chrome.
+    CatppuccinFrappe,
+    /// Catppuccin Macchiato chrome.
+    CatppuccinMacchiato,
+    /// Catppuccin Mocha chrome.
+    CatppuccinMocha,
+    /// Tokyo Night chrome.
+    TokyoNight,
+    /// Tokyo Night Storm chrome.
+    TokyoNightStorm,
+    /// Tokyo Night Light chrome.
+    TokyoNightLight,
+    /// Kanagawa Wave chrome.
+    KanagawaWave,
+    /// Kanagawa Dragon chrome.
+    KanagawaDragon,
+    /// Kanagawa Lotus chrome.
+    KanagawaLotus,
+    /// Moonfly chrome.
+    Moonfly,
+    /// Nightfly chrome.
+    Nightfly,
+    /// Oxocarbon chrome.
+    Oxocarbon,
+    /// Ferra chrome.
+    Ferra,
 }
 
 /// The name a person reads — iced's own, so the picker and the theme it
@@ -463,13 +497,29 @@ impl Default for CloseSettings {
 
 impl ThemeChoice {
     /// Every choice, in the order the settings panel lists them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 22] = [
         Self::Dark,
         Self::Light,
         Self::SolarizedDark,
         Self::SolarizedLight,
         Self::GruvboxDark,
         Self::GruvboxLight,
+        Self::Dracula,
+        Self::Nord,
+        Self::CatppuccinLatte,
+        Self::CatppuccinFrappe,
+        Self::CatppuccinMacchiato,
+        Self::CatppuccinMocha,
+        Self::TokyoNight,
+        Self::TokyoNightStorm,
+        Self::TokyoNightLight,
+        Self::KanagawaWave,
+        Self::KanagawaDragon,
+        Self::KanagawaLotus,
+        Self::Moonfly,
+        Self::Nightfly,
+        Self::Oxocarbon,
+        Self::Ferra,
     ];
 
     /// The iced theme this choice maps to.
@@ -482,6 +532,22 @@ impl ThemeChoice {
             ThemeChoice::SolarizedLight => iced::Theme::SolarizedLight,
             ThemeChoice::GruvboxDark => iced::Theme::GruvboxDark,
             ThemeChoice::GruvboxLight => iced::Theme::GruvboxLight,
+            ThemeChoice::Dracula => iced::Theme::Dracula,
+            ThemeChoice::Nord => iced::Theme::Nord,
+            ThemeChoice::CatppuccinLatte => iced::Theme::CatppuccinLatte,
+            ThemeChoice::CatppuccinFrappe => iced::Theme::CatppuccinFrappe,
+            ThemeChoice::CatppuccinMacchiato => iced::Theme::CatppuccinMacchiato,
+            ThemeChoice::CatppuccinMocha => iced::Theme::CatppuccinMocha,
+            ThemeChoice::TokyoNight => iced::Theme::TokyoNight,
+            ThemeChoice::TokyoNightStorm => iced::Theme::TokyoNightStorm,
+            ThemeChoice::TokyoNightLight => iced::Theme::TokyoNightLight,
+            ThemeChoice::KanagawaWave => iced::Theme::KanagawaWave,
+            ThemeChoice::KanagawaDragon => iced::Theme::KanagawaDragon,
+            ThemeChoice::KanagawaLotus => iced::Theme::KanagawaLotus,
+            ThemeChoice::Moonfly => iced::Theme::Moonfly,
+            ThemeChoice::Nightfly => iced::Theme::Nightfly,
+            ThemeChoice::Oxocarbon => iced::Theme::Oxocarbon,
+            ThemeChoice::Ferra => iced::Theme::Ferra,
         }
     }
 }
@@ -1030,6 +1096,60 @@ mod tests {
         }
     }
 
+    fn theme_name(theme: ThemeChoice) -> String {
+        serde_json::to_value(theme)
+            .expect("a theme serialises")
+            .as_str()
+            .expect("as a string")
+            .to_owned()
+    }
+
+    #[test]
+    fn every_iced_theme_has_exactly_one_choice() {
+        let mapped = ThemeChoice::ALL.map(ThemeChoice::to_iced);
+        assert_eq!(mapped.len(), iced::Theme::ALL.len());
+        for theme in iced::Theme::ALL {
+            assert_eq!(
+                mapped.iter().filter(|m| *m == theme).count(),
+                1,
+                "{theme} must be offered once"
+            );
+        }
+    }
+
+    /// The pairing is by name alone, so a scheme whose name drifts from its
+    /// theme's would silently stop matching — and an unpaired theme is a
+    /// decision, spelled out here, not an accident.
+    #[test]
+    fn named_themes_pair_with_the_scheme_of_the_same_name() {
+        let names = ThemeChoice::ALL.map(theme_name);
+        for scheme in Palette::schemes() {
+            assert!(names.iter().any(|n| n == scheme), "{scheme} has no theme");
+        }
+        let unpaired: Vec<_> = names
+            .iter()
+            .filter(|n| Palette::named(n).is_none())
+            .collect();
+        assert_eq!(unpaired, ["dark", "light", "kanagawa-lotus", "ferra"]);
+    }
+
+    #[test]
+    fn the_mcp_catalogue_offers_exactly_the_panel_choices() {
+        let choices = |id: &str| {
+            termherd_mcp::OPTIONS
+                .iter()
+                .find(|o| o.id == id)
+                .expect("a catalogued option")
+                .choices
+                .to_vec()
+        };
+        assert_eq!(choices("theme"), ThemeChoice::ALL.map(theme_name));
+        assert_eq!(
+            choices("terminal.colors.scheme"),
+            Palette::schemes().collect::<Vec<_>>()
+        );
+    }
+
     /// What the panel would write, applied by the catalogue's own setter.
     fn saved(change: &AppearanceChange) -> Settings {
         let (id, value) = change.option();
@@ -1047,7 +1167,7 @@ mod tests {
 
     #[test]
     fn every_saved_scheme_reads_back_as_what_was_picked() {
-        for scheme in Palette::SCHEMES {
+        for scheme in Palette::schemes() {
             let s = saved(&AppearanceChange::Scheme(Some(scheme.to_string())));
             assert_eq!(s.terminal.colors.scheme.as_deref(), Some(scheme));
         }

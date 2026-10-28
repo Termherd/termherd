@@ -69,12 +69,30 @@ only when named explicitly. See [Status and attention](../workspace/status.md).
 
 ### `theme`
 
-`"dark"` (default), `"light"`, or one of the named presets
-`"solarized-dark"`, `"solarized-light"`, `"gruvbox-dark"`, `"gruvbox-light"`.
-GUI chrome only — sidebar, tab strip, buttons. The terminal grid keeps its own
-colours: pick the matching `terminal.colors.scheme` for a chrome that blends
-with it. An unknown value falls back to `"dark"` alone. Both keys are
-also set live from the [settings panel](../workspace/settings-panel.md).
+`"dark"` (default) or any value in the table below. GUI chrome only — sidebar,
+tab strip, buttons. The terminal grid keeps its own colours: give
+`terminal.colors.scheme` the same value for a chrome that blends with it. An
+unknown value falls back to `"dark"` alone. Both keys are also set live from
+the [settings panel](../workspace/settings-panel.md).
+
+| Value | Chrome theme | Matching `colors.scheme` |
+| --- | --- | --- |
+| `dark` | Dark | — (the built-in scheme) |
+| `light` | Light | — |
+| `solarized-dark` / `solarized-light` | Solarized | ✓ same value |
+| `gruvbox-dark` / `gruvbox-light` | Gruvbox | ✓ same value |
+| `dracula` | Dracula | ✓ same value |
+| `nord` | Nord | ✓ same value |
+| `catppuccin-latte` / `-frappe` / `-macchiato` / `-mocha` | Catppuccin | ✓ same value |
+| `tokyo-night` / `tokyo-night-storm` / `tokyo-night-light` | Tokyo Night | ✓ same value |
+| `kanagawa-wave` / `kanagawa-dragon` | Kanagawa | ✓ same value |
+| `kanagawa-lotus` | Kanagawa Lotus | — none published |
+| `moonfly` / `nightfly` / `oxocarbon` | each its own | ✓ same value |
+| `ferra` | Ferra | — none published |
+
+The session status dots and `/color` marks keep their hue on every theme, but
+are shaded darker or lighter where a theme's surface would otherwise wash them
+out.
 
 ### `close`
 
@@ -112,7 +130,7 @@ Per-action close confirmation. Both keys default to `"confirmWhenActive"`.
 | `font_size` | `14` | pixels, clamped to 6–40. The zoom chords step from here at runtime without rewriting it. |
 | `copy_on_select` | `false` | a drag release or a double-click copies the selection outright, no chord needed |
 | `paste_on_right_click` | `false` | a right-click pastes into the pane under the pointer, not necessarily the focused one |
-| `colors.scheme` | built-in | `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |
+| `colors.scheme` | built-in | every [`theme`](#theme) value marked ✓, e.g. `catppuccin-mocha` |
 | `colors.foreground` / `.background` / `.cursor` | from the scheme | `"#rrggbb"`; the `#` is optional |
 | `colors.palette` | from the scheme | the 16 ANSI colours — normal 0–7, then bright 8–15 |
 
