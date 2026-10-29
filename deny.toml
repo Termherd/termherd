@@ -43,6 +43,14 @@ ignore = [
     # quick-xml < 0.41. TODO: drop these once the parents reach quick-xml >=0.41.
     { id = "RUSTSEC-2026-0194", reason = "quick-xml DoS; unreachable — build-time/self-generated XML only, no upgrade path yet" },
     { id = "RUSTSEC-2026-0195", reason = "quick-xml DoS; unreachable — build-time/self-generated XML only, no upgrade path yet" },
+    # `zbus_names`, `zvariant` and `zvariant_derive` are unmaintained (no
+    # vulnerability), reached only through the D-Bus client `zbus`, which
+    # iced_winit → mundy (system appearance) and notify-rust (Linux
+    # notifications) pull in. No safe upgrade exists; drops out whenever zbus
+    # moves off them.
+    { id = "RUSTSEC-2026-0370", reason = "unmaintained, transitive via zbus (iced_winit, notify-rust); no safe upgrade" },
+    { id = "RUSTSEC-2026-0371", reason = "unmaintained, transitive via zbus (iced_winit, notify-rust); no safe upgrade" },
+    { id = "RUSTSEC-2026-0372", reason = "unmaintained, transitive via zbus (iced_winit, notify-rust); no safe upgrade" },
 ]
 
 [bans]
