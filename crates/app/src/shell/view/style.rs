@@ -293,30 +293,22 @@ mod tests {
         }
     }
 
-    /// The stock themes paint what they did before the push existed.
+    /// The six stock themes paint what they did before the push existed.
     #[test]
     fn the_stock_themes_keep_their_tuned_colours() {
-        let stock = [
-            ThemeChoice::Dark,
-            ThemeChoice::Light,
-            ThemeChoice::SolarizedDark,
-            ThemeChoice::SolarizedLight,
-            ThemeChoice::GruvboxDark,
-            ThemeChoice::GruvboxLight,
+        // (hue, painted on a light stock theme); a dark one paints the hue.
+        let cases = [
+            ([0.95, 0.7, 0.2], [0.57, 0.42, 0.12]),
+            ([1.0, 0.42, 0.40], [0.6, 0.252, 0.24]),
         ];
-        let hues = [
-            Color::from_rgb(0.95, 0.7, 0.2),
-            Color::from_rgb(1.0, 0.42, 0.40),
-        ];
-        for theme in stock.map(ThemeChoice::to_iced) {
+        for theme in ThemeChoice::ALL[..6].iter().map(|t| t.to_iced()) {
             let palette = theme.extended_palette();
-            for hue in hues {
-                let tuned = if palette.is_dark {
-                    hue
-                } else {
-                    mix(hue, Color::BLACK, LIGHT_SURFACE_DARKEN)
-                };
-                assert_eq!(on_surface(hue, palette), tuned, "{theme}");
+            for ([r, g, b], light) in cases {
+                let [er, eg, eb] = if palette.is_dark { [r, g, b] } else { light };
+                let got = on_surface(Color::from_rgb(r, g, b), palette);
+                for (got, want) in [(got.r, er), (got.g, eg), (got.b, eb)] {
+                    assert!((got - want).abs() < 1e-4, "{theme}: {got} vs {want}");
+                }
             }
         }
     }

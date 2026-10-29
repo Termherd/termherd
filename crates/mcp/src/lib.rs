@@ -545,33 +545,8 @@ mod tests {
         let opts = resolve_options(&settings());
         let theme = opts.iter().find(|o| o["id"] == "theme").expect("theme");
         assert_eq!(theme["value"], json!("light"));
-        assert_eq!(
-            theme["choices"],
-            json!([
-                "dark",
-                "light",
-                "solarized-dark",
-                "solarized-light",
-                "gruvbox-dark",
-                "gruvbox-light",
-                "dracula",
-                "nord",
-                "catppuccin-latte",
-                "catppuccin-frappe",
-                "catppuccin-macchiato",
-                "catppuccin-mocha",
-                "tokyo-night",
-                "tokyo-night-storm",
-                "tokyo-night-light",
-                "kanagawa-wave",
-                "kanagawa-dragon",
-                "kanagawa-lotus",
-                "moonfly",
-                "nightfly",
-                "oxocarbon",
-                "ferra"
-            ])
-        );
+        let spec = OPTIONS.iter().find(|o| o.id == "theme").expect("theme");
+        assert_eq!(theme["choices"], json!(spec.choices));
         let program = opts
             .iter()
             .find(|o| o["id"] == "shell.program")

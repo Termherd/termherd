@@ -4788,7 +4788,7 @@ mod key_routing {
         // be a no-op, not a second recolour of every terminal.
         let (mut shell, sink) = shell_with_appearance(ColorSettings::default());
         let _ = shell.update(Message::PickScheme(appearance::SchemeChoice(Some(
-            "solarized-dark",
+            ThemeChoice::SolarizedDark,
         ))));
         let echoed: crate::settings::Settings =
             serde_json::from_str(r#"{ "terminal": { "colors": { "scheme": "solarized-dark" } } }"#)
@@ -4861,7 +4861,7 @@ mod key_routing {
             serde_json::from_str(r##"{ "cursor": "#ff0000" }"##).expect("valid colours");
         let (mut shell, sink) = shell_with_appearance(colors);
         let _ = shell.update(Message::PickScheme(appearance::SchemeChoice(Some(
-            "gruvbox-light",
+            ThemeChoice::GruvboxLight,
         ))));
 
         let expected = termherd_pty::Palette {

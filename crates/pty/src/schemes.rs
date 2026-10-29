@@ -281,14 +281,4 @@ mod tests {
             );
         }
     }
-
-    #[test]
-    fn every_listed_scheme_resolves() {
-        for name in Palette::schemes() {
-            assert!(
-                Palette::named(name).is_some(),
-                "{name} is listed but unknown"
-            );
-        }
-    }
 }

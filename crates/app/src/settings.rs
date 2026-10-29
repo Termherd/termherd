@@ -375,35 +375,66 @@ impl TerminalSettings {
     }
 }
 
-/// Which iced theme dresses the GUI chrome: one variant per iced built-in.
-/// A named variant shares its settings name with the `terminal.colors.scheme`
-/// preset it matches, where one is published.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(into = "&'static str", try_from = "String")]
-pub enum ThemeChoice {
+/// One row per theme: the variant, its `settings.json` name, and the iced
+/// theme of the same variant name.
+macro_rules! theme_choices {
+    ($($(#[$attr:meta])* $variant:ident => $name:literal,)+) => {
+        /// Which iced theme dresses the GUI chrome: one variant per iced
+        /// built-in. A named variant shares its settings name with the
+        /// `terminal.colors.scheme` preset it matches, where one is published.
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(into = "&'static str", try_from = "String")]
+        pub enum ThemeChoice {
+            $($(#[$attr])* $variant,)+
+        }
+
+        impl ThemeChoice {
+            /// Every choice, in the order the settings panel lists them.
+            pub const ALL: [Self; [$($name),+].len()] = [$(Self::$variant),+];
+
+            /// The value `settings.json` spells this choice with.
+            #[must_use]
+            pub const fn settings_name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)+
+                }
+            }
+
+            /// The iced theme this choice maps to.
+            #[must_use]
+            pub fn to_iced(self) -> iced::Theme {
+                match self {
+                    $(Self::$variant => iced::Theme::$variant,)+
+                }
+            }
+        }
+    };
+}
+
+theme_choices! {
     #[default]
-    Dark,
-    Light,
-    SolarizedDark,
-    SolarizedLight,
-    GruvboxDark,
-    GruvboxLight,
-    Dracula,
-    Nord,
-    CatppuccinLatte,
-    CatppuccinFrappe,
-    CatppuccinMacchiato,
-    CatppuccinMocha,
-    TokyoNight,
-    TokyoNightStorm,
-    TokyoNightLight,
-    KanagawaWave,
-    KanagawaDragon,
-    KanagawaLotus,
-    Moonfly,
-    Nightfly,
-    Oxocarbon,
-    Ferra,
+    Dark => "dark",
+    Light => "light",
+    SolarizedDark => "solarized-dark",
+    SolarizedLight => "solarized-light",
+    GruvboxDark => "gruvbox-dark",
+    GruvboxLight => "gruvbox-light",
+    Dracula => "dracula",
+    Nord => "nord",
+    CatppuccinLatte => "catppuccin-latte",
+    CatppuccinFrappe => "catppuccin-frappe",
+    CatppuccinMacchiato => "catppuccin-macchiato",
+    CatppuccinMocha => "catppuccin-mocha",
+    TokyoNight => "tokyo-night",
+    TokyoNightStorm => "tokyo-night-storm",
+    TokyoNightLight => "tokyo-night-light",
+    KanagawaWave => "kanagawa-wave",
+    KanagawaDragon => "kanagawa-dragon",
+    KanagawaLotus => "kanagawa-lotus",
+    Moonfly => "moonfly",
+    Nightfly => "nightfly",
+    Oxocarbon => "oxocarbon",
+    Ferra => "ferra",
 }
 
 impl From<ThemeChoice> for &'static str {
@@ -486,96 +517,12 @@ impl Default for CloseSettings {
 }
 
 impl ThemeChoice {
-    /// Every choice, in the order the settings panel lists them.
-    pub const ALL: [Self; 22] = [
-        Self::Dark,
-        Self::Light,
-        Self::SolarizedDark,
-        Self::SolarizedLight,
-        Self::GruvboxDark,
-        Self::GruvboxLight,
-        Self::Dracula,
-        Self::Nord,
-        Self::CatppuccinLatte,
-        Self::CatppuccinFrappe,
-        Self::CatppuccinMacchiato,
-        Self::CatppuccinMocha,
-        Self::TokyoNight,
-        Self::TokyoNightStorm,
-        Self::TokyoNightLight,
-        Self::KanagawaWave,
-        Self::KanagawaDragon,
-        Self::KanagawaLotus,
-        Self::Moonfly,
-        Self::Nightfly,
-        Self::Oxocarbon,
-        Self::Ferra,
-    ];
-
-    /// The value `settings.json` spells this choice with.
-    #[must_use]
-    pub const fn settings_name(self) -> &'static str {
-        match self {
-            ThemeChoice::Dark => "dark",
-            ThemeChoice::Light => "light",
-            ThemeChoice::SolarizedDark => "solarized-dark",
-            ThemeChoice::SolarizedLight => "solarized-light",
-            ThemeChoice::GruvboxDark => "gruvbox-dark",
-            ThemeChoice::GruvboxLight => "gruvbox-light",
-            ThemeChoice::Dracula => "dracula",
-            ThemeChoice::Nord => "nord",
-            ThemeChoice::CatppuccinLatte => "catppuccin-latte",
-            ThemeChoice::CatppuccinFrappe => "catppuccin-frappe",
-            ThemeChoice::CatppuccinMacchiato => "catppuccin-macchiato",
-            ThemeChoice::CatppuccinMocha => "catppuccin-mocha",
-            ThemeChoice::TokyoNight => "tokyo-night",
-            ThemeChoice::TokyoNightStorm => "tokyo-night-storm",
-            ThemeChoice::TokyoNightLight => "tokyo-night-light",
-            ThemeChoice::KanagawaWave => "kanagawa-wave",
-            ThemeChoice::KanagawaDragon => "kanagawa-dragon",
-            ThemeChoice::KanagawaLotus => "kanagawa-lotus",
-            ThemeChoice::Moonfly => "moonfly",
-            ThemeChoice::Nightfly => "nightfly",
-            ThemeChoice::Oxocarbon => "oxocarbon",
-            ThemeChoice::Ferra => "ferra",
-        }
-    }
-
     /// The choice `settings.json` spells `name`, if any.
     #[must_use]
     pub fn from_settings_name(name: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
             .find(|theme| theme.settings_name() == name)
-    }
-
-    /// The iced theme this choice maps to.
-    #[must_use]
-    pub fn to_iced(self) -> iced::Theme {
-        match self {
-            ThemeChoice::Dark => iced::Theme::Dark,
-            ThemeChoice::Light => iced::Theme::Light,
-            ThemeChoice::SolarizedDark => iced::Theme::SolarizedDark,
-            ThemeChoice::SolarizedLight => iced::Theme::SolarizedLight,
-            ThemeChoice::GruvboxDark => iced::Theme::GruvboxDark,
-            ThemeChoice::GruvboxLight => iced::Theme::GruvboxLight,
-            ThemeChoice::Dracula => iced::Theme::Dracula,
-            ThemeChoice::Nord => iced::Theme::Nord,
-            ThemeChoice::CatppuccinLatte => iced::Theme::CatppuccinLatte,
-            ThemeChoice::CatppuccinFrappe => iced::Theme::CatppuccinFrappe,
-            ThemeChoice::CatppuccinMacchiato => iced::Theme::CatppuccinMacchiato,
-            ThemeChoice::CatppuccinMocha => iced::Theme::CatppuccinMocha,
-            ThemeChoice::TokyoNight => iced::Theme::TokyoNight,
-            ThemeChoice::TokyoNightStorm => iced::Theme::TokyoNightStorm,
-            ThemeChoice::TokyoNightLight => iced::Theme::TokyoNightLight,
-            ThemeChoice::KanagawaWave => iced::Theme::KanagawaWave,
-            ThemeChoice::KanagawaDragon => iced::Theme::KanagawaDragon,
-            ThemeChoice::KanagawaLotus => iced::Theme::KanagawaLotus,
-            ThemeChoice::Moonfly => iced::Theme::Moonfly,
-            ThemeChoice::Nightfly => iced::Theme::Nightfly,
-            ThemeChoice::Oxocarbon => iced::Theme::Oxocarbon,
-            ThemeChoice::Ferra => iced::Theme::Ferra,
-        }
     }
 }
 
