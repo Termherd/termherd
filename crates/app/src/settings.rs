@@ -375,59 +375,49 @@ impl TerminalSettings {
     }
 }
 
-/// Which iced theme dresses the GUI chrome (sidebar, tab strip, buttons).
-/// One variant per iced built-in theme. Every named variant but Kanagawa Lotus
-/// and Ferra shares its settings name with a `terminal.colors.scheme` preset,
-/// so the chrome can match the grid it frames; those two have no published
-/// terminal palette to pair with.
+/// Which iced theme dresses the GUI chrome: one variant per iced built-in.
+/// A named variant shares its settings name with the `terminal.colors.scheme`
+/// preset it matches, where one is published.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(into = "&'static str", try_from = "String")]
 pub enum ThemeChoice {
-    /// A dark chrome, matching the terminal's dark background.
     #[default]
     Dark,
-    /// A light chrome.
     Light,
-    /// Solarized Dark chrome.
     SolarizedDark,
-    /// Solarized Light chrome.
     SolarizedLight,
-    /// Gruvbox Dark chrome.
     GruvboxDark,
-    /// Gruvbox Light chrome.
     GruvboxLight,
-    /// Dracula chrome.
     Dracula,
-    /// Nord chrome.
     Nord,
-    /// Catppuccin Latte chrome.
     CatppuccinLatte,
-    /// Catppuccin Frappé chrome.
     CatppuccinFrappe,
-    /// Catppuccin Macchiato chrome.
     CatppuccinMacchiato,
-    /// Catppuccin Mocha chrome.
     CatppuccinMocha,
-    /// Tokyo Night chrome.
     TokyoNight,
-    /// Tokyo Night Storm chrome.
     TokyoNightStorm,
-    /// Tokyo Night Light chrome.
     TokyoNightLight,
-    /// Kanagawa Wave chrome.
     KanagawaWave,
-    /// Kanagawa Dragon chrome.
     KanagawaDragon,
-    /// Kanagawa Lotus chrome.
     KanagawaLotus,
-    /// Moonfly chrome.
     Moonfly,
-    /// Nightfly chrome.
     Nightfly,
-    /// Oxocarbon chrome.
     Oxocarbon,
-    /// Ferra chrome.
     Ferra,
+}
+
+impl From<ThemeChoice> for &'static str {
+    fn from(theme: ThemeChoice) -> Self {
+        theme.settings_name()
+    }
+}
+
+impl TryFrom<String> for ThemeChoice {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::from_settings_name(&name).ok_or(name)
+    }
 }
 
 /// The name a person reads — iced's own, so the picker and the theme it
@@ -521,6 +511,43 @@ impl ThemeChoice {
         Self::Oxocarbon,
         Self::Ferra,
     ];
+
+    /// The value `settings.json` spells this choice with.
+    #[must_use]
+    pub const fn settings_name(self) -> &'static str {
+        match self {
+            ThemeChoice::Dark => "dark",
+            ThemeChoice::Light => "light",
+            ThemeChoice::SolarizedDark => "solarized-dark",
+            ThemeChoice::SolarizedLight => "solarized-light",
+            ThemeChoice::GruvboxDark => "gruvbox-dark",
+            ThemeChoice::GruvboxLight => "gruvbox-light",
+            ThemeChoice::Dracula => "dracula",
+            ThemeChoice::Nord => "nord",
+            ThemeChoice::CatppuccinLatte => "catppuccin-latte",
+            ThemeChoice::CatppuccinFrappe => "catppuccin-frappe",
+            ThemeChoice::CatppuccinMacchiato => "catppuccin-macchiato",
+            ThemeChoice::CatppuccinMocha => "catppuccin-mocha",
+            ThemeChoice::TokyoNight => "tokyo-night",
+            ThemeChoice::TokyoNightStorm => "tokyo-night-storm",
+            ThemeChoice::TokyoNightLight => "tokyo-night-light",
+            ThemeChoice::KanagawaWave => "kanagawa-wave",
+            ThemeChoice::KanagawaDragon => "kanagawa-dragon",
+            ThemeChoice::KanagawaLotus => "kanagawa-lotus",
+            ThemeChoice::Moonfly => "moonfly",
+            ThemeChoice::Nightfly => "nightfly",
+            ThemeChoice::Oxocarbon => "oxocarbon",
+            ThemeChoice::Ferra => "ferra",
+        }
+    }
+
+    /// The choice `settings.json` spells `name`, if any.
+    #[must_use]
+    pub fn from_settings_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|theme| theme.settings_name() == name)
+    }
 
     /// The iced theme this choice maps to.
     #[must_use]
@@ -1096,12 +1123,13 @@ mod tests {
         }
     }
 
-    fn theme_name(theme: ThemeChoice) -> String {
-        serde_json::to_value(theme)
-            .expect("a theme serialises")
-            .as_str()
-            .expect("as a string")
-            .to_owned()
+    #[test]
+    fn every_settings_name_is_unique_and_is_what_serde_writes() {
+        for theme in ThemeChoice::ALL {
+            let name = theme.settings_name();
+            assert_eq!(ThemeChoice::from_settings_name(name), Some(theme));
+            assert_eq!(serde_json::json!(theme), serde_json::json!(name));
+        }
     }
 
     #[test]
@@ -1117,17 +1145,18 @@ mod tests {
         }
     }
 
-    /// The pairing is by name alone, so a scheme whose name drifts from its
-    /// theme's would silently stop matching — and an unpaired theme is a
-    /// decision, spelled out here, not an accident.
+    /// The pairing is by name alone; the unpaired themes are a decision.
     #[test]
     fn named_themes_pair_with_the_scheme_of_the_same_name() {
-        let names = ThemeChoice::ALL.map(theme_name);
         for scheme in Palette::schemes() {
-            assert!(names.iter().any(|n| n == scheme), "{scheme} has no theme");
+            assert!(
+                ThemeChoice::from_settings_name(scheme).is_some(),
+                "{scheme} has no theme"
+            );
         }
-        let unpaired: Vec<_> = names
-            .iter()
+        let unpaired: Vec<_> = ThemeChoice::ALL
+            .map(ThemeChoice::settings_name)
+            .into_iter()
             .filter(|n| Palette::named(n).is_none())
             .collect();
         assert_eq!(unpaired, ["dark", "light", "kanagawa-lotus", "ferra"]);
@@ -1143,7 +1172,10 @@ mod tests {
                 .choices
                 .to_vec()
         };
-        assert_eq!(choices("theme"), ThemeChoice::ALL.map(theme_name));
+        assert_eq!(
+            choices("theme"),
+            ThemeChoice::ALL.map(ThemeChoice::settings_name)
+        );
         assert_eq!(
             choices("terminal.colors.scheme"),
             Palette::schemes().collect::<Vec<_>>()

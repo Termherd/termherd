@@ -135,13 +135,12 @@ you want and strip the comments (the real file is strict JSON). In short:
 
 - `shell` — program + args launched for each session (default: the platform
   login shell).
-- `theme` — GUI chrome: `"dark"` (default), `"light"`, or any of iced's 20
-  named themes (Solarized, Gruvbox, Dracula, Nord, Catppuccin, Tokyo Night,
-  Kanagawa, …); the terminal grid keeps its own colours.
+- `theme` — GUI chrome: any of iced's 22 themes, `"dark"` by default; the
+  terminal grid keeps its own colours.
 - `close` — per-action close confirmation (`tab`, `app`): always, only while
   a foreground process runs (default), or never.
 - `terminal` — base `font_size` (the zoom shortcuts step from it), grid
-  `colors` (a named scheme — 18 of them, each named like its chrome theme — plus
+  `colors` (one of 18 schemes, each named like its chrome theme, plus
   per-slot overrides), and the two clipboard mouse gestures
   (`copy_on_select`, `paste_on_right_click`), both off by default.
 - `sidebar` — sessions listed per project before the tail folds behind an

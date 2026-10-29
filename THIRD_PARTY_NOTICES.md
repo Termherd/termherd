@@ -1,14 +1,11 @@
 # Third-party notices
 
-TermHerd embeds data written by others. This file carries the notices their
-licences ask a copy to keep, and ships beside the binary in every release
-archive.
+Notices for data TermHerd embeds. Ships with every release.
 
 ## Terminal colour schemes
 
-The built-in `terminal.colors.scheme` palettes (`crates/pty/src/schemes.rs`)
-are colour values from the projects below. Each is under the MIT licence,
-whose permission notice follows the table.
+`crates/pty/src/schemes.rs` holds colour values from these MIT projects; the
+permission notice follows the table.
 
 | Schemes | Project | Copyright |
 | --- | --- | --- |

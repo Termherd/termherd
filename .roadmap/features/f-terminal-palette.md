@@ -22,11 +22,7 @@ fixed hand-tuned table (legibility guards). Deliberately out: selection colour
 (app affordance), live reload (waits for the in-app settings panel). Verified
 end-to-end via F-capture on a real session (Solarized Light)
 
-Since then the settings panel made both keys live, and the catalogue widened
-to every iced chrome theme (22) with 14 terminal schemes taken from
-alacritty-theme (Apache-2.0) beside the four originals, each named like its
-chrome theme. One table in `pty::schemes` now drives both the picker and the
-lookup. Kanagawa Lotus and Ferra stay chrome-only: no terminal palette is
-published for them. The chrome marks (status dots, `/color`) shade per
-surface to hold the WCAG 3:1 floor on every theme, instead of a fixed
-dark/light step.
+Since then (#381): both keys apply live; all 22 iced chrome themes, 18
+same-name schemes (14 from alacritty-theme, Apache-2.0) in one `pty::schemes`
+table; chrome marks shaded per theme to hold 3:1. Kanagawa Lotus and Ferra
+have no published palette.

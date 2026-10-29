@@ -69,30 +69,23 @@ only when named explicitly. See [Status and attention](../workspace/status.md).
 
 ### `theme`
 
-`"dark"` (default) or any value in the table below. GUI chrome only — sidebar,
-tab strip, buttons. The terminal grid keeps its own colours: give
-`terminal.colors.scheme` the same value for a chrome that blends with it. An
-unknown value falls back to `"dark"` alone. Both keys are also set live from
-the [settings panel](../workspace/settings-panel.md).
+GUI chrome only: sidebar, tab strip, buttons. `"dark"` by default; an unknown
+value falls back to it. A ✓ value also names a `terminal.colors.scheme`; give
+both keys the same one for a matching window. Both are set live from the
+[settings panel](../workspace/settings-panel.md).
 
-| Value | Chrome theme | Matching `colors.scheme` |
-| --- | --- | --- |
-| `dark` | Dark | — (the built-in scheme) |
-| `light` | Light | — |
-| `solarized-dark` / `solarized-light` | Solarized | ✓ same value |
-| `gruvbox-dark` / `gruvbox-light` | Gruvbox | ✓ same value |
-| `dracula` | Dracula | ✓ same value |
-| `nord` | Nord | ✓ same value |
-| `catppuccin-latte` / `-frappe` / `-macchiato` / `-mocha` | Catppuccin | ✓ same value |
-| `tokyo-night` / `tokyo-night-storm` / `tokyo-night-light` | Tokyo Night | ✓ same value |
-| `kanagawa-wave` / `kanagawa-dragon` | Kanagawa | ✓ same value |
-| `kanagawa-lotus` | Kanagawa Lotus | — none published |
-| `moonfly` / `nightfly` / `oxocarbon` | each its own | ✓ same value |
-| `ferra` | Ferra | — none published |
+| `theme` values | Same-name `colors.scheme` |
+| --- | --- |
+| `dark`, `light` | — |
+| `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` | ✓ |
+| `dracula`, `nord` | ✓ |
+| `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha` | ✓ |
+| `tokyo-night`, `tokyo-night-storm`, `tokyo-night-light` | ✓ |
+| `kanagawa-wave`, `kanagawa-dragon` | ✓ |
+| `kanagawa-lotus`, `ferra` | — none published |
+| `moonfly`, `nightfly`, `oxocarbon` | ✓ |
 
-The session status dots and `/color` marks keep their hue on every theme, but
-are shaded darker or lighter where a theme's surface would otherwise wash them
-out.
+Status dots and `/color` marks are shaded per theme to stay legible.
 
 ### `close`
 

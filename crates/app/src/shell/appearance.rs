@@ -41,16 +41,15 @@ impl SchemeChoice {
     }
 }
 
-/// A scheme reads as the chrome theme of the same name, so the two pickers
-/// label one theme alike (`Catppuccin Frappé`, accent included).
+/// Labelled as the chrome theme of the same name, so both pickers agree.
 impl fmt::Display for SchemeChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Some(name) = self.0 else {
             return f.write_str(crate::strings::SETTINGS_SCHEME_BUILTIN);
         };
-        match serde_json::from_value::<ThemeChoice>(name.into()) {
-            Ok(theme) => theme.fmt(f),
-            Err(_) => f.write_str(name),
+        match ThemeChoice::from_settings_name(name) {
+            Some(theme) => theme.fmt(f),
+            None => f.write_str(name),
         }
     }
 }

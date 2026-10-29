@@ -1,29 +1,16 @@
-//! The built-in terminal colour schemes `terminal.colors.scheme` names.
-//!
-//! One table, [`NAMED`], is both the catalogue a picker lists and what a name
-//! resolves to, so the two cannot disagree. Each scheme beyond Solarized and
-//! Gruvbox shares its settings name with the iced chrome theme it matches, so
-//! picking the same name for both keys dresses the window in one theme.
-//!
-//! Provenance: Solarized and Gruvbox from their published specifications;
-//! every other scheme converted from the alacritty-theme collection
-//! (<https://github.com/alacritty/alacritty-theme>, Apache-2.0), its colours
-//! from each theme's own MIT project. `THIRD_PARTY_NOTICES.md` at the
-//! repository root carries every notice, and ships with each release, so a
-//! scheme added here owes a row there.
+//! The built-in `terminal.colors.scheme` presets, each named like the chrome
+//! theme it matches. Their licences are in `THIRD_PARTY_NOTICES.md`, which a
+//! new scheme owes a row.
 
 use crate::grid::Palette;
 
 impl Palette {
-    /// Every name [`Palette::named`] resolves, in the order a picker lists
-    /// them.
+    /// Every name [`Palette::named`] resolves, in picker order.
     pub fn schemes() -> impl Iterator<Item = &'static str> {
         NAMED.iter().map(|(name, _)| *name)
     }
 
-    /// A built-in scheme by its settings name (`terminal.colors.scheme`), or
-    /// `None` when unknown. The unnamed built-in default is
-    /// [`Palette::default`].
+    /// A built-in scheme by its settings name, or `None` when unknown.
     #[must_use]
     pub fn named(name: &str) -> Option<Self> {
         NAMED
@@ -32,8 +19,6 @@ impl Palette {
             .map(|(_, palette)| palette.clone())
     }
 
-    /// The scheme with its own cursor colour, for a theme that publishes one
-    /// instead of leaving the cursor on the foreground.
     const fn with_cursor(self, cursor: u32) -> Self {
         Self {
             cursor: hex(cursor),
@@ -42,8 +27,7 @@ impl Palette {
     }
 }
 
-/// A scheme whose cursor sits on its foreground, from the `0xrrggbb` values
-/// its specification publishes.
+/// A scheme whose cursor sits on its foreground.
 const fn scheme(foreground: u32, background: u32, ansi: &[u32; 16]) -> Palette {
     let mut rgb = [[0; 3]; 16];
     let mut i = 0;
@@ -64,7 +48,7 @@ const fn hex(c: u32) -> [u8; 3] {
     [(c >> 16) as u8, (c >> 8) as u8, c as u8]
 }
 
-const NAMED: [(&str, Palette); 18] = [
+static NAMED: [(&str, Palette); 18] = [
     (
         "solarized-dark",
         scheme(0x839496, 0x002b36, &SOLARIZED_ANSI),
@@ -255,9 +239,7 @@ mod tests {
         assert_eq!(Palette::named("no-such-scheme"), None);
     }
 
-    /// Spot-checks against the upstream alacritty-theme files, one with a
-    /// published cursor and one without, so a table transcribed off by one
-    /// row or one field fails here.
+    /// Upstream values, one scheme with a published cursor and one without.
     #[test]
     fn imported_schemes_keep_their_published_values() {
         let mocha = Palette::named("catppuccin-mocha").expect("known scheme");
@@ -286,10 +268,15 @@ mod tests {
     /// The licences ride with the binary only if each scheme has its row.
     #[test]
     fn every_scheme_is_credited_in_the_third_party_notices() {
-        let notices = include_str!("../../../THIRD_PARTY_NOTICES.md");
+        let credited: Vec<&str> = include_str!("../../../THIRD_PARTY_NOTICES.md")
+            .lines()
+            .filter_map(|line| line.strip_prefix('|')?.split('|').next())
+            .flat_map(|cell| cell.split(','))
+            .map(|name| name.trim().trim_matches('`'))
+            .collect();
         for name in Palette::schemes() {
             assert!(
-                notices.contains(&format!("`{name}`")),
+                credited.contains(&name),
                 "{name} has no row in THIRD_PARTY_NOTICES.md"
             );
         }

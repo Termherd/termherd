@@ -39,8 +39,6 @@ pub(super) fn status_dot<'a>(status: SessionStatus) -> Text<'a> {
         })
 }
 
-/// The dot colour for a status, made legible on the theme's surfaces by
-/// [`on_surface`].
 fn status_color(status: SessionStatus, palette: &Extended) -> Color {
     let hue = match status {
         SessionStatus::Starting => Color::from_rgb(0.55, 0.55, 0.6),
@@ -52,23 +50,32 @@ fn status_color(status: SessionStatus, palette: &Extended) -> Color {
     on_surface(hue, palette)
 }
 
-/// A hue tuned against a dark surface, made legible on this theme's: darkened
-/// by a fixed step on a light theme, then pushed further from the surface —
-/// toward black on a light theme, white on a dark one — until it clears
-/// [`MARK_FLOOR`] against every surface a mark sits on. The fixed step alone
-/// suits the stock themes; a mid-tone surface (Nord, Tokyo Night Light) needs
-/// the push. Which hue means what never changes, only how far it is shaded.
+/// The hues are tuned for a dark surface. The fixed light-theme darkening
+/// suits the stock themes; a mid-tone surface (Nord, Tokyo Night Light) also
+/// needs the push away from it, until the mark clears [`MARK_FLOOR`] on the
+/// [`mark_surfaces`].
 fn on_surface(hue: Color, palette: &Extended) -> Color {
     let (start, away) = if palette.is_dark {
         (hue, Color::WHITE)
     } else {
         (mix(hue, Color::BLACK, LIGHT_SURFACE_DARKEN), Color::BLACK)
     };
-    let surfaces = [palette.background.base.color, palette.background.weak.color];
+    let surfaces = mark_surfaces(palette).map(luminance);
     (0..=SHADE_STEPS)
-        .map(|step| mix(start, away, step as f32 / SHADE_STEPS as f32))
-        .find(|shade| surfaces.iter().all(|s| contrast(*shade, *s) >= MARK_FLOOR))
+        .map(|step| mix(start, away, f32::from(step) / f32::from(SHADE_STEPS)))
+        .find(|shade| {
+            let shade = luminance(*shade);
+            surfaces
+                .iter()
+                .all(|s| contrast_ratio(shade, *s) >= MARK_FLOOR)
+        })
         .unwrap_or(away)
+}
+
+/// The backgrounds a mark must read on. Not the active tab chip's fill: its
+/// status dot is unshaded against it.
+fn mark_surfaces(palette: &Extended) -> [Color; 2] {
+    [palette.background.base.color, palette.background.weak.color]
 }
 
 /// How far a status hue moves toward black on a light surface.
@@ -92,15 +99,13 @@ fn luminance(c: Color) -> f32 {
     0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
 }
 
-/// WCAG contrast ratio, from 1 (none) to 21 (black on white).
-fn contrast(a: Color, b: Color) -> f32 {
-    let (la, lb) = (luminance(a), luminance(b));
+/// WCAG contrast ratio of two luminances, from 1 to 21.
+fn contrast_ratio(la: f32, lb: f32) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
 /// What a `/color` name paints in termherd's chrome, or `None` for
 /// [`ClaudeColor::Default`], which leaves a session with no colour of its own.
-/// Shaded like the status dots, by [`on_surface`].
 pub(super) fn claude_color(color: ClaudeColor, palette: &Extended) -> Option<Color> {
     let hue = match color {
         ClaudeColor::Red => Color::from_rgb(1.0, 0.42, 0.40),
@@ -249,8 +254,8 @@ mod tests {
         ThemeChoice::ALL.map(ThemeChoice::to_iced).into_iter()
     }
 
-    fn surfaces(palette: &Extended) -> [Color; 2] {
-        [palette.background.base.color, palette.background.weak.color]
+    fn contrast(a: Color, b: Color) -> f32 {
+        contrast_ratio(luminance(a), luminance(b))
     }
 
     /// The colours that paint: every `/color` name but `default`.
@@ -265,7 +270,7 @@ mod tests {
     fn every_status_dot_reads_on_every_theme_chrome() {
         for theme in every_theme() {
             let palette = theme.extended_palette();
-            for surface in surfaces(palette) {
+            for surface in mark_surfaces(palette) {
                 for status in ALL {
                     let ratio = contrast(status_color(status, palette), surface);
                     assert!(ratio >= MARK_FLOOR, "{status:?} on {theme}: {ratio:.2}");
@@ -278,7 +283,7 @@ mod tests {
     fn every_session_colour_reads_on_every_theme_chrome() {
         for theme in every_theme() {
             let palette = theme.extended_palette();
-            for surface in surfaces(palette) {
+            for surface in mark_surfaces(palette) {
                 for color in painted_colors() {
                     let paint = claude_color(color, palette).expect("painted");
                     let ratio = contrast(paint, surface);
@@ -288,9 +293,7 @@ mod tests {
         }
     }
 
-    /// The push only shades a hue that needs it: on the stock themes every
-    /// mark is still the hue itself on a dark surface, and the fixed darkening
-    /// on a light one — what they painted before themes beyond those existed.
+    /// The stock themes paint what they did before the push existed.
     #[test]
     fn the_stock_themes_keep_their_tuned_colours() {
         let stock = [
@@ -318,22 +321,20 @@ mod tests {
         }
     }
 
-    /// A mid-tone surface is where the push earns its keep: the hue the stock
-    /// rule would paint fails the floor there, and the shaded one clears it.
     #[test]
     fn a_mid_tone_surface_shades_the_hue_until_it_reads() {
         let palette = iced::Theme::TokyoNightLight.extended_palette();
         let busy = Color::from_rgb(0.95, 0.7, 0.2);
         let stock = mix(busy, Color::BLACK, LIGHT_SURFACE_DARKEN);
         assert!(
-            surfaces(palette)
+            mark_surfaces(palette)
                 .iter()
                 .any(|s| contrast(stock, *s) < MARK_FLOOR),
             "the stock shade must fail here, or this test proves nothing"
         );
         let shaded = on_surface(busy, palette);
         assert!(luminance(shaded) < luminance(stock), "pushed toward black");
-        for surface in surfaces(palette) {
+        for surface in mark_surfaces(palette) {
             assert!(contrast(shaded, surface) >= MARK_FLOOR);
         }
     }
