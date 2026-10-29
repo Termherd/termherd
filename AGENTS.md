@@ -89,6 +89,24 @@ TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app   # second instance
 `temp_dir()` honours `$TMPDIR`, so both run. Launch detached when you need to
 keep interacting with the original window (e.g. to compare quit behaviour).
 
+**A second instance shares `~/.termherd/settings.json` with the first.** The
+lock moved, the settings did not: a theme picked in the test build is
+persisted to the same file, and the settings watch repaints the user's own
+app with it. Point the home at a throwaway directory too. `paths::home_dir`
+reads `USERPROFILE` before `HOME`, and a worktree-isolated agent session
+refused a command setting `HOME` (it injects git config), so use
+`USERPROFILE`:
+
+```bash
+USERPROFILE=$(mktemp -d) TMPDIR=$(mktemp -d) cargo run -p termherd-app
+```
+
+The fake home hides `~/.claude` as well, so that build starts with an empty
+sidebar and finds no session files: fine for a theme or layout check, wrong
+for anything that reads Claude's data. And the lock follows `TMPDIR` on macOS
+only (`instance.rs`); elsewhere its path is fixed, so two instances cannot run
+side by side there at all.
+
 **A build an agent launches is not a build a user launches.** The agent's shell
 carries its own Claude session's `CLAUDE*` variables (`CLAUDECODE`,
 `CLAUDE_CODE_CHILD_SESSION`, the session id and messaging socket), and termherd
