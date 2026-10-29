@@ -287,7 +287,7 @@ fn tab_chip_style(
     color: Option<ClaudeColor>,
 ) -> container::Style {
     let palette = theme.extended_palette();
-    let outline = color.and_then(|c| claude_color(c, palette.is_dark));
+    let outline = color.and_then(|c| claude_color(c, palette));
     let bg = active.then_some(palette.primary.base.color);
     let fg = tab_chip_text(theme, active);
     let fade = |c: Color| super::mix(c, palette.background.base.color, 0.55);

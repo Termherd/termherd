@@ -4,6 +4,7 @@
 //! colour is pulled from the theme palette rather than hardcoded, so the whole
 //! view tracks the theme system once it lands.
 
+use iced::theme::palette::Extended;
 use iced::widget::text::Text;
 use iced::widget::{container, text};
 use iced::{Color, Element};
@@ -34,14 +35,11 @@ pub(super) fn status_dot<'a>(status: SessionStatus) -> Text<'a> {
     text("●")
         .size(9)
         .style(move |theme: &iced::Theme| text::Style {
-            color: Some(status_color(status, theme.extended_palette().is_dark)),
+            color: Some(status_color(status, theme.extended_palette())),
         })
 }
 
-/// The dot colour for a status. The hues are tuned against a dark surface;
-/// on a light one they wash out, so they are darkened by the same step to keep
-/// the dot legible without changing which hue means what.
-fn status_color(status: SessionStatus, dark_surface: bool) -> Color {
+fn status_color(status: SessionStatus, palette: &Extended) -> Color {
     let hue = match status {
         SessionStatus::Starting => Color::from_rgb(0.55, 0.55, 0.6),
         SessionStatus::Busy => Color::from_rgb(0.95, 0.7, 0.2),
@@ -49,27 +47,66 @@ fn status_color(status: SessionStatus, dark_surface: bool) -> Color {
         SessionStatus::Attention => Color::from_rgb(0.95, 0.35, 0.35),
         SessionStatus::Exited => Color::from_rgb(0.5, 0.5, 0.5),
     };
-    on_surface(hue, dark_surface)
+    on_surface(hue, palette)
 }
 
-/// A hue tuned against a dark surface, darkened on a light one so it keeps
-/// its contrast without changing which hue means what.
-fn on_surface(hue: Color, dark_surface: bool) -> Color {
-    if dark_surface {
-        hue
+/// The hues are tuned for a dark surface. The fixed light-theme darkening
+/// suits the stock themes; a mid-tone surface (Nord, Tokyo Night Light) also
+/// needs the push away from it, until the mark clears [`MARK_FLOOR`] on the
+/// [`mark_surfaces`].
+fn on_surface(hue: Color, palette: &Extended) -> Color {
+    let (start, away) = if palette.is_dark {
+        (hue, Color::WHITE)
     } else {
-        mix(hue, Color::BLACK, LIGHT_SURFACE_DARKEN)
-    }
+        (mix(hue, Color::BLACK, LIGHT_SURFACE_DARKEN), Color::BLACK)
+    };
+    let surfaces = mark_surfaces(palette).map(luminance);
+    (0..=SHADE_STEPS)
+        .map(|step| mix(start, away, f32::from(step) / f32::from(SHADE_STEPS)))
+        .find(|shade| {
+            let shade = luminance(*shade);
+            surfaces
+                .iter()
+                .all(|s| contrast_ratio(shade, *s) >= MARK_FLOOR)
+        })
+        .unwrap_or(away)
+}
+
+/// The backgrounds a mark must read on. Not the active tab chip's fill: its
+/// status dot is unshaded against it.
+fn mark_surfaces(palette: &Extended) -> [Color; 2] {
+    [palette.background.base.color, palette.background.weak.color]
 }
 
 /// How far a status hue moves toward black on a light surface.
 const LIGHT_SURFACE_DARKEN: f32 = 0.4;
 
+/// The WCAG contrast floor for non-text UI components.
+const MARK_FLOOR: f32 = 3.0;
+
+/// How finely [`on_surface`] shades a hue toward black or white.
+const SHADE_STEPS: u8 = 20;
+
+/// WCAG relative luminance.
+fn luminance(c: Color) -> f32 {
+    let lin = |v: f32| {
+        if v <= 0.039_28 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+}
+
+/// WCAG contrast ratio of two luminances, from 1 to 21.
+fn contrast_ratio(la: f32, lb: f32) -> f32 {
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
 /// What a `/color` name paints in termherd's chrome, or `None` for
 /// [`ClaudeColor::Default`], which leaves a session with no colour of its own.
-/// Like the status dots, the hues are tuned against a dark surface and
-/// darkened by the same step on a light one.
-pub(super) fn claude_color(color: ClaudeColor, dark_surface: bool) -> Option<Color> {
+pub(super) fn claude_color(color: ClaudeColor, palette: &Extended) -> Option<Color> {
     let hue = match color {
         ClaudeColor::Red => Color::from_rgb(1.0, 0.42, 0.40),
         ClaudeColor::Blue => Color::from_rgb(0.42, 0.62, 1.0),
@@ -81,7 +118,7 @@ pub(super) fn claude_color(color: ClaudeColor, dark_surface: bool) -> Option<Col
         ClaudeColor::Cyan => Color::from_rgb(0.24, 0.80, 0.86),
         ClaudeColor::Default => return None,
     };
-    Some(on_surface(hue, dark_surface))
+    Some(on_surface(hue, palette))
 }
 
 /// The width of a session colour's mark: a chip's outline, a sidebar bar.
@@ -96,7 +133,7 @@ pub(super) fn color_swatch<'a, M: 'a>(color: ClaudeColor) -> Element<'a, M> {
         .style(move |theme: &iced::Theme| {
             let palette = theme.extended_palette();
             container::Style {
-                background: claude_color(color, palette.is_dark).map(iced::Background::Color),
+                background: claude_color(color, palette).map(iced::Background::Color),
                 border: iced::Border {
                     color: palette.background.strong.color,
                     width: 1.0,
@@ -120,7 +157,7 @@ pub(super) fn color_bar<'a, M: 'a>(color: ClaudeColor) -> Option<container::Cont
             .width(COLOR_MARK_WIDTH + 1.0)
             .height(14)
             .style(move |theme: &iced::Theme| container::Style {
-                background: claude_color(color, theme.extended_palette().is_dark)
+                background: claude_color(color, theme.extended_palette())
                     .map(iced::Background::Color),
                 border: iced::Border {
                     radius: 1.0.into(),
@@ -203,26 +240,7 @@ pub(super) fn clip(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// WCAG relative luminance, enough to compare contrast ratios.
-    fn luminance(c: Color) -> f32 {
-        let lin = |v: f32| {
-            if v <= 0.039_28 {
-                v / 12.92
-            } else {
-                ((v + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
-    }
-
-    fn contrast(a: Color, b: Color) -> f32 {
-        let (hi, lo) = {
-            let (la, lb) = (luminance(a), luminance(b));
-            if la > lb { (la, lb) } else { (lb, la) }
-        };
-        (hi + 0.05) / (lo + 0.05)
-    }
+    use crate::settings::ThemeChoice;
 
     const ALL: [SessionStatus; 5] = [
         SessionStatus::Starting,
@@ -232,23 +250,12 @@ mod tests {
         SessionStatus::Exited,
     ];
 
-    #[test]
-    fn every_status_dot_reads_on_every_light_chrome() {
-        // The WCAG floor for non-text UI components.
-        const FLOOR: f32 = 3.0;
-        let light = crate::settings::ThemeChoice::ALL
-            .map(crate::settings::ThemeChoice::to_iced)
-            .into_iter()
-            .filter(|theme| !theme.extended_palette().is_dark);
-        for theme in light {
-            let palette = theme.extended_palette();
-            for surface in [palette.background.base.color, palette.background.weak.color] {
-                for status in ALL {
-                    let ratio = contrast(status_color(status, false), surface);
-                    assert!(ratio >= FLOOR, "{status:?} on {theme}: {ratio:.2}");
-                }
-            }
-        }
+    fn every_theme() -> impl Iterator<Item = iced::Theme> {
+        ThemeChoice::ALL.map(ThemeChoice::to_iced).into_iter()
+    }
+
+    fn contrast(a: Color, b: Color) -> f32 {
+        contrast_ratio(luminance(a), luminance(b))
     }
 
     /// The colours that paint: every `/color` name but `default`.
@@ -260,56 +267,114 @@ mod tests {
     }
 
     #[test]
-    fn default_paints_nothing_and_every_other_name_paints() {
-        assert_eq!(claude_color(ClaudeColor::Default, true), None);
-        assert_eq!(claude_color(ClaudeColor::Default, false), None);
-        let painted = ClaudeColor::ALL
-            .into_iter()
-            .filter(|c| claude_color(*c, true).is_some())
-            .collect::<Vec<_>>();
-        assert_eq!(painted, painted_colors());
+    fn every_status_dot_reads_on_every_theme_chrome() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            for surface in mark_surfaces(palette) {
+                for status in ALL {
+                    let ratio = contrast(status_color(status, palette), surface);
+                    assert!(ratio >= MARK_FLOOR, "{status:?} on {theme}: {ratio:.2}");
+                }
+            }
+        }
     }
 
     #[test]
     fn every_session_colour_reads_on_every_theme_chrome() {
-        // The WCAG floor for non-text UI components, against the surfaces a
-        // chip outline and a sidebar bar sit on.
-        const FLOOR: f32 = 3.0;
-        for theme in crate::settings::ThemeChoice::ALL.map(crate::settings::ThemeChoice::to_iced) {
+        for theme in every_theme() {
             let palette = theme.extended_palette();
-            for surface in [palette.background.base.color, palette.background.weak.color] {
+            for surface in mark_surfaces(palette) {
                 for color in painted_colors() {
-                    let paint = claude_color(color, palette.is_dark).expect("painted");
+                    let paint = claude_color(color, palette).expect("painted");
                     let ratio = contrast(paint, surface);
-                    assert!(ratio >= FLOOR, "{color:?} on {theme}: {ratio:.2}");
+                    assert!(ratio >= MARK_FLOOR, "{color:?} on {theme}: {ratio:.2}");
                 }
             }
+        }
+    }
+
+    /// The six stock themes paint what they did before the push existed.
+    #[test]
+    fn the_stock_themes_keep_their_tuned_colours() {
+        // (hue, painted on a light stock theme); a dark one paints the hue.
+        let cases = [
+            ([0.95, 0.7, 0.2], [0.57, 0.42, 0.12]),
+            ([1.0, 0.42, 0.40], [0.6, 0.252, 0.24]),
+        ];
+        for theme in ThemeChoice::ALL[..6].iter().map(|t| t.to_iced()) {
+            let palette = theme.extended_palette();
+            for ([r, g, b], light) in cases {
+                let [er, eg, eb] = if palette.is_dark { [r, g, b] } else { light };
+                let got = on_surface(Color::from_rgb(r, g, b), palette);
+                for (got, want) in [(got.r, er), (got.g, eg), (got.b, eb)] {
+                    assert!((got - want).abs() < 1e-4, "{theme}: {got} vs {want}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_mid_tone_surface_shades_the_hue_until_it_reads() {
+        let palette = iced::Theme::TokyoNightLight.extended_palette();
+        let busy = Color::from_rgb(0.95, 0.7, 0.2);
+        let stock = mix(busy, Color::BLACK, LIGHT_SURFACE_DARKEN);
+        assert!(
+            mark_surfaces(palette)
+                .iter()
+                .any(|s| contrast(stock, *s) < MARK_FLOOR),
+            "the stock shade must fail here, or this test proves nothing"
+        );
+        let shaded = on_surface(busy, palette);
+        assert!(luminance(shaded) < luminance(stock), "pushed toward black");
+        for surface in mark_surfaces(palette) {
+            assert!(contrast(shaded, surface) >= MARK_FLOOR);
+        }
+    }
+
+    #[test]
+    fn default_paints_nothing_and_every_other_name_paints() {
+        for theme in [iced::Theme::Dark, iced::Theme::Light] {
+            let palette = theme.extended_palette();
+            assert_eq!(claude_color(ClaudeColor::Default, palette), None);
+            let painted = ClaudeColor::ALL
+                .into_iter()
+                .filter(|c| claude_color(*c, palette).is_some())
+                .collect::<Vec<_>>();
+            assert_eq!(painted, painted_colors());
         }
     }
 
     #[test]
     fn no_two_session_colours_paint_alike() {
-        for dark in [true, false] {
-            let palette = painted_colors();
-            for (i, a) in palette.iter().enumerate() {
-                for b in &palette[i + 1..] {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            let colors = painted_colors();
+            for (i, a) in colors.iter().enumerate() {
+                for b in &colors[i + 1..] {
                     let (pa, pb) = (
-                        claude_color(*a, dark).expect("painted"),
-                        claude_color(*b, dark).expect("painted"),
+                        claude_color(*a, palette).expect("painted"),
+                        claude_color(*b, palette).expect("painted"),
                     );
                     let distance = (pa.r - pb.r).abs() + (pa.g - pb.g).abs() + (pa.b - pb.b).abs();
-                    assert!(distance > 0.2, "{a:?} and {b:?} (dark: {dark})");
+                    assert!(distance > 0.2, "{a:?} and {b:?} on {theme}");
                 }
             }
         }
     }
 
     #[test]
-    fn a_dark_surface_keeps_the_original_hues() {
+    fn a_light_surface_darkens_every_status_hue() {
+        let (dark, light) = (
+            iced::Theme::Dark.extended_palette(),
+            iced::Theme::Light.extended_palette(),
+        );
         for status in ALL {
-            let dark = status_color(status, true);
-            let light = status_color(status, false);
-            assert!(luminance(light) < luminance(dark), "{status:?} darkens");
+            let on_dark = status_color(status, dark);
+            let on_light = status_color(status, light);
+            assert!(
+                luminance(on_light) < luminance(on_dark),
+                "{status:?} darkens"
+            );
         }
     }
 }

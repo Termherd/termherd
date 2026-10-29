@@ -48,6 +48,7 @@ mod launch;
 mod manager;
 mod mode;
 mod prompt;
+mod schemes;
 mod session;
 mod status;
 mod workdir;

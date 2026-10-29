@@ -33,10 +33,13 @@
   },
 
   // ── Theme ────────────────────────────────────────────────────────────────
-  // GUI chrome theme (sidebar, tab strip, buttons): "dark" (default),
-  // "light", "solarized-dark", "solarized-light", "gruvbox-dark" or
-  // "gruvbox-light". The terminal grid keeps its own colours — pair a named
-  // theme with the same `terminal.colors.scheme` for a matching chrome.
+  // GUI chrome theme: "dark" (default), "light", "solarized-dark",
+  // "solarized-light", "gruvbox-dark", "gruvbox-light", "dracula", "nord",
+  // "catppuccin-latte", "catppuccin-frappe", "catppuccin-macchiato",
+  // "catppuccin-mocha", "tokyo-night", "tokyo-night-storm",
+  // "tokyo-night-light", "kanagawa-wave", "kanagawa-dragon",
+  // "kanagawa-lotus", "moonfly", "nightfly", "oxocarbon" or "ferra".
+  // Give `terminal.colors.scheme` the same value for a matching grid.
   "theme": "dark",
 
   // ── Close confirmation ──────────────────────────────────────────────────
@@ -123,9 +126,8 @@
     // individual slots; every field is optional and a malformed colour
     // degrades to its default alone.
     "colors": {
-      // Built-in scheme the overrides start from: "solarized-dark",
-      // "solarized-light", "gruvbox-dark" or "gruvbox-light".
-      // Omit for the built-in default scheme.
+      // Built-in scheme the overrides start from: any `theme` value above but
+      // "dark", "light", "kanagawa-lotus" and "ferra". Omit for the default.
       "scheme": "solarized-dark",
       // Default text / background / cursor-block colours, "#rrggbb"
       // (the "#" is optional).

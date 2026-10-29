@@ -69,12 +69,23 @@ only when named explicitly. See [Status and attention](../workspace/status.md).
 
 ### `theme`
 
-`"dark"` (default), `"light"`, or one of the named presets
-`"solarized-dark"`, `"solarized-light"`, `"gruvbox-dark"`, `"gruvbox-light"`.
-GUI chrome only — sidebar, tab strip, buttons. The terminal grid keeps its own
-colours: pick the matching `terminal.colors.scheme` for a chrome that blends
-with it. An unknown value falls back to `"dark"` alone. Both keys are
-also set live from the [settings panel](../workspace/settings-panel.md).
+GUI chrome only: sidebar, tab strip, buttons. `"dark"` by default; an unknown
+value falls back to it. A ✓ value also names a `terminal.colors.scheme`; give
+both keys the same one for a matching window. Both are set live from the
+[settings panel](../workspace/settings-panel.md).
+
+| `theme` values | Same-name `colors.scheme` |
+| --- | --- |
+| `dark`, `light` | — |
+| `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` | ✓ |
+| `dracula`, `nord` | ✓ |
+| `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha` | ✓ |
+| `tokyo-night`, `tokyo-night-storm`, `tokyo-night-light` | ✓ |
+| `kanagawa-wave`, `kanagawa-dragon` | ✓ |
+| `kanagawa-lotus`, `ferra` | — none published |
+| `moonfly`, `nightfly`, `oxocarbon` | ✓ |
+
+Status dots and `/color` marks are shaded per theme to stay legible.
 
 ### `close`
 
@@ -112,7 +123,7 @@ Per-action close confirmation. Both keys default to `"confirmWhenActive"`.
 | `font_size` | `14` | pixels, clamped to 6–40. The zoom chords step from here at runtime without rewriting it. |
 | `copy_on_select` | `false` | a drag release or a double-click copies the selection outright, no chord needed |
 | `paste_on_right_click` | `false` | a right-click pastes into the pane under the pointer, not necessarily the focused one |
-| `colors.scheme` | built-in | `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |
+| `colors.scheme` | built-in | every [`theme`](#theme) value marked ✓, e.g. `catppuccin-mocha` |
 | `colors.foreground` / `.background` / `.cursor` | from the scheme | `"#rrggbb"`; the `#` is optional |
 | `colors.palette` | from the scheme | the 16 ANSI colours — normal 0–7, then bright 8–15 |
 

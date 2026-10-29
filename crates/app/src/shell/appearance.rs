@@ -20,16 +20,19 @@ pub(super) struct Appearance {
     pub(super) colors: ColorSettings,
 }
 
-/// One entry of the terminal-scheme picker: a built-in scheme by name, or
-/// `None` for the default palette.
+/// One entry of the terminal-scheme picker: the scheme sharing a chrome
+/// theme's name, or `None` for the default palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SchemeChoice(pub(crate) Option<&'static str>);
+pub(crate) struct SchemeChoice(pub(crate) Option<ThemeChoice>);
 
 impl SchemeChoice {
-    /// The default palette, then every named scheme.
+    /// The default palette, then every theme that has a scheme.
     pub(super) fn all() -> Vec<Self> {
+        let paired = ThemeChoice::ALL
+            .into_iter()
+            .filter(|theme| Palette::named(theme.settings_name()).is_some());
         std::iter::once(Self(None))
-            .chain(Palette::SCHEMES.into_iter().map(|name| Self(Some(name))))
+            .chain(paired.map(|theme| Self(Some(theme))))
             .collect()
     }
 
@@ -37,26 +40,22 @@ impl SchemeChoice {
     /// built-in answers to, so the picker shows no selection rather than a
     /// wrong one.
     pub(super) fn of(scheme: Option<&str>) -> Option<Self> {
-        Self::all().into_iter().find(|choice| choice.0 == scheme)
+        Self::all()
+            .into_iter()
+            .find(|choice| choice.name() == scheme)
+    }
+
+    fn name(self) -> Option<&'static str> {
+        self.0.map(ThemeChoice::settings_name)
     }
 }
 
-/// `solarized-light` reads as `Solarized Light`, as the chrome themes do.
 impl fmt::Display for SchemeChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Some(name) = self.0 else {
-            return f.write_str(crate::strings::SETTINGS_SCHEME_BUILTIN);
-        };
-        let words: Vec<String> = name
-            .split('-')
-            .map(|word| {
-                let mut chars = word.chars();
-                chars.next().map_or_else(String::new, |first| {
-                    first.to_uppercase().chain(chars).collect()
-                })
-            })
-            .collect();
-        f.write_str(&words.join(" "))
+        match self.0 {
+            Some(theme) => theme.fmt(f),
+            None => f.write_str(crate::strings::SETTINGS_SCHEME_BUILTIN),
+        }
     }
 }
 
@@ -69,7 +68,7 @@ impl Shell {
 
     /// Apply a terminal scheme to every session and persist it.
     pub(super) fn pick_scheme(&mut self, scheme: SchemeChoice) {
-        let name = scheme.0.map(str::to_owned);
+        let name = scheme.name().map(str::to_owned);
         self.appearance.colors.scheme.clone_from(&name);
         self.config.terminal_scheme = name;
         self.settings_sink
@@ -85,23 +84,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_scheme_entry_reads_as_words_and_finds_itself() {
-        let labels: Vec<String> = SchemeChoice::all()
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        assert_eq!(
-            labels,
-            [
-                "Built-in",
-                "Solarized Dark",
-                "Solarized Light",
-                "Gruvbox Dark",
-                "Gruvbox Light"
-            ]
+    fn the_picker_offers_every_scheme_under_its_theme_label() {
+        let choices = SchemeChoice::all();
+        let names: Vec<_> = choices.iter().filter_map(|c| c.name()).collect();
+        assert_eq!(names, Palette::schemes().collect::<Vec<_>>());
+        let labels: Vec<String> = choices.iter().map(ToString::to_string).collect();
+        assert_eq!(labels[0], "Built-in");
+        assert!(
+            labels.iter().any(|l| l == "Catppuccin Frappé"),
+            "{labels:?}"
         );
-        for choice in SchemeChoice::all() {
-            assert_eq!(SchemeChoice::of(choice.0), Some(choice));
+        for choice in choices {
+            assert_eq!(SchemeChoice::of(choice.name()), Some(choice));
         }
         assert_eq!(SchemeChoice::of(Some("no-such")), None);
     }

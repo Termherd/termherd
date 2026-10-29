@@ -149,8 +149,8 @@ not detected, the same limit URLs have.
 ## Colours and font
 
 The terminal grid keeps its own colours, independent of the app chrome theme.
-Start from a built-in scheme (`solarized-dark`, `solarized-light`,
-`gruvbox-dark`, `gruvbox-light`) and override any slot — foreground,
+Start from one of the 18 built-in schemes, each named like the chrome theme it
+matches, and override any slot — foreground,
 background, cursor, and the 16 ANSI colours. A malformed colour degrades alone,
 with a logged warning, instead of failing the file. See
 [`settings.json`](../reference/settings.md).

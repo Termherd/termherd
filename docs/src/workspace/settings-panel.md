@@ -21,7 +21,7 @@ An edit to the file while the panel is open shows in it at once.
 There is no Apply button. Picking a value:
 
 - **Interface theme** restyles the sidebar, tab strip and buttons on the next
-  frame. `Dark`, `Light`, and four presets named after the terminal schemes.
+  frame. Every theme iced ships: 22.
 - **Terminal colours** recolours every open terminal, not only new ones.
   `Built-in` is the default palette. Explicit colour overrides in
   `terminal.colors` still win over the scheme, as they do at startup.
@@ -30,8 +30,8 @@ Each pick writes its own key to `settings.json` — `theme` or
 `terminal.colors.scheme` — and leaves the rest of the file as you wrote it.
 A file that does not parse is left alone rather than rewritten.
 
-Pair a preset with the scheme of the same name for a chrome that matches the
-grid it frames.
+Pick the same name in both for a matching window. 18 themes have a scheme;
+[the list](../reference/settings.md#theme) shows which.
 
 ## One thing a live change cannot reach
 

@@ -59,10 +59,11 @@ jobs:
             # the source-scanning architecture scripts (they read `.rs` and must
             # re-run when their own rules change). proptest replays the seeds
             # in `proptest-regressions/` before any new case, so they are test
-            # input too.
+            # input too, as is the notices file a test reads.
             rust:
               - '**/*.rs'
               - '**/proptest-regressions/**'
+              - 'THIRD_PARTY_NOTICES.md'
               - '**/Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'

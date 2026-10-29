@@ -7,6 +7,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (every iced theme, with matching terminal colours)
+
+- The interface theme offers all 22 iced themes, and 14 new terminal schemes
+  share their names (from alacritty-theme). Status dots and `/color` marks
+  are shaded per theme to stay legible.
+
 ### Added (emoji from the Character Viewer)
 
 - On macOS, Ctrl+Cmd+Space opens the Character Viewer from a new Edit →

@@ -1807,6 +1807,11 @@ fixed hand-tuned table (legibility guards). Deliberately out: selection colour
 (app affordance), live reload (waits for the in-app settings panel). Verified
 end-to-end via F-capture on a real session (Solarized Light)
 
+Since then (#381): both keys apply live; all 22 iced chrome themes, 18
+same-name schemes (14 from alacritty-theme, Apache-2.0) in one `pty::schemes`
+table; chrome marks shaded per theme to hold 3:1. Kanagawa Lotus and Ferra
+have no published palette.
+
 <a id="f-i18n"></a>
 
 ### F-i18n

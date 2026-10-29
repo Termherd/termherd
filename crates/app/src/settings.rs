@@ -375,25 +375,80 @@ impl TerminalSettings {
     }
 }
 
-/// Which iced theme dresses the GUI chrome (sidebar, tab strip, buttons).
-/// The named variants mirror the built-in `terminal.colors.scheme` presets,
-/// so the chrome can match the grid it frames.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ThemeChoice {
-    /// A dark chrome, matching the terminal's dark background.
+/// One row per theme: the variant, its `settings.json` name, and the iced
+/// theme of the same variant name.
+macro_rules! theme_choices {
+    ($($(#[$attr:meta])* $variant:ident => $name:literal,)+) => {
+        /// Which iced theme dresses the GUI chrome: one variant per iced
+        /// built-in. A named variant shares its settings name with the
+        /// `terminal.colors.scheme` preset it matches, where one is published.
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(into = "&'static str", try_from = "String")]
+        pub enum ThemeChoice {
+            $($(#[$attr])* $variant,)+
+        }
+
+        impl ThemeChoice {
+            /// Every choice, in the order the settings panel lists them.
+            pub const ALL: [Self; [$($name),+].len()] = [$(Self::$variant),+];
+
+            /// The value `settings.json` spells this choice with.
+            #[must_use]
+            pub const fn settings_name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)+
+                }
+            }
+
+            /// The iced theme this choice maps to.
+            #[must_use]
+            pub fn to_iced(self) -> iced::Theme {
+                match self {
+                    $(Self::$variant => iced::Theme::$variant,)+
+                }
+            }
+        }
+    };
+}
+
+theme_choices! {
     #[default]
-    Dark,
-    /// A light chrome.
-    Light,
-    /// Solarized Dark chrome.
-    SolarizedDark,
-    /// Solarized Light chrome.
-    SolarizedLight,
-    /// Gruvbox Dark chrome.
-    GruvboxDark,
-    /// Gruvbox Light chrome.
-    GruvboxLight,
+    Dark => "dark",
+    Light => "light",
+    SolarizedDark => "solarized-dark",
+    SolarizedLight => "solarized-light",
+    GruvboxDark => "gruvbox-dark",
+    GruvboxLight => "gruvbox-light",
+    Dracula => "dracula",
+    Nord => "nord",
+    CatppuccinLatte => "catppuccin-latte",
+    CatppuccinFrappe => "catppuccin-frappe",
+    CatppuccinMacchiato => "catppuccin-macchiato",
+    CatppuccinMocha => "catppuccin-mocha",
+    TokyoNight => "tokyo-night",
+    TokyoNightStorm => "tokyo-night-storm",
+    TokyoNightLight => "tokyo-night-light",
+    KanagawaWave => "kanagawa-wave",
+    KanagawaDragon => "kanagawa-dragon",
+    KanagawaLotus => "kanagawa-lotus",
+    Moonfly => "moonfly",
+    Nightfly => "nightfly",
+    Oxocarbon => "oxocarbon",
+    Ferra => "ferra",
+}
+
+impl From<ThemeChoice> for &'static str {
+    fn from(theme: ThemeChoice) -> Self {
+        theme.settings_name()
+    }
+}
+
+impl TryFrom<String> for ThemeChoice {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::from_settings_name(&name).ok_or(name)
+    }
 }
 
 /// The name a person reads — iced's own, so the picker and the theme it
@@ -462,27 +517,12 @@ impl Default for CloseSettings {
 }
 
 impl ThemeChoice {
-    /// Every choice, in the order the settings panel lists them.
-    pub const ALL: [Self; 6] = [
-        Self::Dark,
-        Self::Light,
-        Self::SolarizedDark,
-        Self::SolarizedLight,
-        Self::GruvboxDark,
-        Self::GruvboxLight,
-    ];
-
-    /// The iced theme this choice maps to.
+    /// The choice `settings.json` spells `name`, if any.
     #[must_use]
-    pub fn to_iced(self) -> iced::Theme {
-        match self {
-            ThemeChoice::Dark => iced::Theme::Dark,
-            ThemeChoice::Light => iced::Theme::Light,
-            ThemeChoice::SolarizedDark => iced::Theme::SolarizedDark,
-            ThemeChoice::SolarizedLight => iced::Theme::SolarizedLight,
-            ThemeChoice::GruvboxDark => iced::Theme::GruvboxDark,
-            ThemeChoice::GruvboxLight => iced::Theme::GruvboxLight,
-        }
+    pub fn from_settings_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|theme| theme.settings_name() == name)
     }
 }
 
@@ -1030,6 +1070,65 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_settings_name_is_unique_and_is_what_serde_writes() {
+        for theme in ThemeChoice::ALL {
+            let name = theme.settings_name();
+            assert_eq!(ThemeChoice::from_settings_name(name), Some(theme));
+            assert_eq!(serde_json::json!(theme), serde_json::json!(name));
+        }
+    }
+
+    #[test]
+    fn every_iced_theme_has_exactly_one_choice() {
+        let mapped = ThemeChoice::ALL.map(ThemeChoice::to_iced);
+        assert_eq!(mapped.len(), iced::Theme::ALL.len());
+        for theme in iced::Theme::ALL {
+            assert_eq!(
+                mapped.iter().filter(|m| *m == theme).count(),
+                1,
+                "{theme} must be offered once"
+            );
+        }
+    }
+
+    /// The pairing is by name alone; the unpaired themes are a decision.
+    #[test]
+    fn named_themes_pair_with_the_scheme_of_the_same_name() {
+        for scheme in Palette::schemes() {
+            assert!(
+                ThemeChoice::from_settings_name(scheme).is_some(),
+                "{scheme} has no theme"
+            );
+        }
+        let unpaired: Vec<_> = ThemeChoice::ALL
+            .map(ThemeChoice::settings_name)
+            .into_iter()
+            .filter(|n| Palette::named(n).is_none())
+            .collect();
+        assert_eq!(unpaired, ["dark", "light", "kanagawa-lotus", "ferra"]);
+    }
+
+    #[test]
+    fn the_mcp_catalogue_offers_exactly_the_panel_choices() {
+        let choices = |id: &str| {
+            termherd_mcp::OPTIONS
+                .iter()
+                .find(|o| o.id == id)
+                .expect("a catalogued option")
+                .choices
+                .to_vec()
+        };
+        assert_eq!(
+            choices("theme"),
+            ThemeChoice::ALL.map(ThemeChoice::settings_name)
+        );
+        assert_eq!(
+            choices("terminal.colors.scheme"),
+            Palette::schemes().collect::<Vec<_>>()
+        );
+    }
+
     /// What the panel would write, applied by the catalogue's own setter.
     fn saved(change: &AppearanceChange) -> Settings {
         let (id, value) = change.option();
@@ -1047,7 +1146,7 @@ mod tests {
 
     #[test]
     fn every_saved_scheme_reads_back_as_what_was_picked() {
-        for scheme in Palette::SCHEMES {
+        for scheme in Palette::schemes() {
             let s = saved(&AppearanceChange::Scheme(Some(scheme.to_string())));
             assert_eq!(s.terminal.colors.scheme.as_deref(), Some(scheme));
         }
