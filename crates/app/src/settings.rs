@@ -271,9 +271,8 @@ pub struct ClipboardGestures {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ColorSettings {
-    /// A built-in scheme the overrides below start from: `"solarized-dark"`,
-    /// `"solarized-light"`, `"gruvbox-dark"` or `"gruvbox-light"`; absent →
-    /// the built-in default scheme.
+    /// A built-in scheme the overrides below start from, one of
+    /// [`Palette::schemes`]; absent → the built-in default scheme.
     pub scheme: Option<String>,
     /// Default text colour, `"#rrggbb"`.
     pub foreground: Option<String>,
