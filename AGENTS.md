@@ -470,7 +470,8 @@ exists). Do not relax them locally.
 - **One logging stack:** `tracing`. No `println!` outside tests.
 - **`unsafe_code = "deny"`** workspace-wide. The lone sanctioned exception is
   `crates/app/src/macos.rs` (AppKit FFI for the Cmd+Q quit path, the Edit menu
-  that gives Ctrl+Cmd+Space its *Emoji & Symbols* item, and the `insertText:`
+  that gives Ctrl+Cmd+Space its *Emoji & Symbols* item, the Window menu that
+  gives Cmd+M its *Minimize*, and the `insertText:`
   relay that turns Character Viewer text winit drops into an input-method
   commit): a `#![cfg(…)]` module with a module-scoped
   `#![allow(unsafe_code)]` and a `// SAFETY:` note on every block. Any further
