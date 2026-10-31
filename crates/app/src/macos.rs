@@ -16,6 +16,9 @@
 //! AppKit's **Emoji & Symbols** item and its shortcut live, so the chord
 //! opened nothing and typed a space. [`add_character_palette_item`] adds one.
 //!
+//! **Cmd+M.** Nor has it a Window menu, so ⌘M minimized nothing;
+//! [`add_window_menu`] adds one.
+//!
 //! **Text inserted outside a keystroke.** winit's `insertText:replacementRange:`
 //! only reports text while a composition (marked text) is in progress, and
 //! leaves everything else to the `keyDown:` assumed to have caused it. The
@@ -156,6 +159,52 @@ pub fn add_character_palette_item(mtm: MainThreadMarker) {
         menubar.addItem(&edit_item);
     }
     tracing::info!("added Emoji & Symbols (Ctrl+Cmd+Space) to an Edit menu");
+}
+
+/// Give the menu bar the standard **Window** menu winit's default menu lacks,
+/// so ⌘M minimizes. AppKit fires a key equivalent only through a menu item.
+///
+/// No Close item: ⌘W stays with termherd's own keymap (close a pane), as Cut,
+/// Copy and Paste do in the Edit menu. Fire-once; a menu already holding
+/// Minimize is left alone.
+pub fn add_window_menu(mtm: MainThreadMarker) {
+    let app = NSApplication::sharedApplication(mtm);
+    // SAFETY: plain AppKit menu reads and construction on the main thread
+    // (`mtm`), as in `add_character_palette_item`. The actions are NSWindow
+    // selectors, reached through the responder chain from a nil target.
+    unsafe {
+        let Some(menubar) = app.mainMenu() else {
+            tracing::warn!("no main menu; Cmd+M minimizes nothing");
+            return;
+        };
+        if !lacks_action(&submenu_actions(&menubar), sel!(performMiniaturize:)) {
+            return;
+        }
+        let window = NSMenu::initWithTitle(mtm.alloc(), ns_string!("Window"));
+        for (title, action, key) in window_items() {
+            let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                mtm.alloc(),
+                &NSString::from_str(title),
+                Some(action),
+                &NSString::from_str(key),
+            );
+            window.addItem(&item);
+        }
+        let window_item = NSMenuItem::new(mtm);
+        window_item.setSubmenu(Some(&window));
+        menubar.addItem(&window_item);
+        // AppKit appends the open windows' list to the menu it is told of.
+        app.setWindowsMenu(Some(&window));
+    }
+    tracing::info!("added a Window menu (Minimize: Cmd+M, Zoom)");
+}
+
+/// The Window menu's items: title, action, key equivalent (Cmd implied).
+fn window_items() -> [(&'static str, Sel, &'static str); 2] {
+    [
+        ("Minimize", sel!(performMiniaturize:), "m"),
+        ("Zoom", sel!(performZoom:), ""),
+    ]
 }
 
 /// The action of every item one level under the menu bar.
@@ -388,8 +437,19 @@ unsafe extern "C" fn insert_text(
 
 #[cfg(test)]
 mod tests {
-    use super::{Insertion, lacks_action, replays_as_composition};
+    use super::{Insertion, lacks_action, replays_as_composition, window_items};
     use objc2::sel;
+
+    #[test]
+    fn the_window_menu_minimizes_on_cmd_m_and_leaves_cmd_w_to_the_keymap() {
+        let items = window_items();
+        assert!(items.contains(&("Minimize", sel!(performMiniaturize:), "m")));
+        assert!(
+            items
+                .iter()
+                .all(|&(_, action, key)| { action != sel!(performClose:) && key != "w" })
+        );
+    }
 
     #[test]
     fn a_menu_without_the_palette_item_gets_one() {
