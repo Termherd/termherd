@@ -63,6 +63,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A settings panel, live reload of `settings.json`, and the options on the
   live bridge (#292, #297, #298).
 
+### Fixed (a modified doc closed without asking)
+
+- Closing the doc editor with unsaved edits — its `✕ close` button or
+  Escape — or opening another doc over it now asks before discarding them;
+  Escape at the prompt goes back to the editor (#248). Quitting the app does
+  not ask yet.
+
 ### Fixed (a tab drag lost off the strip)
 
 - A tab drag stays alive when the pointer leaves the tab strip (#348).

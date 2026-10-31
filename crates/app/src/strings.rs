@@ -53,6 +53,20 @@ pub const DOC_CLOSE: &str = "✕ close";
 pub const DOC_SAVE: &str = "💾 save";
 pub const DOC_SAVED: &str = "saved";
 pub const DOC_MODIFIED: &str = "• modified";
+pub const DISCARD: &str = "Discard";
+
+/// Asked before a modified doc's unsaved edits are thrown away.
+#[must_use]
+pub fn doc_discard_prompt(label: &str) -> String {
+    format!("Discard unsaved changes to “{label}”?")
+}
+
+/// Asked before a modified doc is replaced by another one clicked in the
+/// sidebar; names both, so the user can tell it from a plain close.
+#[must_use]
+pub fn doc_discard_open_prompt(label: &str, next: &str) -> String {
+    format!("Discard unsaved changes to “{label}” and open “{next}”?")
+}
 
 /// Shown in the doc pane when a plan/memory file can't be read.
 #[must_use]

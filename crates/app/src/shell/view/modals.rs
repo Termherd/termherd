@@ -1,24 +1,21 @@
-//! Confirmation modals and the scrim that hosts them. Quit, tab-close,
-//! archive and a Claude command all confirm through the one centred [`modal`]
-//! overlay (so the four flows look and behave alike), driven by
-//! [`Shell::active_confirmation`] which picks the single armed confirmation in
-//! priority order.
+//! Confirmation modals and the scrim that hosts them. Every confirmation goes
+//! through the one centred [`modal`] overlay, so they look and behave alike,
+//! driven by [`Shell::active_confirmation`] which picks the single armed
+//! confirmation in priority order.
 
 use iced::widget::{button, center, container, mouse_area, opaque, row, stack, text};
 use iced::{Color, Element};
 
 use super::clip;
+use crate::shell::docs::DocDiscard;
 use crate::shell::{Message, Shell};
 use crate::strings;
 
 impl Shell {
     /// The active confirmation card and the message to fire when its backdrop is
-    /// dismissed. Quit, tab-close, archive and a Claude command are all routed
-    /// through the same [`modal`] presentation for parity, in priority order
-    /// (quit > tab-close > archive > Claude command — at most one is armed at a
-    /// time); `view` wraps the base UI with
-    /// it. `pub(in crate::shell)` so the shell's own tests can assert the
-    /// routing.
+    /// dismissed, in the priority order of the chain below — at most one is
+    /// armed at a time. `pub(in crate::shell)` so the shell's own tests can
+    /// assert the routing.
     pub(in crate::shell) fn active_confirmation(&self) -> Option<(Element<'_, Message>, Message)> {
         self.quit_confirmation()
             .map(|card| (card, Message::CancelCloseWindow))
@@ -34,6 +31,31 @@ impl Shell {
                 self.claude_command_confirmation()
                     .map(|card| (card, Message::CancelClaudeCommand))
             })
+            .or_else(|| {
+                self.doc_discard_confirmation()
+                    .map(|card| (card, Message::CancelDocDiscard))
+            })
+    }
+
+    fn doc_discard_confirmation(&self) -> Option<Element<'_, Message>> {
+        let discard = self.discarding_doc.as_ref()?;
+        let current = clip(
+            self.open_doc.as_ref().map_or("", |doc| doc.label.as_str()),
+            24,
+        );
+        let prompt = match discard {
+            DocDiscard::Close => strings::doc_discard_prompt(&current),
+            DocDiscard::Open { label, .. } => {
+                strings::doc_discard_open_prompt(&current, &clip(label, 24))
+            }
+        };
+        Some(Self::confirmation_bar(
+            prompt,
+            strings::DISCARD,
+            button::danger,
+            Message::ConfirmDocDiscard,
+            Message::CancelDocDiscard,
+        ))
     }
 
     /// The quit-confirmation card (shown when a window close is armed and live

@@ -82,7 +82,7 @@ impl Shell {
         // A plan / memory doc, when one is open, takes over the main pane for
         // viewing/editing (F-plans-memory).
         if let Some(doc) = &self.open_doc {
-            return doc_editor(doc);
+            return doc_editor(doc, self.doc_accepts_edits());
         }
 
         let focused = self.core.workspace.focused_session();

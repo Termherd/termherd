@@ -110,6 +110,10 @@ selection, and `copy` runs on it.
   prompt names into its Claude session — or answers `refused` with the reason,
   leaving the prompt open, when Claude went busy or a draft appeared meanwhile;
   see [`claude_command`](./live-bridge.md#a-claude-slash-command-confirmed).
+- **`doc-editor`** with unsaved edits answers `escape` by opening
+  **`doc-discard-confirm`** rather than closing. There, `enter` discards the
+  edits and `escape` returns to `doc-editor` with them intact — so `escape`
+  alone never loses a modified doc, however many times it is pressed.
 - Every other overlay is exitable from the keyboard, and a test sweep derived
   from the overlay enumeration — not a hand-written list — is what keeps it
   that way. A new overlay added without an exit fails there.

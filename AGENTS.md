@@ -336,11 +336,11 @@ carry is modifiers: the event lost its `modifiers` field in #311 as dead
 weight, and it comes back as one type shared with `KeyMods` when a caller
 needs it, not before.
 
-**Still open.** Two features and two defects: `F-mcp-attach` (#267 — the bridge
+**Still open.** Two features and one defect: `F-mcp-attach` (#267 — the bridge
 is reachable only from a session termherd spawned, so the launcher itself cannot
 drive it), the pointer at termherd's own chrome (#301 — the sidebar, tabs and
-gutters still have no mouse), `enter` on the two renames (#246), and a doc editor
-that discards unsaved edits when it closes (#248). None of the four blocks another.
+gutters still have no mouse), and `enter` on the two renames (#246). None of the
+three blocks another.
 The list leaves out the bridge's hardening defects (#284, #293). A third
 defect, the copy chord overwriting a mouse-mode program's own clipboard write
 with termherd's last copy (#316), is fixed: the shell keeps no copy cache any
@@ -365,10 +365,26 @@ blur it stands in for.
 The interesting part is what closed it for good: the fix carries a sweep driven
 off `KeyboardOwner::ALL` rather than a test per prompt, and that sweep found a
 *second* offender nobody had reported — the doc editor, closable only by its own
-button. A rung added without an exit fails there now. `escape` there closes
-exactly as the button does, discarding unsaved edits: a known trade, since a
-stricter gesture for the key alone would leave the button's identical hole
-standing. Losing a modified doc silently is a defect on both paths and is #248.
+button. A rung added without an exit fails there now. `escape` there goes
+through the same close as the button, and since #248 a modified doc asks first
+on both — and when another doc is clicked over it (quitting the app still does
+not ask). The confirmation is its own rung, `DocDiscard`, whose `escape` hands
+the keyboard *back* to the editor, and the sweep names that one hand-off rather
+than loosening "left" for every rung: an empty ladder after one `escape` would
+have forced the prompt to throw the edits away on the very key it exists to
+make safe, while a general "the armed rung let go" would let any rung trade
+one trap for another unseen.
+
+Two rules the review of #248 paid for. **Arm a destructive prompt on a
+deliberate gesture, never on an async answer**: arming the replace on the
+read's reply raised it mid-typing, where the next Enter meant as a newline
+would have answered it — so the click arms it, and a reply finding fresh edits
+is dropped. **A modal scrim blocks the mouse, not the keyboard**: `opaque`
+captures pointer events only, so a focused widget under a prompt still hears
+the keys that answer it. The doc editor therefore takes input only while it
+owns the keyboard (`doc_accepts_edits` is `keyboard_owner() == Some(Doc)`, the
+rule the search box already followed) — so every prompt over it is covered, not
+just its own — and the view and the edit handler both read that one predicate.
 
 The sweep is the general form of the "test that claims to be exhaustive" rule
 below: it is honest because `arm_overlay`'s `match` is compiler-checked, so a
