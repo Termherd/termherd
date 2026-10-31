@@ -399,8 +399,14 @@ impl Shell {
         event: &keyboard::Event,
     ) -> (KeyVerdict, Task<Message>) {
         let (verdict, task) = match owner {
-            KeyboardOwner::TabRename => (None, self.tab_rename_key(event)),
-            KeyboardOwner::SessionRename => (None, self.session_rename_key(event)),
+            KeyboardOwner::TabRename => (
+                None,
+                self.rename_key(event, Message::CancelTabRename, Message::CommitTabRename),
+            ),
+            KeyboardOwner::SessionRename => (
+                None,
+                self.rename_key(event, Message::CancelRename, Message::CommitRename),
+            ),
             KeyboardOwner::Quit => (None, self.quit_confirm_key(event)),
             KeyboardOwner::TabClose(index) => (None, self.tab_close_confirm_key(event, index)),
             KeyboardOwner::Archive => (None, self.archive_confirm_key(event)),
@@ -415,16 +421,6 @@ impl Shell {
             KeyboardOwner::Doc => (None, self.open_doc_key(event)),
         };
         (verdict.unwrap_or(KeyVerdict::Overlay(owner.label())), task)
-    }
-
-    /// Escape cancels; Enter commits. A blur also commits a tab rename.
-    fn tab_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
-        self.rename_key(event, Message::CancelTabRename, Message::CommitTabRename)
-    }
-
-    /// Escape cancels; Enter commits. A blur cancels a session rename.
-    fn session_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
-        self.rename_key(event, Message::CancelRename, Message::CommitRename)
     }
 
     fn rename_key(
