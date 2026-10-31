@@ -271,12 +271,12 @@ Bundles are unsigned for now (signing/notarization pending certs, OQ5).
 
 ### `sign-release.yml` — attestation & checksums
 
-Trigger: `release: [published]`. After `release.yml` and `package.yml` publish a
-GitHub Release, `attest` downloads all release assets, writes a combined
-`SHA256SUMS.txt` back to the release, and generates a Sigstore build-provenance
-attestation (`actions/attest-build-provenance`) verifiable via
-`gh attestation verify <file> --repo Termherd/termherd`. Requires
-`contents: write`, `id-token: write`, and `attestations: write`.
+Trigger: `release: [published]`, `workflow_dispatch`. After `release.yml`
+publishes the Release, `sign` downloads the Linux release tarballs, writes
+`SHA256SUMS`, records a keyless Sigstore build-provenance attestation
+(`actions/attest-build-provenance`, verifiable via
+`gh attestation verify <file> --repo Termherd/termherd`), and uploads
+`SHA256SUMS` to the Release.
 
 ### `docs-deploy.yml` — the book on GitHub Pages
 
