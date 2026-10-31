@@ -64,7 +64,7 @@ jobs:
       # Keyless sigstore provenance over every entry in SHA256SUMS. No secret:
       # identity = this workflow via OIDC, logged in Rekor.
       - name: Attest SHA256SUMS
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-checksums: linux/SHA256SUMS
 

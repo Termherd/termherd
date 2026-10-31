@@ -12,9 +12,11 @@ on:
   workflow_dispatch:
 
 # Cancel superseded PR runs so a fresh push doesn't queue behind its own stale
-# jobs. Pushes to main are never cancelled: those runs gate the default branch.
+# jobs. Non-PR runs (push→main, tags, workflow_dispatch) key by SHA so rapid
+# consecutive merges run in parallel rather than queuing behind `cross-os`
+# (where a third queued push would cancel the second).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege: CI only reads the repo. Jobs that need more request it.
@@ -25,6 +27,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   RUSTFLAGS: "-D warnings"
+  # Single workflow-level pin matching rust-toolchain.toml and Cargo.toml
+  # rust-version (Q10), enforced by scripts/check-crate-deps.sh.
+  RUST_TOOLCHAIN: "1.95.0"
 
 # Third-party actions are pinned to commit SHAs (version in the trailing
 # comment). Bump the SHA and the comment together; never use a mutable tag.
@@ -43,12 +48,12 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      cargo: ${{ steps.filter.outputs.cargo }}
-      markdown: ${{ steps.filter.outputs.markdown }}
-      book: ${{ steps.filter.outputs.book }}
-      roadmap: ${{ steps.filter.outputs.roadmap }}
-      workflows: ${{ steps.filter.outputs.workflows }}
+      rust: ${{ steps.filter.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
+      cargo: ${{ steps.filter.outputs.cargo == 'true' || github.event_name == 'workflow_dispatch' }}
+      markdown: ${{ steps.filter.outputs.markdown == 'true' || github.event_name == 'workflow_dispatch' }}
+      book: ${{ steps.filter.outputs.book == 'true' || github.event_name == 'workflow_dispatch' }}
+      roadmap: ${{ steps.filter.outputs.roadmap == 'true' || github.event_name == 'workflow_dispatch' }}
+      workflows: ${{ steps.filter.outputs.workflows == 'true' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
@@ -73,14 +78,16 @@ jobs:
               - 'scripts/report-file-length.sh'
               - '.github/workflows/ci.yml'
             # `cargo` = the dependency graph / manifests only, for the
-            # metadata-scan gates (deny / machete / dependency-rule). A pure
-            # `.rs` change leaves the dep tree untouched and skips these.
+            # metadata-scan gate (cargo-checks: deny + machete + dependency-rule).
+            # A pure `.rs` change leaves the dep tree untouched and skips this.
             cargo:
               - '**/Cargo.toml'
               - 'Cargo.lock'
+              - 'rust-toolchain.toml'
               - 'deny.toml'
               - 'scripts/check-crate-deps.sh'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/codeql.yml'
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
@@ -108,19 +115,23 @@ jobs:
               - '.github/workflows/**'
 
   fmt:
-    name: rustfmt
+    name: rustfmt & arch
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
+    # Fast source-only checks that need no rust-cache: formatting plus the
+    # intra-crate architecture fitness functions (module boundaries, OS-cfg
+    # containment, and the report-only file-length signal).
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      # `toolchain` must match rust-toolchain.toml / Cargo.toml rust-version (Q10);
-      # this pinned action requires the input explicitly. Keep the three in sync.
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.95.0"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
       - run: cargo fmt --all --check
+      - run: ./scripts/check-module-boundaries.sh
+      - run: ./scripts/check-os-cfg-containment.sh
+      - run: ./scripts/report-file-length.sh
 
   # clippy + test run ubuntu-only on every PR (the fast merge gate). mac +
   # Windows are covered by the `cross-os` job below, which is skipped on PRs
@@ -134,7 +145,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -148,7 +159,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
         with:
@@ -185,7 +196,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
@@ -216,7 +227,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
@@ -225,69 +236,26 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo nextest run --workspace
 
-  deny:
-    name: cargo-deny
+  cargo:
+    name: cargo-checks
     needs: changes
     if: needs.changes.outputs.cargo == 'true'
     runs-on: ubuntu-latest
+    # Dependency-graph and manifest checks in a single runner:
+    #   - cargo-deny: disallowed licences, RUSTSEC advisories, unknown sources
+    #   - cargo-machete: declared-but-unused dependencies
+    #   - check-crate-deps.sh: hexagonal crate dependency rule + toolchain
+    #     version lockstep across rust-toolchain.toml, Cargo.toml, and CI YAML
+    # Pure metadata + source scan — no full build and no toolchain install
+    # (cargo and jq are preinstalled on ubuntu-latest).
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
         with:
-          tool: cargo-deny
+          tool: cargo-deny,cargo-machete@0.9.2
       - run: cargo deny check
-
-  machete:
-    name: cargo-machete
-    needs: changes
-    if: needs.changes.outputs.cargo == 'true'
-    runs-on: ubuntu-latest
-    # Fail when a crate declares a dependency it no longer uses — unused deps
-    # add build time and supply-chain surface. Fast, ubuntu-only: a metadata +
-    # source scan, no full build. Tool version is pinned (bump it together with
-    # this comment); the install-action itself is SHA-pinned like every action.
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
-        with:
-          tool: cargo-machete@0.9.2
       - run: cargo machete
-
-  deps:
-    name: dependency-rule
-    needs: changes
-    if: needs.changes.outputs.cargo == 'true'
-    runs-on: ubuntu-latest
-    # Architecture fitness function: the hexagonal dependency rule (adapters
-    # depend on core, never the reverse) holds by construction, not by reviewer
-    # vigilance. Pure `cargo metadata` parse — no build, ubuntu-only (the graph
-    # is platform-independent). jq is preinstalled on ubuntu-latest runners.
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
-        with:
-          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
       - run: ./scripts/check-crate-deps.sh
-
-  intra-arch:
-    name: intra-crate-arch
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    # Intra-crate architecture fitness functions — one level below the
-    # crate dependency rule (`deps`). The split-up refactor (clusters A–E) built
-    # module walls *inside* crates; these keep them standing by construction.
-    # Pure grep/find over source — no build, no toolchain, ubuntu-only.
-    #   - module boundaries: leaf modules stay leaves, renderers don't reach
-    #     executors, core::app submodules go through the parent registry.
-    #   - OS-cfg containment: compile-time `#[cfg(target_os)]` stays in its
-    #     audited homes (same spirit as the `unsafe_code` quarantine).
-    #   - file-length: report-only signal (never fails), written to the summary.
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: ./scripts/check-module-boundaries.sh
-      - run: ./scripts/check-os-cfg-containment.sh
-      - run: ./scripts/report-file-length.sh
 
   actionlint:
     name: actionlint
@@ -405,7 +373,7 @@ jobs:
   ci-success:
     name: ci-success
     if: always()
-    needs: [changes, fmt, clippy, test, portable, deny, machete, deps, intra-arch, actionlint, markdown, roadmap, book]
+    needs: [changes, fmt, clippy, test, portable, cargo, actionlint, markdown, roadmap, book]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required job failed or was cancelled

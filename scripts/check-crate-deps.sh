@@ -64,9 +64,33 @@ done < <(jq -r '
     | [$p.name, .name] | @tsv
 ' <<<"$metadata" | sort -u)
 
+# Toolchain lockstep check (Q10): rust-toolchain.toml, Cargo.toml rust-version,
+# and the workflow pins in ci.yml / codeql.yml must agree by construction.
+toolchain_channel="$(sed -ne 's/^channel = "\([^"]*\)"/\1/p' rust-toolchain.toml)"
+toolchain_channel="${toolchain_channel%"$cr"}"
+cargo_msrv="$(sed -ne 's/^rust-version = "\([^"]*\)"/\1/p' Cargo.toml)"
+cargo_msrv="${cargo_msrv%"$cr"}"
+ci_toolchain="$(sed -ne 's/^  RUST_TOOLCHAIN: "\([^"]*\)"/\1/p' .github/workflows/ci.yml)"
+ci_toolchain="${ci_toolchain%"$cr"}"
+codeql_toolchain="$(sed -ne 's/^ *toolchain: "\([^"]*\)"/\1/p' .github/workflows/codeql.yml)"
+codeql_toolchain="${codeql_toolchain%"$cr"}"
+
+if [[ "$toolchain_channel" != "$cargo_msrv" && "$toolchain_channel" != "${cargo_msrv}."* ]]; then
+    echo "::error::toolchain mismatch: rust-toolchain.toml has '$toolchain_channel' but Cargo.toml rust-version has '$cargo_msrv'." >&2
+    violations=$((violations + 1))
+fi
+if [[ "$ci_toolchain" != "$toolchain_channel" ]]; then
+    echo "::error::toolchain mismatch: rust-toolchain.toml has '$toolchain_channel' but .github/workflows/ci.yml RUST_TOOLCHAIN has '$ci_toolchain'." >&2
+    violations=$((violations + 1))
+fi
+if [[ "$codeql_toolchain" != "$toolchain_channel" ]]; then
+    echo "::error::toolchain mismatch: rust-toolchain.toml has '$toolchain_channel' but .github/workflows/codeql.yml toolchain has '$codeql_toolchain'." >&2
+    violations=$((violations + 1))
+fi
+
 if [[ "$violations" -ne 0 ]]; then
-    echo "FAIL: $violations dependency-rule violation(s)." >&2
+    echo "FAIL: $violations dependency-rule / toolchain lockstep violation(s)." >&2
     exit 1
 fi
 
-echo "OK: all ${#crates[@]} crates respect the hexagonal dependency rule."
+echo "OK: all ${#crates[@]} crates respect the hexagonal dependency rule and toolchain '$toolchain_channel' is in lockstep."

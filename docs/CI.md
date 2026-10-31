@@ -30,15 +30,12 @@ themselves), `markdownlint` (the prose), `roadmap` (the generated
 
 | Gate | Workflow · job | Protects | Runs on | OS | Blocking |
 | --- | --- | --- | --- | --- | --- |
-| Formatting | `ci` · `rustfmt` | Consistent layout (`cargo fmt`) | PR, push→main | ubuntu | yes |
+| Formatting + module arch | `ci` · `rustfmt & arch` (`fmt`) | `cargo fmt` + intra-crate module boundaries + OS-cfg containment + file-length report | PR, push→main | ubuntu | yes (report-only length signal) |
 | Lint + complexity | `ci` · `clippy` | Clippy `-D warnings`; `unwrap`/`expect`/`panic` (core/claude), `too_many_lines`, `todo`/`unimplemented` | PR, push→main | ubuntu | yes |
 | Tests | `ci` · `test` | `cargo nextest run --workspace` | PR, push→main | ubuntu | yes |
 | Portable crates on Windows | `ci` · `portable` | clippy + `nextest` for `--workspace --exclude termherd-app` — everything but the GUI | PR, push→main (Cargo paths) | win | yes |
 | Cross-OS clippy + tests | `ci` · `cross-os` | Same clippy + `nextest` on macOS & Windows | push→main, tag (skipped on PR) | mac · win | signal |
-| Licenses / CVEs / sources | `ci` · `cargo-deny` | Disallowed licences, RUSTSEC advisories, unknown registries | PR, push→main | ubuntu | yes |
-| Unused deps | `ci` · `cargo-machete` | Declared-but-unused dependencies | PR, push→main | ubuntu | yes |
-| Architecture (crates) | `ci` · `dependency-rule` | Hexagonal crate dep rule (deps point inward) | PR, push→main | ubuntu | yes |
-| Architecture (modules) | `ci` · `intra-crate-arch` | Intra-crate module boundaries + OS-cfg containment; file-length report | PR, push→main | ubuntu | yes (report-only length signal) |
+| Cargo & crate arch | `ci` · `cargo-checks` (`cargo`) | `cargo-deny` (licences, RUSTSEC, sources) + `cargo-machete` (unused deps) + hexagonal crate dep rule & toolchain lockstep | PR, push→main | ubuntu | yes |
 | Workflow lint | `ci` · `actionlint` | Valid, shellcheck-clean workflow YAML | PR, push→main | ubuntu | yes |
 | Docs lint | `ci` · `markdownlint` | 80-col Markdown prose | PR, push→main | ubuntu | yes |
 | Roadmap | `ci` · `roadmap` | `.roadmap/` schema and cross-references; `ROADMAP.md` still matches its source | PR, push→main | ubuntu | yes |
@@ -47,6 +44,7 @@ themselves), `markdownlint` (the prose), `roadmap` (the generated
 | SAST | `codeql` · `Analyze (Rust)` | Taint / cross-function security & quality | push→main (Rust paths), weekly | ubuntu | baseline |
 | CLI release | `release` · `plan…announce` | Build archives + curl\|sh / PowerShell installers, cut the GitHub Release | tag push | mac · win · ubuntu | release-time |
 | Desktop installers | `package` · `package` | `.app`/`.dmg`, NSIS `.exe`, `.deb`/`.AppImage`, attached to the Release | tag push | mac · win · ubuntu | release-time |
+| Release provenance | `sign-release` · `sign` | `SHA256SUMS` + keyless sigstore provenance attestation over Linux archives | release published | ubuntu | release-time |
 | Docs publish | `docs-deploy` · `build`/`deploy` | The book on GitHub Pages, from what `main` already proved buildable | push→main | ubuntu | post-merge |
 
 "Blocking" = a red run blocks merge (PR/CI gates) or blocks the release
@@ -77,13 +75,12 @@ This is the cheapest place to catch a failure — do it before opening a PR.
 
 Everything fans out in parallel (no inter-job ordering):
 
-- **`ci`** — a `changes` classifier plus twelve gate jobs (`fmt`, `clippy`,
-  `test`, `portable`, `cargo-deny`, `cargo-machete`, `dependency-rule`,
-  `intra-crate-arch`, `actionlint`, `markdownlint`, `roadmap`, `mdbook`), each
-  gated on its file category and fanned into the `ci-success` aggregator. Jobs
-  whose category didn't change report `skipped` (a docs-only PR skips all the
-  Rust jobs) and `ci-success` still passes. `cross-os` is **skipped** on PRs.
-  Branch protection requires only `ci-success`.
+- **`ci`** — a `changes` classifier plus nine gate jobs (`fmt`, `clippy`,
+  `test`, `portable`, `cargo`, `actionlint`, `markdownlint`, `roadmap`,
+  `mdbook`), each gated on its file category and fanned into the `ci-success`
+  aggregator. Jobs whose category didn't change report `skipped` (a docs-only
+  PR skips all the Rust jobs) and `ci-success` still passes. `cross-os` is
+  **skipped** on PRs. Branch protection requires only `ci-success`.
 - **`codeql`** and **`release`** — do **not** run on PRs (`pr-run-mode = "skip"`
   in `dist-workspace.toml`).
 
@@ -99,7 +96,9 @@ to refresh its own feature-scoped Windows cache key (`--workspace` in `cross-os`
 unifies `termherd-app` features, so sharing one cache key would force a 50s
 recompile on every PR). `codeql` runs when Rust or Cargo files changed
 (cancelling any stale in-progress `main` scan so consecutive merges only scan
-the tip). `ci` runs on `main` are **never cancelled**.
+the tip). `ci` runs on `main` key their concurrency group by commit SHA so
+consecutive merges run in parallel rather than queuing behind `cross-os` (and
+are **never cancelled**).
 
 ### Scheduled (weekly)
 
@@ -110,7 +109,7 @@ can flag code already sitting on `main`.
 ### Release (tag push)
 
 Pushing a tag matching `**[0-9]+.[0-9]+.[0-9]+*` (e.g. `v0.1.0`,
-`v0.1.0-prerelease.4`) triggers the two release workflows:
+`v0.1.0-prerelease.4`) triggers the release workflows:
 
 - **`release`** (cargo-dist) — `plan → build-local-artifacts +
   build-global-artifacts → host → announce`. Builds the archives and the
@@ -119,6 +118,9 @@ Pushing a tag matching `**[0-9]+.[0-9]+.[0-9]+*` (e.g. `v0.1.0`,
 - **`package`** — builds the **GUI desktop** installers per target and
   **attaches** them to the Release that `release` created (it polls for the
   Release to exist, so the two never race to create it).
+- **`sign-release`** — fires on `release: published`, computes `SHA256SUMS` over
+  the Linux release tarballs, records a keyless sigstore build-provenance
+  attestation via GitHub OIDC, and uploads `SHA256SUMS` to the Release.
 
 A version with a `-prerelease.N` suffix is published as a GitHub
 *prerelease*.
@@ -138,14 +140,15 @@ before you tag.
 
 Trigger: `push`→`main`, `push` release tag, `pull_request`→`main`,
 `workflow_dispatch`. A `changes` job classifies the diff (via
-`dorny/paths-filter`); the twelve gate jobs each run **only when their category
-changed**, then fan into one aggregator, plus a cross-OS signal:
+`dorny/paths-filter`, or enables all gates on `workflow_dispatch`); the nine
+gate jobs each run **only when their category changed**, then fan into one
+aggregator, plus a cross-OS signal:
 
 ```text
 changes  ── booleans: rust · cargo · markdown · workflows · roadmap · book
    │
-   ├─ rust     → fmt  clippy  test  portable  intra-crate-arch  (skipped on docs)
-   ├─ cargo    → cargo-deny   cargo-machete   dependency-rule
+   ├─ rust     → fmt (rustfmt + intra-arch)  clippy  test  portable  (skipped on docs)
+   ├─ cargo    → cargo (cargo-deny + cargo-machete + dependency-rule)
    ├─ markdown → markdownlint
    ├─ workflows→ actionlint
    ├─ roadmap  → roadmap
@@ -164,11 +167,12 @@ protection, so the required-checks list stays stable as jobs come and go.
 **Change-focused runs.** A path-filtered job that doesn't apply reports a
 `skipped` check — which is **not** `failure`/`cancelled`, so `ci-success` still
 goes green. A docs-only PR skips every Rust job; a pure-`.rs` change skips the
-dependency-metadata jobs (`cargo-*`, `dependency-rule`, gated on the narrower
-`cargo` filter: manifests, `Cargo.lock`, `deny.toml`, the dep script). This is
-why the aggregator matters: because protection pins only `ci-success` (which
-always runs), we never rely on GitHub counting a skipped *required* check as a
-pass, and `cross-os` may stay a matrix without wedging PRs.
+dependency-metadata job (`cargo-checks`, gated on the narrower `cargo` filter:
+manifests, `Cargo.lock`, `rust-toolchain.toml`, `deny.toml`, the dep script, and
+the workflow files whose toolchain pins it checks). This is why the aggregator
+matters: because protection pins only `ci-success` (which always runs), we never
+rely on GitHub counting a skipped *required* check as a pass, and `cross-os` may
+stay a matrix without wedging PRs.
 
 **The flip side: a skipped job is a green that tested nothing.** A file a test
 reads but the `rust` filter does not list merges on an unexercised pass. The
@@ -253,7 +257,7 @@ installers; `host` uploads and **creates** the Release; `announce` finalizes.
 ### `package.yml` — GUI desktop installers (cargo-packager)
 
 Trigger: tag push, `workflow_dispatch`. A single matrixed `package` job over
-four targets:
+four targets, with `Swatinem/rust-cache` keyed per target:
 
 | Target | Runner | Formats |
 | --- | --- | --- |
@@ -264,6 +268,15 @@ four targets:
 
 Config lives in `[package.metadata.packager]` in `crates/app/Cargo.toml`.
 Bundles are unsigned for now (signing/notarization pending certs, OQ5).
+
+### `sign-release.yml` — attestation & checksums
+
+Trigger: `release: [published]`. After `release.yml` and `package.yml` publish a
+GitHub Release, `attest` downloads all release assets, writes a combined
+`SHA256SUMS.txt` back to the release, and generates a Sigstore build-provenance
+attestation (`actions/attest-build-provenance`) verifiable via
+`gh attestation verify <file> --repo Termherd/termherd`. Requires
+`contents: write`, `id-token: write`, and `attestations: write`.
 
 ### `docs-deploy.yml` — the book on GitHub Pages
 
@@ -285,24 +298,27 @@ group keeps two merges from racing to publish.
   (`nextest`) on Linux gate every PR; the `cross-os` job re-runs both on macOS
   and Windows on push→main and release tags, so platform-specific breakage
   surfaces on the default branch (and before a release) without slowing merge.
-- **"Is it formatted and readable?"** → `rustfmt`, `markdownlint`.
+- **"Is it formatted and readable?"** → `rustfmt & arch` (`cargo fmt`),
+  `markdownlint`.
 - **"Is a function getting too complex?"** → `clippy::too_many_lines`
   (threshold 150 in `clippy.toml`), enforced inside the `clippy` job.
 - **"Does the architecture still hold?"** → two fitness functions.
-  `dependency-rule` (`scripts/check-crate-deps.sh`): the hexagonal rule that
+  `cargo-checks` runs `scripts/check-crate-deps.sh`: the hexagonal rule that
   adapters depend on `core`, never the reverse, checked against an allow-list of
-  internal edges. `intra-crate-arch` guards the seams *inside* a crate: module
-  boundaries (`scripts/check-module-boundaries.sh` — leaf modules stay leaves,
-  renderers don't reach the executor, `core::app` submodules go through the
-  parent registry) and OS-cfg containment
-  (`scripts/check-os-cfg-containment.sh` — compile-time `#[cfg(target_os)]`
-  stays in its audited homes, same spirit as the `unsafe_code` quarantine). It
-  also prints a report-only file-length signal (never fails) to the job summary.
+  internal edges (plus the toolchain lockstep check). `rustfmt & arch` guards
+  the seams *inside* a crate: module boundaries
+  (`scripts/check-module-boundaries.sh` — leaf modules stay leaves, renderers
+  don't reach the executor, `core::app` submodules go through the parent
+  registry) and OS-cfg containment (`scripts/check-os-cfg-containment.sh` —
+  compile-time `#[cfg(target_os)]` stays in its audited homes, same spirit as
+  the `unsafe_code` quarantine). It also prints a report-only file-length signal
+  (never fails) to the job summary.
 - **"Are core/claude staying panic-free?"** → `clippy` denies `unwrap_used`,
   `expect_used`, `panic` in those two crates (their `Cargo.toml` lint
   tables); tests may use them (`clippy.toml`).
-- **"Is our dependency tree safe and lean?"** → `cargo-deny` (licences,
-  RUSTSEC advisories, unknown sources) + `cargo-machete` (unused deps).
+- **"Is our dependency tree safe and lean?"** → `cargo-checks` runs `cargo-deny`
+  (licences, RUSTSEC advisories, unknown sources) + `cargo-machete` (unused
+  deps).
 - **"Could there be a security bug in our own code?"** → `codeql`.
 - **"Are the workflows themselves correct?"** → `actionlint`.
 
@@ -315,14 +331,11 @@ The toolchain is pinned to **Rust 1.95.0 / edition 2024**
 
 | Gate | Local command |
 | --- | --- |
-| `rustfmt` | `cargo fmt --all --check` |
+| `rustfmt & arch` | `cargo fmt --all --check && just check-arch` |
 | `clippy` (+ `too_many_lines`, panic-free) | `cargo clippy --workspace --all-targets -- -D warnings` |
 | `test` | `cargo test --workspace` (CI uses `cargo nextest run --workspace`) |
 | `portable` | no local mirror — it is a *Windows* run. Nearest approximation: `cargo check -p termherd-pty --target x86_64-pc-windows-msvc`, which catches compile breakage but never behaviour |
-| `cargo-deny` | `cargo deny check` (needs `cargo-deny`) |
-| `cargo-machete` | `cargo machete` (needs `cargo-machete`) |
-| `dependency-rule` | `just check-deps` (or `./scripts/check-crate-deps.sh`) |
-| `intra-crate-arch` | `just check-arch` (module boundaries + OS-cfg + length report) |
+| `cargo-checks` (`deny` · `machete` · `deps`) | `cargo deny check && cargo machete && just check-deps` |
 | `markdownlint` | `markdownlint-cli2` (uses `.markdownlint-cli2.jsonc`) |
 | `roadmap` | `just roadmap` (needs the pinned `roadmark`; the version is in the job) |
 | `mdbook` | `just docs` (needs `mdbook`; `just docs-serve` previews with live reload) |
@@ -343,15 +356,19 @@ confusing way.
   comment **together**; never use a mutable tag. (`release.yml` is the
   exception — it is dist-generated and pins by tag.)
 - **Toolchain in lockstep (Q10).** `1.95.0` appears in `rust-toolchain.toml`,
-  `Cargo.toml` `rust-version`, and every `toolchain:` input in the workflows.
-  Change all of them at once.
+  `Cargo.toml` `rust-version`, `ci.yml` `env.RUST_TOOLCHAIN`, and `codeql.yml`
+  `toolchain`. Change all four at once — `scripts/check-crate-deps.sh` (`just
+  check-deps`) verifies that they match.
 - **Least privilege.** Workflows default to `permissions: contents: read`.
   A job escalates only when it must: `codeql` (`security-events: write`),
-  `release` / `package` (`contents: write`).
-- **PR runs are disposable, `ci` runs on `main` are not.** `ci.yml` cancels
-  superseded PR runs but never cancels a push to `main` or a tag. `codeql.yml`
-  does cancel a stale `main` scan when a newer Rust push arrives so the
-  Security tab analyzes the tip directly.
+  `release` / `package` (`contents: write`), `sign-release` (`contents: write`,
+  `id-token: write`, `attestations: write`).
+- **PR runs are disposable, `ci` runs on `main` are not.** `ci.yml` keys its
+  concurrency group on `'pr'` for pull requests and `github.sha` elsewhere, so
+  superseded PR pushes cancel while consecutive merges to `main` run in parallel
+  without cancelling or queueing behind `cross-os`. `codeql.yml` cancels a stale
+  `main` scan when a newer Rust push arrives so the Security tab analyzes the
+  tip directly.
 - **`-D warnings`.** CI sets `RUSTFLAGS: -D warnings`, so a lint at `warn`
   in a `Cargo.toml` lint table (e.g. `too_many_lines`, `unwrap_used` outside
   core/claude) is advisory locally but **blocking** in CI.
