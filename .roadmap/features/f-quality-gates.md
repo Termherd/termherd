@@ -15,8 +15,10 @@ merge-conflict risk). Scoped from a brainstorm
 (#105), unused deps (#106), and the crate-level dependency rule as an
 architecture fitness function enforcing the hexagonal inward-only invariant
 (#107) all landed. **P2 follow-ups — shipped** as the intra-crate refactor
-cluster #167–#173, now complete: the intra-crate architecture gate
-(`intra-crate-arch`) is #173 — a module-boundary check
+cluster #167–#173, now complete: the intra-crate architecture gate (#173,
+consolidated with `rustfmt` into `rustfmt & arch` in #393, while `cargo-deny`,
+`cargo-machete`, and the crate dependency rule + toolchain lockstep run in
+`cargo-checks`) — a module-boundary check
 (`scripts/check-module-boundaries.sh`: leaf modules stay leaves, renderers
 don't reach the executor, `core::app` submodules go through the parent
 registry), an OS-cfg containment check (`scripts/check-os-cfg-containment.sh`:

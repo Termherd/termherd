@@ -75,13 +75,15 @@ Non-negotiable, and CI-enforced:
 - **One logging stack**: `tracing`. No `println!` outside tests.
 - **Function length is gated** (`clippy::too_many_lines`, threshold 150). A
   function that exceeds it on purpose carries a local allow with a rationale.
-- **Twelve gates guard a pull request** — formatting, clippy with warnings
-  denied, the test suite, dependency licensing, unused dependencies, the crate
-  dependency rule, intra-crate module boundaries, workflow lint, markdown lint,
-  the roadmap, and this book. Each runs **only when its own file category
-  changed**, so a docs-only change skips every Rust job; they fan into one
-  required check, which treats a skipped gate as a pass. Portable crates are
-  additionally **built and tested on Windows on every PR**.
+- **Nine gate jobs guard a pull request** — `rustfmt & arch` (`cargo fmt`,
+  intra-crate module boundaries, OS-cfg containment, and the file-length
+  report), `clippy` (warnings denied), `test` (`nextest`), `portable` (every
+  non-GUI crate built and tested on Windows), `cargo-checks` (`cargo-deny`,
+  `cargo-machete`, the crate dependency rule, and toolchain lockstep),
+  `actionlint`, `markdownlint`, `roadmap`, and `mdbook`. Each runs **only when
+  its own file category changed**, so a docs-only change skips every Rust job;
+  they fan into one required check (`ci-success`), which treats a skipped gate
+  as a pass.
 
 The full CI reference is
 [`docs/CI.md`](https://github.com/Termherd/termherd/blob/main/docs/CI.md).

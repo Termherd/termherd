@@ -448,12 +448,11 @@ just roadmap                           # ROADMAP.md still matches .roadmap/
 just docs                              # the user manual builds (mdbook)
 ```
 
-This block is a *local loop*, not the gate list: the heading used to say "all
-blocking", which read as an inventory and was four jobs short (`portable`,
-`intra-crate-arch`, `roadmap`, `mdbook`). Two blocking gates have no local
-mirror at all — `portable`, because it is a *Windows* run, and `actionlint`.
-CodeQL runs too, but it is a post-merge baseline and not in `ci-success`, so it
-blocks nothing.
+This block is a *local loop*, not the gate list: `just check-arch` runs with
+`cargo fmt` in `rustfmt & arch`, while `deny`, `machete`, and `just check-deps`
+run together in `cargo-checks`. Two blocking gates have no local mirror at all
+— `portable`, because it is a *Windows* run, and `actionlint`. CodeQL runs too,
+but it is a post-merge baseline and not in `ci-success`, so it blocks nothing.
 
 For the **full picture** — every gate, what it
 protects, when it runs (PR / merge / schedule / release), how to mirror it, and
