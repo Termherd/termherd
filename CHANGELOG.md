@@ -7,6 +7,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (pick which Option key is Meta)
+
+- On macOS the right Option key now types what the layout composes, such as
+  `|` with ⌥⇧L on a French layout, while the left one stays Meta (⌥B / ⌥F move
+  by word). `terminal.option_as_meta` picks the side (#59).
+
+### Added (⌘M minimizes)
+
+- On macOS a Window menu gives ⌘M its *Minimize*, with Zoom beside it (#114).
+
 ### Added (every iced theme, with matching terminal colours)
 
 - The interface theme offers all 22 iced themes, and 14 new terminal schemes
