@@ -72,7 +72,8 @@ because inventing a stricter gesture for the key alone would have left the
 button's identical hole standing while looking closed. Discarding a modified
 doc without asking is a real defect on *both* paths and is filed as its own
 (#248) — widened here, not created here, and not half-fixed inside a keyboard
-PR. It also accumulates rather than stopping at the first
+PR. (Since fixed: both paths ask before discarding, in #386, and so does a
+quit, in #392.) It also accumulates rather than stopping at the first
 failure: a sweep that names one offender reads as *and the rest are fine*,
 which is the assumption that let this one through. Tidy-first prerequisite:
 `PaneRename` announced itself as `session-rename` in its own `label()`, in the
