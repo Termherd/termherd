@@ -22,11 +22,9 @@ they are *overlay* keys, bound to no action. Without them an agent that armed a
 close confirmation would have no way to answer it, and would park the app until
 a human intervened.
 
-The two are not equally complete, and the difference matters to a caller.
 **`escape` leaves every prompt** — that is what guarantees an agent can always
-back out. **`enter` confirms the confirmation prompts but commits neither
-rename**, because both commit through a widget callback no synthesised event
-reaches ([#246](https://github.com/Termherd/termherd/issues/246)).
+back out. **`enter` confirms confirmation prompts and commits both inline
+renames.** Menus and pickers handle it themselves, as described below.
 
 The corollary: **an open overlay consumes an MCP press exactly as it consumes a
 keypress.** The step reports which prompt ate it, so a caller learns why its
@@ -76,14 +74,10 @@ selection, and `copy` runs on it.
 
 - On **`quit-confirm`**, `enter` quits the app — killing every session and the
   connection you are speaking over, and dropping a modified doc's edits.
-- **`session-rename`** (the sidebar's inline ✎ field) does not commit on
-  `enter`, and neither does **`tab-rename`**: both commit through the widget's
-  own submit, which a synthesised key event never reaches. `rename-tab` opens
-  the tab's field from MCP, but only a human can commit it. `escape` abandons
-  either — so you can always back out and start over — but committing a rename
-  over MCP
-  is a missing capability, tracked as
-  [#246](https://github.com/Termherd/termherd/issues/246).
+- **`session-rename`** (the sidebar's inline ✎ field) and **`tab-rename`** both
+  commit on `enter`; `escape` abandons either edit. MCP and the widget submit
+  use the same commit messages. When a rename targets a live Claude session,
+  committing may open `claude-command-confirm` for `/rename`.
 - **`tab-menu`** (opened by `open-tab-menu`, or a human's right-click on a
   tab) answers `up`, `down` and `enter` itself, so unlike the renames it is
   fully drivable: `enter` closes the menu and runs the selected entry exactly

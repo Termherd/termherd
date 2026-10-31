@@ -76,9 +76,6 @@ PR. It also accumulates rather than stopping at the first
 failure: a sweep that names one offender reads as *and the rest are fine*,
 which is the assumption that let this one through. Tidy-first prerequisite:
 `PaneRename` announced itself as `session-rename` in its own `label()`, in the
-MCP reply, and in the tests — the code was the only name that disagreed. Left
-open on purpose: `enter` reaches neither rename over MCP, since both commit
-through the widget's `on_submit`, which no synthesised key event touches. That
-is a missing capability, not a parked surface — `escape` always gets the
-keyboard back — so it is a separate ticket (#246) rather than a passenger on
-this fix
+MCP reply, and in the tests — the code was the only name that disagreed. Both
+rename handlers now route `enter` to their existing commit messages, while
+the widget submit callbacks remain in place for human input (#246).

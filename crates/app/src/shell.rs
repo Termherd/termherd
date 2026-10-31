@@ -4579,6 +4579,44 @@ mod key_routing {
     }
 
     #[test]
+    fn enter_commits_a_tab_rename_through_the_keyboard_router() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.update(Message::StartTabRename(0));
+        let _ = shell.update(Message::TabRenameInput("new title".to_owned()));
+
+        assert_eq!(
+            press_chord(&mut shell, "enter"),
+            PressStep::Overlay("tab-rename".to_owned())
+        );
+        assert!(shell.keyboard_owner().is_none());
+        assert_eq!(shell.core.workspace.tabs[0].display_title(), "new title");
+    }
+
+    #[test]
+    fn enter_commits_a_session_rename_through_the_keyboard_router() {
+        let (mut shell, _pty) = empty_shell();
+        let _ = shell.update(Message::StartRename {
+            session: OPEN_ID.to_owned(),
+            current: "old title".to_owned(),
+        });
+        let _ = shell.update(Message::RenameInput("new title".to_owned()));
+
+        assert_eq!(
+            press_chord(&mut shell, "enter"),
+            PressStep::Overlay("session-rename".to_owned())
+        );
+        assert!(shell.keyboard_owner().is_none());
+        assert_eq!(
+            shell
+                .core
+                .metadata
+                .get(OPEN_ID)
+                .and_then(|meta| meta.title.as_deref()),
+            Some("new title")
+        );
+    }
+
+    #[test]
     fn every_overlay_that_owns_the_keyboard_can_be_left_from_the_keyboard() {
         // The invariant this bug broke, stated once for the whole ladder rather
         // than per prompt: an overlay that takes the keyboard and answers no key

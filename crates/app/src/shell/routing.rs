@@ -417,24 +417,27 @@ impl Shell {
         (verdict.unwrap_or(KeyVerdict::Overlay(owner.label())), task)
     }
 
-    /// Escape abandons a tab rename; Enter and a blur commit it elsewhere, so
-    /// every other key is swallowed.
+    /// Escape cancels; Enter commits. A blur also commits a tab rename.
     fn tab_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
-        self.rename_key(event, Message::CancelTabRename)
+        self.rename_key(event, Message::CancelTabRename, Message::CommitTabRename)
     }
 
-    /// Escape abandons a session rename — the outcome a blur already gives it,
-    /// where a tab rename commits. The field owns every other key: it is a live
-    /// text input, and Enter reaches it through the widget.
+    /// Escape cancels; Enter commits. A blur cancels a session rename.
     fn session_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
-        self.rename_key(event, Message::CancelRename)
+        self.rename_key(event, Message::CancelRename, Message::CommitRename)
     }
 
-    /// Escape is routed here because the overlay captures it before the field
-    /// can blur.
-    fn rename_key(&mut self, event: &keyboard::Event, cancel: Message) -> Task<Message> {
+    fn rename_key(
+        &mut self,
+        event: &keyboard::Event,
+        cancel: Message,
+        commit: Message,
+    ) -> Task<Message> {
         if is_escape(event) {
             return self.update(cancel);
+        }
+        if is_enter(event) {
+            return self.update(commit);
         }
         Task::none()
     }
