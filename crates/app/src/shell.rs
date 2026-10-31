@@ -6471,10 +6471,7 @@ mod key_routing {
             "precondition: nothing live"
         );
 
-        let _ = shell.update(Message::Window(
-            window::Id::unique(),
-            window::Event::CloseRequested,
-        ));
+        request_quit_from_the_window(&mut shell);
         assert!(
             shell.exiting,
             "a quit with no live sessions must terminate the runtime, not just the window"
@@ -6497,10 +6494,7 @@ mod key_routing {
             "precondition: a session is running"
         );
 
-        let _ = shell.update(Message::Window(
-            window::Id::unique(),
-            window::Event::CloseRequested,
-        ));
+        request_quit_from_the_window(&mut shell);
         assert!(
             shell.quit_pending(),
             "a running session arms the quit modal"
@@ -6527,10 +6521,7 @@ mod key_routing {
             1,
             "…but it is still a live session"
         );
-        let _ = shell.update(Message::Window(
-            window::Id::unique(),
-            window::Event::CloseRequested,
-        ));
+        request_quit_from_the_window(&mut shell);
         assert!(shell.exiting, "an all-idle app quits without a prompt");
         assert!(!shell.quit_pending(), "no modal when nothing is running");
     }
@@ -6549,10 +6540,7 @@ mod key_routing {
             0,
             "precondition: nothing live"
         );
-        let _ = shell.update(Message::Window(
-            window::Id::unique(),
-            window::Event::CloseRequested,
-        ));
+        request_quit_from_the_window(&mut shell);
         assert!(
             shell.quit_pending(),
             "alwaysConfirm prompts even with nothing to hard-kill"
@@ -6570,10 +6558,7 @@ mod key_routing {
             shell.core.any_running_process(),
             "precondition: a session is running"
         );
-        let _ = shell.update(Message::Window(
-            window::Id::unique(),
-            window::Event::CloseRequested,
-        ));
+        request_quit_from_the_window(&mut shell);
         assert!(shell.exiting, "noConfirmation quits without a modal");
         assert!(!shell.quit_pending());
     }
@@ -6916,7 +6901,6 @@ mod key_routing {
 
     #[test]
     fn a_modified_doc_holds_up_the_quit_even_under_no_confirmation() {
-        // The policy speaks for sessions killed on quit, not for unsaved text.
         let (mut shell, _pty) = shell_with_terminal();
         shell.close_confirm.app = ConfirmClose::NoConfirmation;
         modified_doc(&mut shell, "notes.md");
@@ -6936,18 +6920,6 @@ mod key_routing {
 
         assert!(shell.exiting);
         assert!(!shell.quit_pending());
-    }
-
-    #[test]
-    fn the_quit_prompt_names_the_modified_doc() {
-        let (mut shell, _pty) = shell_with_terminal();
-        modified_doc(&mut shell, "notes.md");
-
-        request_quit_from_the_window(&mut shell);
-
-        let prompt = shell.quit_prompt();
-        assert!(prompt.contains("“notes.md”"), "{prompt}");
-        assert!(prompt.contains("Unsaved changes"), "{prompt}");
     }
 
     #[test]

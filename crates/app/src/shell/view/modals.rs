@@ -58,19 +58,11 @@ impl Shell {
         ))
     }
 
-    /// What the quit confirmation asks, for the card and the tests alike.
     pub(in crate::shell) fn quit_prompt(&self) -> String {
-        let unsaved_doc = self
-            .open_doc
-            .as_ref()
-            .filter(|doc| doc.dirty)
-            .map(|doc| clip(&doc.label, 24));
+        let unsaved_doc = self.unsaved_doc().map(|doc| clip(&doc.label, 24));
         strings::quit_prompt(self.core.live_session_count(), unsaved_doc.as_deref())
     }
 
-    /// The quit-confirmation card, shown when a window close is armed: live
-    /// sessions would be hard-killed, or a modified doc lost. `None` when no
-    /// quit is pending.
     fn quit_confirmation(&self) -> Option<Element<'_, Message>> {
         if !self.quit_pending() {
             return None;

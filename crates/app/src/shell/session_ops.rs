@@ -261,11 +261,10 @@ impl Shell {
     /// default) confirms only while some session is still running work — the
     /// core `any_running_process` predicate, the app-wide sibling of the one the
     /// tab close uses — so an all-idle app quits silently; `alwaysConfirm` /
-    /// `noConfirmation` override that. A modified doc confirms under every
-    /// policy (see `quit_confirms`). `iced::exit` (not `window::close`) is what
-    /// actually ends the process: on macOS winit cancels the OS terminate and
-    /// `exit_on_close_request(false)` keeps the runtime alive, so a mere window
-    /// close would survive.
+    /// `noConfirmation` override that, except over a modified doc.
+    /// `iced::exit` (not `window::close`) is what actually ends the process: on
+    /// macOS winit cancels the OS terminate and `exit_on_close_request(false)`
+    /// keeps the runtime alive, so a mere window close would survive.
     pub(super) fn request_quit(&mut self, id: window::Id) -> Task<Message> {
         if self.quit_confirms() {
             self.closing_window = Some(id);
@@ -277,10 +276,9 @@ impl Shell {
         }
     }
 
-    /// Unsaved doc edits ask whatever the policy says: the policy speaks for
-    /// the sessions a quit kills, and text lost on quit is not one of them.
+    /// The policy covers the sessions a quit kills, not unsaved text.
     fn quit_confirms(&self) -> bool {
-        self.has_unsaved_doc()
+        self.unsaved_doc().is_some()
             || self
                 .close_confirm
                 .app

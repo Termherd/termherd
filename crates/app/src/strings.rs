@@ -196,10 +196,8 @@ pub fn archive_prompt(title: &str) -> String {
     format!("Archive “{title}”?")
 }
 
-/// Quit confirmation. It names the modified doc whose edits would be lost, and
-/// how many open sessions would be hard-killed (every non-exited session dies
-/// on quit, Claude or shell); with neither (an `alwaysConfirm` quit of an idle
-/// app) it's a plain confirm.
+/// Every non-exited session dies on quit, Claude or shell, so `live` counts
+/// them all.
 #[must_use]
 pub fn quit_prompt(live: usize, unsaved_doc: Option<&str>) -> String {
     let mut prompt = "Quit TermHerd?".to_string();

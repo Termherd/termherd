@@ -181,8 +181,12 @@ impl Shell {
     }
 
     /// The one test every way out of the editor asks before it discards.
-    pub(super) fn has_unsaved_doc(&self) -> bool {
-        self.open_doc.as_ref().is_some_and(|doc| doc.dirty)
+    pub(super) fn unsaved_doc(&self) -> Option<&OpenDoc> {
+        self.open_doc.as_ref().filter(|doc| doc.dirty)
+    }
+
+    fn has_unsaved_doc(&self) -> bool {
+        self.unsaved_doc().is_some()
     }
 
     /// The editor takes input only while it owns the keyboard, as the search
