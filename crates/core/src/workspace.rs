@@ -246,6 +246,20 @@ impl Workspace {
         Some(())
     }
 
+    /// Set the ratio of the split at `path` in `tab_index`, clamped so neither
+    /// pane falls below ten percent. Returns `None` for an invalid tab or path.
+    pub fn set_split_ratio(&mut self, tab_index: usize, path: &[Branch], ratio: f32) -> Option<()> {
+        if !ratio.is_finite() {
+            return None;
+        }
+        let tab = self.tabs.get_mut(tab_index)?;
+        let Pane::Split { ratio: current, .. } = navigate_mut(&mut tab.root, path)? else {
+            return None;
+        };
+        *current = ratio.clamp(0.1, 0.9);
+        Some(())
+    }
+
     /// Record the OSC title `session` reported on the tab hosting it. Only the
     /// tab's first pane — the one it is named after — speaks for it: a shell
     /// split beside a Claude would otherwise retitle the Claude's tab with its
@@ -881,6 +895,71 @@ mod tests {
         }
         assert_eq!(tab.focus, vec![Branch::B]);
         assert_eq!(ws.focused_session(), Some(sid(2)));
+    }
+
+    #[test]
+    fn set_split_ratio_updates_the_requested_tab_and_nested_path() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+        ws.split(SplitDir::Horizontal, sid(3));
+        ws.open(sid(4), "b");
+
+        assert_eq!(ws.set_split_ratio(0, &[Branch::B], 0.25), Some(()));
+        let Pane::Split { ratio, b, .. } = &ws.tabs[0].root else {
+            panic!("expected a root split");
+        };
+        assert_eq!(*ratio, 0.5, "the root split remains unchanged");
+        let Pane::Split { ratio, .. } = b.as_ref() else {
+            panic!("expected a nested split");
+        };
+        assert_eq!(*ratio, 0.25);
+        assert_eq!(ws.active, 1, "the explicitly targeted tab stays in place");
+    }
+
+    #[test]
+    fn set_split_ratio_keeps_each_pane_at_least_ten_percent() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+
+        assert_eq!(ws.set_split_ratio(0, &[], 0.0), Some(()));
+        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
+            panic!("expected a root split");
+        };
+        assert_eq!(*ratio, 0.1);
+        assert_eq!(ws.set_split_ratio(0, &[], 1.0), Some(()));
+        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
+            panic!("expected a root split");
+        };
+        assert_eq!(*ratio, 0.9);
+    }
+
+    #[test]
+    fn set_split_ratio_rejects_non_finite_values() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+
+        assert_eq!(ws.set_split_ratio(0, &[], f32::NAN), None);
+        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
+            panic!("expected a root split");
+        };
+        assert_eq!(*ratio, 0.5);
+    }
+
+    #[test]
+    fn set_split_ratio_rejects_a_leaf_or_missing_tab() {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+
+        assert_eq!(ws.set_split_ratio(0, &[Branch::A], 0.25), None);
+        assert_eq!(ws.set_split_ratio(9, &[], 0.25), None);
+        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
+            panic!("expected a root split");
+        };
+        assert_eq!(*ratio, 0.5);
     }
 
     #[test]
