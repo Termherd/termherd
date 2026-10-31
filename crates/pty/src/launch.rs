@@ -80,7 +80,7 @@ pub(crate) fn launch_command(
 /// flag and the launch fails outright, rather than merely losing its status.
 /// The floor the README states is higher still, for `--session-id`.
 pub(crate) fn write_title_settings(session: SessionId) -> Option<PathBuf> {
-    let path = std::env::temp_dir().join(format!("termherd-settings-{}.json", session.0.get()));
+    let path = settings_path(session);
     let json = r#"{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":"0"}}"#;
     match write_private(&path, json) {
         Ok(()) => Some(path),
@@ -183,11 +183,17 @@ fn write_startup_files(dir: &Path, files: &[(PathBuf, String)]) -> std::io::Resu
 /// business outliving the session it authorised. Best-effort by construction:
 /// a file already gone is the desired state, and a teardown is no place to fail.
 pub(crate) fn discard_private_files(session: SessionId) {
-    let temp = std::env::temp_dir();
-    let id = session.0.get();
     let _ = std::fs::remove_dir_all(shell_dir(session));
-    let _ = std::fs::remove_file(temp.join(format!("termherd-mcp-{id}.json")));
-    let _ = std::fs::remove_file(temp.join(format!("termherd-settings-{id}.json")));
+    let _ = std::fs::remove_file(mcp_config_path(session));
+    let _ = std::fs::remove_file(settings_path(session));
+}
+
+fn mcp_config_path(session: SessionId) -> PathBuf {
+    std::env::temp_dir().join(format!("termherd-mcp-{}.json", session.0.get()))
+}
+
+fn settings_path(session: SessionId) -> PathBuf {
+    std::env::temp_dir().join(format!("termherd-settings-{}.json", session.0.get()))
 }
 
 /// Create `path` as a directory only this user can reach (`0o700` on Unix), and
@@ -218,7 +224,7 @@ fn private_dir(path: &Path) -> std::io::Result<()> {
 /// loopback url and a hex token), so no escaping is needed. `None` (logged, not
 /// fatal) if the write fails: the session then launches without the live bridge.
 pub(crate) fn write_mcp_config(session: SessionId, config: &McpConfig) -> Option<PathBuf> {
-    let path = std::env::temp_dir().join(format!("termherd-mcp-{}.json", session.0.get()));
+    let path = mcp_config_path(session);
     let json = format!(
         r#"{{"mcpServers":{{"termherd":{{"type":"http","url":"{}","headers":{{"Authorization":"Bearer {}"}}}}}}}}"#,
         config.url, config.token
