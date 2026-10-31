@@ -10,6 +10,7 @@ use std::time::SystemTime;
 use iced::Task;
 use iced::widget::text_editor;
 
+use super::routing::KeyboardOwner;
 use super::{Message, Shell};
 
 /// A plan / memory document open in the main pane (F-plans-memory). Holds the
@@ -164,16 +165,13 @@ impl Shell {
     }
 
     pub(super) fn confirm_doc_discard(&mut self) -> Task<Message> {
-        match self.discarding_doc.take() {
-            Some(DocDiscard::Close) => {
-                self.open_doc = None;
-                Task::none()
-            }
-            Some(DocDiscard::Open { label, path }) => {
-                self.open_doc = None;
-                Self::read_doc(label, path)
-            }
-            None => Task::none(),
+        let Some(discard) = self.discarding_doc.take() else {
+            return Task::none();
+        };
+        self.open_doc = None;
+        match discard {
+            DocDiscard::Close => Task::none(),
+            DocDiscard::Open { label, path } => Self::read_doc(label, path),
         }
     }
 
@@ -187,11 +185,13 @@ impl Shell {
         self.open_doc.as_ref().is_some_and(|doc| doc.dirty)
     }
 
-    /// Read by the view and by the edit handler alike, so a key that reaches
-    /// the editor under a discard prompt changes nothing whichever arrives
-    /// first.
+    /// The editor takes input only while it owns the keyboard, as the search
+    /// box does: any modal over it blocks the mouse alone, so a focused editor
+    /// would otherwise also take the keys that answer the modal. Read by the
+    /// view and by the edit handler alike, so whichever arrives first, such a
+    /// key changes nothing.
     pub(super) fn doc_accepts_edits(&self) -> bool {
-        self.discarding_doc.is_none()
+        self.keyboard_owner() == Some(KeyboardOwner::Doc)
     }
 
     /// Save the open doc off-thread, if there is one with unsaved edits in the

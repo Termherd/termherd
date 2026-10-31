@@ -381,9 +381,10 @@ read's reply raised it mid-typing, where the next Enter meant as a newline
 would have answered it — so the click arms it, and a reply finding fresh edits
 is dropped. **A modal scrim blocks the mouse, not the keyboard**: `opaque`
 captures pointer events only, so a focused widget under a prompt still hears
-the keys that answer it. The doc editor goes read-only while its prompt is up,
-gated by one predicate (`doc_accepts_edits`) that the view and the edit handler
-both read.
+the keys that answer it. The doc editor therefore takes input only while it
+owns the keyboard (`doc_accepts_edits` is `keyboard_owner() == Some(Doc)`, the
+rule the search box already followed) — so every prompt over it is covered, not
+just its own — and the view and the edit handler both read that one predicate.
 
 The sweep is the general form of the "test that claims to be exhaustive" rule
 below: it is honest because `arm_overlay`'s `match` is compiler-checked, so a

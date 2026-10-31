@@ -5444,18 +5444,23 @@ mod key_routing {
                 let _ = shell.update(Message::ToggleSettings);
             }
             KeyboardOwner::DocDiscard => {
-                load_doc(shell, "CLAUDE.md", "notes");
-                type_into_doc(shell, 'x');
+                modified_doc(shell, "CLAUDE.md");
                 let _ = shell.update(Message::CloseDoc);
             }
             KeyboardOwner::Doc => load_doc(shell, "CLAUDE.md", "notes"),
         }
     }
 
+    /// Shared by `load_doc` and `click_doc`, so a click and the read that
+    /// answers it name the same file.
+    fn doc_path(name: &str) -> PathBuf {
+        PathBuf::from("/nowhere").join(name)
+    }
+
     fn load_doc(shell: &mut Shell, name: &str, content: &str) {
         let _ = shell.update(Message::DocLoaded {
             label: name.to_string(),
-            path: PathBuf::from("/nowhere").join(name),
+            path: doc_path(name),
             content: content.to_string(),
             mtime: None,
         });
@@ -6764,7 +6769,7 @@ mod key_routing {
     fn click_doc(shell: &mut Shell, name: &str) {
         let _ = shell.update(Message::OpenDoc {
             label: name.to_string(),
-            path: PathBuf::from("/nowhere").join(name),
+            path: doc_path(name),
         });
     }
 
@@ -6856,6 +6861,38 @@ mod key_routing {
         assert_eq!(open_doc_state(&shell), Some(edited));
         let _ = shell.update(Message::CancelDocDiscard);
         assert!(shell.doc_accepts_edits());
+    }
+
+    #[test]
+    fn no_overlay_over_an_open_doc_lets_its_keys_edit_the_doc() {
+        // Every modal blocks only the mouse, not just the discard prompt: the
+        // editor takes input only while it owns the keyboard. Driven off
+        // `KeyboardOwner::ALL`, so a new rung is covered without being listed.
+        let mut edited_under = Vec::new();
+        for owner in KeyboardOwner::ALL {
+            if owner == KeyboardOwner::Doc {
+                continue;
+            }
+            // Armed before the doc opens: an overlay armed through a keypress
+            // would otherwise have its key eaten by the open editor's rung.
+            let (mut shell, _pty) = shell_with_terminal();
+            arm_overlay(&mut shell, owner);
+            if shell.open_doc.is_none() {
+                load_doc(&mut shell, "CLAUDE.md", "notes");
+            }
+            assert_eq!(shell.keyboard_owner(), Some(owner), "{owner:?} armed");
+            let before = open_doc_state(&shell);
+
+            type_into_doc(&mut shell, 'y');
+
+            if open_doc_state(&shell) != before {
+                edited_under.push(owner.label());
+            }
+        }
+        assert!(
+            edited_under.is_empty(),
+            "the doc took keys typed under these overlays: {edited_under:?}"
+        );
     }
 
     #[test]

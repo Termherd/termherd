@@ -13,8 +13,8 @@ use crate::strings;
 /// Render an open plan/memory doc: a header (label, save state, actions) above
 /// the editable text area (F-plans-memory). A read-only doc omits the Save
 /// control; the header always carries a close button. `editable` is off while
-/// a discard prompt sits over the editor: the modal blocks only the mouse, and
-/// a focused editor would otherwise take the very Enter that answers it.
+/// any prompt sits over the editor: a modal blocks only the mouse, and a
+/// focused editor would otherwise take the very Enter that answers it.
 pub(super) fn doc_editor(doc: &OpenDoc, editable: bool) -> Element<'_, Message> {
     let mut header = row![text(&doc.label).size(13)]
         .spacing(12)

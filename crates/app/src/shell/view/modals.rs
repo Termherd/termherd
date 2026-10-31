@@ -38,11 +38,15 @@ impl Shell {
     }
 
     fn doc_discard_confirmation(&self) -> Option<Element<'_, Message>> {
-        let current = self.open_doc.as_ref().map_or("", |doc| doc.label.as_str());
-        let prompt = match self.discarding_doc.as_ref()? {
-            DocDiscard::Close => strings::doc_discard_prompt(&clip(current, 24)),
+        let discard = self.discarding_doc.as_ref()?;
+        let current = clip(
+            self.open_doc.as_ref().map_or("", |doc| doc.label.as_str()),
+            24,
+        );
+        let prompt = match discard {
+            DocDiscard::Close => strings::doc_discard_prompt(&current),
             DocDiscard::Open { label, .. } => {
-                strings::doc_discard_open_prompt(&clip(current, 24), &clip(label, 24))
+                strings::doc_discard_open_prompt(&current, &clip(label, 24))
             }
         };
         Some(Self::confirmation_bar(
