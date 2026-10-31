@@ -17,14 +17,15 @@ run:
 run-isolated:
     TMPDIR="$(mktemp -d)" cargo run -p termherd-app
 
-# Assert the hexagonal crate dependency rule (deps point inward only). Mirrors
-# the `deps` CI job; run before pushing a new crate or cross-crate dependency.
+# Assert the hexagonal crate dependency rule (deps point inward only) and
+# toolchain lockstep across config/workflow files. Mirrors the `cargo-checks`
+# CI job; run before pushing a new crate, cross-crate dependency, or toolchain bump.
 check-deps:
     ./scripts/check-crate-deps.sh
 
 # Assert the intra-crate architecture rules (module boundaries + OS-cfg
 # containment), then print the report-only file-length signal. Mirrors the
-# `intra-arch` CI job; run before pushing a new module or an OS-conditional cfg.
+# `rustfmt & arch` CI job; run before pushing a new module or an OS-conditional cfg.
 check-arch:
     ./scripts/check-module-boundaries.sh
     ./scripts/check-os-cfg-containment.sh
@@ -61,8 +62,8 @@ roadmap-check:
     roadmark validate
 
 # Build the documentation book into docs/book (mdbook required; not a Rust
-# crate, so it stays out of the dependency graph the `deny`/`machete` gates
-# scan). Mirrors the `book` CI job. `create-missing = false` in book.toml means
+# crate, so it stays out of the dependency graph `cargo-checks` scans). Mirrors
+# the `book` CI job. `create-missing = false` in book.toml means
 # a link to a missing page fails the build instead of minting an empty page.
 [doc("Build the documentation book into docs/book")]
 docs:

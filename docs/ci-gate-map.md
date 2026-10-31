@@ -18,8 +18,8 @@ Pull request → main
 
   changes · dorny/paths-filter — one boolean per file category
   ───────────────────────────────────────────────────────────────────
-    rust       →  rustfmt · clippy · test · portable · intra-crate-arch
-    cargo      →  cargo-deny · cargo-machete · dependency-rule
+    rust       →  rustfmt & arch · clippy · test · portable
+    cargo      →  cargo-checks (deny · machete · dependency-rule)
     markdown   →  markdownlint
     workflows  →  actionlint
     roadmap    →  roadmap
@@ -35,8 +35,7 @@ Pull request → main
 
 A docs-only PR skips every Rust job (they report `skipped`, which
 `ci-success` treats as pass), so it goes green in seconds — though one touching
-`docs/src/**` still fires `mdbook`. A pure-`.rs` change skips the three `cargo`
-metadata jobs.
+`docs/src/**` still fires `mdbook`. A pure-`.rs` change skips `cargo-checks`.
 
 ## Not on the PR gate
 
@@ -47,7 +46,7 @@ Four things run outside the merge gate, so they never slow a PR:
   ────────────────  ─────────  ──────────  ─────────────────────────────────
   cross-os          signal     mac · win   non-PR, when rust changed, or a tag
   Analyze (Rust)    baseline   ubuntu      push→main (rust paths) + weekly
-  release·package   release    all         tag push
+  release·package   release    all         tag push (+ sign-release on publish)
   docs-deploy       publish    ubuntu      push→main under docs/ (book → Pages)
 ```
 
@@ -59,22 +58,19 @@ check.
 
 | Job | Guards | Filter | OS | Status |
 | --- | --- | --- | --- | --- |
-| `rustfmt` | formatting (`cargo fmt`) | rust | ubuntu | required |
+| `rustfmt & arch` | formatting (`cargo fmt`), module boundaries, OS-cfg containment, length report | rust | ubuntu | required |
 | `clippy` | `-D warnings`, panic-free core, `too_many_lines` | rust | ubuntu | required |
 | `test` | `cargo nextest run --workspace` | rust | ubuntu | required |
 | `portable` | clippy + tests for `--workspace --exclude termherd-app`, **on Windows** (PRs) | rust | win | required |
-| `intra-crate-arch` | module boundaries + OS-cfg containment; length report | rust | ubuntu | required |
-| `cargo-deny` | licences, RUSTSEC, unknown sources | cargo | ubuntu | required |
-| `cargo-machete` | declared-but-unused deps | cargo | ubuntu | required |
-| `dependency-rule` | hexagonal crate dep rule | cargo | ubuntu | required |
+| `cargo-checks` | `cargo-deny`, `cargo-machete`, hexagonal crate dep rule + toolchain lockstep | cargo | ubuntu | required |
 | `actionlint` | valid, shellcheck-clean workflow YAML | workflows | ubuntu | required |
 | `markdownlint` | 80-col Markdown prose | markdown | ubuntu | required |
 | `roadmap` | `.roadmap/` schema; `ROADMAP.md` still matches its source | roadmap | ubuntu | required |
 | `mdbook` | the book builds; every `SUMMARY.md` link resolves | book | ubuntu | required |
-| `ci-success` | aggregates the twelve gates | always | ubuntu | the check |
+| `ci-success` | aggregates the nine gates | always | ubuntu | the check |
 | `cross-os` | clippy + tests on mac and win | non-PR / tag | mac·win | signal |
 | `Analyze (Rust)` | CodeQL taint / cross-function SAST | push→main (rust) | ubuntu | baseline |
-| `release`·`package` | archives, installers, GitHub Release | tag | all | release |
+| `release`·`package`·`sign-release` | archives, installers, GitHub Release, SHA256SUMS + Sigstore attestation | tag | all | release |
 | `docs-deploy` | publishes the book to Pages | push→main, docs | ubuntu | publish |
 
 ## What runs when
@@ -82,8 +78,8 @@ check.
 | Event | Runs |
 | --- | --- |
 | Pull request → `main` | `changes` + gated ubuntu jobs + `portable` (win) → `ci-success`. `cross-os`, CodeQL and `release` skipped. |
-| Merge / push → `main` | the ubuntu gates re-run, plus `cross-os` (replaces `portable`) and CodeQL `Analyze (Rust)` (when Rust/Cargo changed). |
-| Release tag | `release` + `package` build and publish; `cross-os` is forced on. CodeQL does not run on tags. |
+| Merge / push → `main` | the ubuntu gates re-run, plus `cross-os` (and `portable` only when `cargo` changed, to keep its cache warm) and CodeQL `Analyze (Rust)` (when Rust/Cargo changed). |
+| Release tag | `release` + `package` build and publish (`sign-release` attests on publish); `cross-os` is forced on. CodeQL does not run on tags. |
 | Weekly · Mon 07:00 UTC | CodeQL only; catches query-pack drift on code already on `main`. |
 
 ## CodeQL query suite

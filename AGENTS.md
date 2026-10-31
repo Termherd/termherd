@@ -336,11 +336,10 @@ carry is modifiers: the event lost its `modifiers` field in #311 as dead
 weight, and it comes back as one type shared with `KeyMods` when a caller
 needs it, not before.
 
-**Still open.** Two features and one defect: `F-mcp-attach` (#267 — the bridge
-is reachable only from a session termherd spawned, so the launcher itself cannot
-drive it), the pointer at termherd's own chrome (#301 — the sidebar, tabs and
-gutters still have no mouse), and `enter` on the two renames (#246). None of the
-three blocks another.
+**Still open.** Two features: `F-mcp-attach` (#267 — the bridge is reachable
+only from a session termherd spawned, so the launcher itself cannot drive it)
+and the pointer at termherd's own chrome (#301 — the sidebar, tabs and gutters
+still have no mouse). Neither blocks the other.
 The list leaves out the bridge's hardening defect #293 (#284 is fixed). A third
 defect, the copy chord overwriting a mouse-mode program's own clipboard write
 with termherd's last copy (#316), is fixed: the shell keeps no copy cache any
@@ -392,11 +391,8 @@ below: it is honest because `arm_overlay`'s `match` is compiler-checked, so a
 new variant cannot slip past it. (**#236**, the sibling defect that left every
 session on `starting`, is fixed — see the wait rung above.)
 
-One gap remains and is **not** a variant of this: `enter` reaches neither rename
-through MCP, because both commit via the widget's `on_submit`, which a
-synthesised key event never touches. That is a missing capability rather than a
-parked surface — a caller can always `escape` and start over — so it is tracked
-separately, as #246.
+Both rename overlays now route `enter` to their existing commit messages,
+alongside the widget's `on_submit` path for human input (#246).
 
 **Looks like a contradiction, is not.** `docs/ARCHITECTURE.md` §15 lists an
 `mcp` crate as *deferred (Unsure)*. That is a **different feature** —

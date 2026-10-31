@@ -356,10 +356,9 @@ A worked example, from inside a session TermHerd launched:
 
 ## What is still open
 
-Three follow-ups, and they are independent of each other:
+Two follow-ups, and they are independent of each other:
 
 | Gap | Issue |
 | --- | --- |
-| `enter` commits neither rename over MCP — see [Driving the keyboard](./keyboard.md). | [#246](https://github.com/Termherd/termherd/issues/246) |
 | The bridge is reachable only from a session termherd spawned, so the launcher itself cannot drive it — see [Two surfaces](./index.md). | [#267](https://github.com/Termherd/termherd/issues/267) |
 | No pointer at TermHerd's own interface: the sidebar, the tab strip, a split gutter. | [#301](https://github.com/Termherd/termherd/issues/301) |

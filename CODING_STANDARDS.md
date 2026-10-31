@@ -327,6 +327,15 @@ purpose*, not by accident.
   that history belongs in the commit and the PR, dated and searchable where a
   doc comment only rots. Same for a test, where the name states the intent and
   a comment restating the assertions goes.
+- **Prose budget: the shortest text that keeps the fact.** Applies to
+  comments, doc comments and every `.md` (book, `CHANGELOG.md`, `AGENTS.md`).
+  - Doc comment: one summary line, then at most a few lines of constraint.
+  - Test comment: one line, only for a non-obvious *why*; the name says the
+    rest.
+  - Changelog entry: one or two lines, what the user sees.
+  - Book page: what the user sees or does, not the mechanism.
+  - Cut the threat model, the design's argument and the history: they go in
+    the commit and the PR.
 
 ```rust
 /// Drives one terminal session: spawn, write, resize, kill.
