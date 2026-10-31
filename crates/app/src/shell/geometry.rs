@@ -293,6 +293,40 @@ mod tests {
     }
 
     #[test]
+    fn pane_geometry_honors_an_existing_non_half_ratio() {
+        let tree = Pane::Split {
+            dir: SplitDir::Vertical,
+            ratio: 0.25,
+            a: Box::new(Pane::Leaf(sid(1))),
+            b: Box::new(Pane::Leaf(sid(2))),
+        };
+
+        assert_eq!(
+            pane_rects(&tree, area()),
+            vec![
+                (
+                    sid(1),
+                    Rectangle {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 250.0,
+                        height: 600.0,
+                    },
+                ),
+                (
+                    sid(2),
+                    Rectangle {
+                        x: 250.0,
+                        y: 0.0,
+                        width: 750.0,
+                        height: 600.0,
+                    },
+                ),
+            ]
+        );
+    }
+
+    #[test]
     fn a_nested_split_subdivides_recursively() {
         // B side is itself split horizontally: right column stacks 2 over 3.
         let tree = split(
