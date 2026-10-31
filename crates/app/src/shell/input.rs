@@ -331,11 +331,10 @@ impl AltSides {
 /// No side known (an MCP press synthesises Alt on the letter alone) counts as
 /// either side, so Meta keeps working for a caller that cannot name one.
 pub(super) fn sends_meta(option: OptionAsMeta, sides: AltSides) -> bool {
-    let unknown = !sides.left && !sides.right;
     match option {
         OptionAsMeta::None => false,
-        OptionAsMeta::Left => sides.left || unknown,
-        OptionAsMeta::Right => sides.right || unknown,
+        OptionAsMeta::Left => sides.left || !sides.right,
+        OptionAsMeta::Right => sides.right || !sides.left,
         OptionAsMeta::Both => true,
     }
 }
