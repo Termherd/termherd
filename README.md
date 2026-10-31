@@ -274,15 +274,15 @@ with "it worked".
 
 `escape` leaves **every** prompt, which is what keeps an agent from parking the
 app on one it cannot answer; a sidebar rename used to be the exception
-([#237]). `enter` confirms the confirmation prompts, but commits neither
-rename — those go through a widget callback no synthesised event reaches
+([#237]). `enter` confirms confirmation prompts and commits both inline
+renames. The rename fields use the same commit path for MCP and widget submit
 ([#246]).
 
-Three follow-ups remain: `enter` on the renames ([#246]), reaching the bridge
-from outside a session termherd spawned — the launcher cannot drive it today
-([#267]) — and the pointer at TermHerd's own interface ([#301]): it reaches a
-session's terminal, and through it a program reading the mouse, but not yet
-the sidebar, tabs or gutters.
+Two follow-ups remain: reaching the bridge from outside a session termherd
+spawned — the launcher cannot drive it today ([#267]) — and the pointer at
+TermHerd's own interface ([#301]): it reaches a session's terminal, and
+through it a program reading the mouse, but not yet the sidebar, tabs or
+gutters.
 
 ### The stdio server (manual)
 

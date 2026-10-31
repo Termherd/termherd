@@ -16,5 +16,5 @@ Shipped (#338): `rename-tab`, bound to ⌘⇧I on macOS (Terminal.app's *Edit
 Title*) and Ctrl+Shift+I elsewhere, a chord a legacy-encoded terminal program
 cannot tell from Ctrl+I (Tab). It opens the field a double-click opens, filled
 with the tab's current name, and reports `inert` / `no-context` with no tab
-open. Over MCP the field can be opened and abandoned with `escape`, not
-committed: `enter` on a rename is #246.
+open. Over MCP, `enter` commits the field and `escape` abandons it, using the
+same commit message as the widget submit (#246).

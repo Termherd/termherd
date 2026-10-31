@@ -399,8 +399,14 @@ impl Shell {
         event: &keyboard::Event,
     ) -> (KeyVerdict, Task<Message>) {
         let (verdict, task) = match owner {
-            KeyboardOwner::TabRename => (None, self.tab_rename_key(event)),
-            KeyboardOwner::SessionRename => (None, self.session_rename_key(event)),
+            KeyboardOwner::TabRename => (
+                None,
+                self.rename_key(event, Message::CancelTabRename, Message::CommitTabRename),
+            ),
+            KeyboardOwner::SessionRename => (
+                None,
+                self.rename_key(event, Message::CancelRename, Message::CommitRename),
+            ),
             KeyboardOwner::Quit => (None, self.quit_confirm_key(event)),
             KeyboardOwner::TabClose(index) => (None, self.tab_close_confirm_key(event, index)),
             KeyboardOwner::Archive => (None, self.archive_confirm_key(event)),
@@ -417,21 +423,17 @@ impl Shell {
         (verdict.unwrap_or(KeyVerdict::Overlay(owner.label())), task)
     }
 
-    /// Escape abandons a tab rename; Enter and a blur commit it elsewhere, so
-    /// every other key is swallowed.
-    fn tab_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+    fn rename_key(
+        &mut self,
+        event: &keyboard::Event,
+        cancel: Message,
+        commit: Message,
+    ) -> Task<Message> {
         if is_escape(event) {
-            return self.update(Message::CancelTabRename);
+            return self.update(cancel);
         }
-        Task::none()
-    }
-
-    /// Escape abandons a session rename — the outcome a blur already gives it,
-    /// where a tab rename commits. The field owns every other key: it is a live
-    /// text input, and Enter reaches it through the widget.
-    fn session_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
-        if is_escape(event) {
-            return self.update(Message::CancelRename);
+        if is_enter(event) {
+            return self.update(commit);
         }
         Task::none()
     }
