@@ -9,6 +9,7 @@ use termherd_core::Effect;
 use termherd_core::workspace::{SessionId, index_after_removal};
 
 use super::{Focus, Message, Shell, TabDrag};
+use crate::strings;
 
 impl Shell {
     /// Handle a request to close the tab at `index`. The configured `close.tab`
@@ -266,11 +267,7 @@ impl Shell {
     /// `exit_on_close_request(false)` keeps the runtime alive, so a mere window
     /// close would survive.
     pub(super) fn request_quit(&mut self, id: window::Id) -> Task<Message> {
-        if self
-            .close_confirm
-            .app
-            .confirms(self.core.any_running_process())
-        {
+        if self.quit_confirms() {
             self.closing_window = Some(id);
             Task::none()
         } else {
@@ -278,6 +275,17 @@ impl Shell {
             self.exiting = true;
             iced::exit()
         }
+    }
+
+    fn quit_confirms(&self) -> bool {
+        self.close_confirm
+            .app
+            .confirms(self.core.any_running_process())
+    }
+
+    /// What the quit confirmation asks, for the modal and the tests alike.
+    pub(super) fn quit_prompt(&self) -> String {
+        strings::quit_prompt(self.core.live_session_count())
     }
 
     /// Whether a quit is awaiting confirmation (the modal is up).

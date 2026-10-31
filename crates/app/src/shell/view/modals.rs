@@ -64,9 +64,8 @@ impl Shell {
         if !self.quit_pending() {
             return None;
         }
-        let live = self.core.live_session_count();
         Some(Self::confirmation_bar(
-            strings::quit_prompt(live),
+            self.quit_prompt(),
             strings::QUIT,
             button::danger,
             Message::ConfirmCloseWindow,

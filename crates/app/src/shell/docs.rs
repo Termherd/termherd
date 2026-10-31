@@ -181,7 +181,7 @@ impl Shell {
     }
 
     /// The one test every way out of the editor asks before it discards.
-    fn has_unsaved_doc(&self) -> bool {
+    pub(super) fn has_unsaved_doc(&self) -> bool {
         self.open_doc.as_ref().is_some_and(|doc| doc.dirty)
     }
 
