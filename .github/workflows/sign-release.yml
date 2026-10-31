@@ -1,27 +1,10 @@
-# Signs the Linux release artifacts (#52).
-#
-# Publishes a `SHA256SUMS` over the Linux build tarballs and a sigstore
-# *keyless* build-provenance attestation over it. There is no stored secret:
-# the signer identity is this workflow itself, via GitHub OIDC, recorded in the
-# public Rekor transparency log. A SHA256SUMS attestation proves both integrity
-# (digest) and origin (built by `Termherd/termherd` CI) — strictly more than a
-# GPG-signed checksums file, with no long-lived key to protect or rotate.
-#
-# Verify a download:
-#   gh attestation verify <linux-artifact> --repo Termherd/termherd
-# (offline: `gh attestation download … --repo Termherd/termherd` first.)
-#
-# Runs after the dist-generated `release.yml` publishes the Release: its `host`
-# job attaches the Linux tarballs *before* `gh release create`, so they exist
-# when the `release: published` event fires here. This touches nothing dist
-# generates. The `.deb`/`.AppImage` GUI bundles (package.yml) are out of scope:
-# they arrive asynchronously and signing them is a separate slice.
+# Publishes SHA256SUMS over Linux release tarballs and a keyless Sigstore
+# build-provenance attestation via GitHub OIDC (#52). See docs/CI.md §3.
 name: Sign release
 
 on:
   release:
     types: [published]
-  # Manual re-sign (e.g. after a re-run), by tag.
   workflow_dispatch:
     inputs:
       tag:
@@ -29,9 +12,9 @@ on:
         required: true
 
 permissions:
-  contents: write      # upload SHA256SUMS to the Release
-  id-token: write      # OIDC token for sigstore keyless signing
-  attestations: write  # write the attestation to the repo
+  contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   sign:
@@ -64,7 +47,7 @@ jobs:
       # Keyless sigstore provenance over every entry in SHA256SUMS. No secret:
       # identity = this workflow via OIDC, logged in Rekor.
       - name: Attest SHA256SUMS
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-checksums: linux/SHA256SUMS
 

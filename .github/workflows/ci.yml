@@ -1,23 +1,21 @@
+# Quality gate pipeline. Full reference & rationale: docs/CI.md.
 name: CI
 
 on:
   push:
     branches: [main]
     tags:
-      # Release tags also run CI so the cross-OS gate (below) exercises
-      # mac/Windows before a release is cut. Same glob as release.yml.
       - '**[0-9]+.[0-9]+.[0-9]+*'
   pull_request:
     branches: [main]
   workflow_dispatch:
 
-# Cancel superseded PR runs so a fresh push doesn't queue behind its own stale
-# jobs. Pushes to main are never cancelled: those runs gate the default branch.
+# Cancel superseded PR runs; key non-PR runs by SHA so merges on main never
+# queue behind cross-os or cancel each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'pull_request' && 'pr' || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Least privilege: CI only reads the repo. Jobs that need more request it.
 permissions:
   contents: read
 
@@ -25,17 +23,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   RUSTFLAGS: "-D warnings"
+  RUST_TOOLCHAIN: "1.95.0"
 
-# Third-party actions are pinned to commit SHAs (version in the trailing
-# comment). Bump the SHA and the comment together; never use a mutable tag.
 jobs:
-  # Which kinds of file changed, so each gate runs only when it's relevant. A
-  # docs-only change skips every Rust job; a pure-`.rs` change skips the
-  # dependency-metadata jobs; etc. A path-skipped job reports a "skipped" check,
-  # which the `ci-success` aggregator (below) treats as non-failure — so the one
-  # required check still goes green and a PR is never stuck waiting. Because
-  # branch protection pins only `ci-success`, we avoid faceto's "static names,
-  # no matrix" pitfall: `cross-os` can stay a matrix, it just isn't required.
   changes:
     name: detect changes
     runs-on: ubuntu-latest
@@ -43,23 +33,18 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      rust: ${{ steps.filter.outputs.rust }}
-      cargo: ${{ steps.filter.outputs.cargo }}
-      markdown: ${{ steps.filter.outputs.markdown }}
-      book: ${{ steps.filter.outputs.book }}
-      roadmap: ${{ steps.filter.outputs.roadmap }}
-      workflows: ${{ steps.filter.outputs.workflows }}
+      rust: ${{ steps.filter.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
+      cargo: ${{ steps.filter.outputs.cargo == 'true' || github.event_name == 'workflow_dispatch' }}
+      markdown: ${{ steps.filter.outputs.markdown == 'true' || github.event_name == 'workflow_dispatch' }}
+      book: ${{ steps.filter.outputs.book == 'true' || github.event_name == 'workflow_dispatch' }}
+      roadmap: ${{ steps.filter.outputs.roadmap == 'true' || github.event_name == 'workflow_dispatch' }}
+      workflows: ${{ steps.filter.outputs.workflows == 'true' || github.event_name == 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3.0.3
         id: filter
         with:
           filters: |
-            # `rust` = anything that can change build/lint/test output, plus
-            # the source-scanning architecture scripts (they read `.rs` and must
-            # re-run when their own rules change). proptest replays the seeds
-            # in `proptest-regressions/` before any new case, so they are test
-            # input too, as is the notices file a test reads.
             rust:
               - '**/*.rs'
               - '**/proptest-regressions/**'
@@ -72,59 +57,45 @@ jobs:
               - 'scripts/check-os-cfg-containment.sh'
               - 'scripts/report-file-length.sh'
               - '.github/workflows/ci.yml'
-            # `cargo` = the dependency graph / manifests only, for the
-            # metadata-scan gates (deny / machete / dependency-rule). A pure
-            # `.rs` change leaves the dep tree untouched and skips these.
             cargo:
               - '**/Cargo.toml'
               - 'Cargo.lock'
+              - 'rust-toolchain.toml'
               - 'deny.toml'
               - 'scripts/check-crate-deps.sh'
               - '.github/workflows/ci.yml'
+              - '.github/workflows/codeql.yml'
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
-            # `book` = the mdbook sources and its config/theme. The build is
-            # the only thing that checks SUMMARY.md against the files on disk
-            # (`create-missing = false` turns a dead chapter link into a build
-            # failure), which markdownlint cannot see.
             book:
               - 'docs/book.toml'
               - 'docs/src/**'
               - 'docs/theme/**'
-            # `roadmap` = the compiled roadmap and everything it is compiled
-            # from. ROADMAP.md is in both filters on purpose: markdownlint
-            # ignores it (it is an artifact) while this gate is the only thing
-            # that checks it, by rebuilding it.
             roadmap:
               - '.roadmap/**'
               - 'ROADMAP.md'
-              # The job's own definition, including the roadmark version it
-              # pins — the same reason `rust` watches the scripts it runs. A
-              # bump that changes rendering must be caught by the PR that makes
-              # it, not by the next one to touch a feature file.
               - '.github/workflows/ci.yml'
             workflows:
               - '.github/workflows/**'
 
   fmt:
-    name: rustfmt
+    name: rustfmt & arch
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      # `toolchain` must match rust-toolchain.toml / Cargo.toml rust-version (Q10);
-      # this pinned action requires the input explicitly. Keep the three in sync.
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.95.0"
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
-      - run: cargo fmt --all --check
+      - run: |
+          cargo fmt --all --check
+          ./scripts/check-module-boundaries.sh
+          ./scripts/check-os-cfg-containment.sh
+          ./scripts/report-file-length.sh
 
-  # clippy + test run ubuntu-only on every PR (the fast merge gate). mac +
-  # Windows are covered by the `cross-os` job below, which is skipped on PRs
-  # and runs on push→main and release tags. See docs/CI.md §3.
   clippy:
     name: clippy
     needs: changes
@@ -134,7 +105,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -148,35 +119,18 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
         with:
           tool: nextest
       - run: cargo nextest run --workspace
 
-  # The portable crates, on Windows, on every PR. `cross-os` below covers more
-  # but runs only after merge, and that gap let a Windows-only defect through:
-  # the shell integration built a POSIX path with `Path::join`, so the user's
-  # own startup file was never sourced. It compiled everywhere — no
-  # `cargo check --target` could have caught it — and only a *test run on
-  # Windows* would have. Post-merge coverage found it three merges later, on
-  # the wrong commit.
-  #
-  # Deliberately narrower than `cross-os`: `app` is excluded, because building
-  # `iced` twice per PR is the cost that made cross-OS a post-merge job in the
-  # first place. `core`, `claude`, `pty` and `scan` carry the path handling,
-  # codec and process logic where hosts actually diverge, and they build in a
-  # fraction of the time. macOS is excluded too — it is a Unix, and the
-  # divergence this guards against is Windows'.
+  # Non-GUI crates on Windows for PRs; also runs on push→main when Cargo files
+  # change to keep its feature-scoped Windows rust-cache warm.
   portable:
     name: portable (windows)
     needs: changes
-    # Runs on every Rust PR, and on push→main only when Cargo manifests/lockfile
-    # changed so `rust-cache` refreshes the `portable` cache key on `main`
-    # (`--workspace` in `cross-os` unifies `termherd-app` features, which would
-    # otherwise force a 50s recompile here). Pure-`.rs` merges to `main` skip
-    # this job and rely on `cross-os (windows-latest)`.
     if: >-
       (github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true') ||
       (github.event_name == 'push' && needs.changes.outputs.cargo == 'true')
@@ -185,7 +139,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
@@ -194,16 +148,10 @@ jobs:
       - run: cargo clippy --workspace --exclude termherd-app --all-targets -- -D warnings
       - run: cargo nextest run --workspace --exclude termherd-app
 
-  # Cross-OS coverage: clippy + tests on macOS and Windows. Skipped on PRs to
-  # keep the merge gate fast/cheap; runs on push→main (post-merge baseline) and
-  # on release tags so platform-specific breakage surfaces before a release. A
-  # red run here does NOT block cargo-dist's release.yml (separate workflow) —
-  # it is a signal, not a hard gate. See docs/CI.md §3.
+  # Post-merge and release-tag full-workspace coverage on macOS and Windows.
   cross-os:
     name: cross-os (${{ matrix.os }})
     needs: changes
-    # Non-PR only, and only when Rust actually changed — except on release
-    # tags, where it always runs to validate the release across platforms.
     if: >-
       github.event_name != 'pull_request' &&
       (needs.changes.outputs.rust == 'true' || github.ref_type == 'tag')
@@ -216,7 +164,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
-          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
@@ -225,8 +173,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo nextest run --workspace
 
-  deny:
-    name: cargo-deny
+  cargo:
+    name: cargo-checks
     needs: changes
     if: needs.changes.outputs.cargo == 'true'
     runs-on: ubuntu-latest
@@ -234,79 +182,22 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
         with:
-          tool: cargo-deny
-      - run: cargo deny check
-
-  machete:
-    name: cargo-machete
-    needs: changes
-    if: needs.changes.outputs.cargo == 'true'
-    runs-on: ubuntu-latest
-    # Fail when a crate declares a dependency it no longer uses — unused deps
-    # add build time and supply-chain surface. Fast, ubuntu-only: a metadata +
-    # source scan, no full build. Tool version is pinned (bump it together with
-    # this comment); the install-action itself is SHA-pinned like every action.
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
-        with:
-          tool: cargo-machete@0.9.2
-      - run: cargo machete
-
-  deps:
-    name: dependency-rule
-    needs: changes
-    if: needs.changes.outputs.cargo == 'true'
-    runs-on: ubuntu-latest
-    # Architecture fitness function: the hexagonal dependency rule (adapters
-    # depend on core, never the reverse) holds by construction, not by reviewer
-    # vigilance. Pure `cargo metadata` parse — no build, ubuntu-only (the graph
-    # is platform-independent). jq is preinstalled on ubuntu-latest runners.
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
-        with:
-          toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
-      - run: ./scripts/check-crate-deps.sh
-
-  intra-arch:
-    name: intra-crate-arch
-    needs: changes
-    if: needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
-    # Intra-crate architecture fitness functions — one level below the
-    # crate dependency rule (`deps`). The split-up refactor (clusters A–E) built
-    # module walls *inside* crates; these keep them standing by construction.
-    # Pure grep/find over source — no build, no toolchain, ubuntu-only.
-    #   - module boundaries: leaf modules stay leaves, renderers don't reach
-    #     executors, core::app submodules go through the parent registry.
-    #   - OS-cfg containment: compile-time `#[cfg(target_os)]` stays in its
-    #     audited homes (same spirit as the `unsafe_code` quarantine).
-    #   - file-length: report-only signal (never fails), written to the summary.
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: ./scripts/check-module-boundaries.sh
-      - run: ./scripts/check-os-cfg-containment.sh
-      - run: ./scripts/report-file-length.sh
+          tool: cargo-deny,cargo-machete@0.9.2
+      - run: |
+          cargo deny check
+          cargo machete
+          ./scripts/check-crate-deps.sh
 
   actionlint:
     name: actionlint
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
     runs-on: ubuntu-latest
-    # release.yml is generated by cargo-dist and trips shellcheck info/style
-    # notes (SC2086/SC2129) we don't own. Drop those severities so actionlint
-    # still catches real warnings/errors in our own workflows.
     env:
-      SHELLCHECK_OPTS: --severity=warning
+      SHELLCHECK_OPTS: --severity=warning # Ignore SC2086/SC2129 in dist-generated release.yml
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Install actionlint
-        # taiki-e/install-action does not ship actionlint and the crate has
-        # no prebuilt binaries, so we use the upstream downloader — pinned to
-        # actionlint's v1.7.12 commit and verified by sha256 before running, so
-        # this is never an unverified `curl | bash`.
-        id: install
+      - name: Run actionlint
         env:
           ACTIONLINT_SHA: 914e7df21a07ef503a81201c76d2b11c789d3fca # v1.7.12
           DOWNLOADER_SHA256: 72fa3e45ac20f3c3a512d6747b4fcf719e21f890e8c43e78d48a41fdfb900c4e
@@ -315,46 +206,26 @@ jobs:
             "https://raw.githubusercontent.com/rhysd/actionlint/${ACTIONLINT_SHA}/scripts/download-actionlint.bash"
           echo "${DOWNLOADER_SHA256}  download-actionlint.bash" | sha256sum --check --status
           bash download-actionlint.bash 1.7.12
-          echo "path=$(pwd)/actionlint" >> "$GITHUB_OUTPUT"
-      - name: Run actionlint
-        run: ${{ steps.install.outputs.path }} -color
+          ./actionlint -color
 
   roadmap:
     name: roadmap
     needs: changes
     if: needs.changes.outputs.roadmap == 'true'
     runs-on: ubuntu-latest
-    # The roadmap is compiled: `.roadmap/` is the source, ROADMAP.md the
-    # artifact. Two things can go wrong and both are caught here.
-    #   - `validate` reads the source alone: schema, duplicate ids, and links
-    #     to a feature id nothing declares. Warnings (an empty body, prose
-    #     naming a non-feature) are printed and do not fail.
-    #   - the rebuild-and-diff catches the case `validate` cannot see from the
-    #     source: someone edited ROADMAP.md by hand, or changed a feature and
-    #     forgot to regenerate. `validate` compares anchors, which agree when
-    #     only prose moved; only the bytes tell the whole truth.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      # Pinned to v0.8.1's prebuilt Linux release archive and verified by sha256
-      # before extracting — roadmark's output is what this job diffs against, so
-      # a version bump that changes rendering must land as a visible ROADMAP.md
-      # diff in its own PR, and skipping the source compile saves ~24s per run.
-      - name: Install roadmark
+      - name: Validate and diff ROADMAP.md
         env:
-          ROADMARK_VERSION: 0.8.1
           ARCHIVE: roadmark-x86_64-unknown-linux-gnu.tar.xz
-          ARCHIVE_SHA256: ce8cc389868013c433d8c1dfe5f8c3723339c6b0f70e5bba48d9f9b91f451502
+          SHA256: ce8cc389868013c433d8c1dfe5f8c3723339c6b0f70e5bba48d9f9b91f451502
         run: |
-          mkdir -p /tmp/roadmark-bin
           curl -fsSL -o "/tmp/${ARCHIVE}" \
-            "https://github.com/bastien-gallay/roadmark/releases/download/v${ROADMARK_VERSION}/${ARCHIVE}"
-          echo "${ARCHIVE_SHA256}  /tmp/${ARCHIVE}" | sha256sum --check --status
-          tar -xJf "/tmp/${ARCHIVE}" --strip-components=1 -C /tmp/roadmark-bin roadmark-x86_64-unknown-linux-gnu/roadmark
-          echo "/tmp/roadmark-bin" >> "$GITHUB_PATH"
-      - run: roadmark validate
-      - name: Rebuild and compare
-        run: |
-          roadmark generate -o /tmp/ROADMAP.expected.md
+            "https://github.com/bastien-gallay/roadmark/releases/download/v0.8.1/${ARCHIVE}"
+          echo "${SHA256}  /tmp/${ARCHIVE}" | sha256sum --check --status
+          tar -xJf "/tmp/${ARCHIVE}" --strip-components=1 -C /tmp roadmark-x86_64-unknown-linux-gnu/roadmark
+          /tmp/roadmark validate
+          /tmp/roadmark generate -o /tmp/ROADMAP.expected.md
           if ! diff -u ROADMAP.md /tmp/ROADMAP.expected.md; then
             echo "::error file=ROADMAP.md::ROADMAP.md is stale — run \`just roadmap\` and commit the result."
             exit 1
@@ -372,11 +243,6 @@ jobs:
           globs: '**/*.md'
           config: '.markdownlint-cli2.jsonc'
 
-  # Build the book. This is not a duplicate of `markdown`: markdownlint reads
-  # each file alone, while the build is the only thing that resolves the
-  # chapter map — `create-missing = false` fails on a SUMMARY.md link to a page
-  # that does not exist, which is the failure mode a growing book actually has.
-  # `docs-deploy.yml` publishes what this proved buildable.
   book:
     name: mdbook
     needs: changes
@@ -389,23 +255,11 @@ jobs:
           tool: mdbook
       - run: mdbook build docs
 
-  # Single required status check for the `main` branch-protection rule. It
-  # `needs:` every per-PR gate, so protection pins one stable name
-  # (`ci-success`) that never changes as jobs are added or removed. `cross-os`
-  # is intentionally excluded — it is skipped on PRs and is a signal, not a
-  # merge gate. `portable` is *included*: it is the Windows coverage that does
-  # run on PRs, and it exists precisely because a signal nobody is paged for
-  # caught a defect three merges after it landed. `if: always()` so this job still runs (and fails) when a
-  # dependency fails rather than being skipped.
-  #
-  # Path-filtered gates that don't apply to a change report `skipped`, which is
-  # NOT `failure`/`cancelled` — so a docs-only PR (all Rust jobs skipped) still
-  # goes green here. `changes` is in `needs` so a filter-detection failure (or a
-  # cancel) does fail the gate rather than waving the PR through. See docs/CI.md.
+  # Single required status check for `main` branch protection.
   ci-success:
     name: ci-success
     if: always()
-    needs: [changes, fmt, clippy, test, portable, deny, machete, deps, intra-arch, actionlint, markdown, roadmap, book]
+    needs: [changes, fmt, clippy, test, portable, cargo, actionlint, markdown, roadmap, book]
     runs-on: ubuntu-latest
     steps:
       - name: Fail if any required job failed or was cancelled
