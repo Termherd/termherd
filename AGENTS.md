@@ -45,10 +45,10 @@ Toolchain is pinned to **Rust 1.95.0 / edition 2024** via `rust-toolchain.toml`
 
 CI runs each gate **only when its file category changed** (a `changes` job with
 `dorny/paths-filter`): a docs-only PR skips every Rust job, a pure-`.rs` change
-skips the dependency-metadata jobs. All gates fan into one required check,
-`ci-success`, which treats path-skipped jobs as passing — so `main` branch
-protection pins that single check. Gate any new job on its category; never make
-a path-filtered job a *required* check directly.
+skips the dependency-metadata job (`cargo-checks`). All gates fan into one
+required check, `ci-success`, which treats path-skipped jobs as passing — so
+`main` branch protection pins that single check. Gate any new job on its
+category; never make a path-filtered job a *required* check directly.
 
 One job runs somewhere other than ubuntu: **`portable`** builds and tests every
 crate but `app` on **Windows, on every PR**. The wider `cross-os` matrix still
