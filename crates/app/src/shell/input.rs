@@ -7,6 +7,8 @@ use iced::keyboard;
 use termherd_core::{KeyChord, keymap};
 use termherd_pty::{KeyMods, TermKey};
 
+use crate::settings::OptionAsMeta;
+
 /// The keymap chord for a key press (FR9): the key's normalised name plus the
 /// modifier bits. `None` for keys we do not bind (so they reach the terminal).
 ///
@@ -244,6 +246,100 @@ pub(super) fn key_mods(m: keyboard::Modifiers) -> KeyMods {
     }
 }
 
+/// Which Alt (Option) keys are held, read from the Alt keys' own press and
+/// release: a letter's event says Alt is down, never which one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct AltSides {
+    left: bool,
+    right: bool,
+}
+
+/// Alt key events as winit reports them, for tests on both sides of the shell.
+#[cfg(test)]
+pub(super) mod alt_events {
+    use iced::keyboard::key::{Code, Named, Physical};
+    use iced::keyboard::{Event, Key, Location, Modifiers};
+
+    fn physical(location: Location) -> Physical {
+        Physical::Code(match location {
+            Location::Right => Code::AltRight,
+            _ => Code::AltLeft,
+        })
+    }
+
+    /// The Alt key at `location` going down.
+    pub(in crate::shell) fn alt_down(location: Location) -> Event {
+        let key = Key::Named(Named::Alt);
+        Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: physical(location),
+            location,
+            modifiers: Modifiers::ALT,
+            text: None,
+            repeat: false,
+        }
+    }
+
+    /// The Alt key at `location` coming up, leaving `modifiers` held.
+    pub(in crate::shell) fn alt_up(location: Location, modifiers: Modifiers) -> Event {
+        let key = Key::Named(Named::Alt);
+        Event::KeyReleased {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: physical(location),
+            location,
+            modifiers,
+        }
+    }
+}
+
+impl AltSides {
+    /// Fold one keyboard event into the held sides.
+    pub(super) fn track(&mut self, event: &keyboard::Event) {
+        use keyboard::key::Named;
+        match event {
+            // The Alt press itself may not list Alt among its modifiers yet.
+            keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(Named::Alt),
+                location,
+                ..
+            } => return self.set(*location, true),
+            keyboard::Event::KeyReleased {
+                key: keyboard::Key::Named(Named::Alt),
+                location,
+                ..
+            } => self.set(*location, false),
+            _ => {}
+        }
+        // A release lost to a focus change must not leave a side stuck down.
+        if !event_modifiers(event).alt() {
+            *self = Self::default();
+        }
+    }
+
+    fn set(&mut self, location: keyboard::Location, held: bool) {
+        match location {
+            keyboard::Location::Left => self.left = held,
+            keyboard::Location::Right => self.right = held,
+            _ => {}
+        }
+    }
+}
+
+/// Whether a held Alt sends Meta under `option`, given which sides are down.
+/// No side known (an MCP press synthesises Alt on the letter alone) counts as
+/// either side, so Meta keeps working for a caller that cannot name one.
+pub(super) fn sends_meta(option: OptionAsMeta, sides: AltSides) -> bool {
+    let unknown = !sides.left && !sides.right;
+    match option {
+        OptionAsMeta::None => false,
+        OptionAsMeta::Left => sides.left || unknown,
+        OptionAsMeta::Right => sides.right || unknown,
+        OptionAsMeta::Both => true,
+    }
+}
+
 /// The modifier state carried by a keyboard event, if it carries one. Used to
 /// keep the link-open modifier tracked across press / release / change.
 pub(super) fn event_modifiers(event: &keyboard::Event) -> keyboard::Modifiers {
@@ -256,9 +352,10 @@ pub(super) fn event_modifiers(event: &keyboard::Event) -> keyboard::Modifiers {
 
 #[cfg(test)]
 mod tests {
+    use super::alt_events::{alt_down, alt_up};
     use super::*;
     use iced::keyboard::key::{Code, Named, Physical};
-    use iced::keyboard::{Key, Modifiers};
+    use iced::keyboard::{Key, Location, Modifiers};
     use termherd_core::keymap::{Platform, default_bindings};
 
     /// The chord a synthesised event reads back as, or `None` when the chord
@@ -307,6 +404,66 @@ mod tests {
         );
         // Cmd / Super (logo) never affects terminal bytes.
         assert_eq!(key_mods(Modifiers::LOGO), KeyMods::default());
+    }
+
+    const LEFT: AltSides = AltSides {
+        left: true,
+        right: false,
+    };
+    const RIGHT: AltSides = AltSides {
+        left: false,
+        right: true,
+    };
+    const BOTH: AltSides = AltSides {
+        left: true,
+        right: true,
+    };
+
+    #[test]
+    fn sends_meta_follows_the_side_the_setting_names() {
+        use OptionAsMeta::{Both, Left, None, Right};
+        for (option, sides, meta) in [
+            (Left, LEFT, true),
+            (Left, RIGHT, false),
+            (Right, LEFT, false),
+            (Right, RIGHT, true),
+            (Both, LEFT, true),
+            (Both, RIGHT, true),
+            (None, LEFT, false),
+            (None, RIGHT, false),
+        ] {
+            assert_eq!(sends_meta(option, sides), meta, "{option:?} with {sides:?}");
+        }
+    }
+
+    #[test]
+    fn an_alt_with_no_known_side_is_meta_unless_neither_key_is() {
+        // An MCP press synthesises Alt on the letter alone, with no Alt key
+        // event to name a side.
+        let unknown = AltSides::default();
+        for option in [OptionAsMeta::Left, OptionAsMeta::Right, OptionAsMeta::Both] {
+            assert!(sends_meta(option, unknown), "{option:?}");
+        }
+        assert!(!sends_meta(OptionAsMeta::None, unknown));
+    }
+
+    #[test]
+    fn alt_sides_follow_each_alt_keys_press_and_release() {
+        let mut sides = AltSides::default();
+        sides.track(&alt_down(Location::Right));
+        assert_eq!(sides, RIGHT);
+        sides.track(&alt_down(Location::Left));
+        assert_eq!(sides, BOTH);
+        sides.track(&alt_up(Location::Right, Modifiers::ALT));
+        assert_eq!(sides, LEFT);
+    }
+
+    #[test]
+    fn any_event_without_alt_held_clears_both_sides() {
+        // A release lost to a focus change must not leave a side stuck down.
+        let mut sides = BOTH;
+        sides.track(&keyboard::Event::ModifiersChanged(Modifiers::empty()));
+        assert_eq!(sides, AltSides::default());
     }
 
     #[test]

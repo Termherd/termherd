@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use iced::Task;
 use iced::futures::{SinkExt, Stream, StreamExt};
+use termherd_core::keymap::Platform;
 use termherd_pty::{Palette, PtyManager};
 
 use super::{Message, Shell};
@@ -101,6 +102,7 @@ impl Shell {
         self.keymap = settings.keymap();
         self.close_confirm = settings.close;
         self.gestures = settings.clipboard_gestures();
+        self.option_as_meta = settings.option_as_meta(Platform::current());
         self.record.set_config(settings.record_config());
         self.config = super::config_input(settings);
         for event in [

@@ -142,7 +142,8 @@ you want and strip the comments (the real file is strict JSON). In short:
 - `terminal` — base `font_size` (the zoom shortcuts step from it), grid
   `colors` (one of 18 schemes, each named like its chrome theme, plus
   per-slot overrides), and the two clipboard mouse gestures
-  (`copy_on_select`, `paste_on_right_click`), both off by default.
+  (`copy_on_select`, `paste_on_right_click`), both off by default, and on
+  macOS which Option key is Meta (`option_as_meta`, the left one by default).
 - `sidebar` — sessions listed per project before the tail folds behind an
   expander (`0` shows all).
 - `record` — the GIF screencast budget (fps, duration cap, frame scale).
@@ -198,6 +199,10 @@ All shortcuts are configurable via the `keys` section of the config file
 Jump-to-tab (`Ctrl`/`Cmd`+`1`–`9`) is matched by physical key position, so it
 lands on the same number-row keys on every layout — including AZERTY and QWERTZ,
 where those keys produce `&`, `é`, … without Shift.
+
+On macOS the left Option key is Meta (`⌥B` / `⌥F` move by word) and the right
+one types what the layout composes, such as `|` with `⌥⇧L` on a French layout;
+`terminal.option_as_meta` picks the side.
 
 Dragging with the mouse selects, and the wheel scrolls back through history.
 The two classic terminal clipboard gestures are off until you ask for them:

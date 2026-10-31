@@ -19,6 +19,23 @@ Copy/paste is the one binding that is deliberately irregular per platform:
 on Windows and Linux <kbd>Ctrl</kbd>+<kbd>C</kbd> must stay the interrupt.
 <kbd>Ctrl</kbd>+<kbd>C</kbd> sends `SIGINT` on every platform.
 
+### Option as Meta (macOS)
+
+By default the **left** Option key is Meta: <kbd>⌥</kbd>+a letter sends `ESC`
+and the letter, the readline word motions (<kbd>⌥B</kbd>, <kbd>⌥F</kbd>,
+<kbd>⌥D</kbd>) and Claude Code's <kbd>⌥T</kbd> / <kbd>⌥P</kbd>. The **right**
+Option key types what the layout composes instead — `|` with <kbd>⌥⇧L</kbd> on
+a French layout, `å` or `©` on a US one. Pick the side with:
+
+```json
+"terminal": { "option_as_meta": "left" }
+```
+
+`"none"` makes both keys compose, `"right"` swaps them, `"both"` makes both
+Meta. Only letters and symbols are affected: <kbd>⌥Enter</kbd> (a newline in
+Claude), <kbd>⌥⌫</kbd> and <kbd>⌥←</kbd> / <kbd>⌥→</kbd> keep their Meta
+sequences on either side. On Windows and Linux, Alt is always Meta.
+
 ### Mouse gestures
 
 The two classic terminal conventions are available, both **off by default** —

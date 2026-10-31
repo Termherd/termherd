@@ -122,6 +122,12 @@
     // A right-click pastes into THE PANE UNDER THE POINTER (not necessarily
     // the focused one), bracketed when that pane asked for bracketed paste.
     "paste_on_right_click": false,
+    // macOS only: which Option key sends Meta (ESC + key, readline's ⌥B/⌥F)
+    // rather than the glyph the layout composes — "none", "left", "right" or
+    // "both". The default keeps the left one as Meta and lets the right one
+    // type ⌥⇧L → | on a French layout. Enter, Backspace and the arrows keep
+    // their Meta sequences on either side. Elsewhere Alt is always Meta.
+    "option_as_meta": "left",
 
     // Terminal grid colours. Start from a named scheme, then override
     // individual slots; every field is optional and a malformed colour

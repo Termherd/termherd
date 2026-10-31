@@ -19,6 +19,8 @@ Keymap concerns from the gist that need design, layered on the shipped
   — **stays design-first** (feature-torture 🧬 `F-keymap-advanced.md`):
   blocked on foreground-process detection (macOS `tcgetpgrp` vs Windows
   ConPTY gap); file only once that's designed
-- a configurable "bypass" key so a modifier passes through to the terminal
-  instead of the app (cf. Ghostty `macos-option-as-alt`) — **graduated to
-  #59** (the cheap, high-value slice)
+- ~~a configurable "bypass" key so a modifier passes through to the terminal
+  instead of the app (cf. Ghostty `macos-option-as-alt`)~~ — **done** with
+  #59: `terminal.option_as_meta` (`none` / `left` / `right` / `both`, default
+  `left`) picks which macOS Option key is Meta; the other one types the glyph
+  the layout composes

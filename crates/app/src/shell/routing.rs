@@ -10,7 +10,7 @@ use termherd_core::workspace::{Direction, SplitDir};
 use termherd_core::{Action, ClaudeCommand, ScrollTarget, keymap};
 use termherd_pty::{KeyMods, TermKey};
 
-use super::input::{chord_of, key_mods, numpad_char, to_term_key};
+use super::input::{chord_of, key_mods, numpad_char, sends_meta, to_term_key};
 use super::{Focus, Message, Shell, search_id};
 
 /// How a confirmation overlay reads a key — the shared shape behind the quit,
@@ -578,9 +578,15 @@ impl Shell {
         (KeyVerdict::Typed, self.perform(effects))
     }
 
-    /// The modifiers the PTY codec encodes `term_key` with.
-    fn pty_mods(&self, _term_key: TermKey, modifiers: keyboard::Modifiers) -> KeyMods {
-        key_mods(modifiers)
+    /// The modifiers the PTY codec encodes `term_key` with. Only a character
+    /// can be composed, so only a character's Alt yields to `option_as_meta`:
+    /// ⌥Enter, ⌥⌫ and ⌥←/→ keep their Meta sequences on either side.
+    fn pty_mods(&self, term_key: TermKey, modifiers: keyboard::Modifiers) -> KeyMods {
+        let mut mods = key_mods(modifiers);
+        if matches!(term_key, TermKey::Char(_)) {
+            mods.alt &= sends_meta(self.option_as_meta, self.alt_sides);
+        }
+        mods
     }
 
     /// Whether raw keyboard / IME input should reach the focused terminal: it

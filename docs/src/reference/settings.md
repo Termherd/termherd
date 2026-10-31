@@ -39,7 +39,7 @@ What a live change reaches:
 | Setting | Applies to |
 | --- | --- |
 | `theme`, `terminal.colors` | the chrome and **every open terminal**, at once |
-| `keys`, `close`, `sidebar`, `open`, `mcp`, `terminal.copy_on_select`, `terminal.paste_on_right_click` | the next keypress, click or call |
+| `keys`, `close`, `sidebar`, `open`, `mcp`, `terminal.copy_on_select`, `terminal.paste_on_right_click`, `terminal.option_as_meta` | the next keypress, click or call |
 | `terminal.font_size` | every terminal, at once (your zoom steps are kept on top) |
 | `shell` | the **next session** you open — a running one keeps its program |
 | `record` | the **next recording** — one in progress keeps its budget |
@@ -111,6 +111,7 @@ policy covers the sessions a quit stops, not text it would lose.
   "font_size": 14,
   "copy_on_select": false,
   "paste_on_right_click": false,
+  "option_as_meta": "left",
   "colors": {
     "scheme": "solarized-dark",
     "foreground": "#839496",
@@ -126,6 +127,7 @@ policy covers the sessions a quit stops, not text it would lose.
 | `font_size` | `14` | pixels, clamped to 6–40. The zoom chords step from here at runtime without rewriting it. |
 | `copy_on_select` | `false` | a drag release or a double-click copies the selection outright, no chord needed |
 | `paste_on_right_click` | `false` | a right-click pastes into the pane under the pointer, not necessarily the focused one |
+| `option_as_meta` | `"left"` | macOS only: which Option key sends Meta (`ESC` + key) on a letter — `"none"`, `"left"`, `"right"` or `"both"`; the other one types the glyph the layout composes. Enter, Backspace and the arrows stay Meta on either side. Another value falls back to `"left"`. |
 | `colors.scheme` | built-in | every [`theme`](#theme) value marked ✓, e.g. `catppuccin-mocha` |
 | `colors.foreground` / `.background` / `.cursor` | from the scheme | `"#rrggbb"`; the `#` is optional |
 | `colors.palette` | from the scheme | the 16 ANSI colours — normal 0–7, then bright 8–15 |
@@ -221,8 +223,9 @@ The eight ids it covers today: `theme`, `shell.program`, `shell.args`,
 are **read-only** over MCP: they name what TermHerd executes at the next
 launch, so an agent may read them but never set them. The `close`, `sidebar`,
 `record`, `open`, `mcp`, `keys`, `terminal.font_size`,
-`terminal.copy_on_select` and `terminal.paste_on_right_click` blocks are
-file-only for now; `keys` is published as a read-only resource.
+`terminal.copy_on_select`, `terminal.paste_on_right_click` and
+`terminal.option_as_meta` blocks are file-only for now; `keys` is published
+as a read-only resource.
 
 A `set_option` write lands in `settings.json` and applies **as soon as it is
 written**, like any other edit to the file.
@@ -238,6 +241,7 @@ written**, like any other edit to the file.
     "font_size": 15,
     "copy_on_select": true,
     "paste_on_right_click": true,
+    "option_as_meta": "left",
     "colors": { "scheme": "gruvbox-dark" }
   },
   "sidebar": { "session_limit": 0 },

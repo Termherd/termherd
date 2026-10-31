@@ -60,8 +60,8 @@ empty object would discard the rest of the file. `null` is
 always accepted on a writable id — it unsets the option.
 
 That is the whole write surface today. The `close`, `sidebar`, `record`,
-`open`, `mcp`, `keys`, `terminal.font_size`, `terminal.copy_on_select` and
-`terminal.paste_on_right_click` blocks of
+`open`, `mcp`, `keys`, `terminal.font_size`, `terminal.copy_on_select`,
+`terminal.paste_on_right_click` and `terminal.option_as_meta` blocks of
 [`settings.json`](../reference/settings.md) are file-only — `keys` is
 readable as a resource, below.
 
