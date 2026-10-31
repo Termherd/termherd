@@ -7,7 +7,8 @@ tools are there.
 
 Its private files — the mcp config carrying that bearer token, the
 shell-integration directory, the settings overlay — are deleted when the
-session is torn down.
+session is torn down. Each is created afresh and owner-only; if another user
+already holds its name, the session starts without the bridge.
 
 ## The tools
 

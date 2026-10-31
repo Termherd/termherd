@@ -341,7 +341,7 @@ is reachable only from a session termherd spawned, so the launcher itself cannot
 drive it), the pointer at termherd's own chrome (#301 — the sidebar, tabs and
 gutters still have no mouse), and `enter` on the two renames (#246). None of the
 three blocks another.
-The list leaves out the bridge's hardening defects (#284, #293). A third
+The list leaves out the bridge's hardening defect #293 (#284 is fixed). A third
 defect, the copy chord overwriting a mouse-mode program's own clipboard write
 with termherd's last copy (#316), is fixed: the shell keeps no copy cache any
 more, and asks the terminal whether it holds a selection at all.
