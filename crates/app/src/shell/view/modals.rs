@@ -58,15 +58,17 @@ impl Shell {
         ))
     }
 
-    /// The quit-confirmation card (shown when a window close is armed and live
-    /// sessions would be hard-killed). `None` when no quit is pending.
+    pub(in crate::shell) fn quit_prompt(&self) -> String {
+        let unsaved_doc = self.unsaved_doc().map(|doc| clip(&doc.label, 24));
+        strings::quit_prompt(self.core.live_session_count(), unsaved_doc.as_deref())
+    }
+
     fn quit_confirmation(&self) -> Option<Element<'_, Message>> {
         if !self.quit_pending() {
             return None;
         }
-        let live = self.core.live_session_count();
         Some(Self::confirmation_bar(
-            strings::quit_prompt(live),
+            self.quit_prompt(),
             strings::QUIT,
             button::danger,
             Message::ConfirmCloseWindow,

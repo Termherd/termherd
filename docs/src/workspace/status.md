@@ -114,7 +114,8 @@ That is why the status work matters beyond the badges: while every shell sat on
 
 Quitting names the cost: *"Quit TermHerd? 3 open session(s) will be
 force-stopped — any running work is lost."* Every non-exited session dies on
-quit, Claude or shell.
+quit, Claude or shell. A doc with unsaved changes is named in the same prompt,
+and makes the quit ask under every policy, `noConfirmation` included.
 
 Every confirmation is answerable from the keyboard — <kbd>Escape</kbd> to
 cancel, <kbd>Enter</kbd> to confirm — which is also what makes them reachable

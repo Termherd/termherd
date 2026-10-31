@@ -63,12 +63,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A settings panel, live reload of `settings.json`, and the options on the
   live bridge (#292, #297, #298).
 
+### Fixed (quitting lost a modified doc's edits)
+
+- Quitting TermHerd with unsaved doc edits now asks first, and the quit
+  prompt names the doc beside the sessions it stops. It asks under every
+  `close.app` policy, `noConfirmation` included (#385).
+
 ### Fixed (a modified doc closed without asking)
 
 - Closing the doc editor with unsaved edits — its `✕ close` button or
   Escape — or opening another doc over it now asks before discarding them;
-  Escape at the prompt goes back to the editor (#248). Quitting the app does
-  not ask yet.
+  Escape at the prompt goes back to the editor (#248).
 
 ### Fixed (a tab drag lost off the strip)
 

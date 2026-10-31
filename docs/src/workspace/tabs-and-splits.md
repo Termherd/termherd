@@ -218,7 +218,8 @@ Closing a tab, and quitting the app, are each governed by their own
 confirmation policy — `alwaysConfirm`, `confirmWhenActive` (the default), or
 `noConfirmation`. Under the default, a tab whose session is mid-command asks
 before closing; an idle one closes silently. Quitting names how many sessions
-will be force-stopped.
+will be force-stopped, and always asks while the doc editor holds unsaved
+changes.
 
 A pane whose **shell exits cleanly closes itself**; one whose shell exited with
 a failure stays on screen so you can read what happened.

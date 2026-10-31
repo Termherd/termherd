@@ -261,16 +261,12 @@ impl Shell {
     /// default) confirms only while some session is still running work — the
     /// core `any_running_process` predicate, the app-wide sibling of the one the
     /// tab close uses — so an all-idle app quits silently; `alwaysConfirm` /
-    /// `noConfirmation` override that. `iced::exit` (not `window::close`) is what
-    /// actually ends the process: on macOS winit cancels the OS terminate and
-    /// `exit_on_close_request(false)` keeps the runtime alive, so a mere window
-    /// close would survive.
+    /// `noConfirmation` override that, except over a modified doc.
+    /// `iced::exit` (not `window::close`) is what actually ends the process: on
+    /// macOS winit cancels the OS terminate and `exit_on_close_request(false)`
+    /// keeps the runtime alive, so a mere window close would survive.
     pub(super) fn request_quit(&mut self, id: window::Id) -> Task<Message> {
-        if self
-            .close_confirm
-            .app
-            .confirms(self.core.any_running_process())
-        {
+        if self.quit_confirms() {
             self.closing_window = Some(id);
             Task::none()
         } else {
@@ -278,6 +274,15 @@ impl Shell {
             self.exiting = true;
             iced::exit()
         }
+    }
+
+    /// The policy covers the sessions a quit kills, not unsaved text.
+    fn quit_confirms(&self) -> bool {
+        self.unsaved_doc().is_some()
+            || self
+                .close_confirm
+                .app
+                .confirms(self.core.any_running_process())
     }
 
     /// Whether a quit is awaiting confirmation (the modal is up).

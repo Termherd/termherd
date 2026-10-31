@@ -101,6 +101,9 @@ Per-action close confirmation. Both keys default to `"confirmWhenActive"`.
 | `confirmWhenActive` | ask only while a session runs a foreground process |
 | `noConfirmation` | never ask |
 
+Unsaved changes in the doc editor make a quit ask under any `app` value: the
+policy covers the sessions a quit stops, not text it would lose.
+
 ### `terminal`
 
 ```json
