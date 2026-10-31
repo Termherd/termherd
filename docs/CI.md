@@ -81,8 +81,9 @@ Everything fans out in parallel (no inter-job ordering):
   aggregator. Jobs whose category didn't change report `skipped` (a docs-only
   PR skips all the Rust jobs) and `ci-success` still passes. `cross-os` is
   **skipped** on PRs. Branch protection requires only `ci-success`.
-- **`codeql`** and **`release`** — do **not** run on PRs (`pr-run-mode = "skip"`
-  in `dist-workspace.toml`).
+- **`codeql`** and **`release`** — do **not** run on PRs (`codeql` has no
+  `pull_request` trigger; `release` sets `pr-run-mode = "skip"` in
+  `dist-workspace.toml`).
 
 Superseded PR runs are auto-cancelled (a fresh push kills the stale run) for
 `ci` — see the `concurrency` block in the workflow.
@@ -352,9 +353,10 @@ These are project-wide conventions; breaking one tends to break CI in a
 confusing way.
 
 - **Actions are SHA-pinned.** Every `uses:` points at a commit SHA with the
-  human version in a trailing comment (`# v6.0.2`). Bump the SHA and the
-  comment **together**; never use a mutable tag. (`release.yml` is the
-  exception — it is dist-generated and pins by tag.)
+  human version in a trailing comment (`# v7.0.1`). Bump the SHA and the
+  comment **together** (`.github/dependabot.yml` opens a monthly grouped PR for
+  this); never use a mutable tag. (`release.yml` is the exception — it is
+  dist-generated and pins by tag.)
 - **Toolchain in lockstep (Q10).** `1.95.0` appears in `rust-toolchain.toml`,
   `Cargo.toml` `rust-version`, `ci.yml` `env.RUST_TOOLCHAIN`, and `codeql.yml`
   `toolchain`. Change all four at once — `scripts/check-crate-deps.sh` (`just
