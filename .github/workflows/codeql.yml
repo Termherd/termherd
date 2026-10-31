@@ -16,17 +16,24 @@ name: CodeQL
 on:
   push:
     branches: [main]
+    paths:
+      - '**/*.rs'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/codeql.yml'
   schedule:
     # Weekly: catches drift in the query packs themselves (new queries may
     # flag code already on main).
     - cron: '0 7 * * 1'
   workflow_dispatch:
 
-# Pushes to main and the weekly run establish the default-branch security
-# baseline — never cancel them. (No PR runs exist to supersede.)
+# The Security tab tracks the tip of main: if a newer Rust push lands while an
+# 8-minute traced build is still running, cancel the stale scan and analyze the
+# new tip directly rather than queuing behind it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -34,7 +41,7 @@ permissions:
 jobs:
   analyze:
     name: Analyze (Rust)
-    # No path gate: SAST covers every commit on the default branch.
+    # Path-gated on push→main so docs-only merges skip the traced Rust build.
     runs-on: ubuntu-latest
     permissions:
       contents: read

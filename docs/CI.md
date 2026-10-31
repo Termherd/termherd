@@ -33,7 +33,7 @@ themselves), `markdownlint` (the prose), `roadmap` (the generated
 | Formatting | `ci` · `rustfmt` | Consistent layout (`cargo fmt`) | PR, push→main | ubuntu | yes |
 | Lint + complexity | `ci` · `clippy` | Clippy `-D warnings`; `unwrap`/`expect`/`panic` (core/claude), `too_many_lines`, `todo`/`unimplemented` | PR, push→main | ubuntu | yes |
 | Tests | `ci` · `test` | `cargo nextest run --workspace` | PR, push→main | ubuntu | yes |
-| Portable crates on Windows | `ci` · `portable` | clippy + `nextest` for `core`, `claude`, `pty`, `scan`, `mcp` — everything but the GUI | PR, push→main | win | yes |
+| Portable crates on Windows | `ci` · `portable` | clippy + `nextest` for `--workspace --exclude termherd-app` — everything but the GUI | PR, push→main (Cargo paths) | win | yes |
 | Cross-OS clippy + tests | `ci` · `cross-os` | Same clippy + `nextest` on macOS & Windows | push→main, tag (skipped on PR) | mac · win | signal |
 | Licenses / CVEs / sources | `ci` · `cargo-deny` | Disallowed licences, RUSTSEC advisories, unknown registries | PR, push→main | ubuntu | yes |
 | Unused deps | `ci` · `cargo-machete` | Declared-but-unused dependencies | PR, push→main | ubuntu | yes |
@@ -44,19 +44,22 @@ themselves), `markdownlint` (the prose), `roadmap` (the generated
 | Roadmap | `ci` · `roadmap` | `.roadmap/` schema and cross-references; `ROADMAP.md` still matches its source | PR, push→main | ubuntu | yes |
 | Book | `ci` · `mdbook` | The manual builds, and every `SUMMARY.md` link resolves to a file on disk | PR, push→main | ubuntu | yes |
 | Merge gate | `ci` · `ci-success` | Aggregates every PR job into one required check | PR, push→main | ubuntu | yes (the one required check) |
-| SAST | `codeql` · `Analyze (Rust)` | Taint / cross-function security & quality | push→main, weekly | ubuntu | baseline |
-| CLI release | `release` · `plan…announce` | Build archives + curl\|sh / PowerShell installers, cut the GitHub Release | tag push (validates on PR) | mac · win · ubuntu | release-time |
+| SAST | `codeql` · `Analyze (Rust)` | Taint / cross-function security & quality | push→main (Rust paths), weekly | ubuntu | baseline |
+| CLI release | `release` · `plan…announce` | Build archives + curl\|sh / PowerShell installers, cut the GitHub Release | tag push | mac · win · ubuntu | release-time |
 | Desktop installers | `package` · `package` | `.app`/`.dmg`, NSIS `.exe`, `.deb`/`.AppImage`, attached to the Release | tag push | mac · win · ubuntu | release-time |
 | Docs publish | `docs-deploy` · `build`/`deploy` | The book on GitHub Pages, from what `main` already proved buildable | push→main | ubuntu | post-merge |
 
 "Blocking" = a red run blocks merge (PR/CI gates) or blocks the release
 (release-time). "signal" = it runs and reports red/green but does **not** block
 merge (see `cross-os`). "baseline" = it doesn't run on PRs at all; it guards the
-default branch after merge (see `codeql`). The `main` branch-protection rule
-requires exactly **one** check — `ci-success` — which fans in every per-PR job.
-`codeql` is deliberately **not** required: its traced full compile is minutes
-long, so it runs on push→main + weekly, not per-PR (a required check that never
-runs on a PR would wedge the PR).
+default branch after merge (see `codeql`). The `main-protection` repository
+ruleset requires linear history (squash-only merges, `PR_TITLE` + `PR_BODY`,
+auto-merge enabled, non-strict so parallel PRs do not force cascade rebases)
+and pins exactly **one** status check — `ci-success` — which fans in every
+per-PR job. `codeql` is deliberately **not** required: its traced full compile
+is minutes long, so it runs on push→main (when Rust/Cargo files changed) +
+weekly, not per-PR (a required check that never runs on a PR would wedge the
+PR).
 
 ---
 
@@ -81,22 +84,22 @@ Everything fans out in parallel (no inter-job ordering):
   whose category didn't change report `skipped` (a docs-only PR skips all the
   Rust jobs) and `ci-success` still passes. `cross-os` is **skipped** on PRs.
   Branch protection requires only `ci-success`.
-- **`codeql`** — does **not** run on PRs (push→main + weekly only); see the
-  Merge/Scheduled stages below. SAST reaches the code seconds after merge.
-- **`release`** — runs in *validation* mode (cargo-dist's `plan`; artifact
-  builds are gated off unless configured), so a tag push won't be the first
-  time the release pipeline is exercised. It does **not** publish on a PR.
+- **`codeql`** and **`release`** — do **not** run on PRs (`pr-run-mode = "skip"`
+  in `dist-workspace.toml`).
 
 Superseded PR runs are auto-cancelled (a fresh push kills the stale run) for
 `ci` — see the `concurrency` block in the workflow.
 
 ### Merge / push to `main`
 
-`ci` and `codeql` run again on the merged commit — and here `cross-os` also
-runs (clippy + `nextest` on macOS & Windows), giving the post-merge baseline
-its cross-platform check. These runs are **never cancelled**: they establish
-the default-branch baseline (CI status badge, the CodeQL security baseline in
-the Security tab).
+`ci` runs again on the merged commit — `cross-os` runs here (clippy + `nextest`
+for the full `--workspace` on macOS & Windows), while `portable` is skipped on
+pure-`.rs` merges and runs on `main` only when Cargo manifests/lockfile changed
+to refresh its own feature-scoped Windows cache key (`--workspace` in `cross-os`
+unifies `termherd-app` features, so sharing one cache key would force a 50s
+recompile on every PR). `codeql` runs when Rust or Cargo files changed
+(cancelling any stale in-progress `main` scan so consecutive merges only scan
+the tip). `ci` runs on `main` are **never cancelled**.
 
 ### Scheduled (weekly)
 
@@ -212,18 +215,19 @@ including `too_many_lines` — becomes a hard error in CI), and a strict
 
 ### `codeql.yml` — static application security testing
 
-Trigger: `push`→`main`, weekly cron, `workflow_dispatch` — **not** on PRs. The
-Rust extractor traces a full `cargo build` (the `iced`-heavy `app` crate is a
-cold compile that the rust-cache can't shortcut, since CodeQL must observe
-compilation), so a run is minutes long; putting it on every PR bought no
-coverage over the push→main run that fires seconds after merge. One job,
-`Analyze (Rust)`: CodeQL autobuilds the workspace, extracts a database, runs the
+Trigger: `push`→`main` (when Rust/Cargo files or `codeql.yml` changed), weekly
+cron, `workflow_dispatch` — **not** on PRs. The Rust extractor traces a full
+`cargo build` (the `iced`-heavy `app` crate is a cold compile that the
+rust-cache can't shortcut, since CodeQL must observe compilation), so a run is
+minutes long; putting it on every PR bought no coverage over the push→main run
+that fires seconds after merge, and path-gating the push trigger keeps
+docs-only merges from paying for a traced build. One job, `Analyze (Rust)`:
+CodeQL autobuilds the workspace, extracts a database, runs the
 `security-and-quality` suite, and uploads SARIF to the **Security → Code
-scanning** tab. It needs
-`security-events: write` (the only `ci`/`codeql` job that escalates beyond
-`contents: read`). Complements `cargo-deny` (CVE/dependency-side) and
-`clippy` (in-tree style + simple soundness) with taint tracking and
-cross-function patterns neither can see.
+scanning** tab. It needs `security-events: write` (the only `ci`/`codeql` job
+that escalates beyond `contents: read`). Complements `cargo-deny`
+(CVE/dependency-side) and `clippy` (in-tree style + simple soundness) with
+taint tracking and cross-function patterns neither can see.
 
 The suite stays on `security-and-quality` (the full pack), **not** the leaner
 `security-extended`. Trimming was weighed for speed, but once CodeQL moved off
@@ -234,9 +238,9 @@ path.
 
 ### `release.yml` — CLI artifacts & the GitHub Release (cargo-dist)
 
-Trigger: tag push (and `pull_request`, for validation). Autogenerated by
-dist — **do not hand-edit**; regenerate with `dist init` / `dist generate`.
-Job graph:
+Trigger: tag push (`pr-run-mode = "skip"` in `dist-workspace.toml`).
+Autogenerated by dist — **do not hand-edit**; regenerate with `dist init` /
+`dist generate`. Job graph:
 
 ```text
 plan ─┬─► build-local-artifacts (per-target matrix) ─┐
@@ -344,9 +348,10 @@ confusing way.
 - **Least privilege.** Workflows default to `permissions: contents: read`.
   A job escalates only when it must: `codeql` (`security-events: write`),
   `release` / `package` (`contents: write`).
-- **PR runs are disposable, `main` runs are not.** The `concurrency` blocks
-  cancel superseded PR runs but never cancel a push to `main`, the weekly
-  schedule, or a tag.
+- **PR runs are disposable, `ci` runs on `main` are not.** `ci.yml` cancels
+  superseded PR runs but never cancels a push to `main` or a tag. `codeql.yml`
+  does cancel a stale `main` scan when a newer Rust push arrives so the
+  Security tab analyzes the tip directly.
 - **`-D warnings`.** CI sets `RUSTFLAGS: -D warnings`, so a lint at `warn`
   in a `Cargo.toml` lint table (e.g. `too_many_lines`, `unwrap_used` outside
   core/claude) is advisory locally but **blocking** in CI.
