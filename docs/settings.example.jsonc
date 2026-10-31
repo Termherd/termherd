@@ -122,6 +122,10 @@
     // A right-click pastes into THE PANE UNDER THE POINTER (not necessarily
     // the focused one), bracketed when that pane asked for bracketed paste.
     "paste_on_right_click": false,
+    // macOS only: which Option key is Meta (⌥B / ⌥F move by word) — "none",
+    // "left", "right" or "both". The other one types what the layout
+    // composes, e.g. ⌥⇧L → | on a French layout.
+    "option_as_meta": "left",
 
     // Terminal grid colours. Start from a named scheme, then override
     // individual slots; every field is optional and a malformed colour

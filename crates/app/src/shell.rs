@@ -31,7 +31,7 @@ use termherd_pty::{PtyEvent, Screen};
 
 use crate::docs::DocEntry;
 use crate::record_config::RecordConfig;
-use crate::settings::{ClipboardGestures, CloseSettings, ThemeChoice};
+use crate::settings::{ClipboardGestures, CloseSettings, OptionAsMeta, ThemeChoice};
 use crate::window_config::WindowConfig;
 
 mod appearance;
@@ -71,7 +71,7 @@ pub(crate) struct LiveBridge {
     pub(crate) mcp_endpoint: Option<crate::mcp::Endpoint>,
     pub(crate) mcp_tokens: crate::mcp::Tokens,
 }
-use input::event_modifiers;
+use input::{AltSides, event_modifiers};
 use record::RecordState;
 use streams::{PtyOutput, pty_stream, watch_stream};
 
@@ -331,6 +331,10 @@ struct Shell {
     /// Whether Shift is currently held, handed to the terminal canvas so a
     /// Shift+click extends the existing selection instead of restarting it.
     shift_modifier: bool,
+    /// Which Alt keys are held, for `option_as_meta`.
+    alt_sides: AltSides,
+    /// Which Option key sends Meta, resolved for this platform.
+    option_as_meta: OptionAsMeta,
     /// An in-progress tab drag (FR5 reorder): the tab being dragged and
     /// the slot the pointer is currently over. `None` when no drag is active.
     /// Transient pointer state only — the tab order itself lives in `core`.
@@ -848,6 +852,8 @@ impl Shell {
             closing_window: None,
             link_modifier: false,
             shift_modifier: false,
+            alt_sides: AltSides::default(),
+            option_as_meta: OptionAsMeta::default(),
             tab_drag: None,
             split_drag: None,
             cursor_position: Point::new(0.0, 0.0),
@@ -1069,6 +1075,7 @@ impl Shell {
                 let modifiers = event_modifiers(&event);
                 self.link_modifier = modifiers.control() || modifiers.logo();
                 self.shift_modifier = modifiers.shift();
+                self.alt_sides.track(&event);
                 if self.enter_too_soon(&event, Instant::now()) {
                     return Task::none();
                 }
@@ -4255,6 +4262,40 @@ mod key_routing {
         // A modified key with no binding still falls through to its bytes.
         let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::SHIFT, None));
         assert_eq!(pty.writes(), vec![b"a".to_vec(), b"\n".to_vec()]);
+    }
+
+    /// Set directly, not from settings, so the test reads the same on every OS.
+    fn shell_holding_alt(side: Location) -> (Shell, Arc<RecordingPty>) {
+        let (mut shell, pty) = shell_with_terminal();
+        shell.option_as_meta = OptionAsMeta::Left;
+        let _ = shell.update(Message::Key(input::alt_events::alt_down(side)));
+        (shell, pty)
+    }
+
+    #[test]
+    fn the_composing_option_key_types_the_layout_glyph() {
+        // French AZERTY: ⌥⇧L is `|`, which iced reports as key `l` + text `|`.
+        let (mut shell, pty) = shell_holding_alt(Location::Right);
+        let _ = shell.on_key(press(
+            Key::Character("l".into()),
+            Modifiers::ALT | Modifiers::SHIFT,
+            Some("|"),
+        ));
+        assert_eq!(pty.writes(), vec![b"|".to_vec()]);
+    }
+
+    #[test]
+    fn the_meta_option_key_still_sends_escape_and_the_letter() {
+        let (mut shell, pty) = shell_holding_alt(Location::Left);
+        let _ = shell.on_key(press(Key::Character("b".into()), Modifiers::ALT, Some("∫")));
+        assert_eq!(pty.writes(), vec![b"\x1bb".to_vec()]);
+    }
+
+    #[test]
+    fn option_enter_keeps_its_newline_on_the_composing_side() {
+        let (mut shell, pty) = shell_holding_alt(Location::Right);
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::ALT, None));
+        assert_eq!(pty.writes(), vec![b"\x1b\r".to_vec()]);
     }
 
     #[test]

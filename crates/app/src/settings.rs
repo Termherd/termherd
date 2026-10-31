@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use termherd_core::keymap::Platform;
 use termherd_core::{Action, KeyChord, Keymap};
 use termherd_pty::Palette;
 use tracing::warn;
@@ -219,6 +220,42 @@ pub struct TerminalSettings {
     /// A right-click pastes the clipboard into the pane under the pointer.
     #[serde(deserialize_with = "flag")]
     pub paste_on_right_click: bool,
+    /// Which macOS Option key is Meta.
+    #[serde(deserialize_with = "option_as_meta_or_default")]
+    pub option_as_meta: OptionAsMeta,
+}
+
+/// Which Option key acts as Meta on macOS; the other one composes glyphs
+/// (`⌥⇧L` → `|` on a French layout). Elsewhere Alt is always Meta.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OptionAsMeta {
+    None,
+    #[default]
+    Left,
+    Right,
+    Both,
+}
+
+fn option_as_meta_or_default<'de, D>(de: D) -> Result<OptionAsMeta, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    enum_or_default(de, "terminal.option_as_meta")
+}
+
+/// Parse a named choice; an unknown value warns and falls back to the default
+/// instead of failing the whole file.
+fn enum_or_default<'de, D, T>(de: D, setting: &str) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(de)?;
+    Ok(T::deserialize(&value).unwrap_or_else(|_| {
+        warn!(%value, setting, "unknown value; using the default");
+        T::default()
+    }))
 }
 
 /// Parse a JSON boolean, treating anything else as "not asked for" (with a
@@ -245,11 +282,7 @@ fn theme_or_default<'de, D>(de: D) -> Result<ThemeChoice, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let value = serde_json::Value::deserialize(de)?;
-    Ok(ThemeChoice::deserialize(&value).unwrap_or_else(|_| {
-        warn!(%value, "unknown theme; using the default");
-        ThemeChoice::default()
-    }))
+    enum_or_default(de, "theme")
 }
 
 /// Which mouse gestures reach the clipboard — the classic terminal
@@ -355,6 +388,7 @@ impl Default for TerminalSettings {
             colors: ColorSettings::default(),
             copy_on_select: false,
             paste_on_right_click: false,
+            option_as_meta: OptionAsMeta::default(),
         }
     }
 }
@@ -550,6 +584,15 @@ impl Settings {
         ClipboardGestures {
             copy_on_select: self.terminal.copy_on_select,
             paste_on_right_click: self.terminal.paste_on_right_click,
+        }
+    }
+
+    /// Which Option key is Meta on `platform`; only macOS composes on Option.
+    #[must_use]
+    pub fn option_as_meta_on(&self, platform: Platform) -> OptionAsMeta {
+        match platform {
+            Platform::MacOs => self.terminal.option_as_meta,
+            Platform::Other => OptionAsMeta::Both,
         }
     }
 
@@ -800,6 +843,56 @@ mod tests {
         let s: Settings =
             serde_json::from_str(r#"{ "terminal": { "font_size": -3 } }"#).expect("valid json");
         assert!((s.font_size() - 6.0).abs() < f32::EPSILON);
+    }
+
+    fn option_as_meta_from(value: &str) -> Settings {
+        serde_json::from_str(&format!(
+            r#"{{ "terminal": {{ "option_as_meta": {value}, "copy_on_select": true }} }}"#
+        ))
+        .expect("a terminal block with option_as_meta parses")
+    }
+
+    #[test]
+    fn the_left_option_key_is_meta_by_default() {
+        assert_eq!(
+            Settings::default().option_as_meta_on(Platform::MacOs),
+            OptionAsMeta::Left
+        );
+    }
+
+    #[test]
+    fn option_as_meta_reads_each_side() {
+        for (value, side) in [
+            ("none", OptionAsMeta::None),
+            ("left", OptionAsMeta::Left),
+            ("right", OptionAsMeta::Right),
+            ("both", OptionAsMeta::Both),
+        ] {
+            let settings = option_as_meta_from(&format!("\"{value}\""));
+            assert_eq!(settings.option_as_meta_on(Platform::MacOs), side, "{value}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_option_as_meta_falls_back_to_left_and_costs_nothing_else() {
+        for value in [r#""middle""#, "true", "1"] {
+            let settings = option_as_meta_from(value);
+            assert_eq!(
+                settings.terminal.option_as_meta,
+                OptionAsMeta::Left,
+                "{value}"
+            );
+            assert!(settings.terminal.copy_on_select, "{value}");
+        }
+    }
+
+    #[test]
+    fn alt_is_meta_on_both_sides_off_macos_whatever_the_setting() {
+        let settings = option_as_meta_from(r#""none""#);
+        assert_eq!(
+            settings.option_as_meta_on(Platform::Other),
+            OptionAsMeta::Both
+        );
     }
 
     #[test]

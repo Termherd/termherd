@@ -8,9 +8,9 @@ use iced::keyboard::{Key, key::Named};
 use iced::{Task, keyboard};
 use termherd_core::workspace::{Direction, SplitDir};
 use termherd_core::{Action, ClaudeCommand, ScrollTarget, keymap};
-use termherd_pty::TermKey;
+use termherd_pty::{KeyMods, TermKey};
 
-use super::input::{chord_of, key_mods, numpad_char, to_term_key};
+use super::input::{chord_of, key_mods, numpad_char, sends_meta, to_term_key};
 use super::{Focus, Message, Shell, search_id};
 
 /// How a confirmation overlay reads a key — the shared shape behind the quit,
@@ -568,14 +568,24 @@ impl Shell {
         let Some(term_key) = term_key else {
             return (KeyVerdict::Ignored, Task::none());
         };
-        let Some(bytes) = termherd_pty::key_bytes(term_key, key_mods(modifiers), text.as_deref())
-        else {
+        let mods = self.pty_mods(term_key, modifiers);
+        let Some(bytes) = termherd_pty::key_bytes(term_key, mods, text.as_deref()) else {
             return (KeyVerdict::Ignored, Task::none());
         };
         let effects = self
             .core
             .apply(termherd_core::Event::TerminalInput { session, bytes });
         (KeyVerdict::Typed, self.perform(effects))
+    }
+
+    /// The modifiers the PTY codec encodes `term_key` with. Only a character
+    /// composes, so ⌥Enter, ⌥⌫ and ⌥←/→ stay Meta on either side.
+    fn pty_mods(&self, term_key: TermKey, modifiers: keyboard::Modifiers) -> KeyMods {
+        let mut mods = key_mods(modifiers);
+        if matches!(term_key, TermKey::Char(_)) {
+            mods.alt &= sends_meta(self.option_as_meta, self.alt_sides);
+        }
+        mods
     }
 
     /// Whether raw keyboard / IME input should reach the focused terminal: it
