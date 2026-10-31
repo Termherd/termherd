@@ -169,8 +169,9 @@ impl Shell {
             window::Event::Opened { .. } => {
                 // Reroute the macOS menu Quit item (and ⌘Q) through the iced
                 // runtime, give Ctrl+Cmd+Space its Character Viewer menu item
-                // and ⌘M its Window menu, and route the text it inserts, which winit would drop,
-                // through the input method. Done here, not in the boot closure: iced
+                // and ⌘M a Window menu, and route the text the Character
+                // Viewer inserts, which winit would drop, through the input
+                // method. Done here, not in the boot closure: iced
                 // constructs the app state *before* `run_app`, so the boot
                 // closure runs ahead of winit's `applicationDidFinishLaunching`
                 // (where the default menu is installed) and ahead of the

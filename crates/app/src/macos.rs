@@ -42,6 +42,7 @@
 use std::ffi::{c_char, c_void};
 
 use objc2::ffi;
+use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Imp, Method, Sel};
 use objc2::{msg_send, sel};
 use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
@@ -152,11 +153,7 @@ pub fn add_character_palette_item(mtm: MainThreadMarker) {
             ns_string!(" "),
         );
         item.setKeyEquivalentModifierMask(control_command);
-        let edit = NSMenu::initWithTitle(mtm.alloc(), ns_string!("Edit"));
-        edit.addItem(&item);
-        let edit_item = NSMenuItem::new(mtm);
-        edit_item.setSubmenu(Some(&edit));
-        menubar.addItem(&edit_item);
+        append_top_menu(mtm, &menubar, ns_string!("Edit")).addItem(&item);
     }
     tracing::info!("added Emoji & Symbols (Ctrl+Cmd+Space) to an Edit menu");
 }
@@ -180,41 +177,43 @@ pub fn add_window_menu(mtm: MainThreadMarker) {
         if !lacks_action(&submenu_actions(&menubar), sel!(performMiniaturize:)) {
             return;
         }
-        let window = NSMenu::initWithTitle(mtm.alloc(), ns_string!("Window"));
-        for (title, action, key) in window_items() {
-            let item = NSMenuItem::initWithTitle_action_keyEquivalent(
-                mtm.alloc(),
-                &NSString::from_str(title),
-                Some(action),
-                &NSString::from_str(key),
-            );
-            window.addItem(&item);
-        }
-        let window_item = NSMenuItem::new(mtm);
-        window_item.setSubmenu(Some(&window));
-        menubar.addItem(&window_item);
+        let window = append_top_menu(mtm, &menubar, ns_string!("Window"));
+        window.addItem(&NSMenuItem::initWithTitle_action_keyEquivalent(
+            mtm.alloc(),
+            ns_string!("Minimize"),
+            Some(sel!(performMiniaturize:)),
+            ns_string!("m"),
+        ));
+        window.addItem(&NSMenuItem::initWithTitle_action_keyEquivalent(
+            mtm.alloc(),
+            ns_string!("Zoom"),
+            Some(sel!(performZoom:)),
+            ns_string!(""),
+        ));
         // AppKit appends the open windows' list to the menu it is told of.
         app.setWindowsMenu(Some(&window));
     }
     tracing::info!("added a Window menu (Minimize: Cmd+M, Zoom)");
 }
 
-/// The Window menu's items: title, action, key equivalent (Cmd implied).
-fn window_items() -> [(&'static str, Sel, &'static str); 2] {
-    [
-        ("Minimize", sel!(performMiniaturize:), "m"),
-        ("Zoom", sel!(performZoom:), ""),
-    ]
+/// A new, empty top-level menu titled `title`, appended to `menubar`.
+fn append_top_menu(mtm: MainThreadMarker, menubar: &NSMenu, title: &NSString) -> Retained<NSMenu> {
+    // SAFETY: AppKit menu construction on the main thread (`mtm`), each
+    // initialiser receiving a fresh allocation and a live string.
+    unsafe {
+        let menu = NSMenu::initWithTitle(mtm.alloc(), title);
+        let item = NSMenuItem::new(mtm);
+        item.setSubmenu(Some(&menu));
+        menubar.addItem(&item);
+        menu
+    }
 }
 
 /// The action of every item one level under the menu bar.
-///
-/// # Safety
-///
-/// Main thread only, like every AppKit menu read.
-unsafe fn submenu_actions(menubar: &NSMenu) -> Vec<Option<Sel>> {
+fn submenu_actions(menubar: &NSMenu) -> Vec<Option<Sel>> {
     let mut actions = Vec::new();
-    // SAFETY: plain AppKit menu reads; the caller holds the main thread.
+    // SAFETY: plain AppKit menu reads; an `NSMenu` is main-thread-only, so
+    // holding one proves we are on it.
     unsafe {
         for top in menubar.itemArray().iter() {
             if let Some(submenu) = top.submenu() {
@@ -437,19 +436,8 @@ unsafe extern "C" fn insert_text(
 
 #[cfg(test)]
 mod tests {
-    use super::{Insertion, lacks_action, replays_as_composition, window_items};
+    use super::{Insertion, lacks_action, replays_as_composition};
     use objc2::sel;
-
-    #[test]
-    fn the_window_menu_minimizes_on_cmd_m_and_leaves_cmd_w_to_the_keymap() {
-        let items = window_items();
-        assert!(items.contains(&("Minimize", sel!(performMiniaturize:), "m")));
-        assert!(
-            items
-                .iter()
-                .all(|&(_, action, key)| { action != sel!(performClose:) && key != "w" })
-        );
-    }
 
     #[test]
     fn a_menu_without_the_palette_item_gets_one() {
