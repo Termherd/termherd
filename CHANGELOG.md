@@ -63,6 +63,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A settings panel, live reload of `settings.json`, and the options on the
   live bridge (#292, #297, #298).
 
+### Fixed (the bridge token written through a planted file)
+
+- The live bridge's token file is created afresh, never written through a
+  file or symlink another user planted in a shared `/tmp` (#284).
+
 ### Fixed (quitting lost a modified doc's edits)
 
 - Quitting TermHerd with unsaved doc edits now asks first, and the quit

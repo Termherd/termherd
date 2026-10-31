@@ -80,7 +80,7 @@ pub(crate) fn launch_command(
 /// flag and the launch fails outright, rather than merely losing its status.
 /// The floor the README states is higher still, for `--session-id`.
 pub(crate) fn write_title_settings(session: SessionId) -> Option<PathBuf> {
-    let path = std::env::temp_dir().join(format!("termherd-settings-{}.json", session.0.get()));
+    let path = settings_path(session);
     let json = r#"{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":"0"}}"#;
     match write_private(&path, json) {
         Ok(()) => Some(path),
@@ -183,11 +183,17 @@ fn write_startup_files(dir: &Path, files: &[(PathBuf, String)]) -> std::io::Resu
 /// business outliving the session it authorised. Best-effort by construction:
 /// a file already gone is the desired state, and a teardown is no place to fail.
 pub(crate) fn discard_private_files(session: SessionId) {
-    let temp = std::env::temp_dir();
-    let id = session.0.get();
     let _ = std::fs::remove_dir_all(shell_dir(session));
-    let _ = std::fs::remove_file(temp.join(format!("termherd-mcp-{id}.json")));
-    let _ = std::fs::remove_file(temp.join(format!("termherd-settings-{id}.json")));
+    let _ = std::fs::remove_file(mcp_config_path(session));
+    let _ = std::fs::remove_file(settings_path(session));
+}
+
+fn mcp_config_path(session: SessionId) -> PathBuf {
+    std::env::temp_dir().join(format!("termherd-mcp-{}.json", session.0.get()))
+}
+
+fn settings_path(session: SessionId) -> PathBuf {
+    std::env::temp_dir().join(format!("termherd-settings-{}.json", session.0.get()))
 }
 
 /// Create `path` as a directory only this user can reach (`0o700` on Unix), and
@@ -218,7 +224,7 @@ fn private_dir(path: &Path) -> std::io::Result<()> {
 /// loopback url and a hex token), so no escaping is needed. `None` (logged, not
 /// fatal) if the write fails: the session then launches without the live bridge.
 pub(crate) fn write_mcp_config(session: SessionId, config: &McpConfig) -> Option<PathBuf> {
-    let path = std::env::temp_dir().join(format!("termherd-mcp-{}.json", session.0.get()));
+    let path = mcp_config_path(session);
     let json = format!(
         r#"{{"mcpServers":{{"termherd":{{"type":"http","url":"{}","headers":{{"Authorization":"Bearer {}"}}}}}}}}"#,
         config.url, config.token
@@ -235,29 +241,30 @@ pub(crate) fn write_mcp_config(session: SessionId, config: &McpConfig) -> Option
     }
 }
 
-/// Write `contents` to `path` readable only by the current user (`0o600` on
-/// Unix) — the file carries a bearer token, so a world-readable temp file would
-/// leak it to any other local user. On non-Unix the platform's per-user temp
-/// ACLs are relied on.
-#[cfg(unix)]
+/// Create `path` afresh, owner-only (`0o600` on Unix), holding `contents`.
+///
+/// Never writes through an entry already there: on Linux's shared `/tmp`, a
+/// planted file keeps its own mode and a planted symlink redirects the write.
+/// Our own leftover is removed first; an entry we cannot remove fails the write.
 fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::fs::OpenOptions;
     use std::io::Write;
+
+    let _ = std::fs::remove_file(path);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    owner_only(&mut options);
+    options.open(path)?.write_all(contents.as_bytes())
+}
+
+#[cfg(unix)]
+fn owner_only(options: &mut std::fs::OpenOptions) {
     use std::os::unix::fs::OpenOptionsExt;
 
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    file.write_all(contents.as_bytes())
+    options.mode(0o600);
 }
 
 #[cfg(not(unix))]
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
-    std::fs::write(path, contents)
-}
+fn owner_only(_: &mut std::fs::OpenOptions) {}
 
 /// What [`apply_terminal_env`] advertises as the host terminal. Claude CLI only
 /// emits its status / notification OSC sequences (the busy / idle / attention
@@ -397,6 +404,123 @@ mod tests {
             "an existing directory must never be adopted"
         );
         let _ = std::fs::remove_dir_all(&planted);
+    }
+
+    fn session(id: u64) -> SessionId {
+        SessionId(std::num::NonZeroU64::new(id).expect("nonzero"))
+    }
+
+    #[test]
+    fn a_file_left_by_a_crashed_run_is_replaced_not_refused() {
+        // Session ids restart at 1 each run.
+        let session = session(84);
+        let path = settings_path(session);
+        std::fs::write(&path, "stale").expect("leave a stale overlay");
+
+        let written = write_title_settings(session).expect("our own leftover is replaced");
+        let contents = std::fs::read_to_string(&written).expect("readable overlay");
+        assert!(
+            contents.contains("CLAUDE_CODE_DISABLE_TERMINAL_TITLE"),
+            "got {contents}"
+        );
+        discard_private_files(session);
+    }
+
+    /// What another user could plant first at a predictable name in `/tmp`.
+    #[cfg(unix)]
+    mod planted {
+        use std::os::unix::fs::PermissionsExt;
+
+        use super::*;
+
+        fn mcp_config() -> McpConfig {
+            McpConfig {
+                url: "http://127.0.0.1:1/mcp".to_owned(),
+                token: "feedface".to_owned(),
+            }
+        }
+
+        #[test]
+        fn a_file_planted_world_readable_does_not_receive_the_token_as_is() {
+            let session = session(81);
+            let path = mcp_config_path(session);
+            std::fs::write(&path, "").expect("plant the file");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
+                .expect("open it to everyone");
+
+            let written = write_mcp_config(session, &mcp_config()).expect("the config is written");
+            let mode = std::fs::metadata(&written)
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "got {mode:o}");
+            discard_private_files(session);
+        }
+
+        #[test]
+        fn an_entry_that_cannot_be_removed_is_refused_not_written_through() {
+            // A read-only directory stands in for a sticky `/tmp`: its entry
+            // cannot be unlinked, yet can still be opened for writing.
+            let dir = std::env::temp_dir().join("termherd-locked-85");
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir(&dir).expect("the directory");
+            let planted = dir.join("termherd-mcp-85.json");
+            std::fs::write(&planted, "planted").expect("plant the file");
+            std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o666))
+                .expect("open it to everyone");
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500))
+                .expect("lock the directory");
+            if std::fs::File::create(dir.join("probe")).is_ok() {
+                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                    .expect("unlock for cleanup");
+                let _ = std::fs::remove_dir_all(&dir);
+                eprintln!("skipped: root ignores the directory's mode");
+                return;
+            }
+
+            let outcome = write_private(&planted, "token");
+            let contents = std::fs::read_to_string(&planted).expect("readable");
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                .expect("unlock for cleanup");
+            let _ = std::fs::remove_dir_all(&dir);
+            assert!(outcome.is_err(), "an entry we could not remove was adopted");
+            assert_eq!(contents, "planted", "and the token was written through it");
+        }
+
+        #[test]
+        fn a_symlink_planted_at_either_path_is_never_written_through() {
+            type Writer = fn(SessionId) -> Option<PathBuf>;
+            type Named = fn(SessionId) -> PathBuf;
+            let writers: [(&str, u64, Named, Writer); 2] = [
+                ("mcp config", 82, mcp_config_path, |s| {
+                    write_mcp_config(s, &mcp_config())
+                }),
+                ("settings overlay", 83, settings_path, write_title_settings),
+            ];
+            for (name, id, path_of, write) in writers {
+                let session = session(id);
+                discard_private_files(session);
+                let victim = std::env::temp_dir().join(format!("termherd-victim-{id}"));
+                std::fs::write(&victim, "victim").expect("the victim's file");
+                let path = path_of(session);
+                std::os::unix::fs::symlink(&victim, &path).expect("plant the symlink");
+
+                let _ = write(session);
+                assert_eq!(
+                    std::fs::read_to_string(&victim).expect("victim readable"),
+                    "victim",
+                    "the {name} write followed the planted symlink"
+                );
+                let kind = std::fs::symlink_metadata(&path).map(|meta| meta.file_type());
+                assert!(
+                    !kind.is_ok_and(|kind| kind.is_symlink()),
+                    "the {name} path is still the planted symlink"
+                );
+                discard_private_files(session);
+                let _ = std::fs::remove_file(&victim);
+            }
+        }
     }
 
     #[test]
