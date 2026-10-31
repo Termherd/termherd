@@ -335,6 +335,8 @@ struct Shell {
     /// the slot the pointer is currently over. `None` when no drag is active.
     /// Transient pointer state only — the tab order itself lives in `core`.
     tab_drag: Option<TabDrag>,
+    split_drag: Option<SplitDrag>,
+    cursor_position: Point,
     /// Set once the quit path has asked the iced runtime to terminate.
     /// The observable proof that quitting reached `iced::exit` — closing the
     /// only window is *not* enough on macOS (winit cancels the OS terminate and
@@ -354,6 +356,16 @@ struct TabDrag {
     over: usize,
 }
 
+#[derive(Debug, Clone)]
+struct SplitDrag {
+    tab: usize,
+    path: Vec<termherd_core::workspace::Branch>,
+    dir: termherd_core::workspace::SplitDir,
+    ratio: f32,
+    start: Point,
+    extent: f32,
+}
+
 /// Ends a tab drag on a left release anywhere in the window, not only over
 /// the strip: the pointer routinely overshoots it. Captured events count too,
 /// since the terminal canvas captures the releases that land on it. A lifted
@@ -370,6 +382,22 @@ fn tab_drag_release(
         )) | iced::Event::Touch(iced::touch::Event::FingerLifted { .. })
     )
     .then_some(Message::TabDragEnd)
+}
+
+fn split_drag_event(
+    event: iced::Event,
+    _status: iced::event::Status,
+    _window: window::Id,
+) -> Option<Message> {
+    match event {
+        iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            Some(Message::SplitDragMove(position))
+        }
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+            Some(Message::SplitDragEnd)
+        }
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -449,6 +477,15 @@ enum Message {
     /// and gives the keyboard to the terminal. A lone terminal is the one-leaf
     /// case, focused the same way.
     FocusPane(SessionId),
+    /// Begin a split-handle drag; global mouse events track it through release.
+    SplitDragStart {
+        tab: usize,
+        path: Vec<termherd_core::workspace::Branch>,
+        dir: termherd_core::workspace::SplitDir,
+        ratio: f32,
+    },
+    SplitDragMove(Point),
+    SplitDragEnd,
     /// The mouse wheel turned over a terminal: the session under the pointer
     /// (not necessarily the focused one — splits), the pointer cell, and a line
     /// delta, so a mouse-mode app gets the wheel as input and a plain shell gets
@@ -812,6 +849,8 @@ impl Shell {
             link_modifier: false,
             shift_modifier: false,
             tab_drag: None,
+            split_drag: None,
+            cursor_position: Point::new(0.0, 0.0),
             exiting: false,
             record: RecordState::new(RecordConfig::default()),
             config: config_input(&crate::settings::Settings::default()),
@@ -1039,6 +1078,46 @@ impl Shell {
             }
             Message::ImeCommit(text) => self.on_ime_commit(text),
             Message::FocusPane(session) => self.focus_pane(session),
+            Message::SplitDragStart {
+                tab,
+                path,
+                dir,
+                ratio,
+            } => {
+                if tab == self.core.workspace.active
+                    && let Some(extent) = self.split_extent(tab, &path).filter(|n| *n > 0.0)
+                {
+                    self.split_drag = Some(SplitDrag {
+                        tab,
+                        path,
+                        dir,
+                        ratio,
+                        start: self.cursor_position,
+                        extent,
+                    });
+                }
+                Task::none()
+            }
+            Message::SplitDragMove(position) => {
+                self.cursor_position = position;
+                let Some(drag) = self.split_drag.as_ref() else {
+                    return Task::none();
+                };
+                let delta = match drag.dir {
+                    termherd_core::workspace::SplitDir::Vertical => position.x - drag.start.x,
+                    termherd_core::workspace::SplitDir::Horizontal => position.y - drag.start.y,
+                };
+                let effects = self.core.apply(termherd_core::Event::SetSplitRatio {
+                    tab: drag.tab,
+                    path: drag.path.clone(),
+                    ratio: drag.ratio + delta / drag.extent,
+                });
+                self.perform(effects)
+            }
+            Message::SplitDragEnd => match self.split_drag.take() {
+                Some(drag) => self.resize_tab(drag.tab),
+                None => Task::none(),
+            },
             Message::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -1553,6 +1632,7 @@ impl Shell {
         // (a quick click) and leave the drag armed for the next click anywhere.
         // A release with no drag in flight is a no-op.
         subs.push(iced::event::listen_with(tab_drag_release));
+        subs.push(iced::event::listen_with(split_drag_event));
         if let Some(file) = &self.settings_file {
             subs.push(Subscription::run_with(
                 file.clone(),
@@ -4464,6 +4544,36 @@ mod key_routing {
     }
 
     #[test]
+    fn split_drag_updates_the_core_ratio_and_ends_on_release() {
+        let mut shell = shell_with_three_tabs();
+        let tab = shell.core.workspace.active;
+        let _ = shell.run_action(Action::SplitVertical);
+        let start = Point::new(20.0, 30.0);
+        let extent = shell.split_extent(tab, &[]).expect("root split extent");
+        shell.cursor_position = start;
+
+        let _ = shell.update(Message::SplitDragStart {
+            tab,
+            path: Vec::new(),
+            dir: termherd_core::workspace::SplitDir::Vertical,
+            ratio: 0.5,
+        });
+        let _ = shell.update(Message::SplitDragMove(Point::new(
+            start.x + extent * 0.2,
+            start.y,
+        )));
+
+        let termherd_core::workspace::Pane::Split { ratio, .. } =
+            &shell.core.workspace.tabs[tab].root
+        else {
+            panic!("expected a split tab");
+        };
+        assert!((*ratio - 0.7).abs() < 0.001);
+        let _ = shell.update(Message::SplitDragEnd);
+        assert!(shell.split_drag.is_none());
+    }
+
+    #[test]
     fn confirmations_route_through_one_modal_in_priority_order() {
         // Quit, tab-close and archive all confirm via the same modal, and at
         // most one shows at a time — quit > close > archive.
@@ -5691,6 +5801,27 @@ mod key_routing {
             };
             assert!(ok, "{event:?} ({status:?}) → {message:?}");
         }
+    }
+
+    #[test]
+    fn split_drag_listener_tracks_cursor_and_ends_on_left_release() {
+        let point = Point::new(24.0, 48.0);
+        assert!(matches!(
+            split_drag_event(
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: point }),
+                iced::event::Status::Captured,
+                window::Id::unique(),
+            ),
+            Some(Message::SplitDragMove(position)) if position == point
+        ));
+        assert!(matches!(
+            split_drag_event(
+                left_release(),
+                iced::event::Status::Captured,
+                window::Id::unique(),
+            ),
+            Some(Message::SplitDragEnd)
+        ));
     }
 
     #[test]

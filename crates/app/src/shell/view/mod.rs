@@ -8,14 +8,14 @@
 use std::time::{Duration, SystemTime};
 
 use iced::widget::canvas::Canvas;
-use iced::widget::{Column, button, column, container, mouse_area, row, text};
-use iced::{Border, Color, Element, Fill, Length, Size};
+use iced::widget::{Column, Space, button, column, container, mouse_area, row, text};
+use iced::{Border, Color, Element, Fill, Length, Size, mouse};
 use termherd_claude::digest::SessionDigest;
 use termherd_core::browser::{compact_elapsed, relative_age};
-use termherd_core::workspace::{Pane, SessionId, SplitDir};
+use termherd_core::workspace::{Branch, Pane, SessionId, SplitDir};
 use termherd_core::{ClaudeColor, SessionRecord};
 
-use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD};
+use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD, SPLIT_HANDLE};
 use super::ime::ime_area;
 use super::terminal::{TerminalView, cell_size};
 use super::{Message, Shell};
@@ -93,7 +93,7 @@ impl Shell {
                 // disambiguate — so only a split renders bordered.
                 Some(tab) => {
                     let split = matches!(tab.root, Pane::Split { .. });
-                    self.render_pane(&tab.root, focused, split)
+                    self.render_pane(&tab.root, focused, split, &mut Vec::new())
                 }
                 None => {
                     let total: usize = self
@@ -143,27 +143,58 @@ impl Shell {
         pane: &Pane,
         focused: Option<SessionId>,
         bordered: bool,
+        path: &mut Vec<Branch>,
     ) -> Element<'_, Message> {
         match pane {
             Pane::Leaf(session) => {
                 self.terminal_leaf(*session, focused == Some(*session), bordered)
             }
             Pane::Split { dir, ratio, a, b } => {
-                let a_el = self.render_pane(a, focused, bordered);
-                let b_el = self.render_pane(b, focused, bordered);
-                let pa = ((ratio * 100.0).round() as u16).clamp(1, 99);
-                let pb = 100 - pa;
-                // No inter-pane spacing: the per-pane borders already separate
-                // them, and a gap here would be geometry `resize_panes` cannot
-                // see, drifting the PTY grid from the visible canvas.
+                path.push(Branch::A);
+                let a_el = self.render_pane(a, focused, bordered, path);
+                path.pop();
+                path.push(Branch::B);
+                let b_el = self.render_pane(b, focused, bordered, path);
+                path.pop();
+                let split_path = path.clone();
+                let pa = ((ratio * 1000.0).round() as u16).clamp(100, 900);
+                let pb = 1000 - pa;
+                // The handle's fixed layout extent is also reserved in pane
+                // geometry, keeping each terminal grid aligned with its view.
                 match dir {
                     SplitDir::Vertical => row![
                         container(a_el).width(Length::FillPortion(pa)),
+                        mouse_area(
+                            container(Space::new().width(Fill).height(Fill))
+                                .width(SPLIT_HANDLE)
+                                .height(Fill)
+                                .style(container::bordered_box),
+                        )
+                        .interaction(mouse::Interaction::ResizingHorizontally)
+                        .on_press(Message::SplitDragStart {
+                            tab: self.core.workspace.active,
+                            path: split_path,
+                            dir: *dir,
+                            ratio: *ratio,
+                        }),
                         container(b_el).width(Length::FillPortion(pb)),
                     ]
                     .into(),
                     SplitDir::Horizontal => column![
                         container(a_el).height(Length::FillPortion(pa)),
+                        mouse_area(
+                            container(Space::new().width(Fill).height(Fill))
+                                .width(Fill)
+                                .height(SPLIT_HANDLE)
+                                .style(container::bordered_box),
+                        )
+                        .interaction(mouse::Interaction::ResizingVertically)
+                        .on_press(Message::SplitDragStart {
+                            tab: self.core.workspace.active,
+                            path: split_path,
+                            dir: *dir,
+                            ratio: *ratio,
+                        }),
                         container(b_el).height(Length::FillPortion(pb)),
                     ]
                     .into(),

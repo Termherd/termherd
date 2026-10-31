@@ -280,7 +280,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::app::testsupport::*;
-    use crate::workspace::SplitDir;
+    use crate::workspace::{Pane, SplitDir};
 
     #[test]
     fn activate_tab_brings_an_earlier_session_to_focus() {
@@ -468,6 +468,25 @@ mod tests {
         app.apply(Event::FocusPrevPane);
         assert_eq!(app.tab_kind(0), Some(SessionKind::Claude));
         assert_eq!(app.tab_kind(1), None, "no such tab");
+    }
+
+    #[test]
+    fn set_split_ratio_event_updates_the_workspace_without_effects() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+
+        let effects = app.apply(Event::SetSplitRatio {
+            tab: 0,
+            path: vec![],
+            ratio: 0.25,
+        });
+
+        assert!(effects.is_empty());
+        let Pane::Split { ratio, .. } = &app.workspace.tabs[0].root else {
+            panic!("expected a split tab");
+        };
+        assert_eq!(*ratio, 0.25);
     }
 
     #[test]

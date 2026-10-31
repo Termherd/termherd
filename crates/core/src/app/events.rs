@@ -10,7 +10,7 @@ use crate::browser::SessionRecord;
 use crate::claude_command::{ClaudeColor, ClaudeCommand, PromptInput};
 use crate::metadata::Overlay;
 use crate::snapshot::SnapshotInputs;
-use crate::workspace::{Direction, SessionId, SplitDir};
+use crate::workspace::{Branch, Direction, SessionId, SplitDir};
 use termherd_claude::session_file::SessionFile;
 
 use super::{
@@ -151,6 +151,12 @@ pub enum Event {
     },
     /// Split the focused pane, opening a fresh session beside it (FR6).
     SplitFocused(SplitDir),
+    /// Set a split ratio by tree path in a specific tab.
+    SetSplitRatio {
+        tab: usize,
+        path: Vec<Branch>,
+        ratio: f32,
+    },
     /// Close the focused pane (FR6); its PTY is killed and the split collapses.
     CloseFocusedPane,
     /// Move focus to the next / previous pane in the active tab (FR6).
