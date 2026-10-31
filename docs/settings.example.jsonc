@@ -50,7 +50,8 @@
   //                         process (a working shell or any live Claude);
   //                         an all-idle target closes/quits silently.
   //   "noConfirmation"    — never ask.
-  // Both default to "confirmWhenActive".
+  // Both default to "confirmWhenActive". Unsaved doc edits make a quit ask
+  // under any value.
   "close": {
     "tab": "confirmWhenActive",
     "app": "confirmWhenActive"

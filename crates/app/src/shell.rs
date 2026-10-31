@@ -6895,6 +6895,137 @@ mod key_routing {
         );
     }
 
+    fn request_quit_from_the_window(shell: &mut Shell) {
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::CloseRequested,
+        ));
+    }
+
+    #[test]
+    fn a_modified_doc_holds_up_the_quit_of_an_idle_app() {
+        let (mut shell, _pty) = shell_with_terminal();
+        assert!(!shell.core.any_running_process(), "precondition: idle");
+        modified_doc(&mut shell, "notes.md");
+
+        request_quit_from_the_window(&mut shell);
+
+        assert!(shell.quit_pending(), "unsaved edits arm the quit prompt");
+        assert!(!shell.exiting, "nothing is lost before the user answers");
+    }
+
+    #[test]
+    fn a_modified_doc_holds_up_the_quit_even_under_no_confirmation() {
+        // The policy speaks for sessions killed on quit, not for unsaved text.
+        let (mut shell, _pty) = shell_with_terminal();
+        shell.close_confirm.app = ConfirmClose::NoConfirmation;
+        modified_doc(&mut shell, "notes.md");
+
+        request_quit_from_the_window(&mut shell);
+
+        assert!(shell.quit_pending());
+        assert!(!shell.exiting);
+    }
+
+    #[test]
+    fn an_unmodified_doc_lets_an_idle_app_quit_at_once() {
+        let (mut shell, _pty) = shell_with_terminal();
+        load_doc(&mut shell, "notes.md", "notes");
+
+        request_quit_from_the_window(&mut shell);
+
+        assert!(shell.exiting);
+        assert!(!shell.quit_pending());
+    }
+
+    #[test]
+    fn the_quit_prompt_names_the_modified_doc() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "notes.md");
+
+        request_quit_from_the_window(&mut shell);
+
+        let prompt = shell.quit_prompt();
+        assert!(prompt.contains("“notes.md”"), "{prompt}");
+        assert!(prompt.contains("Unsaved changes"), "{prompt}");
+    }
+
+    #[test]
+    fn the_quit_prompt_keeps_the_sessions_beside_the_modified_doc() {
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        modified_doc(&mut shell, "notes.md");
+
+        request_quit_from_the_window(&mut shell);
+
+        let prompt = shell.quit_prompt();
+        assert!(prompt.contains("“notes.md”"), "{prompt}");
+        assert!(prompt.contains("1 open session(s)"), "{prompt}");
+    }
+
+    #[test]
+    fn the_quit_prompt_names_no_doc_when_none_is_modified() {
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        load_doc(&mut shell, "notes.md", "notes");
+
+        request_quit_from_the_window(&mut shell);
+
+        let prompt = shell.quit_prompt();
+        assert!(!prompt.contains("notes.md"), "{prompt}");
+    }
+
+    #[test]
+    fn cancelling_the_quit_keeps_the_doc_edits() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "notes.md");
+        request_quit_from_the_window(&mut shell);
+
+        let _ = shell.update(Message::CancelCloseWindow);
+
+        assert!(!shell.exiting);
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert!(
+            shell.doc_accepts_edits(),
+            "the editor has the keyboard back"
+        );
+    }
+
+    #[test]
+    fn keys_under_the_quit_prompt_leave_the_modified_doc_alone() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "notes.md");
+        request_quit_from_the_window(&mut shell);
+
+        type_into_doc(&mut shell, 'y');
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+    }
+
+    #[test]
+    fn enter_on_the_quit_prompt_quits_over_the_modified_doc() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "notes.md");
+        request_quit_from_the_window(&mut shell);
+
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::default(), None));
+
+        assert!(shell.exiting, "the prompt was the warning; Enter quits");
+    }
+
+    #[test]
+    fn escape_on_a_quit_over_the_discard_prompt_returns_to_that_prompt() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "notes.md");
+        let _ = shell.update(Message::CloseDoc);
+        request_quit_from_the_window(&mut shell);
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Quit));
+
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+
+        assert!(!shell.exiting);
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::DocDiscard));
+        assert_eq!(open_doc_state(&shell), Some(edited));
+    }
+
     #[test]
     fn requesting_an_archive_only_arms_it_confirming_archives() {
         let (mut shell, _pty) = shell_with_terminal();

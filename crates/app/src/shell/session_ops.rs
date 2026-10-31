@@ -9,7 +9,6 @@ use termherd_core::Effect;
 use termherd_core::workspace::{SessionId, index_after_removal};
 
 use super::{Focus, Message, Shell, TabDrag};
-use crate::strings;
 
 impl Shell {
     /// Handle a request to close the tab at `index`. The configured `close.tab`
@@ -262,7 +261,8 @@ impl Shell {
     /// default) confirms only while some session is still running work — the
     /// core `any_running_process` predicate, the app-wide sibling of the one the
     /// tab close uses — so an all-idle app quits silently; `alwaysConfirm` /
-    /// `noConfirmation` override that. `iced::exit` (not `window::close`) is what
+    /// `noConfirmation` override that. A modified doc confirms under every
+    /// policy (see `quit_confirms`). `iced::exit` (not `window::close`) is what
     /// actually ends the process: on macOS winit cancels the OS terminate and
     /// `exit_on_close_request(false)` keeps the runtime alive, so a mere window
     /// close would survive.
@@ -277,15 +277,14 @@ impl Shell {
         }
     }
 
+    /// Unsaved doc edits ask whatever the policy says: the policy speaks for
+    /// the sessions a quit kills, and text lost on quit is not one of them.
     fn quit_confirms(&self) -> bool {
-        self.close_confirm
-            .app
-            .confirms(self.core.any_running_process())
-    }
-
-    /// What the quit confirmation asks, for the modal and the tests alike.
-    pub(super) fn quit_prompt(&self) -> String {
-        strings::quit_prompt(self.core.live_session_count())
+        self.has_unsaved_doc()
+            || self
+                .close_confirm
+                .app
+                .confirms(self.core.any_running_process())
     }
 
     /// Whether a quit is awaiting confirmation (the modal is up).

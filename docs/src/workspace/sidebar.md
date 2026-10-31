@@ -154,7 +154,8 @@ both ask first — *Discard unsaved changes to “CLAUDE.md”?* — and clickin
 another doc in the sidebar asks too, naming both docs. <kbd>Enter</kbd> or
 `Discard` throws the edits away; <kbd>Escape</kbd> or `Cancel` goes back to the
 editor with them intact. Saving first closes without a question. Quitting
-TermHerd does not ask yet: unsaved doc edits are lost on quit.
+TermHerd with unsaved changes asks too, naming the doc — whatever the
+`close.app` policy says, since that policy is about the sessions a quit stops.
 
 ## When nothing is open
 

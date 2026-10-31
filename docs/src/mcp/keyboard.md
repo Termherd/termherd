@@ -75,7 +75,7 @@ selection, and `copy` runs on it.
 `escape` usually cancels; `enter` usually confirms. Six cautions:
 
 - On **`quit-confirm`**, `enter` quits the app — killing every session and the
-  connection you are speaking over.
+  connection you are speaking over, and dropping a modified doc's edits.
 - **`session-rename`** (the sidebar's inline ✎ field) does not commit on
   `enter`, and neither does **`tab-rename`**: both commit through the widget's
   own submit, which a synthesised key event never reaches. `rename-tab` opens

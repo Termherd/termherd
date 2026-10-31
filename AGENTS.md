@@ -367,10 +367,11 @@ off `KeyboardOwner::ALL` rather than a test per prompt, and that sweep found a
 *second* offender nobody had reported — the doc editor, closable only by its own
 button. A rung added without an exit fails there now. `escape` there goes
 through the same close as the button, and since #248 a modified doc asks first
-on both — and when another doc is clicked over it (quitting the app still does
-not ask). The confirmation is its own rung, `DocDiscard`, whose `escape` hands
-the keyboard *back* to the editor, and the sweep names that one hand-off rather
-than loosening "left" for every rung: an empty ladder after one `escape` would
+on both — and when another doc is clicked over it, and (since #385) on quit,
+through the quit prompt itself. The confirmation is its own rung,
+`DocDiscard`, whose `escape` hands the keyboard *back* to the editor, and the
+sweep names that one hand-off rather than loosening "left" for every rung: an
+empty ladder after one `escape` would
 have forced the prompt to throw the edits away on the very key it exists to
 make safe, while a general "the armed rung let go" would let any rung trade
 one trap for another unseen.

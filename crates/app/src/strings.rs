@@ -196,18 +196,22 @@ pub fn archive_prompt(title: &str) -> String {
     format!("Archive “{title}”?")
 }
 
-/// Quit confirmation. With open sessions it names how many will be hard-killed
-/// (every non-exited session dies on quit, Claude or shell); with none (an
-/// `alwaysConfirm` quit of an idle app) it's a plain confirm.
+/// Quit confirmation. It names the modified doc whose edits would be lost, and
+/// how many open sessions would be hard-killed (every non-exited session dies
+/// on quit, Claude or shell); with neither (an `alwaysConfirm` quit of an idle
+/// app) it's a plain confirm.
 #[must_use]
-pub fn quit_prompt(live: usize) -> String {
-    if live == 0 {
-        "Quit TermHerd?".to_string()
-    } else {
-        format!(
-            "Quit TermHerd? {live} open session(s) will be force-stopped — any running work is lost."
-        )
+pub fn quit_prompt(live: usize, unsaved_doc: Option<&str>) -> String {
+    let mut prompt = "Quit TermHerd?".to_string();
+    if let Some(doc) = unsaved_doc {
+        prompt.push_str(&format!(" Unsaved changes to “{doc}” will be lost."));
     }
+    if live > 0 {
+        prompt.push_str(&format!(
+            " {live} open session(s) will be force-stopped — any running work is lost."
+        ));
+    }
+    prompt
 }
 
 /// Sidebar notice for a config file that existed and could not be used.
@@ -236,6 +240,24 @@ pub const SETTINGS_CLAUDE_NOTE: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_quit_prompt_names_each_cost_it_has_and_no_other() {
+        assert_eq!(quit_prompt(0, None), "Quit TermHerd?");
+        assert_eq!(
+            quit_prompt(0, Some("notes.md")),
+            "Quit TermHerd? Unsaved changes to “notes.md” will be lost."
+        );
+        assert_eq!(
+            quit_prompt(2, Some("notes.md")),
+            "Quit TermHerd? Unsaved changes to “notes.md” will be lost. \
+             2 open session(s) will be force-stopped — any running work is lost."
+        );
+        assert_eq!(
+            quit_prompt(2, None),
+            "Quit TermHerd? 2 open session(s) will be force-stopped — any running work is lost."
+        );
+    }
 
     #[test]
     fn the_agent_line_carries_the_name_itself() {
