@@ -318,12 +318,12 @@
       <div class="card reveal">
         <div class="ct">Analyze (Rust) <span class="tag baseline">baseline</span></div>
         <div class="cd">CodeQL SAST. Traces a full <code class="mono">cargo build</code> (the iced-heavy app crate), so a run is minutes long.</div>
-        <div class="cm">runs: push→main + weekly, never on PRs. Not required; reaches the code seconds after merge.</div>
+        <div class="cm">runs: push→main (Rust paths) + weekly, never on PRs. Not required; reaches the code seconds after merge.</div>
       </div>
       <div class="card reveal">
         <div class="ct">release · package <span class="tag release">release</span></div>
         <div class="cd">cargo-dist archives + installers and the GitHub Release; desktop bundles attached.</div>
-        <div class="cm">runs: tag push matching <code class="mono">**N.N.N*</code>. Validates in plan-mode on PRs.</div>
+        <div class="cm">runs: tag push matching <code class="mono">**N.N.N*</code> (skipped on PRs).</div>
       </div>
       <div class="card reveal">
         <div class="ct">docs-deploy <span class="tag baseline">publish</span></div>
@@ -353,13 +353,13 @@
           <tr class="req"><td><span class="jn">dependency-rule</span></td><td class="small">hexagonal crate dep rule (deps point inward)</td><td><span class="tag filter">cargo</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr class="req"><td><span class="jn">actionlint</span></td><td class="small">valid, shellcheck-clean workflow YAML</td><td><span class="tag filter">workflows</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr class="req"><td><span class="jn">markdownlint</span></td><td class="small">80-col Markdown prose</td><td><span class="tag filter">markdown</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
-          <tr class="req"><td><span class="jn">portable</span></td><td class="small">clippy + tests for every crate but the GUI, on Windows</td><td><span class="tag filter">rust</span></td><td class="os">win</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">portable</span></td><td class="small">clippy + tests for every crate but the GUI, on Windows (PRs)</td><td><span class="tag filter">rust</span></td><td class="os">win</td><td><span class="tag pass">required</span></td></tr>
           <tr class="req"><td><span class="jn">intra-crate-arch</span></td><td class="small">module boundaries · OS-cfg containment · length report</td><td><span class="tag filter">rust</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr class="req"><td><span class="jn">roadmap</span></td><td class="small"><code>.roadmap/</code> schema; <code>ROADMAP.md</code> still matches its source</td><td><span class="tag filter">roadmap</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr class="req"><td><span class="jn">mdbook</span></td><td class="small">the book builds; every <code>SUMMARY.md</code> link resolves</td><td><span class="tag filter">book</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr><td><span class="jn">ci-success</span></td><td class="small">aggregates the twelve gates into one check</td><td class="small">always</td><td class="os">ubuntu</td><td><span class="tag pass">the check</span></td></tr>
           <tr><td><span class="jn">cross-os</span></td><td class="small">clippy + tests on mac &amp; win</td><td class="small">non-PR · rust/tag</td><td class="os">mac · win</td><td><span class="tag signal">signal</span></td></tr>
-          <tr><td><span class="jn">Analyze (Rust)</span></td><td class="small">CodeQL taint / cross-function SAST</td><td class="small">push→main · weekly</td><td class="os">ubuntu</td><td><span class="tag baseline">baseline</span></td></tr>
+          <tr><td><span class="jn">Analyze (Rust)</span></td><td class="small">CodeQL taint / cross-function SAST</td><td class="small">push→main (rust) · weekly</td><td class="os">ubuntu</td><td><span class="tag baseline">baseline</span></td></tr>
           <tr><td><span class="jn">release · package</span></td><td class="small">archives, installers, GitHub Release</td><td class="small">tag push</td><td class="os">mac · win · ubuntu</td><td><span class="tag release">release</span></td></tr>
           <tr><td><span class="jn">docs-deploy</span></td><td class="small">publishes the book to GitHub Pages</td><td class="small">push→main · docs</td><td class="os">ubuntu</td><td><span class="tag baseline">publish</span></td></tr>
         </tbody>
@@ -373,17 +373,16 @@
       <div class="wcol reveal">
         <h4><span class="dot" style="background:var(--pass)"></span>Pull request → main</h4>
         <ul>
-          <li><span class="m">→</span><span><code>changes</code> + only the gated ubuntu jobs → <code>ci-success</code></span></li>
-          <li><span class="m">–</span><span><code>cross-os</code> and CodeQL are skipped</span></li>
-          <li><span class="m">–</span><span>release runs plan-validation only</span></li>
+          <li><span class="m">→</span><span><code>changes</code> + gated ubuntu jobs + <code>portable</code> (win) → <code>ci-success</code></span></li>
+          <li><span class="m">–</span><span><code>cross-os</code>, CodeQL and <code>release</code> are skipped</span></li>
         </ul>
       </div>
       <div class="wcol reveal">
         <h4><span class="dot" style="background:var(--accent)"></span>Merge / push → main</h4>
         <ul>
-          <li><span class="m">→</span><span>the PR gates re-run on the merged commit</span></li>
-          <li><span class="m">+</span><span><code>cross-os</code> (mac · win) baseline</span></li>
-          <li><span class="m">+</span><span>CodeQL <code>Analyze (Rust)</code></span></li>
+          <li><span class="m">→</span><span>the ubuntu gates re-run on the merged commit</span></li>
+          <li><span class="m">+</span><span><code>cross-os</code> (mac · win) replaces <code>portable</code></span></li>
+          <li><span class="m">+</span><span>CodeQL <code>Analyze (Rust)</code> when Rust/Cargo changed</span></li>
           <li><span class="m">+</span><span><code>docs-deploy</code> publishes the book to Pages, when <code>docs/</code> changed</span></li>
         </ul>
       </div>

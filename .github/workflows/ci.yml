@@ -71,6 +71,7 @@ jobs:
               - 'scripts/check-module-boundaries.sh'
               - 'scripts/check-os-cfg-containment.sh'
               - 'scripts/report-file-length.sh'
+              - '.github/workflows/ci.yml'
             # `cargo` = the dependency graph / manifests only, for the
             # metadata-scan gates (deny / machete / dependency-rule). A pure
             # `.rs` change leaves the dep tree untouched and skips these.
@@ -79,6 +80,7 @@ jobs:
               - 'Cargo.lock'
               - 'deny.toml'
               - 'scripts/check-crate-deps.sh'
+              - '.github/workflows/ci.yml'
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
@@ -170,7 +172,9 @@ jobs:
   portable:
     name: portable (windows)
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    # PR-only: on push→main and release tags, `cross-os (windows-latest)`
+    # already builds and tests the entire `--workspace`.
+    if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -179,11 +183,14 @@ jobs:
           toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          # Restore the Windows cache saved on `main` by `cross-os`.
+          shared-key: "cross-os"
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
         with:
           tool: nextest
-      - run: cargo clippy -p termherd-core -p termherd-claude -p termherd-pty -p termherd-scan -p termherd-mcp --all-targets -- -D warnings
-      - run: cargo nextest run -p termherd-core -p termherd-claude -p termherd-pty -p termherd-scan -p termherd-mcp
+      - run: cargo clippy --workspace --exclude termherd-app --all-targets -- -D warnings
+      - run: cargo nextest run --workspace --exclude termherd-app
 
   # Cross-OS coverage: clippy + tests on macOS and Windows. Skipped on PRs to
   # keep the merge gate fast/cheap; runs on push→main (post-merge baseline) and
@@ -326,12 +333,22 @@ jobs:
     #     only prose moved; only the bytes tell the whole truth.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: dtolnay/rust-toolchain@stable
-      # Pinned exactly: roadmark's output is what this job diffs against, so a
-      # version bump that changes rendering must land as a visible ROADMAP.md
-      # diff in its own PR, never as a mystery failure on someone else's.
+      # Pinned to v0.8.1's prebuilt Linux release archive and verified by sha256
+      # before extracting — roadmark's output is what this job diffs against, so
+      # a version bump that changes rendering must land as a visible ROADMAP.md
+      # diff in its own PR, and skipping the source compile saves ~24s per run.
       - name: Install roadmark
-        run: cargo install roadmark --version 0.8.1 --locked
+        env:
+          ROADMARK_VERSION: 0.8.1
+          ARCHIVE: roadmark-x86_64-unknown-linux-gnu.tar.xz
+          ARCHIVE_SHA256: ce8cc389868013c433d8c1dfe5f8c3723339c6b0f70e5bba48d9f9b91f451502
+        run: |
+          mkdir -p /tmp/roadmark-bin
+          curl -fsSL -o "/tmp/${ARCHIVE}" \
+            "https://github.com/bastien-gallay/roadmark/releases/download/v${ROADMARK_VERSION}/${ARCHIVE}"
+          echo "${ARCHIVE_SHA256}  /tmp/${ARCHIVE}" | sha256sum --check --status
+          tar -xJf "/tmp/${ARCHIVE}" --strip-components=1 -C /tmp/roadmark-bin roadmark-x86_64-unknown-linux-gnu/roadmark
+          echo "/tmp/roadmark-bin" >> "$GITHUB_PATH"
       - run: roadmark validate
       - name: Rebuild and compare
         run: |
