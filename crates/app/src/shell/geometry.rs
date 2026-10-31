@@ -7,7 +7,7 @@
 
 use iced::{Rectangle, Task};
 use termherd_core::ScrollTarget;
-use termherd_core::workspace::{Pane, SessionId, SplitDir};
+use termherd_core::workspace::{Branch, Pane, SessionId, SplitDir};
 
 use super::terminal::cell_size;
 use super::{Message, Shell};
@@ -38,10 +38,27 @@ const SIDEBAR_W: f32 = 300.0;
 /// (not `SIDEBAR_W`) when hidden so the reclaimed space becomes columns. The
 /// view pins the handle to it, making it a contract, not a drifting estimate.
 pub(super) const HANDLE_W: f32 = 28.0;
+/// Width reserved for a draggable split handle, in both the view and geometry.
+pub(super) const SPLIT_HANDLE: f32 = 8.0;
 const H_CHROME: f32 = 40.0;
 const V_CHROME: f32 = 84.0;
 
 impl Shell {
+    pub(super) fn split_extent(&self, tab_index: usize, path: &[Branch]) -> Option<f32> {
+        let tab = self.core.workspace.tabs.get(tab_index)?;
+        let (width, height) = self.content_size();
+        split_extent(
+            &tab.root,
+            path,
+            Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height,
+            },
+        )
+    }
+
     /// Scroll the focused terminal's viewport (a wheel delta or a top/bottom
     /// jump). `None` when nothing holds focus — there is no viewport to move, and
     /// a caller is told that rather than told the scroll happened.
@@ -160,6 +177,30 @@ pub(super) fn pane_rects(pane: &Pane, area: Rectangle) -> Vec<(SessionId, Rectan
     out
 }
 
+/// The usable axis length of the split at `path`, after ancestor ratios and
+/// handles have divided the root area.
+pub(super) fn split_extent(pane: &Pane, path: &[Branch], area: Rectangle) -> Option<f32> {
+    if path.is_empty() {
+        let Pane::Split { dir, .. } = pane else {
+            return None;
+        };
+        return Some(
+            match dir {
+                SplitDir::Vertical => area.width,
+                SplitDir::Horizontal => area.height,
+            } - SPLIT_HANDLE,
+        );
+    }
+    let Pane::Split { dir, ratio, a, b } = pane else {
+        return None;
+    };
+    let (area_a, area_b) = split_area(area, *dir, *ratio);
+    match path[0] {
+        Branch::A => split_extent(a, &path[1..], area_a),
+        Branch::B => split_extent(b, &path[1..], area_b),
+    }
+}
+
 fn collect_pane_rects(pane: &Pane, area: Rectangle, out: &mut Vec<(SessionId, Rectangle)>) {
     match pane {
         Pane::Leaf(session) => out.push((*session, area)),
@@ -176,23 +217,25 @@ fn collect_pane_rects(pane: &Pane, area: Rectangle, out: &mut Vec<(SessionId, Re
 fn split_area(area: Rectangle, dir: SplitDir, ratio: f32) -> (Rectangle, Rectangle) {
     match dir {
         SplitDir::Vertical => {
-            let wa = area.width * ratio;
+            let usable = (area.width - SPLIT_HANDLE).max(0.0);
+            let wa = usable * ratio;
             (
                 Rectangle { width: wa, ..area },
                 Rectangle {
-                    x: area.x + wa,
-                    width: area.width - wa,
+                    x: area.x + wa + SPLIT_HANDLE,
+                    width: usable - wa,
                     ..area
                 },
             )
         }
         SplitDir::Horizontal => {
-            let ha = area.height * ratio;
+            let usable = (area.height - SPLIT_HANDLE).max(0.0);
+            let ha = usable * ratio;
             (
                 Rectangle { height: ha, ..area },
                 Rectangle {
-                    y: area.y + ha,
-                    height: area.height - ha,
+                    y: area.y + ha + SPLIT_HANDLE,
+                    height: usable - ha,
                     ..area
                 },
             )
@@ -235,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn a_vertical_split_divides_the_width_side_by_side() {
+    fn a_vertical_split_divides_the_width_around_its_handle() {
         let tree = split(SplitDir::Vertical, Pane::Leaf(sid(1)), Pane::Leaf(sid(2)));
         let rects = pane_rects(&tree, area());
         assert_eq!(
@@ -246,16 +289,16 @@ mod tests {
                     Rectangle {
                         x: 0.0,
                         y: 0.0,
-                        width: 500.0,
+                        width: 496.0,
                         height: 600.0
                     }
                 ),
                 (
                     sid(2),
                     Rectangle {
-                        x: 500.0,
+                        x: 504.0,
                         y: 0.0,
-                        width: 500.0,
+                        width: 496.0,
                         height: 600.0
                     }
                 ),
@@ -264,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn a_horizontal_split_divides_the_height_stacked() {
+    fn a_horizontal_split_divides_the_height_around_its_handle() {
         let tree = split(SplitDir::Horizontal, Pane::Leaf(sid(1)), Pane::Leaf(sid(2)));
         let rects = pane_rects(&tree, area());
         assert_eq!(
@@ -276,16 +319,16 @@ mod tests {
                         x: 0.0,
                         y: 0.0,
                         width: 1000.0,
-                        height: 300.0
+                        height: 296.0
                     }
                 ),
                 (
                     sid(2),
                     Rectangle {
                         x: 0.0,
-                        y: 300.0,
+                        y: 304.0,
                         width: 1000.0,
-                        height: 300.0
+                        height: 296.0
                     }
                 ),
             ]
@@ -309,20 +352,68 @@ mod tests {
                     Rectangle {
                         x: 0.0,
                         y: 0.0,
-                        width: 250.0,
+                        width: 248.0,
                         height: 600.0,
                     },
                 ),
                 (
                     sid(2),
                     Rectangle {
-                        x: 250.0,
+                        x: 256.0,
                         y: 0.0,
-                        width: 750.0,
+                        width: 744.0,
                         height: 600.0,
                     },
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn pane_geometry_reserves_a_handle_without_changing_the_ratio() {
+        let tree = Pane::Split {
+            dir: SplitDir::Horizontal,
+            ratio: 0.25,
+            a: Box::new(Pane::Leaf(sid(1))),
+            b: Box::new(Pane::Leaf(sid(2))),
+        };
+
+        assert_eq!(
+            pane_rects(&tree, area()),
+            vec![
+                (
+                    sid(1),
+                    Rectangle {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1000.0,
+                        height: 148.0,
+                    },
+                ),
+                (
+                    sid(2),
+                    Rectangle {
+                        x: 0.0,
+                        y: 156.0,
+                        width: 1000.0,
+                        height: 444.0,
+                    },
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn split_extent_uses_the_nested_split_area() {
+        let tree = split(
+            SplitDir::Vertical,
+            Pane::Leaf(sid(1)),
+            split(SplitDir::Horizontal, Pane::Leaf(sid(2)), Pane::Leaf(sid(3))),
+        );
+
+        assert_eq!(
+            split_extent(&tree, &[termherd_core::workspace::Branch::B], area()),
+            Some(592.0)
         );
     }
 
@@ -343,26 +434,26 @@ mod tests {
                     Rectangle {
                         x: 0.0,
                         y: 0.0,
-                        width: 500.0,
+                        width: 496.0,
                         height: 600.0
                     }
                 ),
                 (
                     sid(2),
                     Rectangle {
-                        x: 500.0,
+                        x: 504.0,
                         y: 0.0,
-                        width: 500.0,
-                        height: 300.0
+                        width: 496.0,
+                        height: 296.0
                     }
                 ),
                 (
                     sid(3),
                     Rectangle {
-                        x: 500.0,
-                        y: 300.0,
-                        width: 500.0,
-                        height: 300.0
+                        x: 504.0,
+                        y: 304.0,
+                        width: 496.0,
+                        height: 296.0
                     }
                 ),
             ]
