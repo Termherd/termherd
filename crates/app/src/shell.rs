@@ -853,7 +853,7 @@ impl Shell {
             link_modifier: false,
             shift_modifier: false,
             alt_sides: AltSides::default(),
-            option_as_meta: OptionAsMeta::Both,
+            option_as_meta: OptionAsMeta::default(),
             tab_drag: None,
             split_drag: None,
             cursor_position: Point::new(0.0, 0.0),
@@ -4264,8 +4264,7 @@ mod key_routing {
         assert_eq!(pty.writes(), vec![b"a".to_vec(), b"\n".to_vec()]);
     }
 
-    /// A terminal shell under the default `left` setting, set directly so the
-    /// test reads the same on every OS, with `side`'s Alt key held down.
+    /// Set directly, not from settings, so the test reads the same on every OS.
     fn shell_holding_alt(side: Location) -> (Shell, Arc<RecordingPty>) {
         let (mut shell, pty) = shell_with_terminal();
         shell.option_as_meta = OptionAsMeta::Left;
@@ -4294,7 +4293,6 @@ mod key_routing {
 
     #[test]
     fn option_enter_keeps_its_newline_on_the_composing_side() {
-        // Only characters compose: ⌥Enter stays Claude's insert-newline.
         let (mut shell, pty) = shell_holding_alt(Location::Right);
         let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::ALT, None));
         assert_eq!(pty.writes(), vec![b"\x1b\r".to_vec()]);

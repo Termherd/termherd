@@ -267,7 +267,6 @@ pub(super) mod alt_events {
         })
     }
 
-    /// The Alt key at `location` going down.
     pub(in crate::shell) fn alt_down(location: Location) -> Event {
         let key = Key::Named(Named::Alt);
         Event::KeyPressed {
@@ -299,22 +298,19 @@ impl AltSides {
     pub(super) fn track(&mut self, event: &keyboard::Event) {
         use keyboard::key::Named;
         match event {
-            // The Alt press itself may not list Alt among its modifiers yet.
             keyboard::Event::KeyPressed {
                 key: keyboard::Key::Named(Named::Alt),
                 location,
                 ..
-            } => return self.set(*location, true),
+            } => self.set(*location, true),
             keyboard::Event::KeyReleased {
                 key: keyboard::Key::Named(Named::Alt),
                 location,
                 ..
             } => self.set(*location, false),
+            // A release lost to a focus change must not leave a side stuck down.
+            _ if !event_modifiers(event).alt() => *self = Self::default(),
             _ => {}
-        }
-        // A release lost to a focus change must not leave a side stuck down.
-        if !event_modifiers(event).alt() {
-            *self = Self::default();
         }
     }
 
@@ -327,9 +323,8 @@ impl AltSides {
     }
 }
 
-/// Whether a held Alt sends Meta under `option`, given which sides are down.
-/// No side known (an MCP press synthesises Alt on the letter alone) counts as
-/// either side, so Meta keeps working for a caller that cannot name one.
+/// Whether a held Alt sends Meta under `option`. An Alt with no known side
+/// (an MCP press) counts as either side.
 pub(super) fn sends_meta(option: OptionAsMeta, sides: AltSides) -> bool {
     match option {
         OptionAsMeta::None => false,
@@ -437,8 +432,6 @@ mod tests {
 
     #[test]
     fn an_alt_with_no_known_side_is_meta_unless_neither_key_is() {
-        // An MCP press synthesises Alt on the letter alone, with no Alt key
-        // event to name a side.
         let unknown = AltSides::default();
         for option in [OptionAsMeta::Left, OptionAsMeta::Right, OptionAsMeta::Both] {
             assert!(sends_meta(option, unknown), "{option:?}");
@@ -459,7 +452,6 @@ mod tests {
 
     #[test]
     fn any_event_without_alt_held_clears_both_sides() {
-        // A release lost to a focus change must not leave a side stuck down.
         let mut sides = BOTH;
         sides.track(&keyboard::Event::ModifiersChanged(Modifiers::empty()));
         assert_eq!(sides, AltSides::default());

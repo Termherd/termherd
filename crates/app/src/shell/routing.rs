@@ -579,8 +579,7 @@ impl Shell {
     }
 
     /// The modifiers the PTY codec encodes `term_key` with. Only a character
-    /// can be composed, so only a character's Alt yields to `option_as_meta`:
-    /// ⌥Enter, ⌥⌫ and ⌥←/→ keep their Meta sequences on either side.
+    /// composes, so ⌥Enter, ⌥⌫ and ⌥←/→ stay Meta on either side.
     fn pty_mods(&self, term_key: TermKey, modifiers: keyboard::Modifiers) -> KeyMods {
         let mut mods = key_mods(modifiers);
         if matches!(term_key, TermKey::Char(_)) {

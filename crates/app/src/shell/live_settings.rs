@@ -102,7 +102,7 @@ impl Shell {
         self.keymap = settings.keymap();
         self.close_confirm = settings.close;
         self.gestures = settings.clipboard_gestures();
-        self.option_as_meta = settings.option_as_meta(Platform::current());
+        self.option_as_meta = settings.option_as_meta_on(Platform::current());
         self.record.set_config(settings.record_config());
         self.config = super::config_input(settings);
         for event in [

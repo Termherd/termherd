@@ -21,20 +21,18 @@ on Windows and Linux <kbd>Ctrl</kbd>+<kbd>C</kbd> must stay the interrupt.
 
 ### Option as Meta (macOS)
 
-By default the **left** Option key is Meta: <kbd>⌥</kbd>+a letter sends `ESC`
-and the letter, the readline word motions (<kbd>⌥B</kbd>, <kbd>⌥F</kbd>,
-<kbd>⌥D</kbd>) and Claude Code's <kbd>⌥T</kbd> / <kbd>⌥P</kbd>. The **right**
-Option key types what the layout composes instead — `|` with <kbd>⌥⇧L</kbd> on
-a French layout, `å` or `©` on a US one. Pick the side with:
+The **left** Option key is Meta: <kbd>⌥B</kbd> / <kbd>⌥F</kbd> move by word,
+and Claude Code's <kbd>⌥T</kbd> / <kbd>⌥P</kbd> work. The **right** one types
+what the layout composes: `|` with <kbd>⌥⇧L</kbd> on a French layout, `å` on
+a US one.
 
 ```json
 "terminal": { "option_as_meta": "left" }
 ```
 
-`"none"` makes both keys compose, `"right"` swaps them, `"both"` makes both
-Meta. Only letters and symbols are affected: <kbd>⌥Enter</kbd> (a newline in
-Claude), <kbd>⌥⌫</kbd> and <kbd>⌥←</kbd> / <kbd>⌥→</kbd> keep their Meta
-sequences on either side. On Windows and Linux, Alt is always Meta.
+`"right"` swaps them, `"none"` makes both compose, `"both"` makes both Meta.
+<kbd>⌥Enter</kbd> (a newline in Claude), <kbd>⌥⌫</kbd> and <kbd>⌥←</kbd> /
+<kbd>⌥→</kbd> work with either key. On Windows and Linux, Alt is always Meta.
 
 ### Mouse gestures
 

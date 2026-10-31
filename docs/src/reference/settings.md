@@ -127,7 +127,7 @@ policy covers the sessions a quit stops, not text it would lose.
 | `font_size` | `14` | pixels, clamped to 6–40. The zoom chords step from here at runtime without rewriting it. |
 | `copy_on_select` | `false` | a drag release or a double-click copies the selection outright, no chord needed |
 | `paste_on_right_click` | `false` | a right-click pastes into the pane under the pointer, not necessarily the focused one |
-| `option_as_meta` | `"left"` | macOS only: which Option key sends Meta (`ESC` + key) on a letter — `"none"`, `"left"`, `"right"` or `"both"`; the other one types the glyph the layout composes. Enter, Backspace and the arrows stay Meta on either side. Another value falls back to `"left"`. |
+| `option_as_meta` | `"left"` | macOS only: which Option key is Meta — `"none"`, `"left"`, `"right"` or `"both"`; the other one types what the layout composes. Another value falls back to `"left"`. |
 | `colors.scheme` | built-in | every [`theme`](#theme) value marked ✓, e.g. `catppuccin-mocha` |
 | `colors.foreground` / `.background` / `.cursor` | from the scheme | `"#rrggbb"`; the `#` is optional |
 | `colors.palette` | from the scheme | the 16 ANSI colours — normal 0–7, then bright 8–15 |
