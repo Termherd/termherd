@@ -46,8 +46,8 @@ Four things run outside the merge gate, so they never slow a PR:
   job               role       OS          runs on
   ────────────────  ─────────  ──────────  ─────────────────────────────────
   cross-os          signal     mac · win   non-PR, when rust changed, or a tag
-  Analyze (Rust)    baseline   ubuntu      push→main + weekly, never on a PR
-  release·package   release    all         tag push (validates in plan on PRs)
+  Analyze (Rust)    baseline   ubuntu      push→main (rust paths) + weekly
+  release·package   release    all         tag push
   docs-deploy       publish    ubuntu      push→main under docs/ (book → Pages)
 ```
 
@@ -62,7 +62,7 @@ check.
 | `rustfmt` | formatting (`cargo fmt`) | rust | ubuntu | required |
 | `clippy` | `-D warnings`, panic-free core, `too_many_lines` | rust | ubuntu | required |
 | `test` | `cargo nextest run --workspace` | rust | ubuntu | required |
-| `portable` | clippy + tests for every crate but the GUI, **on Windows** | rust | win | required |
+| `portable` | clippy + tests for `--workspace --exclude termherd-app`, **on Windows** (PRs) | rust | win | required |
 | `intra-crate-arch` | module boundaries + OS-cfg containment; length report | rust | ubuntu | required |
 | `cargo-deny` | licences, RUSTSEC, unknown sources | cargo | ubuntu | required |
 | `cargo-machete` | declared-but-unused deps | cargo | ubuntu | required |
@@ -73,7 +73,7 @@ check.
 | `mdbook` | the book builds; every `SUMMARY.md` link resolves | book | ubuntu | required |
 | `ci-success` | aggregates the twelve gates | always | ubuntu | the check |
 | `cross-os` | clippy + tests on mac and win | non-PR / tag | mac·win | signal |
-| `Analyze (Rust)` | CodeQL taint / cross-function SAST | push→main | ubuntu | baseline |
+| `Analyze (Rust)` | CodeQL taint / cross-function SAST | push→main (rust) | ubuntu | baseline |
 | `release`·`package` | archives, installers, GitHub Release | tag | all | release |
 | `docs-deploy` | publishes the book to Pages | push→main, docs | ubuntu | publish |
 
@@ -81,8 +81,8 @@ check.
 
 | Event | Runs |
 | --- | --- |
-| Pull request → `main` | `changes` + gated ubuntu jobs → `ci-success`. `cross-os` and CodeQL skipped; release validates in plan mode. |
-| Merge / push → `main` | the PR gates re-run, plus `cross-os` and CodeQL `Analyze (Rust)`. |
+| Pull request → `main` | `changes` + gated ubuntu jobs + `portable` (win) → `ci-success`. `cross-os`, CodeQL and `release` skipped. |
+| Merge / push → `main` | the ubuntu gates re-run, plus `cross-os` (replaces `portable`) and CodeQL `Analyze (Rust)` (when Rust/Cargo changed). |
 | Release tag | `release` + `package` build and publish; `cross-os` is forced on. CodeQL does not run on tags. |
 | Weekly · Mon 07:00 UTC | CodeQL only; catches query-pack drift on code already on `main`. |
 
