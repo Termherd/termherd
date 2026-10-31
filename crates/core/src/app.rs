@@ -238,7 +238,10 @@ impl App {
             Event::RenameTab { index, title } => self.rename_tab(index, &title),
             Event::SetTabColor { index, color } => self.set_tab_color(index, color),
             Event::SplitFocused(dir) => self.split_focused(dir),
-            Event::SetSplitRatio { tab, path, ratio } => self.set_split_ratio(tab, &path, ratio),
+            Event::SetSplitRatio { tab, path, ratio } => {
+                self.workspace.set_split_ratio(tab, &path, ratio);
+                Vec::new()
+            }
             Event::ClosePane(session) => self.close_pane_of(session).unwrap_or_default(),
             Event::CloseFocusedPane => self
                 .workspace
@@ -317,16 +320,6 @@ impl App {
                 prompt,
             } => self.send_claude_command(session, &command, &prompt),
         }
-    }
-
-    fn set_split_ratio(
-        &mut self,
-        tab: usize,
-        path: &[crate::workspace::Branch],
-        ratio: f32,
-    ) -> Vec<Effect> {
-        self.workspace.set_split_ratio(tab, path, ratio);
-        Vec::new()
     }
 
     /// Whether the OS reports the window focused, so the view can dim an

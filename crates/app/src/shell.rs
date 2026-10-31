@@ -1100,28 +1100,17 @@ impl Shell {
             }
             Message::SplitDragMove(position) => {
                 self.cursor_position = position;
-                let Some((tab, path, dir, ratio, start, extent)) =
-                    self.split_drag.as_ref().map(|drag| {
-                        (
-                            drag.tab,
-                            drag.path.clone(),
-                            drag.dir,
-                            drag.ratio,
-                            drag.start,
-                            drag.extent,
-                        )
-                    })
-                else {
+                let Some(drag) = self.split_drag.as_ref() else {
                     return Task::none();
                 };
-                let delta = match dir {
-                    termherd_core::workspace::SplitDir::Vertical => position.x - start.x,
-                    termherd_core::workspace::SplitDir::Horizontal => position.y - start.y,
+                let delta = match drag.dir {
+                    termherd_core::workspace::SplitDir::Vertical => position.x - drag.start.x,
+                    termherd_core::workspace::SplitDir::Horizontal => position.y - drag.start.y,
                 };
                 let effects = self.core.apply(termherd_core::Event::SetSplitRatio {
-                    tab,
-                    path,
-                    ratio: ratio + delta / extent,
+                    tab: drag.tab,
+                    path: drag.path.clone(),
+                    ratio: drag.ratio + delta / drag.extent,
                 });
                 self.perform(effects)
             }
