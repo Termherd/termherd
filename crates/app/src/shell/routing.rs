@@ -44,6 +44,8 @@ pub(super) enum KeyboardOwner {
     Archive,
     /// The confirmation naming a slash command about to be typed into Claude.
     ClaudeCommand,
+    /// The confirmation before a modified doc's edits are discarded.
+    DocDiscard,
     /// The tab context menu, which answers the arrows and Enter itself rather
     /// than through a widget's submit, which a synthesised key never reaches.
     TabMenu,
@@ -64,13 +66,14 @@ impl KeyboardOwner {
     /// `match` below: a new variant fails to compile there, in this file, where
     /// this array is the next thing the author reads.
     #[cfg(test)]
-    pub(super) const ALL: [Self; 10] = [
+    pub(super) const ALL: [Self; 11] = [
         Self::TabRename,
         Self::SessionRename,
         Self::Quit,
         Self::TabClose(0),
         Self::Archive,
         Self::ClaudeCommand,
+        Self::DocDiscard,
         Self::TabMenu,
         Self::ColorPicker,
         Self::Settings,
@@ -86,6 +89,7 @@ impl KeyboardOwner {
             Self::TabClose(_) => "tab-close-confirm",
             Self::Archive => "archive-confirm",
             Self::ClaudeCommand => "claude-command-confirm",
+            Self::DocDiscard => "doc-discard-confirm",
             Self::TabMenu => "tab-menu",
             Self::ColorPicker => "tab-color-picker",
             Self::Settings => "settings",
@@ -367,6 +371,9 @@ impl Shell {
         if self.claude_command.is_some() {
             return Some(KeyboardOwner::ClaudeCommand);
         }
+        if self.discarding_doc.is_some() {
+            return Some(KeyboardOwner::DocDiscard);
+        }
         if self.live_tab_menu().is_some() {
             return Some(KeyboardOwner::TabMenu);
         }
@@ -401,6 +408,7 @@ impl Shell {
                 let (verdict, task) = self.claude_command_key(event);
                 (Some(verdict), task)
             }
+            KeyboardOwner::DocDiscard => (None, self.doc_discard_confirm_key(event)),
             KeyboardOwner::TabMenu => self.tab_menu_key(event),
             KeyboardOwner::ColorPicker => self.color_picker_key(event),
             KeyboardOwner::Settings => (None, self.settings_key(event)),
@@ -492,12 +500,17 @@ impl Shell {
         Task::none()
     }
 
+    fn doc_discard_confirm_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        match classify_confirm(event) {
+            ConfirmKey::Confirm => self.update(Message::ConfirmDocDiscard),
+            ConfirmKey::Cancel => self.update(Message::CancelDocDiscard),
+            ConfirmKey::Swallow => Task::none(),
+        }
+    }
+
     /// The doc editor handles its own keys; only the save chord (Cmd/Ctrl+S)
-    /// and Escape are intercepted. Escape closes the editor exactly as its own
-    /// close button does — unsaved edits included, since a stricter gesture for
-    /// the key alone would leave the button's identical hole standing while
-    /// looking closed. Discarding a modified doc without asking is a defect on
-    /// both paths, tracked on its own.
+    /// and Escape are intercepted. Escape goes through the same close as the
+    /// editor's button, so a modified doc asks before either discards it.
     fn open_doc_key(&mut self, event: &keyboard::Event) -> Task<Message> {
         if is_escape(event) {
             return self.update(Message::CloseDoc);

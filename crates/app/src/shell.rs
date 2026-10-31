@@ -58,7 +58,7 @@ mod terminal;
 mod view;
 
 pub(crate) use bridge::{Requests as BridgeRequests, channel as bridge_channel};
-use docs::OpenDoc;
+use docs::{DocDiscard, OpenDoc};
 
 /// The live-bridge runtime wiring handed to the shell, grouped so the
 /// constructor stays within argument bounds. Carries the subscription source
@@ -293,6 +293,8 @@ struct Shell {
     rescan_pending: bool,
     /// The doc currently open in the main pane for viewing/editing, if any.
     open_doc: Option<OpenDoc>,
+    /// A discard of the open doc's unsaved edits awaiting confirmation.
+    discarding_doc: Option<DocDiscard>,
     /// A close awaiting confirmation: the tab index to kill, or `None`.
     /// Killing a session is destructive, so the close button arms this and a
     /// confirmation bar must be accepted before the PTY is actually killed —
@@ -610,6 +612,11 @@ enum Message {
     DocSaved(Result<SystemTime, crate::docs::SaveError>),
     /// Close the doc viewer, returning to the terminal.
     CloseDoc,
+    /// Discard the open doc's unsaved edits and finish the armed close or
+    /// replace.
+    ConfirmDocDiscard,
+    /// Keep editing: dismiss the discard confirmation.
+    CancelDocDiscard,
     /// The clickable target now under the pointer in a terminal, or `None` when
     /// the pointer left every one. The canvas finds it; `core` owns it.
     TermTarget {
@@ -794,6 +801,7 @@ impl Shell {
             scan_in_flight: false,
             rescan_pending: false,
             open_doc: None,
+            discarding_doc: None,
             closing: None,
             close_confirm: CloseSettings::default(),
             gestures: ClipboardGestures::default(),
@@ -1300,7 +1308,7 @@ impl Shell {
                 self.renaming = None;
                 Task::none()
             }
-            Message::OpenDoc { label, path } => Self::read_doc(label, path),
+            Message::OpenDoc { label, path } => self.request_doc(label, path),
             Message::DocLoaded {
                 label,
                 path,
@@ -1311,6 +1319,8 @@ impl Shell {
             Message::SaveDoc => self.save_open_doc(),
             Message::DocSaved(result) => self.on_doc_saved(result),
             Message::CloseDoc => self.close_doc(),
+            Message::ConfirmDocDiscard => self.confirm_doc_discard(),
+            Message::CancelDocDiscard => self.cancel_doc_discard(),
             Message::TermTarget { session, probe } => {
                 let effects = self
                     .core
@@ -4578,10 +4588,12 @@ mod key_routing {
         // the first: a sweep that names one offender reads as "and the rest are
         // fine", which is the assumption that let this one through.
         //
-        // What it does *not* claim: that leaving is harmless. It asserts the
-        // owner let go, not what letting go cost — the doc editor satisfies it
-        // while discarding unsaved edits. A rung whose exit destroys state
-        // needs its own test saying so; this one only rules out the parking.
+        // "Left" means the ladder emptied, with one named hand-off: the discard
+        // prompt's escape goes back to the editor it sits over, since leaving
+        // it any further would throw away the edits it exists to protect. What
+        // it does *not* claim: that leaving is harmless. A rung whose exit
+        // destroys state needs its own test saying so; this one only rules out
+        // the parking.
         let mut swallowed = Vec::new();
         for owner in KeyboardOwner::ALL {
             let (mut shell, _pty) = shell_with_terminal();
@@ -4595,7 +4607,10 @@ mod key_routing {
 
             let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
 
-            if shell.keyboard_owner().is_some() {
+            let after = shell.keyboard_owner();
+            let handed_back =
+                (owner, after) == (KeyboardOwner::DocDiscard, Some(KeyboardOwner::Doc));
+            if after.is_some() && !handed_back {
                 swallowed.push(owner.label());
             }
         }
@@ -5427,6 +5442,11 @@ mod key_routing {
             }
             KeyboardOwner::Settings => {
                 let _ = shell.update(Message::ToggleSettings);
+            }
+            KeyboardOwner::DocDiscard => {
+                load_doc(shell, "CLAUDE.md", "notes");
+                type_into_doc(shell, 'x');
+                let _ = shell.update(Message::CloseDoc);
             }
             KeyboardOwner::Doc => load_doc(shell, "CLAUDE.md", "notes"),
         }
@@ -6625,6 +6645,217 @@ mod key_routing {
         let _ = shell
             .core
             .apply(termherd_core::Event::ScanCompleted(vec![record]));
+    }
+
+    fn type_into_doc(shell: &mut Shell, c: char) {
+        let _ = shell.update(Message::DocEdit(text_editor::Action::Edit(
+            text_editor::Edit::Insert(c),
+        )));
+    }
+
+    /// The open doc's label and buffer, for asserting nothing was lost.
+    fn open_doc_state(shell: &Shell) -> Option<(String, String)> {
+        shell
+            .open_doc
+            .as_ref()
+            .map(|doc| (doc.label.clone(), doc.content.text()))
+    }
+
+    /// A doc with unsaved edits, and its state right after the edit.
+    fn modified_doc(shell: &mut Shell, name: &str) -> (String, String) {
+        load_doc(shell, name, "notes");
+        type_into_doc(shell, 'x');
+        open_doc_state(shell).expect("doc open")
+    }
+
+    #[test]
+    fn closing_an_unmodified_doc_asks_nothing() {
+        let (mut shell, _pty) = shell_with_terminal();
+        load_doc(&mut shell, "CLAUDE.md", "notes");
+
+        let _ = shell.update(Message::CloseDoc);
+
+        assert!(shell.open_doc.is_none());
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    #[test]
+    fn a_doc_saved_since_its_last_edit_closes_without_asking() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let _ = shell.update(Message::DocSaved(Ok(SystemTime::UNIX_EPOCH)));
+
+        let _ = shell.update(Message::CloseDoc);
+
+        assert!(shell.open_doc.is_none());
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    #[test]
+    fn closing_a_modified_doc_asks_first_and_keeps_the_edits() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "CLAUDE.md");
+
+        let _ = shell.update(Message::CloseDoc);
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::DocDiscard));
+        assert!(matches!(
+            shell.active_confirmation(),
+            Some((_, Message::CancelDocDiscard))
+        ));
+    }
+
+    #[test]
+    fn escape_on_a_modified_doc_asks_first_and_keeps_the_edits() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "CLAUDE.md");
+
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::DocDiscard));
+    }
+
+    #[test]
+    fn confirming_the_discard_closes_the_doc() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let _ = shell.update(Message::CloseDoc);
+
+        let _ = shell.update(Message::ConfirmDocDiscard);
+
+        assert!(shell.open_doc.is_none());
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    #[test]
+    fn cancelling_the_discard_returns_to_the_modified_doc() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "CLAUDE.md");
+        let _ = shell.update(Message::CloseDoc);
+
+        let _ = shell.update(Message::CancelDocDiscard);
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert!(shell.open_doc.as_ref().is_some_and(|doc| doc.dirty));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Doc));
+    }
+
+    #[test]
+    fn the_discard_confirmation_answers_escape_and_enter_from_the_keyboard() {
+        // Escape keeps editing, so a second reflex escape is what discards —
+        // never the first one.
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "CLAUDE.md");
+        let _ = shell.update(Message::CloseDoc);
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Doc));
+
+        let _ = shell.update(Message::CloseDoc);
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::default(), None));
+        assert!(shell.open_doc.is_none());
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    /// A sidebar click on a doc. The read it may start is not polled here; a
+    /// test that needs the answer delivers it with `load_doc`.
+    fn click_doc(shell: &mut Shell, name: &str) {
+        let _ = shell.update(Message::OpenDoc {
+            label: name.to_string(),
+            path: PathBuf::from("/nowhere").join(name),
+        });
+    }
+
+    #[test]
+    fn clicking_another_doc_over_a_modified_one_asks_first() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "a.md");
+
+        click_doc(&mut shell, "b.md");
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::DocDiscard));
+    }
+
+    #[test]
+    fn confirming_the_other_doc_drops_the_edits_and_lets_its_read_land() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "a.md");
+        click_doc(&mut shell, "b.md");
+
+        let _ = shell.update(Message::ConfirmDocDiscard);
+        assert!(shell.open_doc.is_none(), "a.md's edits are let go");
+        assert_eq!(shell.keyboard_owner(), None);
+
+        load_doc(&mut shell, "b.md", "other");
+        let doc = shell.open_doc.as_ref().expect("b.md open");
+        assert_eq!(doc.label, "b.md");
+        assert!(doc.content.text().starts_with("other"));
+        assert!(!doc.dirty);
+    }
+
+    #[test]
+    fn cancelling_the_other_doc_keeps_the_modified_one() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "a.md");
+        click_doc(&mut shell, "b.md");
+
+        let _ = shell.update(Message::CancelDocDiscard);
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Doc));
+    }
+
+    #[test]
+    fn opening_another_doc_over_an_unmodified_one_replaces_it_at_once() {
+        let (mut shell, _pty) = shell_with_terminal();
+        load_doc(&mut shell, "a.md", "notes");
+
+        click_doc(&mut shell, "b.md");
+        assert_eq!(
+            shell.keyboard_owner(),
+            Some(KeyboardOwner::Doc),
+            "no prompt"
+        );
+        load_doc(&mut shell, "b.md", "other");
+
+        let doc = shell.open_doc.as_ref().expect("b.md open");
+        assert_eq!(doc.label, "b.md");
+    }
+
+    #[test]
+    fn a_read_answering_after_edits_were_typed_neither_takes_them_nor_asks() {
+        // Clicked while clean, edited while the read was in flight: a prompt
+        // raised now would land mid-typing, where the next Enter meant as a
+        // newline would answer it. The answer is dropped instead.
+        let (mut shell, _pty) = shell_with_terminal();
+        load_doc(&mut shell, "a.md", "notes");
+        click_doc(&mut shell, "b.md");
+        type_into_doc(&mut shell, 'x');
+        let edited = open_doc_state(&shell);
+
+        load_doc(&mut shell, "b.md", "other");
+
+        assert_eq!(open_doc_state(&shell), edited);
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Doc));
+    }
+
+    #[test]
+    fn keys_reaching_the_editor_under_the_discard_prompt_change_nothing() {
+        // The modal blocks only the mouse, so a focused editor still hears the
+        // keyboard: the Enter that confirms must not also edit.
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "a.md");
+        let _ = shell.update(Message::CloseDoc);
+        assert!(!shell.doc_accepts_edits());
+
+        type_into_doc(&mut shell, 'y');
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        let _ = shell.update(Message::CancelDocDiscard);
+        assert!(shell.doc_accepts_edits());
     }
 
     #[test]

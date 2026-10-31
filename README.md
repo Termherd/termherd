@@ -278,9 +278,8 @@ app on one it cannot answer; a sidebar rename used to be the exception
 rename — those go through a widget callback no synthesised event reaches
 ([#246]).
 
-Four follow-ups remain: `enter` on the renames ([#246]), a doc editor that
-discards unsaved edits when it closes ([#248]), reaching the bridge from
-outside a session termherd spawned — the launcher cannot drive it today
+Three follow-ups remain: `enter` on the renames ([#246]), reaching the bridge
+from outside a session termherd spawned — the launcher cannot drive it today
 ([#267]) — and the pointer at TermHerd's own interface ([#301]): it reaches a
 session's terminal, and through it a program reading the mouse, but not yet
 the sidebar, tabs or gutters.
@@ -312,7 +311,6 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 [#90]: https://github.com/Termherd/termherd/issues/90
 [#237]: https://github.com/Termherd/termherd/issues/237
 [#246]: https://github.com/Termherd/termherd/issues/246
-[#248]: https://github.com/Termherd/termherd/issues/248
 [#267]: https://github.com/Termherd/termherd/issues/267
 [#301]: https://github.com/Termherd/termherd/issues/301
 

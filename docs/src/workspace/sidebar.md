@@ -149,9 +149,12 @@ terminal view until you close it.
 
 The doc pane can **edit** — `💾 save`, with a `• modified` marker while there
 are unsaved changes and `saved` after a write. Two ways out, and they behave
-identically: the `✕ close` button, or <kbd>Escape</kbd>. Both **discard unsaved
-edits without asking** — a known rough edge, tracked as
-[#248](https://github.com/Termherd/termherd/issues/248).
+identically: the `✕ close` button, or <kbd>Escape</kbd>. With unsaved changes,
+both ask first — *Discard unsaved changes to “CLAUDE.md”?* — and clicking
+another doc in the sidebar asks too, naming both docs. <kbd>Enter</kbd> or
+`Discard` throws the edits away; <kbd>Escape</kbd> or `Cancel` goes back to the
+editor with them intact. Saving first closes without a question. Quitting
+TermHerd does not ask yet: unsaved doc edits are lost on quit.
 
 ## When nothing is open
 

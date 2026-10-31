@@ -34,6 +34,18 @@ pub(super) struct OpenDoc {
     pub(super) feedback: Option<DocFeedback>,
 }
 
+/// Unsaved edits about to be thrown away, held until the user answers. Each
+/// way out of a modified doc arms this instead of discarding outright.
+pub(super) enum DocDiscard {
+    /// The editor is closing (its button or `escape`).
+    Close,
+    /// Another doc was clicked in the sidebar. It is armed by the click, a
+    /// deliberate gesture, and read only once the edits are let go: arming on
+    /// the read's answer instead would raise the prompt mid-typing, where the
+    /// next Enter meant as a newline would answer it.
+    Open { label: String, path: PathBuf },
+}
+
 impl OpenDoc {
     pub(super) fn loaded(
         label: String,
@@ -81,7 +93,25 @@ impl Shell {
         )
     }
 
+    pub(super) fn request_doc(&mut self, label: String, path: PathBuf) -> Task<Message> {
+        if self.has_unsaved_doc() {
+            self.discarding_doc = Some(DocDiscard::Open { label, path });
+            return Task::none();
+        }
+        Self::read_doc(label, path)
+    }
+
+    /// Every read is asked for with no unsaved edits, so any found when it
+    /// answers were typed while it was in flight; the answer is dropped rather
+    /// than allowed to take them.
     pub(super) fn show_doc(&mut self, doc: OpenDoc) -> Task<Message> {
+        if self.has_unsaved_doc() {
+            tracing::info!(
+                path = %doc.path.display(),
+                "doc load dropped: the open doc was edited while it was read"
+            );
+            return Task::none();
+        }
         self.open_doc = Some(doc);
         Task::none()
     }
@@ -89,6 +119,9 @@ impl Shell {
     /// Apply one editor action; only a real edit marks the doc modified, so
     /// moving the cursor or selecting leaves it clean.
     pub(super) fn edit_doc(&mut self, action: text_editor::Action) -> Task<Message> {
+        if !self.doc_accepts_edits() {
+            return Task::none();
+        }
         if let Some(doc) = &mut self.open_doc {
             let edits = action.is_edit();
             doc.content.perform(action);
@@ -122,8 +155,43 @@ impl Shell {
     }
 
     pub(super) fn close_doc(&mut self) -> Task<Message> {
-        self.open_doc = None;
+        if self.has_unsaved_doc() {
+            self.discarding_doc = Some(DocDiscard::Close);
+        } else {
+            self.open_doc = None;
+        }
         Task::none()
+    }
+
+    pub(super) fn confirm_doc_discard(&mut self) -> Task<Message> {
+        match self.discarding_doc.take() {
+            Some(DocDiscard::Close) => {
+                self.open_doc = None;
+                Task::none()
+            }
+            Some(DocDiscard::Open { label, path }) => {
+                self.open_doc = None;
+                Self::read_doc(label, path)
+            }
+            None => Task::none(),
+        }
+    }
+
+    pub(super) fn cancel_doc_discard(&mut self) -> Task<Message> {
+        self.discarding_doc = None;
+        Task::none()
+    }
+
+    /// The one test every way out of the editor asks before it discards.
+    fn has_unsaved_doc(&self) -> bool {
+        self.open_doc.as_ref().is_some_and(|doc| doc.dirty)
+    }
+
+    /// Read by the view and by the edit handler alike, so a key that reaches
+    /// the editor under a discard prompt changes nothing whichever arrives
+    /// first.
+    pub(super) fn doc_accepts_edits(&self) -> bool {
+        self.discarding_doc.is_none()
     }
 
     /// Save the open doc off-thread, if there is one with unsaved edits in the
