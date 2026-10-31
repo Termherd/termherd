@@ -139,13 +139,7 @@ pub fn add_character_palette_item(mtm: MainThreadMarker) {
             tracing::warn!("no main menu; Ctrl+Cmd+Space opens no Character Viewer");
             return;
         };
-        let mut actions = Vec::new();
-        for top in menubar.itemArray().iter() {
-            if let Some(submenu) = top.submenu() {
-                actions.extend(submenu.itemArray().iter().map(|item| item.action()));
-            }
-        }
-        if !lacks_action(&actions, palette) {
+        if !lacks_action(&submenu_actions(&menubar), palette) {
             return;
         }
         let item = NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -162,6 +156,24 @@ pub fn add_character_palette_item(mtm: MainThreadMarker) {
         menubar.addItem(&edit_item);
     }
     tracing::info!("added Emoji & Symbols (Ctrl+Cmd+Space) to an Edit menu");
+}
+
+/// The action of every item one level under the menu bar.
+///
+/// # Safety
+///
+/// Main thread only, like every AppKit menu read.
+unsafe fn submenu_actions(menubar: &NSMenu) -> Vec<Option<Sel>> {
+    let mut actions = Vec::new();
+    // SAFETY: plain AppKit menu reads; the caller holds the main thread.
+    unsafe {
+        for top in menubar.itemArray().iter() {
+            if let Some(submenu) = top.submenu() {
+                actions.extend(submenu.itemArray().iter().map(|item| item.action()));
+            }
+        }
+    }
+    actions
 }
 
 /// Whether no menu item among `actions` already sends `action`.
