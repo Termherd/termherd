@@ -58,7 +58,7 @@ mod terminal;
 mod view;
 
 pub(crate) use bridge::{Requests as BridgeRequests, channel as bridge_channel};
-use docs::{DocFeedback, OpenDoc};
+use docs::OpenDoc;
 
 /// The live-bridge runtime wiring handed to the shell, grouped so the
 /// constructor stays within argument bounds. Carries the subscription source
@@ -1300,72 +1300,17 @@ impl Shell {
                 self.renaming = None;
                 Task::none()
             }
-            Message::OpenDoc { label, path } => {
-                let read_path = path.clone();
-                Task::perform(
-                    async move {
-                        let content = crate::docs::read(&read_path)
-                            .unwrap_or_else(crate::strings::doc_read_failed);
-                        let mtime = crate::docs::mtime(&read_path).ok();
-                        (content, mtime)
-                    },
-                    move |(content, mtime)| Message::DocLoaded {
-                        label: label.clone(),
-                        path: path.clone(),
-                        content,
-                        mtime,
-                    },
-                )
-            }
+            Message::OpenDoc { label, path } => Self::read_doc(label, path),
             Message::DocLoaded {
                 label,
                 path,
                 content,
                 mtime,
-            } => {
-                let writable = crate::docs::is_writable(&path);
-                self.open_doc = Some(OpenDoc {
-                    label,
-                    path,
-                    content: text_editor::Content::with_text(&content),
-                    loaded_mtime: mtime,
-                    writable,
-                    dirty: false,
-                    feedback: None,
-                });
-                Task::none()
-            }
-            Message::DocEdit(action) => {
-                if let Some(doc) = &mut self.open_doc {
-                    let edits = action.is_edit();
-                    doc.content.perform(action);
-                    if edits {
-                        doc.dirty = true;
-                        doc.feedback = None;
-                    }
-                }
-                Task::none()
-            }
+            } => self.show_doc(OpenDoc::loaded(label, path, &content, mtime)),
+            Message::DocEdit(action) => self.edit_doc(action),
             Message::SaveDoc => self.save_open_doc(),
-            Message::DocSaved(result) => {
-                if let Some(doc) = &mut self.open_doc {
-                    match result {
-                        Ok(new_mtime) => {
-                            doc.loaded_mtime = Some(new_mtime);
-                            doc.dirty = false;
-                            doc.feedback = Some(DocFeedback::Saved);
-                        }
-                        Err(error) => {
-                            doc.feedback = Some(DocFeedback::Error(error.to_string()));
-                        }
-                    }
-                }
-                Task::none()
-            }
-            Message::CloseDoc => {
-                self.open_doc = None;
-                Task::none()
-            }
+            Message::DocSaved(result) => self.on_doc_saved(result),
+            Message::CloseDoc => self.close_doc(),
             Message::TermTarget { session, probe } => {
                 let effects = self
                     .core
@@ -5483,15 +5428,17 @@ mod key_routing {
             KeyboardOwner::Settings => {
                 let _ = shell.update(Message::ToggleSettings);
             }
-            KeyboardOwner::Doc => {
-                let _ = shell.update(Message::DocLoaded {
-                    label: "CLAUDE.md".to_string(),
-                    path: PathBuf::from("/nowhere/CLAUDE.md"),
-                    content: "notes".to_string(),
-                    mtime: None,
-                });
-            }
+            KeyboardOwner::Doc => load_doc(shell, "CLAUDE.md", "notes"),
         }
+    }
+
+    fn load_doc(shell: &mut Shell, name: &str, content: &str) {
+        let _ = shell.update(Message::DocLoaded {
+            label: name.to_string(),
+            path: PathBuf::from("/nowhere").join(name),
+            content: content.to_string(),
+            mtime: None,
+        });
     }
 
     #[test]
