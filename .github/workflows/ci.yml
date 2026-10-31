@@ -172,9 +172,14 @@ jobs:
   portable:
     name: portable (windows)
     needs: changes
-    # PR-only: on push→main and release tags, `cross-os (windows-latest)`
-    # already builds and tests the entire `--workspace`.
-    if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'
+    # Runs on every Rust PR, and on push→main only when Cargo manifests/lockfile
+    # changed so `rust-cache` refreshes the `portable` cache key on `main`
+    # (`--workspace` in `cross-os` unifies `termherd-app` features, which would
+    # otherwise force a 50s recompile here). Pure-`.rs` merges to `main` skip
+    # this job and rely on `cross-os (windows-latest)`.
+    if: >-
+      (github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true') ||
+      (github.event_name == 'push' && needs.changes.outputs.cargo == 'true')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -183,9 +188,6 @@ jobs:
           toolchain: "1.95.0"   # keep in lockstep with rust-toolchain.toml (Q10)
           components: clippy
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
-        with:
-          # Restore the Windows cache saved on `main` by `cross-os`.
-          shared-key: "cross-os"
       - uses: taiki-e/install-action@d9be7d8cda89035c9c843f78bd44d4f72d8403d4 # v2.79.7
         with:
           tool: nextest

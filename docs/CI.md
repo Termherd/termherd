@@ -33,7 +33,7 @@ themselves), `markdownlint` (the prose), `roadmap` (the generated
 | Formatting | `ci` · `rustfmt` | Consistent layout (`cargo fmt`) | PR, push→main | ubuntu | yes |
 | Lint + complexity | `ci` · `clippy` | Clippy `-D warnings`; `unwrap`/`expect`/`panic` (core/claude), `too_many_lines`, `todo`/`unimplemented` | PR, push→main | ubuntu | yes |
 | Tests | `ci` · `test` | `cargo nextest run --workspace` | PR, push→main | ubuntu | yes |
-| Portable crates on Windows | `ci` · `portable` | clippy + `nextest` for `--workspace --exclude termherd-app` — everything but the GUI | PR (skipped on push→main) | win | yes |
+| Portable crates on Windows | `ci` · `portable` | clippy + `nextest` for `--workspace --exclude termherd-app` — everything but the GUI | PR, push→main (Cargo paths) | win | yes |
 | Cross-OS clippy + tests | `ci` · `cross-os` | Same clippy + `nextest` on macOS & Windows | push→main, tag (skipped on PR) | mac · win | signal |
 | Licenses / CVEs / sources | `ci` · `cargo-deny` | Disallowed licences, RUSTSEC advisories, unknown registries | PR, push→main | ubuntu | yes |
 | Unused deps | `ci` · `cargo-machete` | Declared-but-unused dependencies | PR, push→main | ubuntu | yes |
@@ -92,10 +92,12 @@ Superseded PR runs are auto-cancelled (a fresh push kills the stale run) for
 
 ### Merge / push to `main`
 
-`ci` runs again on the merged commit — `cross-os` replaces `portable` here
-(clippy + `nextest` for the full `--workspace` on macOS & Windows), giving the
-post-merge baseline its cross-platform check and refreshing the Windows cache
-that `portable` restores on PRs. `codeql` runs when Rust or Cargo files changed
+`ci` runs again on the merged commit — `cross-os` runs here (clippy + `nextest`
+for the full `--workspace` on macOS & Windows), while `portable` is skipped on
+pure-`.rs` merges and runs on `main` only when Cargo manifests/lockfile changed
+to refresh its own feature-scoped Windows cache key (`--workspace` in `cross-os`
+unifies `termherd-app` features, so sharing one cache key would force a 50s
+recompile on every PR). `codeql` runs when Rust or Cargo files changed
 (cancelling any stale in-progress `main` scan so consecutive merges only scan
 the tip). `ci` runs on `main` are **never cancelled**.
 
