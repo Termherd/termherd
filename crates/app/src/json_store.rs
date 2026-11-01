@@ -20,7 +20,7 @@ use tracing::warn;
 /// deserves to be told where they went.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadProblem {
-    /// The file's name under `~/.termherd`, e.g. `settings.json`.
+    /// The file's name within the data dir, e.g. `settings.json`.
     pub file: String,
     /// Where the unparseable original was moved, or `None` when it could not
     /// be read at all (and so was left where it is).

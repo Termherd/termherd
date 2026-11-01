@@ -158,7 +158,7 @@ fn to_dto(overlay: &Overlay) -> OverlayDto {
     }
 }
 
-/// `~/.termherd/metadata.json` — the app data dir from the PRD (§7).
+/// The file's name within the data dir (PRD §7).
 const FILE: &str = "metadata.json";
 
 #[cfg(test)]

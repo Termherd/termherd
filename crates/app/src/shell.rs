@@ -116,6 +116,14 @@ pub struct Startup {
     pub data_dir: Option<crate::paths::DataDir>,
 }
 
+impl Startup {
+    /// The `settings.json` the panel writes and the watch follows: one
+    /// derivation, so the two can never name different files.
+    fn settings_file(&self) -> Option<PathBuf> {
+        self.data_dir.as_ref().map(crate::settings::path)
+    }
+}
+
 /// The settings the MCP `snapshot` tool reports that `core` cannot read —
 /// built in one place for startup and for a live reload, so the two cannot
 /// report different things.
@@ -146,7 +154,7 @@ pub fn run(
         .as_ref()
         .map_or_else(WindowConfig::default, WindowConfig::load)
         .with_onscreen_position(&crate::window_geometry::current_screens());
-    let settings_file = startup.data_dir.as_ref().map(crate::settings::path);
+    let settings_file = startup.settings_file();
     let position = match (config.x, config.y) {
         (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
         _ => window::Position::Centered,
@@ -813,6 +821,7 @@ impl Shell {
             mcp_tokens,
         } = live_bridge;
         let (notification_clicks, notification_clicked) = notify_click::channel();
+        let settings_file = startup.settings_file();
         let mut core = termherd_core::App::new();
         core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
         core.apply(termherd_core::Event::CollapsedLoaded(startup.collapsed));
@@ -824,7 +833,7 @@ impl Shell {
             scanner,
             watch_root,
             claude_sessions,
-            settings_file: startup.data_dir.as_ref().map(crate::settings::path),
+            settings_file,
             scan_error: None,
             path_resolver,
             pty,

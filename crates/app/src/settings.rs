@@ -720,7 +720,7 @@ pub fn path(dir: &DataDir) -> PathBuf {
     dir.file(FILE)
 }
 
-/// `~/.termherd/settings.json` — the app data dir from the PRD (§7).
+/// The file's name within the data dir (PRD §7).
 const FILE: &str = "settings.json";
 
 #[cfg(test)]

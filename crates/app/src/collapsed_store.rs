@@ -19,5 +19,5 @@ pub fn save(dir: &DataDir, collapsed: &HashSet<String>) {
     crate::json_store::save_json(&dir.file(FILE), collapsed);
 }
 
-/// `~/.termherd/collapsed.json` — the app data dir from the PRD (§7).
+/// The file's name within the data dir (PRD §7).
 const FILE: &str = "collapsed.json";
