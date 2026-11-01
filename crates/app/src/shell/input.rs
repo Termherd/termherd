@@ -186,7 +186,7 @@ fn key_name(key: &keyboard::Key) -> Option<String> {
         keyboard::Key::Named(Named::Tab) => Some("tab".to_string()),
         keyboard::Key::Named(Named::Enter) => Some("enter".to_string()),
         keyboard::Key::Named(Named::Escape) => Some("escape".to_string()),
-        // Arrow keys carry chord names so bindings like `cmd+up` (scroll) and
+        // Arrow keys carry chord names so bindings like `mod+up` (scroll) and
         // `mod+shift+left` (pane focus) resolve — without this they fall through
         // to the terminal, leaking the raw cursor sequence to the shell.
         keyboard::Key::Named(Named::ArrowUp) => Some("up".to_string()),
@@ -473,7 +473,7 @@ mod tests {
             chord_of(&Key::Named(Named::Tab), &NON_DIGIT, Modifiers::CTRL),
             Some(KeyChord::new("tab", keymap::MOD_CTRL))
         );
-        // Arrow keys carry chord names so `cmd+up` / `mod+shift+left` resolve
+        // Arrow keys carry chord names so `mod+up` / `mod+shift+left` resolve
         // instead of leaking the cursor sequence to the terminal.
         assert_eq!(
             chord_of(
