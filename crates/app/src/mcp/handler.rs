@@ -93,15 +93,16 @@ impl TermherdMcp {
     pub fn new(bridge: BridgeHandle) -> Self {
         Self {
             bridge,
-            settings_file: None,
+            settings_file: crate::settings::path(),
             tool_router: Self::tool_router(),
         }
     }
 
-    /// Point the options tools at `file`; without one they refuse, so only
-    /// `main()` decides which settings an agent may rewrite.
-    pub fn with_settings_file(mut self, file: Option<PathBuf>) -> Self {
-        self.settings_file = file;
+    /// Point the options tools at another file — a test's own, so a call never
+    /// reaches the user's settings.
+    #[cfg(test)]
+    fn with_settings_file(mut self, file: PathBuf) -> Self {
+        self.settings_file = Some(file);
         self
     }
 
@@ -143,9 +144,9 @@ impl TermherdMcp {
     }
 
     fn settings_file(&self) -> Result<&PathBuf, ErrorData> {
-        self.settings_file
-            .as_ref()
-            .ok_or_else(|| ErrorData::internal_error("no settings.json is configured", None))
+        self.settings_file.as_ref().ok_or_else(|| {
+            ErrorData::internal_error("no home directory; there is no settings.json", None)
+        })
     }
 
     /// The spike tool: list the live terminal sessions termherd is hosting, each
@@ -557,13 +558,7 @@ impl TermherdMcp {
 
         // 1. Session lookup & Nesting opt-in verification
         let target_info = self.fetch_session_info(&args.session).await?;
-        let allow_setting = self
-            .settings_file
-            .as_deref()
-            .map(crate::settings::Settings::load)
-            .unwrap_or_default()
-            .mcp
-            .allow_claude_nesting;
+        let allow_setting = crate::settings::Settings::load().mcp.allow_claude_nesting;
         check_claude_nesting(target_info.kind, allow_setting, args.allow_claude_nesting)?;
 
         // 2. Step 1: Send text (run_in_session primitive)
@@ -1946,8 +1941,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         for tool in tools {
             let (handle, requests) = channel();
-            let mcp =
-                TermherdMcp::new(handle).with_settings_file(Some(dir.path().join("settings.json")));
+            let mcp = TermherdMcp::new(handle).with_settings_file(dir.path().join("settings.json"));
             let (replies, call) = sweep_case(&mcp, &tool);
             let _shell =
                 spawn_test_shell_seq(requests, replies.into_iter().map(Some).collect::<Vec<_>>());
@@ -1982,14 +1976,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_handler_finds_no_settings_file_on_its_own() {
-        // A home-resolved default would let any test rewrite the user's settings.
-        assert_eq!(TermherdMcp::new(channel().0).settings_file, None);
-    }
-
     fn options_mcp(dir: &tempfile::TempDir) -> TermherdMcp {
-        TermherdMcp::new(channel().0).with_settings_file(Some(dir.path().join("settings.json")))
+        TermherdMcp::new(channel().0).with_settings_file(dir.path().join("settings.json"))
     }
 
     #[tokio::test]

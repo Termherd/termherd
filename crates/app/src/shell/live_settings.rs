@@ -39,25 +39,19 @@ pub(crate) trait SettingsSink: Send + Sync {
 }
 
 /// The real sink: the PTY manager and `settings.json`.
-pub(crate) struct LiveSettings {
-    pub(crate) pty: Arc<PtyManager>,
-    /// `None`: a pick is not persisted.
-    pub(crate) file: Option<PathBuf>,
-}
+pub(crate) struct LiveSettings(pub(crate) Arc<PtyManager>);
 
 impl SettingsSink for LiveSettings {
     fn repaint(&self, palette: Palette) {
-        self.pty.set_palette(palette);
+        self.0.set_palette(palette);
     }
 
     fn set_shell(&self, shell: Option<termherd_pty::Shell>) {
-        self.pty.set_shell(shell);
+        self.0.set_shell(shell);
     }
 
     fn persist(&self, change: &AppearanceChange) {
-        if let Some(file) = &self.file {
-            save_appearance(file, change);
-        }
+        save_appearance(change);
     }
 }
 
@@ -72,7 +66,7 @@ impl Shell {
     /// Re-read `settings.json` after it changed on disk and apply it. A file
     /// that does not parse changes nothing.
     pub(super) fn reload_settings(&mut self) -> Task<Message> {
-        match self.settings_file.as_deref().and_then(Settings::reload) {
+        match Settings::reload() {
             Some(settings) => self.apply_settings(&settings),
             None => Task::none(),
         }
@@ -151,24 +145,4 @@ pub(super) fn settings_watch_stream(file: &PathBuf) -> impl Stream<Item = Messag
             }
         },
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::settings::ThemeChoice;
-
-    #[test]
-    fn a_pick_is_persisted_to_the_file_the_sink_was_given() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let file = tmp.path().join("settings.json");
-        let sink = LiveSettings {
-            pty: Arc::new(PtyManager::new(Arc::new(|_| {}), None, Palette::default())),
-            file: Some(file.clone()),
-        };
-
-        sink.persist(&AppearanceChange::Theme(ThemeChoice::Light));
-
-        assert_eq!(Settings::load(&file).theme, ThemeChoice::Light);
-    }
 }

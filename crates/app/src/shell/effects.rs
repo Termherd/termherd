@@ -88,15 +88,11 @@ impl Shell {
             }
             // Metadata / fold state are file writes, not PTY calls.
             Effect::SaveMetadata(metadata) => {
-                if let Some(dir) = &self.data_dir {
-                    crate::metadata_store::save(dir, &metadata);
-                }
+                crate::metadata_store::save(&metadata);
                 Ok(())
             }
             Effect::SaveCollapsed(collapsed) => {
-                if let Some(dir) = &self.data_dir {
-                    crate::collapsed_store::save(dir, &collapsed);
-                }
+                crate::collapsed_store::save(&collapsed);
                 Ok(())
             }
             // Opening a link and a desktop notification are OS handoffs.
@@ -137,9 +133,7 @@ impl Shell {
             Effect::StartRecording
             | Effect::CaptureFrame
             | Effect::FinishRecording { .. }
-            | Effect::CancelRecording => {
-                return self.record.run_one(effect, self.captures.as_deref());
-            }
+            | Effect::CancelRecording => return self.record.run_one(effect),
         };
         if let Err(error) = outcome {
             tracing::warn!(%error, "pty effect failed");
@@ -282,13 +276,13 @@ impl Shell {
     }
 
     /// Resolve the captures dir and write the dump for an `Effect::Capture`. A
-    /// no-op without a data directory.
+    /// no-op when no home directory is set.
     fn capture_dump(&self, dump: WorkspaceSnapshot) -> Task<Message> {
-        let Some(dir) = &self.captures else {
-            tracing::warn!("no data directory; capture skipped");
+        let Some(dir) = crate::capture::captures_dir() else {
+            tracing::warn!("no home directory; capture skipped");
             return Task::none();
         };
-        self.perform_capture(dir, dump)
+        self.perform_capture(&dir, dump)
     }
 
     /// Write the rung-0 JSON dump into `dir` now and schedule the rung-1 PNG.

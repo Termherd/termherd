@@ -5,7 +5,6 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::paths::DataDir;
 use crate::window_geometry::{ScreenRect, position_is_reachable, sanitised};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -32,8 +31,8 @@ impl WindowConfig {
     /// defaults — a corrupt config must never prevent startup. Loaded bounds
     /// are sanitised so an already-corrupt file can't hide the window.
     #[must_use]
-    pub fn load(dir: &DataDir) -> Self {
-        sanitised(crate::json_store::load_json(&dir.file(FILE)))
+    pub fn load() -> Self {
+        sanitised(crate::json_store::load_json(FILE))
     }
 
     /// Drop the saved position when it would open the window off every
@@ -68,12 +67,12 @@ impl WindowConfig {
     /// Persist bounds, sanitised so fresh garbage (a minimised window's
     /// sentinel geometry) is never written. Failures are logged, never fatal —
     /// losing window geometry is not worth blocking shutdown.
-    pub fn save(self, dir: &DataDir) {
-        crate::json_store::save_json(&dir.file(FILE), &sanitised(self));
+    pub fn save(self) {
+        crate::json_store::save_json(FILE, &sanitised(self));
     }
 }
 
-/// The file's name within the data dir (PRD §7).
+/// `~/.termherd/window.json` — the app data dir from the PRD (§7).
 const FILE: &str = "window.json";
 
 #[cfg(test)]
