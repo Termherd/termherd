@@ -13,11 +13,13 @@ chords that reach the clipboard:
 | | macOS | Windows / Linux |
 | --- | --- | --- |
 | Copy selection | <kbd>Cmd</kbd>+<kbd>C</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> |
-| Paste | <kbd>Cmd</kbd>+<kbd>V</kbd> | <kbd>Ctrl</kbd>+<kbd>V</kbd> or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> |
+| Paste | <kbd>Cmd</kbd>+<kbd>V</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>; also <kbd>Ctrl</kbd>+<kbd>V</kbd> on Windows |
 
-Copy/paste is the one binding that is deliberately irregular per platform:
-on Windows and Linux <kbd>Ctrl</kbd>+<kbd>C</kbd> must stay the interrupt.
-<kbd>Ctrl</kbd>+<kbd>C</kbd> sends `SIGINT` on every platform.
+On Windows and Linux <kbd>Ctrl</kbd>+<kbd>C</kbd> must stay the interrupt; it
+sends `SIGINT` on every platform. On Windows <kbd>Ctrl</kbd>+<kbd>V</kbd>
+pastes too, as in Windows Terminal, and Claude Code takes its image paste from
+<kbd>Alt</kbd>+<kbd>V</kbd>; on Linux <kbd>Ctrl</kbd>+<kbd>V</kbd> reaches the
+program, where Claude Code pastes an image on it.
 
 ### Option as Meta (macOS)
 
@@ -78,8 +80,11 @@ See [`settings.json`](../reference/settings.md).
 ## Scrollback
 
 The wheel scrolls back through history.
-<kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Up</kbd> jumps to the top of the buffer,
-<kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Down</kbd> back to the bottom.
+<kbd>Cmd</kbd>+<kbd>Up</kbd> jumps to the top of the buffer and
+<kbd>Cmd</kbd>+<kbd>Down</kbd> back to the bottom on macOS;
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Home</kbd> / <kbd>End</kbd> on Windows
+and Linux, where <kbd>Ctrl</kbd>+<kbd>Up</kbd> / <kbd>Down</kbd> reach the
+program.
 
 ## Zoom
 
@@ -175,6 +180,7 @@ with a logged warning, instead of failing the file. See
 TermHerd tracks the session's working directory from the shell's own OSC 7
 announcements, so a pane's `cwd` follows your `cd`s rather than reporting the
 directory it was launched in forever. That live `cwd` is what
-<kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>T</kbd> opens a new shell in, what path
-resolution tries first, and what `snapshot` reports over
+<kbd>Cmd</kbd>+<kbd>T</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>
+opens a new shell in, what path resolution tries first, and what `snapshot`
+reports over
 [MCP](../mcp/index.md).

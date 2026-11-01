@@ -3205,15 +3205,13 @@ mod key_routing {
         outcome.steps
     }
 
-    /// The platform's primary-modifier spec, so these tests read the same
-    /// bindings the running app does on macOS and elsewhere.
-    fn mod_spec(rest: &str) -> String {
-        let primary = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
-        format!("{primary}+{rest}")
+    /// The first default chord of `action` on this platform.
+    fn default_spec(action: &str) -> String {
+        termherd_core::action_catalog(termherd_core::Platform::current())
+            .into_iter()
+            .find(|binding| binding.name == action)
+            .and_then(|binding| binding.default_chords.into_iter().next())
+            .expect("the action has a default chord")
     }
 
     #[test]
@@ -3223,7 +3221,7 @@ mod key_routing {
         // caller can tell "it worked" from "it hit something else".
         let (mut shell, _pty) = shell_with_terminal();
         let panes_before = shell.core.workspace.tabs[0].sessions().len();
-        let step = press_chord(&mut shell, &mod_spec("d"));
+        let step = press_chord(&mut shell, &default_spec("split-vertical"));
         assert_eq!(step, PressStep::Ran("split-vertical".to_owned()));
         assert_eq!(
             shell.core.workspace.tabs[0].sessions().len(),
@@ -3271,7 +3269,13 @@ mod key_routing {
         // Each press lands before the next, so a sequence composes — two splits
         // leave three panes, not two.
         let (mut shell, _pty) = shell_with_terminal();
-        let steps = press_all(&mut shell, &[&mod_spec("d"), &mod_spec("d")]);
+        let steps = press_all(
+            &mut shell,
+            &[
+                &default_spec("split-vertical"),
+                &default_spec("split-vertical"),
+            ],
+        );
         assert_eq!(
             steps,
             vec![
@@ -3288,7 +3292,7 @@ mod key_routing {
         // focuses the new pane, and that is the handle the caller gets back.
         let (mut shell, _pty) = shell_with_terminal();
         let presses = vec![Press::Chord(
-            KeyChord::parse(&mod_spec("d")).expect("chord parses"),
+            KeyChord::parse(&default_spec("split-vertical")).expect("chord parses"),
         )];
         let (outcome, _task) = shell.perform_presses(presses);
         assert_eq!(outcome.focused, focused(&shell));
@@ -3304,12 +3308,12 @@ mod key_routing {
         // a caller learns why its chord did nothing instead of guessing.
         let (mut shell, pty) = busy_shell_with_terminal();
         assert_eq!(
-            press_chord(&mut shell, &mod_spec("w")),
+            press_chord(&mut shell, &default_spec("close-focused")),
             PressStep::Ran("close-focused".to_owned())
         );
         assert!(shell.closing.is_some(), "a busy session arms the prompt");
         assert_eq!(
-            press_chord(&mut shell, &mod_spec("d")),
+            press_chord(&mut shell, &default_spec("split-vertical")),
             PressStep::Overlay("tab-close-confirm".to_owned()),
             "the prompt owns the keyboard, so the split never happens"
         );
@@ -3325,7 +3329,7 @@ mod key_routing {
         // the app parked until a human intervened. Through the real ladder it
         // dismisses the prompt, so the loop closes.
         let (mut shell, pty) = busy_shell_with_terminal();
-        let _ = press_chord(&mut shell, &mod_spec("w"));
+        let _ = press_chord(&mut shell, &default_spec("close-focused"));
         assert_eq!(
             press_chord(&mut shell, "escape"),
             PressStep::Overlay("tab-close-confirm".to_owned())
@@ -3334,7 +3338,7 @@ mod key_routing {
         assert_eq!(pty.kill_count(), 0, "dismissing kills nothing");
         // With the prompt gone the app takes chords again.
         assert_eq!(
-            press_chord(&mut shell, &mod_spec("d")),
+            press_chord(&mut shell, &default_spec("split-vertical")),
             PressStep::Ran("split-vertical".to_owned())
         );
     }
@@ -3344,7 +3348,7 @@ mod key_routing {
         // The affirmative half: an agent can carry the close it asked for
         // through to the kill, without a human answering the prompt.
         let (mut shell, pty) = busy_shell_with_terminal();
-        let _ = press_chord(&mut shell, &mod_spec("w"));
+        let _ = press_chord(&mut shell, &default_spec("close-focused"));
         let _ = press_chord(&mut shell, "enter");
         assert_eq!(pty.kill_count(), 1, "enter must confirm the close");
     }
@@ -3459,7 +3463,7 @@ mod key_routing {
         let _ = shell.activate_tab(1);
         let shown = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let step = press_chord(&mut shell, &mod_spec("shift+i"));
+        let step = press_chord(&mut shell, &default_spec("rename-tab"));
 
         assert_eq!(step, PressStep::Ran("rename-tab".to_owned()));
         let (anchor, buffer) = shell.tab_rename.clone().expect("renaming");
@@ -4723,7 +4727,7 @@ mod key_routing {
         );
         assert!(shell.keyboard_owner().is_none(), "and then lets go");
         assert_eq!(
-            press_chord(&mut shell, &mod_spec("d")),
+            press_chord(&mut shell, &default_spec("split-vertical")),
             PressStep::Ran("split-vertical".to_owned()),
             "the surface takes chords again"
         );
@@ -6399,23 +6403,21 @@ mod key_routing {
     fn command_chords_fire_without_terminal_focus() {
         // the chord dispatch runs before the terminal-focus guard, so the
         // very first shell can be opened by keyboard from the empty, search-
-        // focused workspace. mod+T = Cmd+T on macOS, Ctrl+T elsewhere.
-        let primary = if cfg!(target_os = "macos") {
-            Modifiers::LOGO
-        } else {
-            Modifiers::CTRL
-        };
+        // focused workspace. The chord is the keymap's own default, pressed
+        // as a real key event.
+        let chord = KeyChord::parse(&default_spec("new-shell-here")).expect("chord parses");
+        let event = super::input::event_of(&chord).expect("a letter chord synthesises");
         let (mut shell, pty) = empty_shell();
         assert_eq!(
             shell.focus,
             Focus::Search,
             "an empty workspace starts on search"
         );
-        let _ = shell.on_key(press(Key::Character("t".into()), primary, Some("t")));
+        let _ = shell.on_key(event);
         assert_eq!(
             pty.spawn_count(),
             1,
-            "mod+T opened a shell despite no terminal focus"
+            "the new-shell chord opened a shell despite no terminal focus"
         );
         assert_eq!(pty.launches().last(), Some(&Launch::Shell));
     }
@@ -7823,7 +7825,7 @@ mod key_routing {
             let mut shell = shell_with_three_tabs();
             let _ = shell.activate_tab(1);
 
-            let step = press_chord(&mut shell, &mod_spec("shift+m"));
+            let step = press_chord(&mut shell, &default_spec("open-tab-menu"));
 
             assert_eq!(step, PressStep::Ran("open-tab-menu".to_owned()));
             assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
@@ -7960,7 +7962,7 @@ mod key_routing {
             let (mut shell, pty) = shell_with_terminal();
             let _ = shell.update(Message::OpenTabMenu(0));
 
-            let steps = press_all(&mut shell, &["x", &mod_spec("d")]);
+            let steps = press_all(&mut shell, &["x", &default_spec("split-vertical")]);
 
             assert_eq!(steps, menu_steps(2));
             assert!(pty.writes().is_empty(), "nothing typed beneath the menu");

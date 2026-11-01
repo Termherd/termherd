@@ -77,8 +77,8 @@ keymap itself uses, so it cannot drift from the binary you are running. It is
 the machine-readable form of
 [Keyboard shortcuts](../reference/keyboard.md), and the catalogue the live
 bridge's `run_action` speaks — less the `activate-tab-N` family, which
-`run_action` accepts but the resource does not list. `copy` and `paste` appear
-with no default: theirs differ per platform and are set outside that table.
+`run_action` accepts but the resource does not list. Defaults are those of the
+platform the server runs on.
 
 ## What it is not
 

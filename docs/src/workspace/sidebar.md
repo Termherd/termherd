@@ -6,12 +6,13 @@ repositories you added by hand, which need no session to appear. It refreshes
 live as the filesystem changes, so a session started elsewhere shows up without
 a restart.
 
-Toggle it with <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>B</kbd>.
+Toggle it with <kbd>Cmd</kbd>+<kbd>B</kbd> (macOS) or
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> (Windows, Linux).
 
 ```text
 ┌──────────────────────────┐
 │ ◀ Hide       + Add a repo  ⚙ │  ← add a folder · open the settings panel
-│ Search…                  │  ← Cmd/Ctrl+F focuses this
+│ Search…                  │  ← focus: Cmd+F / Ctrl+Shift+F
 │ ☐ Titles only            │
 │ ☐ Show archived          │
 ├──────────────────────────┤
@@ -42,7 +43,8 @@ that project's directory, **`✳`** starts a fresh Claude session there — unde
 session id TermHerd picks (`claude --session-id <uuid>`), so once the session
 shows up in the list, clicking it brings its tab forward instead of resuming
 a second copy. The same
-two actions are on the keyboard as <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>T</kbd>
+two actions are on the keyboard as <kbd>Cmd</kbd>+<kbd>T</kbd> (elsewhere
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>)
 and <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>, which use the
 *focused* session's
 directory instead.
@@ -98,8 +100,9 @@ reaches its row at the next rescan.
 
 ## Search
 
-<kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>F</kbd> focuses the search box. Search runs
-in memory over the scan's digests — titles, slugs, first prompts and indexed
+<kbd>Cmd</kbd>+<kbd>F</kbd> (elsewhere <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd>)
+focuses the search box. Search runs in memory over the scan's digests —
+titles, slugs, first prompts and indexed
 transcript text.
 
 - A **content hit** renders the matched line in muted text under the session

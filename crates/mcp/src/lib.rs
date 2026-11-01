@@ -317,7 +317,7 @@ fn set_pointer(root: &mut Value, pointer: &str, value: Value) {
 /// (`null` when unbound). Read-only for now — rebinding is a later slice.
 #[must_use]
 pub fn keys_resource(settings: &Value) -> Value {
-    let actions: Vec<Value> = termherd_core::action_catalog()
+    let actions: Vec<Value> = termherd_core::action_catalog(termherd_core::Platform::current())
         .into_iter()
         .map(|binding| {
             // Current binding: whatever the `keys` section holds for this action
@@ -854,7 +854,10 @@ mod tests {
         let keys = keys_resource(&cfg);
         let actions = keys["actions"].as_array().expect("actions array");
         // The catalogue mirrors core's bindable vocabulary, not an empty list.
-        assert_eq!(actions.len(), termherd_core::action_catalog().len());
+        assert_eq!(
+            actions.len(),
+            termherd_core::action_catalog(termherd_core::Platform::current()).len()
+        );
         let copy = actions
             .iter()
             .find(|a| a["name"] == "copy")

@@ -596,4 +596,40 @@ mod tests {
         );
         assert_eq!(bytes[4], 255);
     }
+
+    #[test]
+    fn no_default_binding_claims_a_terminal_control_key() {
+        // A bound chord never reaches the pane, so no default may be a chord
+        // this encoder turns into a C0 control byte. One exemption, asserted
+        // to still be in use: Ctrl+V pastes on Windows.
+        use termherd_core::Action;
+        use termherd_core::keymap::{MOD_CTRL, Platform, default_bindings};
+        let mut exemption_used = false;
+        for platform in Platform::ALL {
+            for (chord, action) in default_bindings(platform) {
+                if chord.mods != MOD_CTRL {
+                    continue;
+                }
+                let mut chars = chord.key.chars();
+                let (Some(ch), None) = (chars.next(), chars.next()) else {
+                    continue;
+                };
+                if (platform, ch, action) == (Platform::Windows, 'v', Action::Paste) {
+                    exemption_used = true;
+                    continue;
+                }
+                let text = ch.to_string();
+                let bytes = key_bytes(TermKey::Char(ch), CTRL, Some(&text));
+                let control = matches!(bytes.as_deref(), Some([b]) if *b < 0x20 || *b == 0x7f);
+                assert!(
+                    !control,
+                    "{action:?} claims Ctrl+{ch} on {platform:?}, which the pane reads as {bytes:?}"
+                );
+            }
+        }
+        assert!(
+            exemption_used,
+            "Windows no longer pastes on Ctrl+V: drop the exemption above"
+        );
+    }
 }

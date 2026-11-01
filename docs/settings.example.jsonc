@@ -185,28 +185,28 @@
   // Ctrl elsewhere):
   //
   //   copy                      Cmd+C (macOS) / Ctrl+Shift+C
-  //   paste                     Cmd+V (macOS) / Ctrl+V, Ctrl+Shift+V
+  //   paste                     Cmd+V (macOS) / Ctrl+Shift+V, and Ctrl+V on Windows
   //   copy-agent-name           (unbound) copies the focused Claude's agent name
   //   send-to-desktop           (unbound) asks to type /desktop into the focused Claude
   //   next-tab                  Ctrl+Tab
   //   prev-tab                  Ctrl+Shift+Tab
   //   activate-tab-1 … -9       mod+1 … mod+9 (physical number-row keys)
-  //   close-focused             mod+W
+  //   close-focused             mod+W ; Ctrl+Shift+W off macOS
   //   rename-tab                mod+Shift+I (inline rename of the focused tab)
   //   open-tab-menu             mod+Shift+M (the focused tab's menu)
   //   pick-tab-color            (unbound) the focused tab's colour list
-  //   reopen-closed-tab         mod+Shift+T
-  //   new-shell-here            mod+T
+  //   reopen-closed-tab         mod+Shift+T ; Ctrl+Alt+Shift+T off macOS
+  //   new-shell-here            mod+T ; Ctrl+Shift+T off macOS
   //   new-claude-session-here   mod+Alt+T
   //   open-new-session          (unbound)
-  //   split-vertical            mod+D
-  //   split-horizontal          mod+Shift+D
+  //   split-vertical            mod+D ; Alt+Shift+= / Alt+Shift+plus off macOS
+  //   split-horizontal          mod+Shift+D ; Alt+Shift+- / Alt+Shift+D off macOS
   //   focus-left / -right       mod+Shift+Left / Right
   //   focus-up / -down          mod+Shift+Up / Down
   //   focus-next / focus-prev   (unbound)
-  //   focus-search              mod+F
-  //   toggle-sidebar            mod+B
-  //   scroll-top / -bottom      mod+Up / mod+Down
+  //   focus-search              mod+F ; Ctrl+Shift+F off macOS
+  //   toggle-sidebar            mod+B ; Ctrl+Shift+B off macOS
+  //   scroll-top / -bottom      mod+Up / mod+Down ; Ctrl+Shift+Home / End off macOS
   //   zoom-in                   mod+= / mod+plus / mod+Shift+plus
   //   zoom-out                  mod+-
   //   zoom-reset                mod+0
