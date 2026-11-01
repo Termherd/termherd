@@ -115,13 +115,7 @@ fn build_service(
     config.stateful_mode = false;
     config.json_response = true;
     StreamableHttpService::new(
-        move || {
-            let mcp = TermherdMcp::new(bridge.clone());
-            Ok(match &settings_file {
-                Some(file) => mcp.with_settings_file(file.clone()),
-                None => mcp,
-            })
-        },
+        move || Ok(TermherdMcp::new(bridge.clone()).with_settings_file(settings_file.clone())),
         Arc::new(LocalSessionManager::default()),
         config,
     )

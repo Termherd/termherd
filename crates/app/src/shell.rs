@@ -1858,12 +1858,17 @@ mod key_routing {
 
     /// A `Shell` over the given PTY host, with no terminal open yet.
     fn shell_over(pty: Arc<dyn PtyHost>) -> Shell {
+        shell_over_with(pty, test_startup())
+    }
+
+    /// [`shell_over`], starting from `startup`.
+    fn shell_over_with(pty: Arc<dyn PtyHost>, startup: Startup) -> Shell {
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
         Shell::new(
             WindowConfig::default(),
             test_ports(pty, rx),
             test_live_bridge(),
-            test_startup(),
+            startup,
         )
     }
 
@@ -7375,11 +7380,8 @@ mod key_routing {
 
     /// A shell persisting under `dir`, the way `main()` wires the user's own.
     fn shell_persisting_under(dir: &crate::paths::DataDir) -> Shell {
-        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
-        Shell::new(
-            WindowConfig::default(),
-            test_ports(Arc::new(RecordingPty::default()), rx),
-            test_live_bridge(),
+        shell_over_with(
+            Arc::new(RecordingPty::default()),
             Startup {
                 data_dir: Some(dir.clone()),
                 ..test_startup()

@@ -62,9 +62,10 @@ fn main() -> iced::Result {
     // defaults rather than blocking startup — set aside, and reported in the
     // sidebar, so the defaults never overwrite it.
     let data_dir = paths::DataDir::user();
-    let (settings, settings_problem) = data_dir
-        .as_ref()
-        .map(|dir| settings::Settings::load_checked(&settings::path(dir)))
+    let settings_file = data_dir.as_ref().map(settings::path);
+    let (settings, settings_problem) = settings_file
+        .as_deref()
+        .map(settings::Settings::load_checked)
         .unwrap_or_default();
     let shell = settings.shell_profile();
 
@@ -93,7 +94,6 @@ fn main() -> iced::Result {
     // The token registry is shared with the shell, which mints one per Claude
     // launch and injects it into that session's `mcpServers` config.
     let mcp_tokens = mcp::Tokens::default();
-    let settings_file = data_dir.as_ref().map(settings::path);
     let mcp_endpoint = bridge_runtime.as_ref().and_then(|runtime| {
         match runtime.block_on(mcp::serve(
             bridge_handle.clone(),

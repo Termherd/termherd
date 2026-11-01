@@ -100,8 +100,8 @@ impl TermherdMcp {
 
     /// Point the options tools at `file`. Without one they refuse, so only the
     /// composition root decides which settings an agent may rewrite.
-    pub fn with_settings_file(mut self, file: PathBuf) -> Self {
-        self.settings_file = Some(file);
+    pub fn with_settings_file(mut self, file: Option<PathBuf>) -> Self {
+        self.settings_file = file;
         self
     }
 
@@ -1946,7 +1946,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         for tool in tools {
             let (handle, requests) = channel();
-            let mcp = TermherdMcp::new(handle).with_settings_file(dir.path().join("settings.json"));
+            let mcp =
+                TermherdMcp::new(handle).with_settings_file(Some(dir.path().join("settings.json")));
             let (replies, call) = sweep_case(&mcp, &tool);
             let _shell =
                 spawn_test_shell_seq(requests, replies.into_iter().map(Some).collect::<Vec<_>>());
@@ -1989,7 +1990,7 @@ mod tests {
     }
 
     fn options_mcp(dir: &tempfile::TempDir) -> TermherdMcp {
-        TermherdMcp::new(channel().0).with_settings_file(dir.path().join("settings.json"))
+        TermherdMcp::new(channel().0).with_settings_file(Some(dir.path().join("settings.json")))
     }
 
     #[tokio::test]
