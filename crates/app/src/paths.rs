@@ -41,9 +41,7 @@ impl DataDir {
     }
 }
 
-/// Claude Code's own data dir, which termherd reads (plans, memory,
-/// per-process session files) and never owns. Resolved in `main()` alone and
-/// injected.
+/// Claude Code's data dir: read, never owned. Resolved in `main()` alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeDir(PathBuf);
 

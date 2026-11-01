@@ -106,10 +106,8 @@ pub struct Startup {
     /// The `settings.json` `main()` also hands the MCP server: resolved once,
     /// so the agent never writes a file the app does not watch.
     pub settings_file: Option<PathBuf>,
-    /// Where a launch with no context to inherit a directory from starts.
+    /// Where a launch with no context starts.
     pub fallback_cwd: String,
-    /// Claude Code's own data dir. `None`: no global memory, plans or session
-    /// files to read.
     pub claude_dir: Option<crate::paths::ClaudeDir>,
 }
 
@@ -226,10 +224,7 @@ struct Shell {
     /// Where captures and screencasts land: one dir, so the latest is the
     /// highest-named file in it.
     captures: Option<PathBuf>,
-    /// Where a launch with no context to inherit a directory from starts.
     fallback_cwd: String,
-    /// Claude Code's own data dir: the docs' home and write boundary, and
-    /// the session files read for each pane's identity.
     claude_dir: Option<crate::paths::ClaudeDir>,
     scan_error: Option<String>,
     /// Checks whether a path-shaped run of terminal text names a real file.
@@ -1959,8 +1954,6 @@ mod key_routing {
 
     const STARTED: &str = "Wed Oct  7 06:48:07 2026";
 
-    /// Write Claude's session file for `pid` under `name` into the Claude dir
-    /// `claude`.
     fn write_session_file(claude: &std::path::Path, pid: u32, name: &str) {
         let sessions = claude.join("sessions");
         std::fs::create_dir_all(&sessions).expect("mkdir sessions");
@@ -1971,8 +1964,7 @@ mod key_routing {
         .expect("write session file");
     }
 
-    /// A shell reading session files from the Claude dir `claude`, one shell
-    /// tab open and focused; `pid`, when given, is reported in front of it.
+    /// One shell tab, focused; `pid`, when given, reported in front of it.
     fn shell_reading_sessions_from(
         claude: &std::path::Path,
         pid: Option<u32>,
@@ -5699,7 +5691,7 @@ mod key_routing {
                 ..test_startup()
             },
         );
-        // A project memory anywhere else, but a transcript dir under this one.
+        // Writable anywhere else; a transcript dir here.
         let path = claude.join("projects").join("-repo").join("CLAUDE.md");
 
         let _ = shell.update(Message::DocLoaded {

@@ -26,10 +26,7 @@ pub struct DocEntry {
     pub path: PathBuf,
 }
 
-/// Discover the global memory and the plan files under `claude` (none without
-/// one), and a `CLAUDE.md` for each given project path that has one. Order:
-/// global memory, plans (by name), then project memories in the order given.
-/// Missing files are simply absent.
+/// Order: global memory, plans by name, then project memories as given.
 #[must_use]
 pub fn discover(claude: Option<&ClaudeDir>, project_paths: &[String]) -> Vec<DocEntry> {
     let mut docs = Vec::new();
@@ -97,21 +94,14 @@ pub enum SaveError {
     Io(String),
 }
 
-/// Whether the in-app editor may write `path`, given Claude's data dir. Drives
-/// whether the viewer offers a Save action.
+/// Drives whether the viewer offers a Save action.
 #[must_use]
 pub fn is_writable(path: &Path, claude: Option<&ClaudeDir>) -> bool {
     termherd_core::docscope::is_writable(path, &boundary(claude))
 }
 
-/// Write `contents` to `path`, but only if (a) the path is within the writable
-/// document scope `claude` bounds and (b) the file has not changed on disk
-/// since `open_mtime`. `open_mtime` is the baseline captured when the file was
-/// opened, or `None` if it could not be read (then the concurrency guard is
-/// skipped — there is nothing to compare against). The write is atomic — a
-/// temp file in the same directory, then a rename — so a crash mid-write never
-/// truncates the original. Returns the file's new mtime so the caller can
-/// refresh its baseline.
+/// Refuses a path outside the scope and a file changed since `open_mtime`
+/// (`None`: no baseline, no check). Returns the new mtime for the next save.
 pub fn save(
     path: &Path,
     contents: &str,
@@ -161,9 +151,8 @@ fn last_component(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-/// The Claude dir, else a path that is the prefix of nothing — so a project
-/// `CLAUDE.md` (outside any home) is still writable while no file can be
-/// mistaken for one inside the protected tree.
+/// Without a Claude dir, a prefix of nothing: project memories stay writable,
+/// nothing else gains scope.
 fn boundary(claude: Option<&ClaudeDir>) -> PathBuf {
     claude.map_or_else(
         || PathBuf::from("\0/no-claude-home"),
@@ -206,8 +195,6 @@ mod tests {
 
     #[test]
     fn without_a_claude_dir_a_project_memory_stays_writable() {
-        // The sentinel boundary is the prefix of nothing: project memories
-        // keep their scope, and nothing else gains one.
         assert!(is_writable(Path::new("/tmp/some-repo/CLAUDE.md"), None));
         assert!(!is_writable(Path::new("/tmp/some-repo/notes.txt"), None));
     }
