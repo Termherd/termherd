@@ -236,6 +236,7 @@ fn from_mac(
 mod tests {
     use super::*;
     use notify_rust::{CloseReason, NotificationResponse};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn only_a_click_on_the_notification_counts_as_a_click() {
@@ -296,20 +297,25 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("termherd-spawn-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let (from, to) = (dir.join("clicked.txt"), dir.join("opened.txt"));
-        std::fs::write(&from, b"opened").expect("write source");
+        let payload = b"opened".as_slice();
+        std::fs::write(&from, payload).expect("write source");
 
         let (program, args) = copy_command(&from.to_string_lossy(), &to.to_string_lossy());
         spawn_editor(program, &args).expect("the copy must start");
 
-        // Fire-and-forget means the child is not waited on, so poll for its
-        // effect rather than assert it has already landed.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !to.exists() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        // The child is not waited on, so poll for the content: the target
+        // exists before the copy ends, and Windows locks it until then.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let copied = loop {
+            let read = std::fs::read(&to).ok();
+            if read.as_deref() == Some(payload) || Instant::now() >= deadline {
+                break read;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
         assert_eq!(
-            std::fs::read(&to).ok().as_deref(),
-            Some(b"opened".as_slice()),
+            copied.as_deref(),
+            Some(payload),
             "the arguments reached the program, in order"
         );
         let _ = std::fs::remove_dir_all(&dir);
