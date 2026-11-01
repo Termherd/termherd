@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::paths::ClaudeDir;
+
 /// Which kind of document an entry is — drives its icon/grouping in the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocKind {
@@ -29,8 +31,14 @@ pub struct DocEntry {
 /// project memories in the order given. Missing files are simply absent.
 #[must_use]
 pub fn discover(project_paths: &[String]) -> Vec<DocEntry> {
+    discover_in(ClaudeDir::user().as_ref(), project_paths)
+}
+
+/// [`discover`] under `claude`, which offers no global memory or plans when
+/// `None`.
+fn discover_in(claude: Option<&ClaudeDir>, project_paths: &[String]) -> Vec<DocEntry> {
     let mut docs = Vec::new();
-    if let Some(home) = crate::paths::claude_dir() {
+    if let Some(home) = claude {
         let global = home.join("CLAUDE.md");
         if global.is_file() {
             docs.push(DocEntry {
@@ -176,7 +184,15 @@ fn last_component(path: &str) -> &str {
 /// project `CLAUDE.md` (outside any home) is still writable while no file can be
 /// mistaken for one inside the protected tree.
 fn home_or_sentinel() -> PathBuf {
-    crate::paths::claude_dir().unwrap_or_else(|| PathBuf::from("\0/no-claude-home"))
+    boundary(ClaudeDir::user().as_ref())
+}
+
+/// [`home_or_sentinel`] for a given Claude dir.
+fn boundary(claude: Option<&ClaudeDir>) -> PathBuf {
+    claude.map_or_else(
+        || PathBuf::from("\0/no-claude-home"),
+        |dir| dir.path().to_path_buf(),
+    )
 }
 
 #[cfg(test)]
@@ -260,7 +276,7 @@ mod tests {
         std::fs::write(proj.join("CLAUDE.md"), "# project").expect("seed");
 
         let proj_str = proj.to_string_lossy().into_owned();
-        let docs = discover(&[proj_str]);
+        let docs = discover_in(None, &[proj_str]);
 
         let entry = docs
             .iter()

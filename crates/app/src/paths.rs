@@ -4,7 +4,7 @@
 //! the alternative is the seven hand-rolled copies this replaces, which drift
 //! the day the location moves.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The user's home directory: `%USERPROFILE%` (Windows) then `$HOME` (Unix).
 /// `None` when neither is set.
@@ -41,12 +41,29 @@ impl DataDir {
     }
 }
 
-/// `~/.claude` — Claude Code's own data dir, which termherd reads (plans,
-/// memory, per-process session files) and never owns. `None` when no home
-/// directory is set.
-#[must_use]
-pub fn claude_dir() -> Option<PathBuf> {
-    home_dir().map(|home| home.join(".claude"))
+/// Claude Code's own data dir, which termherd reads (plans, memory,
+/// per-process session files) and never owns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeDir(PathBuf);
+
+impl ClaudeDir {
+    /// `~/.claude`. `None` when no home directory is set.
+    #[must_use]
+    pub fn user() -> Option<Self> {
+        home_dir().map(|home| Self(home.join(".claude")))
+    }
+
+    /// The directory itself: the boundary of the doc write-scope.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+
+    /// `<dir>/<name>`, e.g. `CLAUDE.md` or `plans`.
+    #[must_use]
+    pub fn join(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
 }
 
 #[cfg(test)]
@@ -55,7 +72,10 @@ mod tests {
 
     #[test]
     fn claude_dir_is_the_dot_claude_folder_in_home() {
-        assert_eq!(claude_dir(), home_dir().map(|home| home.join(".claude")));
+        assert_eq!(
+            ClaudeDir::user().map(|dir| dir.path().to_path_buf()),
+            home_dir().map(|home| home.join(".claude"))
+        );
     }
 
     /// The `N` of libtest's `test result: ok. N passed; …` line; 0 without one.

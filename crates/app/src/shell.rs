@@ -168,7 +168,7 @@ pub fn run(
                         pty: pty.clone(),
                         file: settings_file.clone(),
                     }),
-                    claude_sessions: crate::paths::claude_dir()
+                    claude_sessions: crate::paths::ClaudeDir::user()
                         .map(|claude| claude.join("sessions")),
                 },
                 live_bridge.clone(),
