@@ -528,9 +528,8 @@ impl Shell {
 
     /// A key no overlay claimed: a bound keymap chord wins over raw input —
     /// resolved before the focus guard so command chords stay global (e.g.
-    /// new-shell-here from an empty workspace with the search box focused) —
-    /// otherwise it goes to the focused terminal's PTY, leaving plain Ctrl+C
-    /// as interrupt.
+    /// `mod+T` from an empty workspace with the search box focused) — otherwise
+    /// it goes to the focused terminal's PTY, leaving plain Ctrl+C as interrupt.
     fn terminal_key(&mut self, event: keyboard::Event) -> (KeyVerdict, Task<Message>) {
         let keyboard::Event::KeyPressed {
             key,

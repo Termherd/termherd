@@ -44,3 +44,6 @@ dev.termherd.lock
 
 # Serena MCP tool state (local)
 .serena/
+
+# Contributor benchmark harness output (docs/BENCH.md); results stay local.
+/bench/results/

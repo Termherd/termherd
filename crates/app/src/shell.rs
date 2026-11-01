@@ -6166,8 +6166,8 @@ mod key_routing {
 
     #[test]
     fn close_focused_closes_only_the_focused_pane_in_a_split() {
-        // `close-focused` in a split must collapse just the focused pane, not
-        // the whole tab: the sibling survives, the tab stays open, one PTY is killed.
+        // `mod+w` in a split must collapse just the focused pane, not the whole
+        // tab: the sibling survives, the tab stays open, one PTY is killed.
         let (mut shell, pty) = shell_with_terminal();
         let original = shell
             .core
@@ -6360,7 +6360,7 @@ mod key_routing {
 
     #[test]
     fn new_shell_here_inherits_the_focused_directory() {
-        // new-shell-here opens a shell in the focused session's cwd.
+        // mod+T opens a shell in the focused session's cwd.
         let (mut shell, pty) = shell_with_terminal();
         let before = pty.spawn_count();
         let _ = shell.run_action(Action::NewShellHere);
@@ -6371,7 +6371,7 @@ mod key_routing {
 
     #[test]
     fn new_shell_here_falls_back_to_home_on_an_empty_workspace() {
-        // with nothing open, new-shell-here still opens a shell — in the home dir.
+        // with nothing open, mod+T still opens a shell — in the home dir.
         let (mut shell, pty) = empty_shell();
         let _ = shell.run_action(Action::NewShellHere);
         assert_eq!(pty.spawn_count(), 1, "a shell opens even with no context");
@@ -6406,7 +6406,7 @@ mod key_routing {
 
     #[test]
     fn reopen_closed_tab_restores_the_last_close_and_then_drains() {
-        // close a tab, reopen-closed-tab brings it back; a second reopen with an
+        // close a tab, mod+Shift+T brings it back; a second reopen with an
         // empty stack does nothing.
         let (mut shell, pty) = shell_with_terminal();
         let _ = shell.update(Message::CloseTab(0));
