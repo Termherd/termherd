@@ -266,3 +266,21 @@ impl Shell {
         self.perform(effects)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_recording_starts_only_with_somewhere_to_write_it() {
+        let mut nowhere = RecordState::new(RecordConfig::default(), None);
+        nowhere.start();
+        assert!(nowhere.recorder.is_none());
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut somewhere =
+            RecordState::new(RecordConfig::default(), Some(tmp.path().join("captures")));
+        somewhere.start();
+        assert!(somewhere.recorder.is_some());
+    }
+}

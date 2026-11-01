@@ -728,6 +728,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_appearance_pick_lands_in_the_data_dir_and_every_read_finds_it() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = path(&DataDir::at(tmp.path()));
+        assert_eq!(file, tmp.path().join("settings.json"));
+
+        save_appearance(&file, &AppearanceChange::Theme(ThemeChoice::Light));
+
+        assert_eq!(Settings::load(&file).theme, ThemeChoice::Light);
+        assert_eq!(Settings::load_checked(&file).0.theme, ThemeChoice::Light);
+        assert_eq!(
+            Settings::reload(&file).map(|s| s.theme),
+            Some(ThemeChoice::Light)
+        );
+    }
+
+    #[test]
     fn defaults_are_a_default_shell_and_dark_theme() {
         let s = Settings::default();
         assert!(s.shell.is_none());

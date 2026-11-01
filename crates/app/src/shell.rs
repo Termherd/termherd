@@ -7405,6 +7405,21 @@ mod key_routing {
     }
 
     #[test]
+    fn a_capture_writes_its_dump_under_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut shell = shell_persisting_under(&crate::paths::DataDir::at(tmp.path()));
+
+        let _ = shell.run_action(Action::Capture);
+
+        let dumps: Vec<_> = std::fs::read_dir(tmp.path().join("captures"))
+            .expect("the captures dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        assert_eq!(dumps.len(), 1, "one JSON dump: {dumps:?}");
+    }
+
+    #[test]
     fn closing_the_window_saves_its_bounds_under_the_data_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let dir = crate::paths::DataDir::at(tmp.path());

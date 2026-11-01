@@ -152,3 +152,23 @@ pub(super) fn settings_watch_stream(file: &PathBuf) -> impl Stream<Item = Messag
         },
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::ThemeChoice;
+
+    #[test]
+    fn a_pick_is_persisted_to_the_file_the_sink_was_given() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("settings.json");
+        let sink = LiveSettings {
+            pty: Arc::new(PtyManager::new(Arc::new(|_| {}), None, Palette::default())),
+            file: Some(file.clone()),
+        };
+
+        sink.persist(&AppearanceChange::Theme(ThemeChoice::Light));
+
+        assert_eq!(Settings::load(&file).theme, ThemeChoice::Light);
+    }
+}
