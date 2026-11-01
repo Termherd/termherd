@@ -7,6 +7,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (a second instance on Windows and Linux)
+
+- The single-instance lock follows the temp directory on Windows and Linux, as
+  it already did on macOS: a build started with its own `TMP` (Windows) or
+  `TMPDIR` (Linux) runs beside the one you use. A running older release does
+  not see a newer build, nor the reverse; quit one before starting the other.
+
 ### Added (pick which Option key is Meta)
 
 - On macOS the right Option key now types what the layout composes, such as

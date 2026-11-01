@@ -10,12 +10,10 @@ default:
 run:
     cargo run -p termherd-app
 
-# The single-instance guard keys off a lock file at `$TMPDIR/dev.termherd.lock`;
-# a private TMPDIR gives this build its own lock, so it neither sees nor is
-# blocked by an installed TermHerd.app's lock.
-[doc("Run a dev copy alongside an installed TermHerd.app (own lock via private TMPDIR)")]
+# The instance lock follows the temp dir: `TMPDIR`, or `TMP` as a Windows path.
+[doc("Run a dev copy alongside the installed app (own lock via a private temp dir)")]
 run-isolated:
-    TMPDIR="$(mktemp -d)" cargo run -p termherd-app
+    d="$(mktemp -d)"; TMPDIR="$d" TMP="$(cygpath -w "$d" 2>/dev/null || echo "$d")" cargo run -p termherd-app
 
 # Assert the hexagonal crate dependency rule (deps point inward only) and
 # toolchain lockstep across config/workflow files. Mirrors the `cargo-checks`
