@@ -208,7 +208,9 @@ impl Shell {
                 self.resize_panes()
             }
             window::Event::CloseRequested => {
-                self.bounds.save();
+                if let Some(dir) = &self.data_dir {
+                    self.bounds.save(dir);
+                }
                 self.request_quit(id)
             }
             window::Event::Focused => {

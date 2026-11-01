@@ -467,6 +467,12 @@ exists). Do not relax them locally.
   return typed errors (`thiserror`).
 - **No global mutable state.** No `static mut`, no `lazy_static`, no
   require-time singletons. Construct dependencies in `main()` and inject.
+  The environment counts: a store reading `$HOME` let 28 tests rewrite the
+  user's `~/.termherd` on each `cargo test` (#407). `paths::DataDir::user()`
+  is `main()`'s alone. The guard
+  `no_test_writes_the_data_dir_of_the_home_it_runs_in` (`.termherd` and
+  `.claude`) covers the app's unit tests only, not `crates/app/tests/` or
+  other crates.
 - **One logging stack:** `tracing`. No `println!` outside tests.
 - **`unsafe_code = "deny"`** workspace-wide. The lone sanctioned exception is
   `crates/app/src/macos.rs` (AppKit FFI for the Cmd+Q quit path, the Edit menu
