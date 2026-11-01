@@ -1813,7 +1813,8 @@ mod key_routing {
             metadata: Overlay::default(),
             collapsed: HashSet::new(),
             load_problems: Vec::new(),
-            data_dir: crate::paths::DataDir::user(),
+            // A test that persists names its own dir: the user's is main()'s alone.
+            data_dir: None,
         }
     }
 
@@ -7361,6 +7362,62 @@ mod key_routing {
         assert!(shell.core.is_collapsed("/tmp/project"));
         let _ = shell.update(Message::ToggleCollapsed("/tmp/project".into()));
         assert!(!shell.core.is_collapsed("/tmp/project"));
+    }
+
+    /// A shell persisting under `dir`, the way `main()` wires the user's own.
+    fn shell_persisting_under(dir: &crate::paths::DataDir) -> Shell {
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        Shell::new(
+            WindowConfig::default(),
+            test_ports(Arc::new(RecordingPty::default()), rx),
+            test_live_bridge(),
+            Startup {
+                data_dir: Some(dir.clone()),
+                ..test_startup()
+            },
+        )
+    }
+
+    #[test]
+    fn a_star_is_saved_under_the_data_dir_and_read_back_by_the_startup_load() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        browse_one(&mut shell, "sess");
+
+        let _ = shell.update(Message::ToggleStar("sess".into()));
+
+        let (overlay, problem) = crate::metadata_store::load(&dir);
+        assert_eq!(problem, None);
+        assert!(overlay.sessions["sess"].starred);
+    }
+
+    #[test]
+    fn a_fold_is_saved_under_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        browse_one(&mut shell, "sess");
+
+        let _ = shell.update(Message::ToggleCollapsed("/tmp/project".into()));
+
+        assert!(crate::collapsed_store::load(&dir).contains("/tmp/project"));
+    }
+
+    #[test]
+    fn closing_the_window_saves_its_bounds_under_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::Resized(Size::new(900.0, 600.0)),
+        ));
+
+        request_quit_from_the_window(&mut shell);
+
+        let saved = WindowConfig::load(&dir);
+        assert_eq!((saved.width, saved.height), (900.0, 600.0));
     }
 
     #[test]

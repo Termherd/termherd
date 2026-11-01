@@ -93,8 +93,13 @@ fn main() -> iced::Result {
     // The token registry is shared with the shell, which mints one per Claude
     // launch and injects it into that session's `mcpServers` config.
     let mcp_tokens = mcp::Tokens::default();
+    let settings_file = data_dir.as_ref().map(settings::path);
     let mcp_endpoint = bridge_runtime.as_ref().and_then(|runtime| {
-        match runtime.block_on(mcp::serve(bridge_handle.clone(), mcp_tokens.clone())) {
+        match runtime.block_on(mcp::serve(
+            bridge_handle.clone(),
+            mcp_tokens.clone(),
+            settings_file,
+        )) {
             Ok(endpoint) => {
                 info!(url = %endpoint.url, "mcp live bridge listening");
                 Some(endpoint)

@@ -93,15 +93,14 @@ impl TermherdMcp {
     pub fn new(bridge: BridgeHandle) -> Self {
         Self {
             bridge,
-            settings_file: crate::paths::DataDir::user().map(|dir| crate::settings::path(&dir)),
+            settings_file: None,
             tool_router: Self::tool_router(),
         }
     }
 
-    /// Point the options tools at another file — a test's own, so a call never
-    /// reaches the user's settings.
-    #[cfg(test)]
-    fn with_settings_file(mut self, file: PathBuf) -> Self {
+    /// Point the options tools at `file`. Without one they refuse, so only the
+    /// composition root decides which settings an agent may rewrite.
+    pub fn with_settings_file(mut self, file: PathBuf) -> Self {
         self.settings_file = Some(file);
         self
     }
@@ -144,9 +143,9 @@ impl TermherdMcp {
     }
 
     fn settings_file(&self) -> Result<&PathBuf, ErrorData> {
-        self.settings_file.as_ref().ok_or_else(|| {
-            ErrorData::internal_error("no home directory; there is no settings.json", None)
-        })
+        self.settings_file
+            .as_ref()
+            .ok_or_else(|| ErrorData::internal_error("no settings.json is configured", None))
     }
 
     /// The spike tool: list the live terminal sessions termherd is hosting, each
@@ -558,8 +557,10 @@ impl TermherdMcp {
 
         // 1. Session lookup & Nesting opt-in verification
         let target_info = self.fetch_session_info(&args.session).await?;
-        let allow_setting = crate::paths::DataDir::user()
-            .map(|dir| crate::settings::Settings::load(&crate::settings::path(&dir)))
+        let allow_setting = self
+            .settings_file
+            .as_deref()
+            .map(crate::settings::Settings::load)
             .unwrap_or_default()
             .mcp
             .allow_claude_nesting;
@@ -1978,6 +1979,13 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name} is on the bridge"));
             assert_eq!(tool.description.as_deref(), Some(expected), "{name}");
         }
+    }
+
+    #[test]
+    fn a_handler_finds_no_settings_file_on_its_own() {
+        // The options tools write the file they hold, so one resolved from the
+        // home would let any test calling them rewrite the user's settings.
+        assert_eq!(TermherdMcp::new(channel().0).settings_file, None);
     }
 
     fn options_mcp(dir: &tempfile::TempDir) -> TermherdMcp {
