@@ -470,7 +470,8 @@ exists). Do not relax them locally.
 - **One logging stack:** `tracing`. No `println!` outside tests.
 - **`unsafe_code = "deny"`** workspace-wide. The lone sanctioned exception is
   `crates/app/src/macos.rs` (AppKit FFI for the Cmd+Q quit path, the Edit menu
-  that gives Ctrl+Cmd+Space its *Emoji & Symbols* item, and the `insertText:`
+  that gives Ctrl+Cmd+Space its *Emoji & Symbols* item, the Window menu that
+  gives Cmd+M its *Minimize*, and the `insertText:`
   relay that turns Character Viewer text winit drops into an input-method
   commit): a `#![cfg(…)]` module with a module-scoped
   `#![allow(unsafe_code)]` and a `// SAFETY:` note on every block. Any further
@@ -725,6 +726,7 @@ ones that rot first:
 | an MCP `#[tool(…)]`, its arguments or its outcomes | `docs/src/mcp/live-bridge.md`, `docs/src/mcp/keyboard.md` — **and** the tool table and the follow-up sentence in `README.md`, and the tool *count* in `docs/src/mcp/index.md` (a diagram and a table); every rung since the README table was written (#215, #229, #281, #300) merged without touching it |
 | `OPTIONS` in `crates/mcp/src/lib.rs` | `docs/src/mcp/stdio.md` (the id table) |
 | a label in `crates/app/src/strings.rs` the book quotes | the matching `docs/src/workspace/` page |
+| anything a user sees | an entry under `[Unreleased]` in `CHANGELOG.md`; #399, #400 and #401 all merged without one, after the misses #277 records |
 
 **A new `settings.json` key is not one edit, it is seven**, and the schema row
 above names only the first. A key added to the schema also owes: the annotated

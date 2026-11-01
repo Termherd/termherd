@@ -70,13 +70,13 @@ issues #18–#29.
 | [F-jsonl-viewer](#f-jsonl-viewer) | feature | sessions | ☐ | Render a Claude session's JSONL transcript as readable messages, not raw lines. |
 | [F-store-cache](#f-store-cache) | feature | sessions | ☐ | A SQLite digest cache with an FTS5 index, replacing the in-memory scan. |
 | [F-terminal-images](#f-terminal-images) | feature | terminal | ☐ | Render images inline in the terminal — parked, no demand and no cheap slice. |
-| [F-terminal-split](#f-terminal-split) | feature | workspace, keymap | ☐ | Split panes with directional focus; drag-resize is what remains. |
 | [F-close-on-exit](#f-close-on-exit) | feature | terminal, workspace | ✅ | A pane whose shell exits cleanly closes itself; a failed one stays readable. |
 | [F-notification-focus-tab](#f-notification-focus-tab) | feature | workspace, sessions | ✅ | Clicking a tab's desktop notification brings termherd forward on that tab. |
 | [F-repo-add](#f-repo-add) | feature | sidebar, sessions | ✅ | Declare a repository in the sidebar, before it has any session. |
 | [F-session-id-at-launch](#f-session-id-at-launch) | feature | sessions | ✅ | A fresh Claude tab knows its session id from the first keystroke. |
 | [F-settings-panel](#f-settings-panel) | feature | workspace | ✅ | An in-app settings panel — appearance first, applied live and saved on pick. |
 | [F-terminal-cwd](#f-terminal-cwd) | feature | terminal, mcp, sessions | ✅ | The shell announces the directory it is in, so a session's `cwd` follows a `cd`. |
+| [F-terminal-split](#f-terminal-split) | feature | workspace, keymap | ✅ | Split panes with directional focus and drag-adjustable ratios. |
 
 ## Could
 
@@ -210,9 +210,10 @@ The window itself: lifecycle, saved bounds, and the native menu gap.
 
 Window, lifecycle, bounds (menu: deferred to M3 with the keymap — no native
 menu API in iced; menu items mirror keymap actions). The deferral left one
-visible gap on macOS: winit builds only the *application* menu, so there is no
-Window menu and **⌘M does not minimize** (#114) — a system gesture users expect
-of any window, not a keymap preference
+visible gap on macOS: winit builds only the *application* menu, so there was no
+Window menu and ⌘M did not minimize (#114) — a system gesture users expect
+of any window, not a keymap preference. **Closed by #399**: termherd adds a
+Window menu (Minimize ⌘M, Zoom) beside winit's
 
 <a id="f-builtin-terminal"></a>
 
@@ -550,22 +551,6 @@ incompatible protocols (OSC/ DCS/APC). Zero demand signal beyond the filed
 issue. Revisit on a real user report of the silent drop, or a free cycle after
 `F-terminal-split` (#54/#55)
 
-<a id="f-terminal-split"></a>
-
-### F-terminal-split
-
-Split panes with directional focus; drag-resize is what remains.
-
-Split panes (h/v), focus, resize (moved from Must, PRD rev. 5): the **#54 MVP
-shipped** — the `split-*`/`focus-*`/`close-focused` keymap actions now drive
-`core` (recursive iced pane rendering from the `Workspace` tree, fixed-ratio
-50/50 splits, per-leaf PTY geometry), plus click-to-focus (`Event::FocusPane`)
-and directional keyboard focus that cycles within its axis (`Event::FocusDir`,
-`mod+shift+arrows`); `mod+w` collapses the focused pane rather than the whole
-tab. Default binds: `mod+d` / `mod+shift+d` split, `mod+shift+arrows` focus.
-What remains is **drag-resize (#55, blocked-by #54)** to flip the fixed ratio;
-`core::Workspace` stays the single source of truth throughout
-
 <a id="f-close-on-exit"></a>
 
 ### F-close-on-exit
@@ -815,6 +800,23 @@ end-to-end proof is a real PTY running the platform's own shell with a typed
 `cd` — the only test that can tell whether the recipe reached the user's shell
 at all; the unit tests below it assert a snippet or a decoded string, neither
 of which knows if the hook ever ran.
+
+<a id="f-terminal-split"></a>
+
+### F-terminal-split
+
+Split panes with directional focus and drag-adjustable ratios.
+
+Split panes (h/v), focus, resize (moved from Must, PRD rev. 5): the **#54 MVP
+shipped** — the `split-*`/`focus-*`/`close-focused` keymap actions now drive
+`core` (recursive iced pane rendering from the `Workspace` tree, fixed-ratio
+50/50 splits, per-leaf PTY geometry), plus click-to-focus (`Event::FocusPane`)
+and directional keyboard focus that cycles within its axis (`Event::FocusDir`,
+`mod+shift+arrows`); `mod+w` collapses the focused pane rather than the whole
+tab. Default binds: `mod+d` / `mod+shift+d` split, `mod+shift+arrows` focus.
+**Drag-resize (#55) shipped:** draggable handles adjust each split from 10% to
+90% of its usable extent. `core::Workspace` remains the single source of
+truth, and the affected tab's PTYs resize on release.
 
 <a id="f-activity-stats"></a>
 

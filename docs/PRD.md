@@ -277,7 +277,7 @@ critical path.
 
 | Risk | Sev | Mitigation |
 | ---- | --- | ---------- |
-| **Terminal multiplexing** (tabs/splits/focus over N live PTYs) is the new hard core | High | Build the pane model as a pure tree in `core` (testable); render with `alacritty_terminal`; M3 is time-boxed and split-resize can ship before drag-resize |
+| **Terminal multiplexing** (tabs/splits/focus over N live PTYs) is the new hard core | High | The pure `core` pane tree and `alacritty_terminal` rendering are in place; fixed-ratio splits shipped before adjustable drag-resize, which now uses the same tree |
 | **Parity gap** — no daily driver until M3 | High | MVP ordering; run beside Electron (shared `~/.claude` reads) until M3 |
 | Native terminal widget cost | Med | `alacritty_terminal` does ANSI/grid; widget is render+input |
 | Scope creep from net-new features | Med | MoSCoW is the contract; Could/Unsure stay out of M0–M3 |

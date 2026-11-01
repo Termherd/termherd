@@ -123,9 +123,9 @@ pub fn key_bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<
         TermKey::PageUp => Some(csi_tilde(5, modifier)),
         TermKey::PageDown => Some(csi_tilde(6, modifier)),
         // Alt+<char> (Meta) prefixes the character with `ESC`, the readline
-        // convention for word-wise editing (Alt+B / Alt+F / Alt+D …). Limited
-        // to ASCII alphanumerics so macOS Option-composed glyphs (e.g. Option+e
-        // → "´") still fall through to the layout-resolved text below.
+        // convention for word-wise editing (Alt+B / Alt+F / Alt+D …). Whether
+        // a macOS Option key is Meta at all is the shell's to decide: it clears
+        // `alt` on character keys for an Option side that composes.
         TermKey::Char(ch) if mods.alt && !mods.ctrl && ch.is_ascii_alphanumeric() => {
             Some(vec![0x1b, ch as u8])
         }
