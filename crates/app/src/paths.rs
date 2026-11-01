@@ -15,8 +15,7 @@ pub fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// The app data dir (PRD §7) every store reads and writes under. Resolved once
-/// in `main()` and injected, so a store never finds the user's files on its own.
+/// The app data dir (PRD §7). Resolved in `main()` alone and injected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataDir(PathBuf);
 
@@ -82,15 +81,11 @@ mod tests {
         assert_eq!(passed_count("running 0 tests\n"), 0);
     }
 
-    /// Reruns this whole test binary under an empty home: a test that persists
-    /// through the user's data dir is caught by the dir it leaves behind, so no
-    /// list of writers has to be kept by hand.
+    /// Reruns this test binary under an empty home, which must stay empty.
     #[test]
     fn no_test_writes_the_data_dir_of_the_home_it_runs_in() {
         let home = tempfile::tempdir().expect("tempdir");
-        // Its own temp dir too: session ids restart at 1 in each process, so a
-        // shared one would let the two runs' real shells claim the same
-        // per-session startup files.
+        // Session ids restart at 1 per process: a shared temp dir would collide.
         let tmp = tempfile::tempdir().expect("tempdir");
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
@@ -106,8 +101,9 @@ mod tests {
             .expect("rerun the test binary");
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        let data_dir = home.path().join(".termherd");
-        let written: Vec<String> = std::fs::read_dir(&data_dir)
+        // `.termherd` is ours; `.claude` is Claude Code's, which the docs
+        // editor writes into.
+        let written: Vec<String> = std::fs::read_dir(home.path())
             .map(|entries| {
                 entries
                     .filter_map(Result::ok)
@@ -116,10 +112,11 @@ mod tests {
             })
             .unwrap_or_default();
         assert!(
-            !data_dir.exists(),
-            "tests wrote the user's data dir: {written:?}"
+            !written
+                .iter()
+                .any(|name| name == ".termherd" || name == ".claude"),
+            "tests wrote the user's home: {written:?}"
         );
-        // A rerun that failed early, or ran nothing, leaves the dir absent too.
         assert!(
             output.status.success() && passed_count(&stdout) > 0,
             "no data dir was written, but the rerun failed, so that proves nothing; \

@@ -111,17 +111,11 @@ pub struct Startup {
     /// Config files that existed but could not be used at startup, shown in
     /// the sidebar until dismissed.
     pub load_problems: Vec<crate::json_store::LoadProblem>,
-    /// Where these were read from, and where the shell writes them back.
-    /// `None`: nothing is persisted.
+    /// Where state is read and written. `None`: nothing is persisted.
     pub data_dir: Option<crate::paths::DataDir>,
-}
-
-impl Startup {
-    /// The `settings.json` the panel writes and the watch follows: one
-    /// derivation, so the two can never name different files.
-    fn settings_file(&self) -> Option<PathBuf> {
-        self.data_dir.as_ref().map(crate::settings::path)
-    }
+    /// The `settings.json` `main()` also hands the MCP server: resolved once,
+    /// so the agent never writes a file the app does not watch.
+    pub settings_file: Option<PathBuf>,
 }
 
 /// The settings the MCP `snapshot` tool reports that `core` cannot read —
@@ -154,7 +148,7 @@ pub fn run(
         .as_ref()
         .map_or_else(WindowConfig::default, WindowConfig::load)
         .with_onscreen_position(&crate::window_geometry::current_screens());
-    let settings_file = startup.settings_file();
+    let settings_file = startup.settings_file.clone();
     let position = match (config.x, config.y) {
         (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
         _ => window::Position::Centered,
@@ -236,6 +230,9 @@ struct Shell {
     data_dir: Option<crate::paths::DataDir>,
     /// The `settings.json` the live-reload watch follows; resolved once.
     settings_file: Option<PathBuf>,
+    /// Where captures and screencasts land: one dir, so the latest is the
+    /// highest-named file in it.
+    captures: Option<PathBuf>,
     /// Claude Code's session-file directory, read for each pane's identity.
     claude_sessions: Option<PathBuf>,
     scan_error: Option<String>,
@@ -821,7 +818,8 @@ impl Shell {
             mcp_tokens,
         } = live_bridge;
         let (notification_clicks, notification_clicked) = notify_click::channel();
-        let settings_file = startup.settings_file();
+        let settings_file = startup.settings_file;
+        let captures = startup.data_dir.as_ref().map(crate::capture::captures_dir);
         let mut core = termherd_core::App::new();
         core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
         core.apply(termherd_core::Event::CollapsedLoaded(startup.collapsed));
@@ -879,12 +877,10 @@ impl Shell {
             split_drag: None,
             cursor_position: Point::new(0.0, 0.0),
             exiting: false,
-            record: RecordState::new(
-                RecordConfig::default(),
-                startup.data_dir.as_ref().map(crate::capture::captures_dir),
-            ),
+            record: RecordState::new(RecordConfig::default()),
             config: config_input(&crate::settings::Settings::default()),
             data_dir: startup.data_dir,
+            captures,
         };
         shell.adopt_settings(&startup.settings);
         shell
@@ -1822,8 +1818,8 @@ mod key_routing {
             metadata: Overlay::default(),
             collapsed: HashSet::new(),
             load_problems: Vec::new(),
-            // A test that persists names its own dir: the user's is main()'s alone.
             data_dir: None,
+            settings_file: None,
         }
     }
 
@@ -7384,6 +7380,7 @@ mod key_routing {
             Arc::new(RecordingPty::default()),
             Startup {
                 data_dir: Some(dir.clone()),
+                settings_file: Some(crate::settings::path(dir)),
                 ..test_startup()
             },
         )

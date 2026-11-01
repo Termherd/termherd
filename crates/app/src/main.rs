@@ -98,7 +98,7 @@ fn main() -> iced::Result {
         match runtime.block_on(mcp::serve(
             bridge_handle.clone(),
             mcp_tokens.clone(),
-            settings_file,
+            settings_file.clone(),
         )) {
             Ok(endpoint) => {
                 info!(url = %endpoint.url, "mcp live bridge listening");
@@ -132,6 +132,7 @@ fn main() -> iced::Result {
             .chain(metadata_problem)
             .collect(),
         data_dir,
+        settings_file,
     };
     // Terminal path candidates are checked against the real filesystem — the
     // one thing that tells `src/main.rs` from prose like `and/or`.

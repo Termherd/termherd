@@ -137,7 +137,9 @@ impl Shell {
             Effect::StartRecording
             | Effect::CaptureFrame
             | Effect::FinishRecording { .. }
-            | Effect::CancelRecording => return self.record.run_one(effect),
+            | Effect::CancelRecording => {
+                return self.record.run_one(effect, self.captures.as_deref());
+            }
         };
         if let Err(error) = outcome {
             tracing::warn!(%error, "pty effect failed");
@@ -282,11 +284,11 @@ impl Shell {
     /// Resolve the captures dir and write the dump for an `Effect::Capture`. A
     /// no-op without a data directory.
     fn capture_dump(&self, dump: WorkspaceSnapshot) -> Task<Message> {
-        let Some(dir) = self.data_dir.as_ref().map(crate::capture::captures_dir) else {
+        let Some(dir) = &self.captures else {
             tracing::warn!("no data directory; capture skipped");
             return Task::none();
         };
-        self.perform_capture(&dir, dump)
+        self.perform_capture(dir, dump)
     }
 
     /// Write the rung-0 JSON dump into `dir` now and schedule the rung-1 PNG.

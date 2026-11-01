@@ -172,7 +172,7 @@ by running the app.
   became its second reader; `write_png` is now the disk wrapper over it.
 - `crates/app/src/snapshot_dto.rs` — the JSON wire form, shared with the MCP
   handler.
-- `crates/app/src/paths.rs` — shared `home_dir` / `termherd_dir` the stores
-  resolve through (one `~/.termherd` resolver, not seven).
+- `crates/app/src/paths.rs` — `DataDir`, resolved once in `main()` and
+  injected into every store (`captures_dir(&DataDir)` here).
 - `crates/app/src/shell.rs` — `Shell::capture` / `perform_capture`, the
   `CaptureScreenshot` → off-thread `CaptureWritten` PNG encode.

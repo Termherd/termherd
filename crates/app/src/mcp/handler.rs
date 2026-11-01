@@ -98,8 +98,8 @@ impl TermherdMcp {
         }
     }
 
-    /// Point the options tools at `file`. Without one they refuse, so only the
-    /// composition root decides which settings an agent may rewrite.
+    /// Point the options tools at `file`; without one they refuse, so only
+    /// `main()` decides which settings an agent may rewrite.
     pub fn with_settings_file(mut self, file: Option<PathBuf>) -> Self {
         self.settings_file = file;
         self
@@ -1984,8 +1984,7 @@ mod tests {
 
     #[test]
     fn a_handler_finds_no_settings_file_on_its_own() {
-        // The options tools write the file they hold, so one resolved from the
-        // home would let any test calling them rewrite the user's settings.
+        // A home-resolved default would let any test rewrite the user's settings.
         assert_eq!(TermherdMcp::new(channel().0).settings_file, None);
     }
 

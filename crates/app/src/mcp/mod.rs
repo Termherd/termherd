@@ -84,8 +84,7 @@ pub(crate) struct Endpoint {
 /// Bind the loopback MCP server and start accepting connections on the current
 /// tokio runtime. Returns the [`Endpoint`] once the listener is bound (so the
 /// launch path can inject its url); the accept loop then runs until the runtime
-/// is dropped. Every request is gated by `tokens` before rmcp sees it. The
-/// options tools read and write `settings_file`, and refuse without one.
+/// is dropped. Every request is gated by `tokens` before rmcp sees it.
 pub(crate) async fn serve(
     bridge: BridgeHandle,
     tokens: Tokens,
