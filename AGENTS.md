@@ -199,6 +199,8 @@ shell's settings watch then applies live; the one pair that touches a file
 rather than `core`, so it needs no bridge round trip). The loop
 they exist to serve is **act → wait → observe**: `run_in_session` returns
 immediately, so synchronise with `wait_for_status` and then `read_terminal`.
+Wait for `busy` before `idle`: just after typing, Claude still shows the
+status from before the prompt, and a wait on it answers at once (#435).
 Do **not** poll `snapshot` in a loop — it races the transition you are
 watching for, which is why the wait rung exists.
 
@@ -345,7 +347,11 @@ needs it, not before.
 only from a session termherd spawned, so the launcher itself cannot drive it)
 and the pointer at termherd's own chrome (#301 — the sidebar, tabs and gutters
 still have no mouse). Neither blocks the other.
-The list leaves out the bridge's hardening defect #293 (#284 is fixed). A third
+Four defects are open beside them: the bridge's hardening (#293; #284 is
+fixed), a status that can read `idle` while Claude still works (#427; a wait
+settling on the status from before its prompt is fixed), a `read_terminal`
+that can return the screen from before the status it waited for (#436), and a
+long `claude_command` that Claude reads as a paste (#439). Another
 defect, the copy chord overwriting a mouse-mode program's own clipboard write
 with termherd's last copy (#316), is fixed: the shell keeps no copy cache any
 more, and asks the terminal whether it holds a selection at all.
@@ -682,6 +688,12 @@ exists). Do not relax them locally.
   screenshot cannot show the no-break space. Build the fixture from a capture
   of the live pane instead: `⌘⇧S` writes the visible text to
   `~/.termherd/captures/`, and `xxd` on that row shows the bytes.
+  Its **input** is read on bytes too, and not as a shell reads it: `\n` is
+  Ctrl+J, a line break in the prompt, and only `\r` is Enter. A burst of
+  about 64 bytes or more is taken as a paste, inside which even `\r` is a
+  line break, so Enter must arrive as a write of its own, after a gap
+  (#426, fixed in #430). `claude_command` still writes its Enter with no gap
+  (#439).
 
 ## Conventions
 

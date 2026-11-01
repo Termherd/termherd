@@ -267,7 +267,9 @@ nothing to configure. It exposes the running workspace:
 | `list_options` · `set_option` | read and change `settings.json` — the same catalogue as the stdio server; a running TermHerd applies a change at once |
 
 The loop that makes it useful is **act → wait → observe**: `run_in_session`,
-then `wait_for_status`, then `read_terminal`. Sessions are addressed by a
+then `wait_for_status` (for `busy`, then for `idle`: just after typing, the
+session still shows the status from before the prompt), then `read_terminal`.
+`prompt_in_session` does that wait for you. Sessions are addressed by a
 stable `handle` that survives a Claude-side session re-key.
 
 `press_keys` and `run_action` reach the app itself, not a terminal — typing
