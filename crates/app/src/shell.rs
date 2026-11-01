@@ -87,16 +87,6 @@ fn tab_rename_id() -> widget::Id {
     widget::Id::new("termherd-tab-rename")
 }
 
-/// The user's home directory, the fallback cwd for "new shell here" when no
-/// session is open to inherit one from. Falls back to "." if neither
-/// `USERPROFILE` (Windows) nor `HOME` (Unix) is set, so a launch always has a
-/// directory to start in.
-fn home_dir() -> String {
-    crate::paths::home_dir()
-        .map(|h| h.to_string_lossy().into_owned())
-        .unwrap_or_else(|| ".".to_string())
-}
-
 /// Resolved user configuration handed to the shell at startup: the theme,
 /// keymap and metadata overlay built from `settings.json` / `metadata.json`.
 /// Bundled so the composition root passes one value, not a long argument list.
@@ -116,6 +106,9 @@ pub struct Startup {
     /// The `settings.json` `main()` also hands the MCP server: resolved once,
     /// so the agent never writes a file the app does not watch.
     pub settings_file: Option<PathBuf>,
+    /// Where a launch with no context starts.
+    pub fallback_cwd: String,
+    pub claude_dir: Option<crate::paths::ClaudeDir>,
 }
 
 /// The settings the MCP `snapshot` tool reports that `core` cannot read —
@@ -168,8 +161,6 @@ pub fn run(
                         pty: pty.clone(),
                         file: settings_file.clone(),
                     }),
-                    claude_sessions: crate::paths::claude_dir()
-                        .map(|claude| claude.join("sessions")),
                 },
                 live_bridge.clone(),
                 startup.clone(),
@@ -233,8 +224,8 @@ struct Shell {
     /// Where captures and screencasts land: one dir, so the latest is the
     /// highest-named file in it.
     captures: Option<PathBuf>,
-    /// Claude Code's session-file directory, read for each pane's identity.
-    claude_sessions: Option<PathBuf>,
+    fallback_cwd: String,
+    claude_dir: Option<crate::paths::ClaudeDir>,
     scan_error: Option<String>,
     /// Checks whether a path-shaped run of terminal text names a real file.
     /// The one thing that tells `src/main.rs` from `and/or`.
@@ -796,9 +787,6 @@ pub(crate) struct Ports {
     /// Where a setting goes beyond the shell: the live terminal palette, the
     /// next session's shell, and `settings.json`.
     pub(crate) settings: Arc<dyn live_settings::SettingsSink>,
-    /// Where Claude Code writes its per-process session files
-    /// (`~/.claude/sessions`), when there is a home to find it in.
-    pub(crate) claude_sessions: Option<PathBuf>,
 }
 
 impl Shell {
@@ -810,7 +798,6 @@ impl Shell {
             pty,
             pty_output,
             settings: settings_sink,
-            claude_sessions,
         } = ports;
         let LiveBridge {
             requests: bridge_requests,
@@ -830,7 +817,6 @@ impl Shell {
             bounds,
             scanner,
             watch_root,
-            claude_sessions,
             settings_file,
             scan_error: None,
             path_resolver,
@@ -880,6 +866,8 @@ impl Shell {
             record: RecordState::new(RecordConfig::default()),
             config: config_input(&crate::settings::Settings::default()),
             data_dir: startup.data_dir,
+            fallback_cwd: startup.fallback_cwd,
+            claude_dir: startup.claude_dir,
             captures,
         };
         shell.adopt_settings(&startup.settings);
@@ -934,8 +922,9 @@ impl Shell {
             .iter()
             .map(|g| g.path.clone())
             .collect();
+        let claude = self.claude_dir.clone();
         Task::perform(
-            async move { crate::docs::discover(&paths) },
+            async move { crate::docs::discover(claude.as_ref(), &paths) },
             Message::DocsDiscovered,
         )
     }
@@ -1421,7 +1410,10 @@ impl Shell {
                 path,
                 content,
                 mtime,
-            } => self.show_doc(OpenDoc::loaded(label, path, &content, mtime)),
+            } => {
+                let doc = OpenDoc::loaded(label, path, &content, mtime, self.claude_dir.as_ref());
+                self.show_doc(doc)
+            }
             Message::DocEdit(action) => self.edit_doc(action),
             Message::SaveDoc => self.save_open_doc(),
             Message::DocSaved(result) => self.on_doc_saved(result),
@@ -1820,6 +1812,8 @@ mod key_routing {
             load_problems: Vec::new(),
             data_dir: None,
             settings_file: None,
+            fallback_cwd: "/injected/home".to_owned(),
+            claude_dir: None,
         }
     }
 
@@ -1848,7 +1842,6 @@ mod key_routing {
             pty,
             pty_output: PtyOutput::new(rx),
             settings: Arc::new(()),
-            claude_sessions: None,
         }
     }
 
@@ -1961,27 +1954,28 @@ mod key_routing {
 
     const STARTED: &str = "Wed Oct  7 06:48:07 2026";
 
-    /// Write Claude's session file for `pid` under `name` into `dir`.
-    fn write_session_file(dir: &std::path::Path, pid: u32, name: &str) {
+    fn write_session_file(claude: &std::path::Path, pid: u32, name: &str) {
+        let sessions = claude.join("sessions");
+        std::fs::create_dir_all(&sessions).expect("mkdir sessions");
         std::fs::write(
-            dir.join(format!("{pid}.json")),
+            sessions.join(format!("{pid}.json")),
             format!(r#"{{"pid":{pid},"name":"{name}","procStart":"{STARTED}"}}"#),
         )
         .expect("write session file");
     }
 
-    /// A shell reading session files from `dir`, one shell tab open and
-    /// focused; `pid`, when given, is reported in front of it.
-    fn shell_reading_sessions_from(dir: &std::path::Path, pid: Option<u32>) -> (Shell, SessionId) {
-        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
-        let mut shell = Shell::new(
-            WindowConfig::default(),
-            Ports {
-                claude_sessions: Some(dir.to_path_buf()),
-                ..test_ports(Arc::new(RecordingPty::default()), rx)
+    /// One shell tab, focused; `pid`, when given, reported in front of it.
+    fn shell_reading_sessions_from(
+        claude: &std::path::Path,
+        pid: Option<u32>,
+    ) -> (Shell, SessionId) {
+        std::fs::create_dir_all(claude.join("sessions")).expect("mkdir sessions");
+        let mut shell = shell_over_with(
+            Arc::new(RecordingPty::default()),
+            Startup {
+                claude_dir: Some(crate::paths::ClaudeDir::at(claude)),
+                ..test_startup()
             },
-            test_live_bridge(),
-            test_startup(),
         );
         let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
         let session = shell.core.workspace.focused_session().expect("focused");
@@ -2004,7 +1998,7 @@ mod key_routing {
         let dir = tempfile::tempdir().expect("tempdir");
         let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
         std::fs::write(
-            dir.path().join("4399.json"),
+            dir.path().join("sessions").join("4399.json"),
             format!(r#"{{"pid":4399,"sessionId":"re-keyed","procStart":"{STARTED}"}}"#),
         )
         .expect("write session file");
@@ -2118,20 +2112,19 @@ mod key_routing {
     #[test]
     fn the_session_files_of_the_panes_reach_list_sessions_and_a_tabs_snapshot() {
         let dir = tempfile::tempdir().expect("tempdir");
+        let sessions = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions).expect("mkdir sessions");
         std::fs::write(
-            dir.path().join("4399.json"),
+            sessions.join("4399.json"),
             r#"{"pid":4399,"name":"proj-35","sessionId":"7eff","procStart":"Wed Oct  7 06:48:07 2026"}"#,
         )
         .expect("write session file");
-        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
-        let mut shell = Shell::new(
-            WindowConfig::default(),
-            Ports {
-                claude_sessions: Some(dir.path().to_path_buf()),
-                ..test_ports(Arc::new(RecordingPty::default()), rx)
+        let mut shell = shell_over_with(
+            Arc::new(RecordingPty::default()),
+            Startup {
+                claude_dir: Some(crate::paths::ClaudeDir::at(dir.path())),
+                ..test_startup()
             },
-            test_live_bridge(),
-            test_startup(),
         );
         let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
         let session = shell.core.workspace.focused_session().expect("focused");
@@ -2279,6 +2272,7 @@ mod key_routing {
             minted_fresh_claude(launches.first()).is_some(),
             "a fresh Claude session, no project → home dir"
         );
+        assert_eq!(focused_cwd(&shell).as_deref(), Some("/injected/home"));
     }
 
     #[test]
@@ -5688,6 +5682,29 @@ mod key_routing {
     }
 
     #[test]
+    fn the_doc_write_scope_is_measured_against_the_injected_claude_dir() {
+        let claude = PathBuf::from("/injected/.claude");
+        let mut shell = shell_over_with(
+            Arc::new(RecordingPty::default()),
+            Startup {
+                claude_dir: Some(crate::paths::ClaudeDir::at(&claude)),
+                ..test_startup()
+            },
+        );
+        // Writable anywhere else; a transcript dir here.
+        let path = claude.join("projects").join("-repo").join("CLAUDE.md");
+
+        let _ = shell.update(Message::DocLoaded {
+            label: "CLAUDE.md".to_string(),
+            path,
+            content: String::new(),
+            mtime: None,
+        });
+
+        assert!(!shell.open_doc.as_ref().expect("doc open").writable);
+    }
+
+    #[test]
     fn pressing_another_tab_commits_the_rename_but_the_double_clicks_own_drag_does_not() {
         let mut shell = shell_with_three_tabs();
 
@@ -6378,8 +6395,8 @@ mod key_routing {
         assert_eq!(pty.launches().last(), Some(&Launch::Shell));
         assert_eq!(
             focused_cwd(&shell).as_deref(),
-            Some(home_dir().as_str()),
-            "the empty-workspace shell lands in the home directory"
+            Some("/injected/home"),
+            "the empty-workspace shell lands in the injected home directory"
         );
     }
 
@@ -8017,7 +8034,7 @@ mod key_routing {
             let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
             let _ = shell.update(Message::OpenTabMenu(0));
             let _ = select(&mut shell, Action::CopyAgentName);
-            std::fs::remove_file(dir.path().join("4399.json")).expect("remove");
+            std::fs::remove_file(dir.path().join("sessions").join("4399.json")).expect("remove");
 
             let enter = press_chord(&mut shell, "enter");
 

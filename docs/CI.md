@@ -106,7 +106,8 @@ Everything fans out in parallel (no inter-job ordering):
   `mdbook`), each gated on its file category and fanned into the `ci-success`
   aggregator. Jobs whose category didn't change report `skipped` (a docs-only
   PR skips all the Rust jobs) and `ci-success` still passes. `cross-os` is
-  **skipped** on PRs. Branch protection requires only `ci-success`.
+  **skipped** on PRs; `gh workflow run CI --ref <branch>` runs it on a branch
+  before merge. Branch protection requires only `ci-success`.
 - **`codeql`** and **`release`** — do **not** run on PRs (`codeql` has no
   `pull_request` trigger; `release` sets `pr-run-mode = "skip"` in
   `dist-workspace.toml`).

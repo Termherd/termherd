@@ -8,6 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::paths::ClaudeDir;
+
 /// Which kind of document an entry is — drives its icon/grouping in the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocKind {
@@ -24,13 +26,11 @@ pub struct DocEntry {
     pub path: PathBuf,
 }
 
-/// Discover the global memory, the plan files, and a `CLAUDE.md` for each given
-/// project path that has one. Order: global memory, plans (by name), then
-/// project memories in the order given. Missing files are simply absent.
+/// Order: global memory, plans by name, then project memories as given.
 #[must_use]
-pub fn discover(project_paths: &[String]) -> Vec<DocEntry> {
+pub fn discover(claude: Option<&ClaudeDir>, project_paths: &[String]) -> Vec<DocEntry> {
     let mut docs = Vec::new();
-    if let Some(home) = crate::paths::claude_dir() {
+    if let Some(home) = claude {
         let global = home.join("CLAUDE.md");
         if global.is_file() {
             docs.push(DocEntry {
@@ -94,44 +94,23 @@ pub enum SaveError {
     Io(String),
 }
 
-/// Whether the in-app editor may write `path`, resolving the user's `~/.claude`
-/// itself. Drives whether the viewer offers a Save action.
+/// Drives whether the viewer offers a Save action.
 #[must_use]
-pub fn is_writable(path: &Path) -> bool {
-    termherd_core::docscope::is_writable(path, &home_or_sentinel())
+pub fn is_writable(path: &Path, claude: Option<&ClaudeDir>) -> bool {
+    termherd_core::docscope::is_writable(path, &boundary(claude))
 }
 
-/// Save `contents` to `path` (the shell-facing entry point), resolving the
-/// `~/.claude` boundary. `open_mtime` is the baseline captured when the file was
-/// opened, or `None` if it could not be read (then the concurrency guard is
-/// skipped — there is nothing to compare against). Returns the file's new mtime
-/// so the caller can refresh its baseline.
+/// Refuses a path outside the scope and a file changed since `open_mtime`
+/// (`None`: no baseline, no check). Returns the new mtime for the next save.
 pub fn save(
     path: &Path,
     contents: &str,
     open_mtime: Option<SystemTime>,
+    claude: Option<&ClaudeDir>,
 ) -> Result<SystemTime, SaveError> {
-    write(path, contents, open_mtime, &home_or_sentinel())
-}
+    use termherd_core::docscope::{SaveDecision, decide_save};
 
-/// Write `contents` to `path`, but only if (a) the path is within the writable
-/// document scope and (b) the file has not changed on disk since `open_mtime`.
-/// The write is atomic — a temp file in the same directory, then a rename — so
-/// a crash mid-write never truncates the original. Returns the file's mtime
-/// after the write.
-///
-/// `claude_home` is the user's `~/.claude`; it is the boundary the scope
-/// predicate is measured against. Split from [`save`] so the boundary is an
-/// explicit argument the tests can drive without touching the environment.
-fn write(
-    path: &Path,
-    contents: &str,
-    open_mtime: Option<SystemTime>,
-    claude_home: &Path,
-) -> Result<SystemTime, SaveError> {
-    use termherd_core::docscope::{SaveDecision, decide_save, is_writable};
-
-    if !is_writable(path, claude_home) {
+    if !is_writable(path, claude) {
         return Err(SaveError::OutOfScope);
     }
     // With a baseline and a file still on disk, refuse if it changed under us.
@@ -172,11 +151,13 @@ fn last_component(path: &str) -> &str {
         .unwrap_or(path)
 }
 
-/// `~/.claude` if it resolves, else a path that is the prefix of nothing — so a
-/// project `CLAUDE.md` (outside any home) is still writable while no file can be
-/// mistaken for one inside the protected tree.
-fn home_or_sentinel() -> PathBuf {
-    crate::paths::claude_dir().unwrap_or_else(|| PathBuf::from("\0/no-claude-home"))
+/// Without a Claude dir, a prefix of nothing: project memories stay writable,
+/// nothing else gains scope.
+fn boundary(claude: Option<&ClaudeDir>) -> PathBuf {
+    claude.map_or_else(
+        || PathBuf::from("\0/no-claude-home"),
+        |dir| dir.path().to_path_buf(),
+    )
 }
 
 #[cfg(test)]
@@ -201,7 +182,7 @@ mod tests {
     // --- write slice -------------------------------------------------------
 
     /// Build a fake `~/.claude` with a plan and a project memory under `root`.
-    fn scaffold(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    fn scaffold(root: &Path) -> (ClaudeDir, PathBuf, PathBuf) {
         let home = root.join(".claude");
         std::fs::create_dir_all(home.join("plans")).expect("mkdir plans");
         std::fs::create_dir_all(home.join("projects").join("-repo")).expect("mkdir projects");
@@ -209,17 +190,13 @@ mod tests {
         std::fs::write(&plan, "old plan").expect("seed plan");
         let session = home.join("projects").join("-repo").join("abc.jsonl");
         std::fs::write(&session, "{}").expect("seed session");
-        (home, plan, session)
+        (ClaudeDir::at(home), plan, session)
     }
 
     #[test]
-    fn is_writable_wrapper_resolves_the_home_boundary() {
-        // The env-resolving wrapper must agree with the scope predicate: a
-        // project CLAUDE.md (outside ~/.claude) is writable, an arbitrary file
-        // is not. This pins the wrapper + home resolution, not just the pure
-        // core predicate.
-        assert!(is_writable(Path::new("/tmp/some-repo/CLAUDE.md")));
-        assert!(!is_writable(Path::new("/tmp/some-repo/notes.txt")));
+    fn without_a_claude_dir_a_project_memory_stays_writable() {
+        assert!(is_writable(Path::new("/tmp/some-repo/CLAUDE.md"), None));
+        assert!(!is_writable(Path::new("/tmp/some-repo/notes.txt"), None));
     }
 
     #[test]
@@ -228,7 +205,7 @@ mod tests {
         let (home, plan, _) = scaffold(dir.path());
         let m = mtime(&plan).expect("mtime");
 
-        write(&plan, "new plan body", Some(m), &home).expect("save ok");
+        save(&plan, "new plan body", Some(m), Some(&home)).expect("save ok");
 
         assert_eq!(
             std::fs::read_to_string(&plan).expect("read"),
@@ -242,11 +219,29 @@ mod tests {
         let (home, _, session) = scaffold(dir.path());
         let m = mtime(&session).expect("mtime");
 
-        let err = write(&session, "tampered", Some(m), &home).expect_err("must reject");
+        let err = save(&session, "tampered", Some(m), Some(&home)).expect_err("must reject");
 
         assert_eq!(err, SaveError::OutOfScope);
         // Session JSONL is untouched.
         assert_eq!(std::fs::read_to_string(&session).expect("read"), "{}");
+    }
+
+    #[test]
+    fn discovers_the_global_memory_and_plans_of_the_given_claude_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (home, plan, _) = scaffold(dir.path());
+        std::fs::write(home.join("CLAUDE.md"), "# global").expect("seed");
+
+        let docs = discover(Some(&home), &[]);
+
+        let found: Vec<(DocKind, PathBuf)> = docs.into_iter().map(|d| (d.kind, d.path)).collect();
+        assert_eq!(
+            found,
+            vec![
+                (DocKind::GlobalMemory, home.join("CLAUDE.md")),
+                (DocKind::Plan, plan),
+            ]
+        );
     }
 
     /// Regression: a project `CLAUDE.md` that `discover` surfaces must be one
@@ -260,7 +255,7 @@ mod tests {
         std::fs::write(proj.join("CLAUDE.md"), "# project").expect("seed");
 
         let proj_str = proj.to_string_lossy().into_owned();
-        let docs = discover(&[proj_str]);
+        let docs = discover(None, &[proj_str]);
 
         let entry = docs
             .iter()
@@ -273,13 +268,25 @@ mod tests {
     }
 
     #[test]
+    fn save_measures_the_scope_against_the_given_claude_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (home, _, _) = scaffold(dir.path());
+        let nested = home.join("projects").join("-repo").join("CLAUDE.md");
+        std::fs::write(&nested, "untouched").expect("seed");
+
+        let err = save(&nested, "tampered", None, Some(&home)).expect_err("must reject");
+
+        assert_eq!(err, SaveError::OutOfScope);
+    }
+
+    #[test]
     fn saves_without_a_baseline_when_mtime_was_unreadable() {
         // No open-time mtime ⇒ no concurrency baseline to compare against, so
         // the save proceeds rather than being wedged into a permanent conflict.
         let dir = tempfile::tempdir().expect("tempdir");
         let (home, plan, _) = scaffold(dir.path());
 
-        write(&plan, "rescued", None, &home).expect("save ok");
+        save(&plan, "rescued", None, Some(&home)).expect("save ok");
 
         assert_eq!(std::fs::read_to_string(&plan).expect("read"), "rescued");
     }
@@ -294,7 +301,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         std::fs::write(&plan, "claude wrote this").expect("concurrent write");
 
-        let err = write(&plan, "our edit", Some(stale), &home).expect_err("must conflict");
+        let err = save(&plan, "our edit", Some(stale), Some(&home)).expect_err("must conflict");
 
         assert_eq!(err, SaveError::Conflict);
         // The concurrent writer's content survives.

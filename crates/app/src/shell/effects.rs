@@ -246,7 +246,7 @@ impl Shell {
     /// Claude's session file for `pid`, read now. `None` when there is no
     /// sessions directory, no file, or none that decodes.
     pub(super) fn session_file(&self, pid: u32) -> Option<SessionFile> {
-        read_session_file(self.claude_sessions.as_ref()?, pid)
+        read_session_file(&self.claude_dir.as_ref()?.join("sessions"), pid)
     }
 
     /// The full visible text of the sessions the filter scopes in, keyed by
