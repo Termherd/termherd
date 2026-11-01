@@ -4,7 +4,6 @@
 //! own `window.json` (FR12).
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use termherd_core::keymap::Platform;
@@ -12,7 +11,6 @@ use termherd_core::{Action, KeyChord, Keymap};
 use termherd_pty::Palette;
 use tracing::warn;
 
-use crate::paths::DataDir;
 use crate::record_config::RecordConfig;
 
 /// The persisted user settings. Every field defaults, so a missing or partial
@@ -651,15 +649,15 @@ impl Settings {
     /// Load persisted settings; any problem (no file, bad JSON) falls back to
     /// defaults — a corrupt config must never prevent startup.
     #[must_use]
-    pub fn load(file: &Path) -> Self {
-        crate::json_store::load_json(file)
+    pub fn load() -> Self {
+        crate::json_store::load_json(FILE)
     }
 
     /// Re-read the file while the app runs. `None` when it does not parse,
     /// so the running settings stay as they are.
     #[must_use]
-    pub fn reload(file: &Path) -> Option<Self> {
-        crate::json_store::reload_json(file)
+    pub fn reload() -> Option<Self> {
+        crate::json_store::reload_json(FILE)
     }
 
     /// The shell to launch, as the PTY adapter takes it; `None` for the
@@ -675,8 +673,8 @@ impl Settings {
     /// The startup load: an unparseable file is set aside and reported rather
     /// than silently replaced by defaults the next save would write over it.
     #[must_use]
-    pub fn load_checked(file: &Path) -> (Self, Option<crate::json_store::LoadProblem>) {
-        crate::json_store::load_json_checked(file)
+    pub fn load_checked() -> (Self, Option<crate::json_store::LoadProblem>) {
+        crate::json_store::load_json_checked(FILE)
     }
 }
 
@@ -707,41 +705,29 @@ impl AppearanceChange {
 /// Persist one appearance change to `settings.json`, keeping the rest of the
 /// file — explicit colour overrides included — as the user wrote it. A
 /// failure is logged, never fatal.
-pub fn save_appearance(file: &Path, change: &AppearanceChange) {
+pub fn save_appearance(change: &AppearanceChange) {
+    let Some(path) = path() else {
+        return;
+    };
     let (id, value) = change.option();
-    if let Err(e) = termherd_mcp::file::set_option_at(file, id, &value) {
-        warn!(error = %e, path = %file.display(), "could not save the appearance");
+    if let Err(e) = termherd_mcp::file::set_option_at(&path, id, &value) {
+        warn!(error = %e, path = %path.display(), "could not save the appearance");
     }
 }
 
-/// Where the settings file lives in `dir`.
+/// Where the settings file lives, for the live-reload watch. `None` without a
+/// home directory.
 #[must_use]
-pub fn path(dir: &DataDir) -> PathBuf {
-    dir.file(FILE)
+pub fn path() -> Option<std::path::PathBuf> {
+    Some(crate::paths::termherd_dir()?.join(FILE))
 }
 
-/// The file's name within the data dir (PRD §7).
+/// `~/.termherd/settings.json` — the app data dir from the PRD (§7).
 const FILE: &str = "settings.json";
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn an_appearance_pick_lands_in_the_data_dir_and_every_read_finds_it() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let file = path(&DataDir::at(tmp.path()));
-        assert_eq!(file, tmp.path().join("settings.json"));
-
-        save_appearance(&file, &AppearanceChange::Theme(ThemeChoice::Light));
-
-        assert_eq!(Settings::load(&file).theme, ThemeChoice::Light);
-        assert_eq!(Settings::load_checked(&file).0.theme, ThemeChoice::Light);
-        assert_eq!(
-            Settings::reload(&file).map(|s| s.theme),
-            Some(ThemeChoice::Light)
-        );
-    }
 
     #[test]
     fn defaults_are_a_default_shell_and_dark_theme() {

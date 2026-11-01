@@ -16,7 +16,6 @@ mod handler;
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
@@ -85,28 +84,20 @@ pub(crate) struct Endpoint {
 /// tokio runtime. Returns the [`Endpoint`] once the listener is bound (so the
 /// launch path can inject its url); the accept loop then runs until the runtime
 /// is dropped. Every request is gated by `tokens` before rmcp sees it.
-pub(crate) async fn serve(
-    bridge: BridgeHandle,
-    tokens: Tokens,
-    settings_file: Option<PathBuf>,
-) -> std::io::Result<Endpoint> {
+pub(crate) async fn serve(bridge: BridgeHandle, tokens: Tokens) -> std::io::Result<Endpoint> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let addr = listener.local_addr()?;
     let endpoint = Endpoint {
         url: format!("http://{addr}{MCP_PATH}"),
     };
-    let service = Arc::new(build_service(bridge, settings_file));
-    tokio::spawn(accept_loop(listener, service, tokens));
+    tokio::spawn(accept_loop(listener, bridge, tokens));
     Ok(endpoint)
 }
 
 /// The rmcp request→response handler, rebuilt per session by the factory (a
 /// fresh [`TermherdMcp`] cloning the bridge). Stateless JSON responses: the
 /// tools are read-only and self-contained, so no SSE session bookkeeping.
-fn build_service(
-    bridge: BridgeHandle,
-    settings_file: Option<PathBuf>,
-) -> StreamableHttpService<TermherdMcp, LocalSessionManager> {
+fn build_service(bridge: BridgeHandle) -> StreamableHttpService<TermherdMcp, LocalSessionManager> {
     // `StreamableHttpServerConfig` is `#[non_exhaustive]`; set fields on a
     // default. Stateless request/response with a plain JSON body — the tools are
     // read-only and self-contained, so no SSE session bookkeeping is needed.
@@ -114,7 +105,7 @@ fn build_service(
     config.stateful_mode = false;
     config.json_response = true;
     StreamableHttpService::new(
-        move || Ok(TermherdMcp::new(bridge.clone()).with_settings_file(settings_file.clone())),
+        move || Ok(TermherdMcp::new(bridge.clone())),
         Arc::new(LocalSessionManager::default()),
         config,
     )
@@ -122,11 +113,8 @@ fn build_service(
 
 /// Accept loopback connections forever, serving each on its own task. One shared
 /// rmcp service backs every connection; the per-request token gate wraps it.
-async fn accept_loop(
-    listener: TcpListener,
-    service: Arc<StreamableHttpService<TermherdMcp, LocalSessionManager>>,
-    tokens: Tokens,
-) {
+async fn accept_loop(listener: TcpListener, bridge: BridgeHandle, tokens: Tokens) {
+    let service = Arc::new(build_service(bridge));
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _peer)) => stream,
@@ -254,7 +242,7 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let (bridge, _requests) = crate::shell::bridge::channel();
-        let endpoint = serve(bridge, Tokens::default(), None)
+        let endpoint = serve(bridge, Tokens::default())
             .await
             .expect("bind the loopback server");
         let authority = endpoint
@@ -326,7 +314,7 @@ mod tests {
     async fn a_valid_token_completes_the_mcp_initialize_handshake() {
         let (bridge, _requests) = crate::shell::bridge::channel();
         let tokens = Tokens::default();
-        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
+        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
         let token = tokens.issue();
         let authority = authority(&endpoint);
 
@@ -359,7 +347,7 @@ mod tests {
     async fn the_screenshot_tool_is_advertised_alongside_the_text_reads() {
         let (bridge, _requests) = crate::shell::bridge::channel();
         let tokens = Tokens::default();
-        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
+        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
         let token = tokens.issue();
 
         let (status, body) = round_trip(
@@ -395,7 +383,7 @@ mod tests {
             }),
         );
         let tokens = Tokens::default();
-        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
+        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
         let token = tokens.issue();
 
         let (status, body) = round_trip(
@@ -420,7 +408,7 @@ mod tests {
     async fn the_keyboard_tools_are_advertised_with_the_rest() {
         let (bridge, _requests) = crate::shell::bridge::channel();
         let tokens = Tokens::default();
-        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
+        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
         let token = tokens.issue();
 
         let (status, body) = round_trip(
@@ -460,7 +448,7 @@ mod tests {
             }),
         );
         let tokens = Tokens::default();
-        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
+        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
         let token = tokens.issue();
 
         let (status, body) = round_trip(
