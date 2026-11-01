@@ -480,7 +480,8 @@ exists). Do not relax them locally.
   require-time singletons. Construct dependencies in `main()` and inject.
   The environment counts: a store reading `$HOME` let 28 tests rewrite the
   user's `~/.termherd` on each `cargo test` (#407). `paths::DataDir::user()`
-  is `main()`'s alone. The guard
+  and `paths::ClaudeDir::user()` are `main()`'s alone (the second since
+  #432). The guard
   `no_test_writes_the_data_dir_of_the_home_it_runs_in` (`.termherd` and
   `.claude`) covers the app's unit tests only, not `crates/app/tests/` or
   other crates.
