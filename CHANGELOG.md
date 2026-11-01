@@ -7,6 +7,19 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (Windows and Linux shortcuts leave terminal keys alone)
+
+- Off macOS, no default shortcut takes a bare Ctrl+letter, so Ctrl+D, Ctrl+W,
+  Ctrl+T, Ctrl+F, Ctrl+B and Ctrl+Up / Down reach the program in the pane
+  (#404). Close is Ctrl+Shift+W, search Ctrl+Shift+F, sidebar Ctrl+Shift+B,
+  new shell Ctrl+Shift+T, reopen closed tab Ctrl+Alt+Shift+T, scroll to top /
+  bottom Ctrl+Shift+Home / End. Splits follow Windows Terminal:
+  Alt+Shift+Plus side by side, Alt+Shift+Minus or Alt+Shift+D stacked.
+- Paste is Ctrl+Shift+V; bare Ctrl+V still pastes on Windows, and on Linux
+  reaches the program, where Claude Code pastes images on it.
+- The MCP `termherd://keys/schema` resource lists copy and paste with their
+  defaults, as chords `press_keys` accepts.
+
 ### Added (pick which Option key is Meta)
 
 - On macOS the right Option key now types what the layout composes, such as
