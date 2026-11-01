@@ -6515,7 +6515,9 @@ mod key_routing {
         let _ = shell.launch(cwd, Launch::Shell);
         let session = shell.core.workspace.focused_session().expect("focused");
 
-        pty.write(session, b"exit\r\n").expect("type exit");
+        // A bare `exit` returns the last command's status: macOS bash under an
+        // empty home exits unclean, and an unclean exit keeps the tab open.
+        pty.write(session, b"exit 0\r\n").expect("type exit");
 
         // Pump the adapter's events through the real update loop until the
         // auto-close lands (or the deadline proves it never does).
