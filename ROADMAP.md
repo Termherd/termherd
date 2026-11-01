@@ -68,6 +68,8 @@ issues #18–#29.
 | [F-auto-update](#f-auto-update) | feature | packaging | ☐ | Check for a new release from inside the app and apply it. |
 | [F-fork-detection](#f-fork-detection) | feature | sessions | ☐ | Detect a forked or plan-accepted session — blocked, the signals do not exist. |
 | [F-jsonl-viewer](#f-jsonl-viewer) | feature | sessions | ☐ | Render a Claude session's JSONL transcript as readable messages, not raw lines. |
+| [F-keymap-help](#f-keymap-help) | feature | keymap | ☐ | An in-app, filterable list of shortcuts, built from the live keymap. |
+| [F-readme-showcase](#f-readme-showcase) | chore | packaging | ☐ | A README first screen that shows the product: one line of benefit, a GIF, a few screenshots. |
 | [F-store-cache](#f-store-cache) | feature | sessions | ☐ | A SQLite digest cache with an FTS5 index, replacing the in-memory scan. |
 | [F-terminal-images](#f-terminal-images) | feature | terminal | ☐ | Render images inline in the terminal — parked, no demand and no cheap slice. |
 | [F-close-on-exit](#f-close-on-exit) | feature | terminal, workspace | ✅ | A pane whose shell exits cleanly closes itself; a failed one stays readable. |
@@ -86,6 +88,7 @@ issues #18–#29.
 | [F-capture](#f-capture) | feature | workspace | ☐ | Capture termherd along a fidelity ladder: debug dumps, promo, bug repros. |
 | [F-file-browser](#f-file-browser) | feature | workspace, sidebar | ☐ | A file tree for the focused repository, floating or as a right pane. |
 | [F-launch-profiles](#f-launch-profiles) | feature | sessions | ☐ | Persistent per-project `--add-dir`, applied to fresh and resumed launches. |
+| [F-layout-restore](#f-layout-restore) | feature | workspace, sessions | ☐ | Restore tabs, splits and resumable sessions at launch. |
 | [F-mcp-attach](#f-mcp-attach) | feature | mcp, workspace | ☐ | The attach rung: reach the live bridge from outside a spawned session. |
 | [F-mcp-control-surface](#f-mcp-control-surface) | feature | mcp | ☐ | Termherd exposes its own control and orchestration surface as an MCP server. |
 | [F-mcp-ide-bridge](#f-mcp-ide-bridge) | feature | mcp | ☐ | A live MCP/IDE bridge to Claude — termherd as the client, not the server. |
@@ -101,6 +104,7 @@ issues #18–#29.
 | [F-session-reveal](#f-session-reveal) | feature | sessions, workspace | ☐ | Reveal a session's directory and transcript in the OS file manager. |
 | [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
+| [F-worktree-launch](#f-worktree-launch) | feature | sessions, sidebar | ☐ | Start a Claude session in a fresh git worktree, grouped under its project. |
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
 | [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ✅ | A `rename-tab` keymap action opening the focused tab's inline rename. |
@@ -137,6 +141,8 @@ issues #18–#29.
 | ID | Type | Area | Status | Summary |
 | --- | --- | --- | --- | --- |
 | [F-file-diff-panel](#f-file-diff-panel) | feature | workspace | ☐ | Show a diff of the files a session touched, in a panel beside the terminal. |
+| [F-public-launch](#f-public-launch) | chore | packaging | ☐ | Open the project to contributors, then announce it. |
+| [F-status-hooks](#f-status-hooks) | feature | sessions | ☐ | Session status from Claude Code hooks, beside the screen and OSC readings. |
 
 ## Details
 
@@ -524,6 +530,27 @@ Never scoped beyond the name. Sibling to
 [F-file-diff-panel](#f-file-diff-panel) in the rendering family — the same
 question of what termherd draws itself rather than letting the PTY draw.
 
+<a id="f-keymap-help"></a>
+
+### F-keymap-help
+
+An in-app, filterable list of shortcuts, built from the live keymap.
+
+Today the shortcuts are only in the book. A command palette can follow on the
+same list. Issue: #423. Related: [F-keymap-advanced](#f-keymap-advanced), #326.
+
+<a id="f-readme-showcase"></a>
+
+### F-readme-showcase
+
+A README first screen that shows the product: one line of benefit, a GIF, a
+few screenshots.
+
+The repository has no image of the app. The GIF can be recorded with
+termherd's own recorder ([F-capture](#f-capture)).
+
+Issue: #424.
+
 <a id="f-store-cache"></a>
 
 ### F-store-cache
@@ -903,6 +930,18 @@ resume }` (`crates/core/src/app.rs`) and the command is *typed* into the shell
 (`launch_command`, `crates/pty/src/lib.rs`), so the one real cost is
 cross-shell path quoting (pwsh vs bash)
 
+<a id="f-layout-restore"></a>
+
+### F-layout-restore
+
+Restore tabs, splits and resumable sessions at launch.
+
+The window position survives a restart (FR12); the workspace inside it does
+not. `Workspace` is plain data and sessions already resume (FR4), so this is
+saving and replaying the tree.
+
+Issue: #421.
+
 <a id="f-mcp-attach"></a>
 
 ### F-mcp-attach
@@ -1250,6 +1289,17 @@ Presentational only: the session keeps running and its status still flows
 session asking for attention reactivates it; dragging a tab into the parked
 zone parks it. A natural entry for [F-tab-context-menu](#f-tab-context-menu).
 Torture report: `.personal/feature-torture/reports/F-tab-park.md`.
+
+<a id="f-worktree-launch"></a>
+
+### F-worktree-launch
+
+Start a Claude session in a fresh git worktree, grouped under its project.
+
+The sidebar already groups worktrees (FR1); only creating one at launch is
+missing.
+
+Issue: #422.
 
 <a id="f-claude-command"></a>
 
@@ -1904,3 +1954,23 @@ Show a diff of the files a session touched, in a panel beside the terminal.
 Never scoped beyond the name — deliberately Unsure. It was coupled to
 [F-mcp-ide-bridge](#f-mcp-ide-bridge) until PRD rev. 6 moved the bridge to
 Could and left the panel here.
+
+<a id="f-public-launch"></a>
+
+### F-public-launch
+
+Open the project to contributors, then announce it.
+
+Discussions, a code of conduct and labelled first issues, then a public post
+once [F-readme-showcase](#f-readme-showcase) and an installable release
+([F-packaging-ci](#f-packaging-ci)) are in.
+
+<a id="f-status-hooks"></a>
+
+### F-status-hooks
+
+Session status from Claude Code hooks, beside the screen and OSC readings.
+
+Status breaks whenever Claude Code changes the bytes it draws; a hook is an
+explicit contract. A timeboxed probe first: a comparable tool went back from
+hooks to screen reading for another agent, and the reason is unknown.
