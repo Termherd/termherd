@@ -17,11 +17,10 @@ use termherd_core::WorkspaceSnapshot;
 
 use crate::snapshot_dto::SnapshotDto;
 
-/// `~/.termherd/captures` — the capture output dir (PRD §7 app data dir). `None`
-/// when no home directory is set, in which case capture is skipped.
+/// `<data dir>/captures` — the capture output dir (PRD §7 app data dir).
 #[must_use]
-pub fn captures_dir() -> Option<PathBuf> {
-    Some(crate::paths::termherd_dir()?.join("captures"))
+pub fn captures_dir(dir: &crate::paths::DataDir) -> PathBuf {
+    dir.file("captures")
 }
 
 /// A UTC `YYYYMMDD-HHMMSS-mmm` stamp for `now`, used as the capture filename
