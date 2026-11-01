@@ -293,49 +293,41 @@ purpose*, not by accident.
 
 ### Comments & Documentation
 
-- Default to **no inline comments**. Code says *what*; commit messages and PR
-  descriptions say *why-it-changed*. A comment that restates the code
-  ("increment the index", "the quit modal owns the keyboard") is noise: it costs
-  every reader time, dilutes the real signal, and — being uncompiled — rots
-  silently when the code moves on. A well-named function or variable is better:
-  the compiler checks the name, so it cannot lie.
-- **Extract, don't annotate.** When a block needs a heading comment to say what
-  it does, that heading is usually a function name. A nested `if`/`match` ladder
-  with a comment per arm is the tell — hoist each arm into a named
-  predicate/handler and let the names carry the *what*: e.g. a modal key-routing
-  ladder reads best as a linear dispatch over named overlay handlers, not a
-  stack of commented blocks. The same move answers an explanation that keeps
-  growing: split the function so its halves are named, or hoist the invariant
-  into a type or a guard that enforces it.
-- Write an inline comment only when the *why* is non-obvious **and
-  non-recoverable from the code**: a hidden constraint, a surprising invariant,
-  a platform quirk, a workaround for a specific bug (e.g. the `ESC[6n` responder
-  ConPTY needs before it starts the child; the NumLock numpad quirk in
-  `on_key`).
-- This why-only rule **overrides matching the comment density of the
-  surrounding code.** Much existing code is over-commented; do not reproduce
-  that when you touch it — thin the narration as you pass through.
-- A reference code in a comment must be resolvable without external context —
-  name the rule in prose, or use only a code whose source is recorded (the one
-  sanctioned code, `FRn`, is defined in [`AGENTS.md`](AGENTS.md) conventions).
-- Every public item has a doc comment: a one-line summary, then details and
-  examples, using intra-doc links.
-- **Both rules — no paraphrase, and extract rather than annotate — govern doc
-  comments too.** A doc comment is not the place the restraint lapses: after
-  the summary line, only a constraint the signature cannot state earns its
-  place — not the design's argument for itself, not the bug that motivated it;
-  that history belongs in the commit and the PR, dated and searchable where a
-  doc comment only rots. Same for a test, where the name states the intent and
-  a comment restating the assertions goes.
-- **Prose budget: the shortest text that keeps the fact.** Applies to
-  comments, doc comments and every `.md` (book, `CHANGELOG.md`, `AGENTS.md`).
-  - Doc comment: one summary line, then at most a few lines of constraint.
-  - Test comment: one line, only for a non-obvious *why*; the name says the
-    rest.
-  - Changelog entry: one or two lines, what the user sees.
-  - Book page: what the user sees or does, not the mechanism.
-  - Cut the threat model, the design's argument and the history: they go in
-    the commit and the PR.
+**Write short.** Comments, doc comments, every `.md` (book, `CHANGELOG.md`,
+`AGENTS.md`), commit messages, pull requests, issues and review comments use
+the fewest plain words that keep the fact.
+
+A comment must pass these, in order:
+
+1. **Refactor it away.** If extracting a function, variable or type lets the
+   code say it, do that and drop the comment. A heading over a block is a
+   function name; a comment per `match` arm is a set of named handlers.
+2. **Last.** Keep only a doc comment, or what the code cannot state: a hidden
+   constraint, a platform quirk, a workaround (the `ESC[6n` responder ConPTY
+   needs before it starts the child).
+3. **Unique.** No history, issue number, author or file name: git and the PR
+   hold them.
+4. **Short and factual.** A fragment is fine when it reads clearly.
+5. **Why, not how or what.** The code shows how; names say what.
+
+- These rules override the surrounding density: thin over-commented code as
+  you pass through.
+- A reference code resolves without context: name the rule, or use `FRn`
+  (defined in [`AGENTS.md`](AGENTS.md) conventions).
+- Every public item has a doc comment: one summary line, then only the
+  constraints its signature cannot state.
+- Test: the name states the intent; a comment is one line of non-obvious why.
+- Changelog entry: one or two lines of what the user sees. Book page: what the
+  user sees or does, not the mechanism.
+
+Outside the code, rules 3 to 5 hold, except that issue numbers belong there
+(`Closes #NN`):
+
+- Commit body: the why, in a few lines; the diff shows the what.
+- Pull request: why, the change in a few bullets, how it was verified. No
+  restated diff, no commit list.
+- Issue: observed, expected, steps to reproduce. A guess is labelled as one.
+- Review comment: the defect and the fix, in one or two lines.
 
 ```rust
 /// Drives one terminal session: spawn, write, resize, kill.
