@@ -199,6 +199,8 @@ shell's settings watch then applies live; the one pair that touches a file
 rather than `core`, so it needs no bridge round trip). The loop
 they exist to serve is **act → wait → observe**: `run_in_session` returns
 immediately, so synchronise with `wait_for_status` and then `read_terminal`.
+Wait for `busy` before `idle`: just after typing, Claude still shows the
+status from before the prompt, and a wait on it answers at once (#435).
 Do **not** poll `snapshot` in a loop — it races the transition you are
 watching for, which is why the wait rung exists.
 
@@ -345,7 +347,11 @@ needs it, not before.
 only from a session termherd spawned, so the launcher itself cannot drive it)
 and the pointer at termherd's own chrome (#301 — the sidebar, tabs and gutters
 still have no mouse). Neither blocks the other.
-The list leaves out the bridge's hardening defect #293 (#284 is fixed). A third
+Four defects are open beside them: the bridge's hardening (#293; #284 is
+fixed), a status that can read `idle` while Claude still works (#427; a wait
+settling on the status from before its prompt is fixed), a `read_terminal`
+that can return the screen from before the status it waited for (#436), and a
+long `claude_command` that Claude reads as a paste (#439). Another
 defect, the copy chord overwriting a mouse-mode program's own clipboard write
 with termherd's last copy (#316), is fixed: the shell keeps no copy cache any
 more, and asks the terminal whether it holds a selection at all.
