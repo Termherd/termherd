@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use termherd_core::{Overlay, RepoMeta, SessionMeta};
 
+use crate::paths::DataDir;
+
 /// On-disk shape of one session entry. Default fields are skipped so the file
 /// only records what the user actually set.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -80,14 +82,14 @@ impl<'de> Deserialize<'de> for StoredOverlay {
 /// reported: stars, titles and added repos are the user's own work, and the
 /// next save would otherwise overwrite them with the empty overlay.
 #[must_use]
-pub fn load() -> (Overlay, Option<crate::json_store::LoadProblem>) {
-    let (stored, problem) = crate::json_store::load_json_checked::<StoredOverlay>(FILE);
+pub fn load(dir: &DataDir) -> (Overlay, Option<crate::json_store::LoadProblem>) {
+    let (stored, problem) = crate::json_store::load_json_checked::<StoredOverlay>(&dir.file(FILE));
     (from_dto(stored.0), problem)
 }
 
 /// Persist the overlay. Failures are logged, never fatal.
-pub fn save(overlay: &Overlay) {
-    crate::json_store::save_json(FILE, &to_dto(overlay));
+pub fn save(dir: &DataDir, overlay: &Overlay) {
+    crate::json_store::save_json(&dir.file(FILE), &to_dto(overlay));
 }
 
 fn from_dto(dto: OverlayDto) -> Overlay {
@@ -156,7 +158,7 @@ fn to_dto(overlay: &Overlay) -> OverlayDto {
     }
 }
 
-/// `~/.termherd/metadata.json` — the app data dir from the PRD (§7).
+/// The file's name within the data dir (PRD §7).
 const FILE: &str = "metadata.json";
 
 #[cfg(test)]

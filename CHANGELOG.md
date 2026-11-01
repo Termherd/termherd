@@ -78,6 +78,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A burst of terminal output no longer holds hundreds of megabytes or draws
   seconds late (#414).
 
+### Fixed (the test suite reset a developer's favorites)
+
+- Running the test suite no longer rewrites `~/.termherd`, which reset
+  favorites, folded projects and window bounds at the next launch (#407).
+
 ### Fixed (the bridge token written through a planted file)
 
 - The live bridge's token file is created afresh, never written through a

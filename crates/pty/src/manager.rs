@@ -574,7 +574,8 @@ mod tests {
         let mgr = PtyManager::new(sink, None, Palette::default());
         let id = sid(2);
         mgr.spawn(spec(id)).expect("spawn");
-        mgr.write(id, b"exit\r\n").expect("write");
+        // `exit 0`: a bare `exit` returns whatever status the startup files left.
+        mgr.write(id, b"exit 0\r\n").expect("write");
 
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut reaped = None;

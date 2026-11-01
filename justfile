@@ -98,3 +98,11 @@ package: build-release
 package: build-release
     # NSIS only — WiX/MSI rejects the non-numeric `-prerelease.N` suffix.
     cargo packager -p termherd-app --release --formats nsis
+
+[doc("Build benchmark images (docs/BENCH.md); all adapters when none is named")]
+bench-build *tools:
+    ./bench/build-all.sh {{tools}}
+
+[doc("Run the S1-S5 benchmark for one adapter (docs/BENCH.md)")]
+bench tool reps="3":
+    ./bench/run-all.sh {{reps}} {{tool}}

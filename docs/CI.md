@@ -371,6 +371,9 @@ The toolchain is pinned to **Rust 1.95.0 / edition 2024**
 in CI. To pre-empt `actionlint`, run the `actionlint` binary over
 `.github/workflows/` if you have it installed.
 
+Off CI: the benchmark harness ([`BENCH.md`](BENCH.md), `just bench termherd
+3`) measures memory and CPU against the PRD §7 budget. It needs Docker.
+
 ---
 
 ## 6. Invariants every gate relies on

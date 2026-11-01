@@ -4,6 +4,7 @@
 //! frame throttle, and the start→feed→finish lifecycle — is one self-contained
 //! object the shell holds a single field of.
 
+use std::path::Path;
 use std::time::{Instant, SystemTime};
 
 use iced::{Task, window};
@@ -81,10 +82,11 @@ impl RecordState {
     /// thread. `CaptureFrame` is the only one with an async follow-up — it
     /// screenshots the window, the result arriving as [`Message::RecordFrame`].
     /// The shell's unified executor delegates each record effect here.
-    pub(super) fn run_one(&mut self, effect: Effect) -> Task<Message> {
+    /// `captures` is where a screencast is written; `None` skips recording.
+    pub(super) fn run_one(&mut self, effect: Effect, captures: Option<&Path>) -> Task<Message> {
         match effect {
             Effect::StartRecording => {
-                self.start();
+                self.start(captures);
                 Task::none()
             }
             Effect::CaptureFrame => {
@@ -116,7 +118,7 @@ impl RecordState {
     /// Open the recorder thread for a new screencast, writing to
     /// `capture-<ts>.gif` in the capture dir. A missing home dir or an
     /// uncreatable dir aborts the start — logged, never fatal.
-    fn start(&mut self) {
+    fn start(&mut self, captures: Option<&Path>) {
         self.inflight = 0;
         self.finish_pending = false;
         // Fresh timing state for the throttle, the per-frame gap, and the stats.
@@ -124,11 +126,11 @@ impl RecordState {
         self.throttle = Some(FrameThrottle::new(self.config.frame_interval()));
         self.last_frame = None;
         self.stats = FrameStats::default();
-        let Some(dir) = crate::capture::captures_dir() else {
-            tracing::warn!("no home directory; recording skipped");
+        let Some(dir) = captures else {
+            tracing::warn!("no data directory; recording skipped");
             return;
         };
-        if let Err(error) = std::fs::create_dir_all(&dir) {
+        if let Err(error) = std::fs::create_dir_all(dir) {
             tracing::warn!(%error, "could not create captures dir; recording skipped");
             return;
         }
@@ -260,5 +262,22 @@ impl Shell {
         }
         let effects = self.core.apply(termherd_core::Event::RecordTick);
         self.perform(effects)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_recording_starts_only_with_somewhere_to_write_it() {
+        let mut nowhere = RecordState::new(RecordConfig::default());
+        nowhere.start(None);
+        assert!(nowhere.recorder.is_none());
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut somewhere = RecordState::new(RecordConfig::default());
+        somewhere.start(Some(&tmp.path().join("captures")));
+        assert!(somewhere.recorder.is_some());
     }
 }
