@@ -618,6 +618,12 @@ exists). Do not relax them locally.
   mid-run (see `.wrap.md`): success and vacuity are indistinguishable from the
   outside. Probe with the operation you actually intend to perform, and if that
   is destructive, assert on something the operation *must* have changed.
+- **Poll for the value you assert, not for a sign it is coming.** The argv
+  spawn test waited for the copy's target to exist, then read it. On Windows
+  the target existed but was still locked by `copy`, so the read failed. Filed
+  twice with two guessed causes (#280, #437), while 200 reruns passed; a 300 MB
+  payload that slowed the copy made it fail at once. Force a suspected race by
+  widening its window, not by rerunning.
 - **A proptest seed file is keyed by the test's source path, so moving the
   test orphans it without a word.** proptest's default persistence reads
   `proptest-regressions/<path of the .rs file>.txt`, derived from `file!()`.

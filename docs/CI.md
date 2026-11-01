@@ -24,20 +24,21 @@ themselves), `markdownlint` (the prose), `roadmap` (the generated
 `ROADMAP.md` against the `.roadmap/` sources it is compiled from), and
 `mdbook` (the user manual builds, and its chapter map resolves).
 
-## Status (as of 2026-10-31)
+## Status (as of 2026-11-01)
 
 - **Settled:** Nine path-filtered gate jobs (`rustfmt & arch`, `clippy`, `test`,
   `portable`, `cargo-checks`, `actionlint`, `markdownlint`, `roadmap`, `mdbook`)
   fan into one required check (`ci-success`) under squash-only, non-strict
   `main-protection` (#388, #393, #397); `.github/dependabot.yml` keeps
-  SHA-pinned actions current monthly (#398).
+  SHA-pinned actions current monthly (#398). The flaky
+  `the_argv_reaches_the_program_that_was_named` is fixed (#438). The cause
+  reproduced on Windows was a read of a target the copy still held, not the
+  timeout #280 guessed.
 - **Still open:**
-  1. **#280** — flaky `the_argv_reaches_the_program_that_was_named` timeout
-     under loaded full-suite runs.
-  2. **#51 / #61 / #62** — macOS Developer ID notarization, Homebrew cask, and
+  1. **#51 / #61 / #62** — macOS Developer ID notarization, Homebrew cask, and
      Windows SignPath code signing in `package.yml` (all parked; Linux keyless
      Sigstore attestation shipped in #52).
-  3. **#274** — `README.md` and `CODING_STANDARDS.md` crate-count reconciliation
+  2. **#274** — `README.md` and `CODING_STANDARDS.md` crate-count reconciliation
      (the `docs/CI.md` `sign-release.yml` gap named there is closed by #393).
 - **Looks like a contradiction, is not:**
   - `portable` runs on `push`→`main` only when `cargo` files changed, while
