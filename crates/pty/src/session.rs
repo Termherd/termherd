@@ -8,6 +8,7 @@
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, PoisonError, RwLock, mpsc};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
@@ -39,6 +40,14 @@ const READ_BUF: usize = 8192;
 /// How long the terminal thread keeps draining trailing output after the
 /// waiter reported the process exit, before declaring the session over.
 const EOF_DRAIN_QUIET: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// The shortest gap between two screens the terminal thread emits. Output is
+/// parsed as fast as it arrives, but a snapshot of the whole grid goes out at
+/// most this often, and the last change always goes out once the gap has
+/// passed. One snapshot per read chunk outran the GUI under a burst of output:
+/// the stale screens queued by the hundred megabytes, the pane drew them
+/// seconds after the shell had finished, and the allocator kept the memory.
+const SCREEN_INTERVAL: Duration = Duration::from_millis(8);
 
 /// The PTY's input side, shared between user writes (the manager) and terminal
 /// replies (the parser). A `Mutex` serialises the two so responses never
@@ -405,7 +414,36 @@ pub(crate) fn spawn_term(
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
             let mut clean = false;
-            while let Ok(cmd) = ctrl_rx.recv() {
+            // `pending`: the grid changed since the last screen went out.
+            // `sent`: when that last screen went out (see SCREEN_INTERVAL).
+            let mut pending = false;
+            let mut sent: Option<Instant> = None;
+            let screen = |term: &Term<PtyResponder>| PtyEvent::Output {
+                session,
+                screen: snapshot(term, &current(&palette)),
+            };
+            loop {
+                // With a change held back, wait no longer than the gap allows
+                // before sending it; otherwise sleep until the next command.
+                let due = sent.filter(|_| pending).map(|at| at + SCREEN_INTERVAL);
+                let cmd = match due {
+                    Some(due) => {
+                        match ctrl_rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
+                            Ok(cmd) => cmd,
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                term_sink(screen(&term));
+                                sent = Some(Instant::now());
+                                pending = false;
+                                continue;
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
+                    }
+                    None => match ctrl_rx.recv() {
+                        Ok(cmd) => cmd,
+                        Err(_) => break,
+                    },
+                };
                 match cmd {
                     TermCmd::Bytes(bytes) => {
                         // OSC status comes from the raw bytes — alacritty
@@ -520,17 +558,16 @@ pub(crate) fn spawn_term(
                         break;
                     }
                 }
-                term_sink(PtyEvent::Output {
-                    session,
-                    screen: snapshot(&term, &current(&palette)),
-                });
+                pending = true;
+                if sent.is_none_or(|at| at.elapsed() >= SCREEN_INTERVAL) {
+                    term_sink(screen(&term));
+                    sent = Some(Instant::now());
+                    pending = false;
+                }
             }
             // A final snapshot so any drained bytes reach the screen the tab
             // keeps showing on an unclean exit.
-            term_sink(PtyEvent::Output {
-                session,
-                screen: snapshot(&term, &current(&palette)),
-            });
+            term_sink(screen(&term));
             term_sink(PtyEvent::Exited { session, clean });
         })
         .unwrap_or_else(|_| {
@@ -887,6 +924,57 @@ mod tests {
         assert_eq!(
             captured.lock().expect("capture lock").as_slice(),
             b"\x1b[<0;5;3M\x1b[<0;5;3m"
+        );
+    }
+
+    /// A burst of output must not become a burst of screens: each one is a
+    /// copy of the whole grid, and the GUI drains them far slower than the
+    /// reader produces chunks. The last one must still show the end of it.
+    #[test]
+    fn a_burst_of_output_is_coalesced_and_ends_on_its_last_line() {
+        const CHUNKS: usize = 2000;
+        let screens = Arc::new(Mutex::new(Vec::new()));
+        let collected = screens.clone();
+        let sink: EventSink = Arc::new(move |event| {
+            if let PtyEvent::Output { screen, .. } = event {
+                collected.lock().expect("sink lock").push(screen);
+            }
+        });
+        let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(Arc::new(
+            Mutex::new(Vec::new()),
+        )))));
+        let session = SessionId(std::num::NonZeroU64::new(1).expect("nonzero"));
+        let (ctrl, ctrl_rx) = mpsc::channel();
+        let term = spawn_term(
+            session,
+            ctrl_rx,
+            (80, 24),
+            writer,
+            sink,
+            Arc::new(RwLock::new(Palette::default())),
+        );
+        for n in 1..=CHUNKS {
+            ctrl.send(TermCmd::Bytes(format!("line {n}\r\n").into_bytes()))
+                .expect("terminal thread alive");
+        }
+        drop(ctrl);
+        term.join().expect("terminal thread ends");
+        let screens = screens.lock().expect("sink lock");
+        assert!(
+            screens.len() < CHUNKS / 10,
+            "{} screens for {CHUNKS} chunks: output is not coalesced",
+            screens.len()
+        );
+        let last = screens.last().expect("at least the final screen");
+        let text: Vec<String> = last
+            .lines
+            .iter()
+            .map(|row| row.iter().map(|cell| cell.c).collect::<String>())
+            .collect();
+        assert!(
+            text.iter()
+                .any(|row| row.trim_end() == format!("line {CHUNKS}")),
+            "the last screen must show the last line, got {text:?}"
         );
     }
 }

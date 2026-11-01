@@ -73,6 +73,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A settings panel, live reload of `settings.json`, and the options on the
   live bridge (#292, #297, #298).
 
+### Fixed (a burst of output held memory and drew late)
+
+- A burst of terminal output no longer leaves TermHerd holding hundreds of
+  megabytes, and the pane shows the end of the output as soon as the command
+  finishes instead of seconds later. A pane now redraws at most every 8 ms
+  while output streams in (#414).
+
 ### Fixed (the bridge token written through a planted file)
 
 - The live bridge's token file is created afresh, never written through a
