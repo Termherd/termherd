@@ -15,11 +15,24 @@ pub fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// `~/.termherd` — the app data dir (PRD §7) the stores live under. `None` when
-/// no home directory is set, in which case the caller skips its file.
-#[must_use]
-pub fn termherd_dir() -> Option<PathBuf> {
-    home_dir().map(|home| home.join(".termherd"))
+/// The app data dir (PRD §7) every store reads and writes under. Resolved once
+/// in `main()` and injected, so a store never finds the user's files on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataDir(PathBuf);
+
+impl DataDir {
+    /// `~/.termherd`. `None` when no home directory is set, in which case
+    /// nothing is persisted.
+    #[must_use]
+    pub fn user() -> Option<Self> {
+        home_dir().map(|home| Self(home.join(".termherd")))
+    }
+
+    /// `<dir>/<name>`, e.g. `metadata.json`.
+    #[must_use]
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
 }
 
 /// `~/.claude` — Claude Code's own data dir, which termherd reads (plans,

@@ -111,6 +111,9 @@ pub struct Startup {
     /// Config files that existed but could not be used at startup, shown in
     /// the sidebar until dismissed.
     pub load_problems: Vec<crate::json_store::LoadProblem>,
+    /// Where these were read from, and where the shell writes them back.
+    /// `None`: nothing is persisted.
+    pub data_dir: Option<crate::paths::DataDir>,
 }
 
 /// The settings the MCP `snapshot` tool reports that `core` cannot read —
@@ -138,8 +141,12 @@ pub fn run(
     // Restore the saved bounds, but discard a position that now lands off every
     // connected monitor (e.g. a second screen that has since been unplugged), so
     // the window can't open out of reach.
-    let config =
-        WindowConfig::load().with_onscreen_position(&crate::window_geometry::current_screens());
+    let config = startup
+        .data_dir
+        .as_ref()
+        .map_or_else(WindowConfig::default, WindowConfig::load)
+        .with_onscreen_position(&crate::window_geometry::current_screens());
+    let settings_file = startup.data_dir.as_ref().map(crate::settings::path);
     let position = match (config.x, config.y) {
         (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
         _ => window::Position::Centered,
@@ -155,7 +162,10 @@ pub fn run(
                     path_resolver: path_resolver.clone(),
                     pty: pty.clone(),
                     pty_output: pty_output.clone(),
-                    settings: Arc::new(live_settings::LiveSettings(pty.clone())),
+                    settings: Arc::new(live_settings::LiveSettings {
+                        pty: pty.clone(),
+                        file: settings_file.clone(),
+                    }),
                     claude_sessions: crate::paths::claude_dir()
                         .map(|claude| claude.join("sessions")),
                 },
@@ -214,6 +224,8 @@ struct Shell {
     bounds: WindowConfig,
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
+    /// Where the shell persists the user's state. `None`: nothing is written.
+    data_dir: Option<crate::paths::DataDir>,
     /// The `settings.json` the live-reload watch follows; resolved once.
     settings_file: Option<PathBuf>,
     /// Claude Code's session-file directory, read for each pane's identity.
@@ -812,7 +824,7 @@ impl Shell {
             scanner,
             watch_root,
             claude_sessions,
-            settings_file: crate::settings::path(),
+            settings_file: startup.data_dir.as_ref().map(crate::settings::path),
             scan_error: None,
             path_resolver,
             pty,
@@ -858,8 +870,12 @@ impl Shell {
             split_drag: None,
             cursor_position: Point::new(0.0, 0.0),
             exiting: false,
-            record: RecordState::new(RecordConfig::default()),
+            record: RecordState::new(
+                RecordConfig::default(),
+                startup.data_dir.as_ref().map(crate::capture::captures_dir),
+            ),
             config: config_input(&crate::settings::Settings::default()),
+            data_dir: startup.data_dir,
         };
         shell.adopt_settings(&startup.settings);
         shell
@@ -1797,6 +1813,7 @@ mod key_routing {
             metadata: Overlay::default(),
             collapsed: HashSet::new(),
             load_problems: Vec::new(),
+            data_dir: crate::paths::DataDir::user(),
         }
     }
 

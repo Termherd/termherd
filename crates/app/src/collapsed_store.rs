@@ -5,16 +5,18 @@
 
 use std::collections::HashSet;
 
+use crate::paths::DataDir;
+
 /// Load the folded-project set; any problem (no file, bad JSON) yields an empty
 /// set — fold state must never block startup.
 #[must_use]
-pub fn load() -> HashSet<String> {
-    crate::json_store::load_json(FILE)
+pub fn load(dir: &DataDir) -> HashSet<String> {
+    crate::json_store::load_json(&dir.file(FILE))
 }
 
 /// Persist the folded-project set. Failures are logged, never fatal.
-pub fn save(collapsed: &HashSet<String>) {
-    crate::json_store::save_json(FILE, collapsed);
+pub fn save(dir: &DataDir, collapsed: &HashSet<String>) {
+    crate::json_store::save_json(&dir.file(FILE), collapsed);
 }
 
 /// `~/.termherd/collapsed.json` — the app data dir from the PRD (§7).

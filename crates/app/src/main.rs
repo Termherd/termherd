@@ -61,7 +61,11 @@ fn main() -> iced::Result {
     // host, the theme into the iced shell. A corrupt file falls back to
     // defaults rather than blocking startup — set aside, and reported in the
     // sidebar, so the defaults never overwrite it.
-    let (settings, settings_problem) = settings::Settings::load_checked();
+    let data_dir = paths::DataDir::user();
+    let (settings, settings_problem) = data_dir
+        .as_ref()
+        .map(|dir| settings::Settings::load_checked(&settings::path(dir)))
+        .unwrap_or_default();
     let shell = settings.shell_profile();
 
     // PTY output flows from the reader threads through this channel into the
@@ -107,15 +111,22 @@ fn main() -> iced::Result {
         mcp_endpoint,
         mcp_tokens,
     };
-    let (metadata, metadata_problem) = metadata_store::load();
+    let (metadata, metadata_problem) = data_dir
+        .as_ref()
+        .map(metadata_store::load)
+        .unwrap_or_default();
     let startup = shell::Startup {
         settings,
         metadata,
-        collapsed: collapsed_store::load(),
+        collapsed: data_dir
+            .as_ref()
+            .map(collapsed_store::load)
+            .unwrap_or_default(),
         load_problems: settings_problem
             .into_iter()
             .chain(metadata_problem)
             .collect(),
+        data_dir,
     };
     // Terminal path candidates are checked against the real filesystem — the
     // one thing that tells `src/main.rs` from prose like `and/or`.

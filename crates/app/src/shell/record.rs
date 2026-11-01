@@ -4,6 +4,7 @@
 //! frame throttle, and the start→feed→finish lifecycle — is one self-contained
 //! object the shell holds a single field of.
 
+use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use iced::{Task, window};
@@ -39,11 +40,14 @@ pub(super) struct RecordState {
     /// Per-frame gap statistics for the in-progress recording — logged at
     /// stop to evidence real-time capture (vs the idle-window time-lapse).
     stats: FrameStats,
+    /// Where a screencast is written. `None`: recording is skipped.
+    captures: Option<PathBuf>,
 }
 
 impl RecordState {
-    pub(super) fn new(config: RecordConfig) -> Self {
+    pub(super) fn new(config: RecordConfig, captures: Option<PathBuf>) -> Self {
         Self {
+            captures,
             config,
             recorder: None,
             inflight: 0,
@@ -124,11 +128,11 @@ impl RecordState {
         self.throttle = Some(FrameThrottle::new(self.config.frame_interval()));
         self.last_frame = None;
         self.stats = FrameStats::default();
-        let Some(dir) = crate::capture::captures_dir() else {
-            tracing::warn!("no home directory; recording skipped");
+        let Some(dir) = &self.captures else {
+            tracing::warn!("no data directory; recording skipped");
             return;
         };
-        if let Err(error) = std::fs::create_dir_all(&dir) {
+        if let Err(error) = std::fs::create_dir_all(dir) {
             tracing::warn!(%error, "could not create captures dir; recording skipped");
             return;
         }

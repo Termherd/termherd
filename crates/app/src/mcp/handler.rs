@@ -93,7 +93,7 @@ impl TermherdMcp {
     pub fn new(bridge: BridgeHandle) -> Self {
         Self {
             bridge,
-            settings_file: crate::settings::path(),
+            settings_file: crate::paths::DataDir::user().map(|dir| crate::settings::path(&dir)),
             tool_router: Self::tool_router(),
         }
     }
@@ -558,7 +558,11 @@ impl TermherdMcp {
 
         // 1. Session lookup & Nesting opt-in verification
         let target_info = self.fetch_session_info(&args.session).await?;
-        let allow_setting = crate::settings::Settings::load().mcp.allow_claude_nesting;
+        let allow_setting = crate::paths::DataDir::user()
+            .map(|dir| crate::settings::Settings::load(&crate::settings::path(&dir)))
+            .unwrap_or_default()
+            .mcp
+            .allow_claude_nesting;
         check_claude_nesting(target_info.kind, allow_setting, args.allow_claude_nesting)?;
 
         // 2. Step 1: Send text (run_in_session primitive)

@@ -1,4 +1,4 @@
-//! Generic JSON config persistence under `~/.termherd/<file>` — the one
+//! Generic JSON config persistence for the files under the data dir — the one
 //! load/save shape every file adapter shares: read the file and fall back to
 //! the default on any problem (missing, unreadable, corrupt — with a warning),
 //! create the dir and pretty-print on save, failures logged but never fatal.
@@ -27,15 +27,12 @@ pub struct LoadProblem {
     pub kept_as: Option<PathBuf>,
 }
 
-/// Load `~/.termherd/<file>`; any problem (no home dir, no file, bad JSON)
-/// yields the default — a config file must never block startup. Touches
-/// nothing on disk: safe for a read that may race a half-written file.
+/// Load `path`; any problem (no file, bad JSON) yields the default — a config
+/// file must never block startup. Touches nothing on disk: safe for a read
+/// that may race a half-written file.
 #[must_use]
-pub fn load_json<T: Default + DeserializeOwned>(file: &str) -> T {
-    let Some(path) = config_path(file) else {
-        return T::default();
-    };
-    match read_at(&path) {
+pub fn load_json<T: Default + DeserializeOwned>(path: &Path) -> T {
+    match read_at(path) {
         Read::Parsed(value) => value,
         Read::Missing => T::default(),
         Read::Unreadable(e) => {
@@ -49,17 +46,12 @@ pub fn load_json<T: Default + DeserializeOwned>(file: &str) -> T {
     }
 }
 
-/// Re-read `~/.termherd/<file>` while the app runs: `Some` only when it parses.
-/// A missing, unreadable or invalid file — an editor's half-written save
-/// included — is `None`, so the caller keeps what it has rather than falling
-/// back to defaults mid-run. Touches nothing on disk.
+/// Re-read `path` while the app runs: `Some` only when it parses. A missing,
+/// unreadable or invalid file — an editor's half-written save included — is
+/// `None`, so the caller keeps what it has rather than falling back to defaults
+/// mid-run. Touches nothing on disk.
 #[must_use]
-pub fn reload_json<T: DeserializeOwned>(file: &str) -> Option<T> {
-    reload_at(&config_path(file)?)
-}
-
-/// The body of [`reload_json`], on an explicit path.
-fn reload_at<T: DeserializeOwned>(path: &Path) -> Option<T> {
+pub fn reload_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
     match read_at(path) {
         Read::Parsed(value) => Some(value),
         Read::Missing => {
@@ -82,15 +74,7 @@ fn reload_at<T: DeserializeOwned>(path: &Path) -> Option<T> {
 /// can be saved without destroying it. Startup only — a later read may see a
 /// file an editor is halfway through writing, which must not be moved.
 #[must_use]
-pub fn load_json_checked<T: Default + DeserializeOwned>(file: &str) -> (T, Option<LoadProblem>) {
-    match config_path(file) {
-        Some(path) => load_json_at(&path),
-        None => (T::default(), None),
-    }
-}
-
-/// The body of [`load_json_checked`], on an explicit path.
-fn load_json_at<T: Default + DeserializeOwned>(path: &Path) -> (T, Option<LoadProblem>) {
+pub fn load_json_checked<T: Default + DeserializeOwned>(path: &Path) -> (T, Option<LoadProblem>) {
     let file = path
         .file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
@@ -158,13 +142,10 @@ fn set_aside(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Persist `value` to `~/.termherd/<file>`. Failures are logged, never fatal —
-/// losing a config write is not worth blocking the app.
-pub fn save_json<T: Serialize>(file: &str, value: &T) {
-    let Some(path) = config_path(file) else {
-        return;
-    };
-    if let Err(e) = write_json_at(&path, value) {
+/// Persist `value` to `path`. Failures are logged, never fatal — losing a
+/// config write is not worth blocking the app.
+pub fn save_json<T: Serialize>(path: &Path, value: &T) {
+    if let Err(e) = write_json_at(path, value) {
         warn!(error = %e, "could not save config file");
     }
 }
@@ -180,11 +161,6 @@ fn write_json_at<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     std::fs::write(path, json).map_err(|e| format!("could not write {}: {e}", path.display()))
 }
 
-/// `~/.termherd/<file>` — the app data dir from the PRD (§7).
-fn config_path(file: &str) -> Option<PathBuf> {
-    Some(crate::paths::termherd_dir()?.join(file))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,7 +172,7 @@ mod tests {
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "{ \"theme\": ").expect("write");
 
-        let (value, problem) = load_json_at::<Value>(&path);
+        let (value, problem) = load_json_checked::<Value>(&path);
 
         assert_eq!(value, Value::Null, "the default is adopted");
         let kept = dir.path().join("settings.json.corrupt-1");
@@ -222,7 +198,7 @@ mod tests {
         std::fs::write(dir.path().join("settings.json.corrupt-1"), "first").expect("write");
         std::fs::write(&path, "second").expect("write");
 
-        let (_, problem) = load_json_at::<Value>(&path);
+        let (_, problem) = load_json_checked::<Value>(&path);
 
         assert_eq!(
             problem.and_then(|p| p.kept_as),
@@ -238,15 +214,15 @@ mod tests {
     fn a_reload_keeps_the_running_values_on_anything_but_a_parse_and_moves_nothing() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("settings.json");
-        assert_eq!(reload_at::<Value>(&path), None, "missing");
+        assert_eq!(reload_json::<Value>(&path), None, "missing");
 
         std::fs::write(&path, "{ \"theme\": ").expect("write");
-        assert_eq!(reload_at::<Value>(&path), None, "half-written");
+        assert_eq!(reload_json::<Value>(&path), None, "half-written");
         assert!(path.exists(), "a mid-run read never sets a file aside");
 
         std::fs::write(&path, "{\"theme\": \"light\"}").expect("write");
         assert_eq!(
-            reload_at::<Value>(&path),
+            reload_json::<Value>(&path),
             Some(serde_json::json!({ "theme": "light" }))
         );
     }
@@ -255,11 +231,11 @@ mod tests {
     fn a_missing_file_is_no_problem_and_a_valid_one_loads() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("settings.json");
-        assert_eq!(load_json_at::<Value>(&path), (Value::Null, None));
+        assert_eq!(load_json_checked::<Value>(&path), (Value::Null, None));
 
         std::fs::write(&path, "{\"a\": 1}").expect("write");
         assert_eq!(
-            load_json_at::<Value>(&path),
+            load_json_checked::<Value>(&path),
             (serde_json::json!({ "a": 1 }), None)
         );
         assert!(path.exists(), "a valid file stays put");
