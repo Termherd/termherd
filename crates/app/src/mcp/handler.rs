@@ -27,6 +27,7 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use termherd_core::Placement;
+use termherd_core::claude_command::SUBMIT;
 use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
@@ -37,8 +38,8 @@ use termherd_core::{
 use termherd_mcp::file::SetAtError;
 
 use crate::shell::bridge::{
-    Action, ActionDetail, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo,
-    TerminalRead,
+    Action, ActionDetail, ActionOutcome, BridgeHandle, CallError, Press, PressStep, Reply, Request,
+    SessionInfo, TerminalRead,
 };
 use crate::snapshot_dto::{IdentityDto, SnapshotDto, kind_str, status_str};
 
@@ -74,6 +75,10 @@ const MAX_MAX_WIDTH: u32 = 4096;
 /// is a courtesy on top of an answer the caller has already earned, so it must
 /// barely extend the wait it follows.
 const READ_BACK_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// Pause before typing Enter. Claude Code takes a long burst for a paste,
+/// where Enter is a line break, so Enter must reach it in a read of its own.
+const ENTER_GAP: Duration = Duration::from_millis(50);
 
 /// The live-bridge MCP server handler. Holds only the bridge into the shell —
 /// cloned fresh per session by the transport's service factory.
@@ -391,11 +396,8 @@ impl TermherdMcp {
         Parameters(args): Parameters<RunArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let session = parse_handle(&args.session)?;
-        self.act(Action::Run {
-            session,
-            bytes: typed_bytes(args.text),
-        })
-        .await
+        let focused = self.type_text(session, args.text).await?;
+        structured(serde_json::json!({ "focused_handle": focused }))
     }
 
     /// Arm the confirmation for a Claude slash command. → `claude_command`.
@@ -569,26 +571,7 @@ impl TermherdMcp {
         check_claude_nesting(target_info.kind, allow_setting, args.allow_claude_nesting)?;
 
         // 2. Step 1: Send text (run_in_session primitive)
-        let act_reply = self
-            .bridge
-            .call(
-                Request::Act(Action::Run {
-                    session,
-                    bytes: typed_bytes(args.text),
-                }),
-                CALL_TIMEOUT,
-            )
-            .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        let Reply::Acted(outcome) = act_reply else {
-            return Err(ErrorData::internal_error(
-                "bridge answered the wrong reply kind",
-                None,
-            ));
-        };
-        if let Some(reason) = outcome.error {
-            return Err(ErrorData::invalid_params(reason, None));
-        }
+        let focused = self.type_text(session, args.text).await?;
 
         // 3. Step 2: Wait for status (wait_for_status primitive)
         let (status_str_val, timed_out) = self
@@ -603,7 +586,7 @@ impl TermherdMcp {
             "timed_out": timed_out,
             "text": read.text.as_deref().unwrap_or_default(),
             "rendered": read.text.is_some(),
-            "focused_handle": outcome.focused,
+            "focused_handle": focused,
         }))
     }
 
@@ -885,10 +868,22 @@ impl TermherdMcp {
         }))
     }
 
-    /// Send an [`Action`] over the bridge and shape its [`ActionOutcome`] into a
-    /// tool result: a rejection (unknown handle / out-of-range tab) becomes an
-    /// `invalid_params` error, an applied action a `{ focused_handle }` object.
-    async fn act(&self, action: Action) -> Result<CallToolResult, ErrorData> {
+    /// Type `text` into `session`, Enter last when it ends in a newline, and
+    /// return the focused handle.
+    async fn type_text(&self, session: u64, text: String) -> Result<Option<String>, ErrorData> {
+        let mut focused = None;
+        for (index, bytes) in typed_writes(text).into_iter().enumerate() {
+            if index > 0 {
+                tokio::time::sleep(ENTER_GAP).await;
+            }
+            focused = self.apply(Action::Run { session, bytes }).await?.focused;
+        }
+        Ok(focused)
+    }
+
+    /// Send an [`Action`] over the bridge; a rejection (unknown handle /
+    /// out-of-range tab) becomes an `invalid_params` error.
+    async fn apply(&self, action: Action) -> Result<ActionOutcome, ErrorData> {
         let reply = self
             .bridge
             .call(Request::Act(action), CALL_TIMEOUT)
@@ -903,6 +898,14 @@ impl TermherdMcp {
         if let Some(reason) = outcome.error {
             return Err(ErrorData::invalid_params(reason, None));
         }
+        Ok(outcome)
+    }
+
+    /// Send an [`Action`] over the bridge and shape its [`ActionOutcome`] into a
+    /// tool result: a rejection (unknown handle / out-of-range tab) becomes an
+    /// `invalid_params` error, an applied action a `{ focused_handle }` object.
+    async fn act(&self, action: Action) -> Result<CallToolResult, ErrorData> {
+        let outcome = self.apply(action).await?;
         let mut value = serde_json::json!({ "focused_handle": outcome.focused });
         // An action's detail rides alongside focus rather than in a second
         // reply kind.
@@ -1267,21 +1270,26 @@ fn no_pixels(reason: Option<String>) -> CallToolResult {
     ))])
 }
 
-/// The bytes typing `text` sends, its final line break pressed as Enter.
+/// The writes that type `text`: the text, then Enter on its own when it ends
+/// in a line break.
 ///
-/// Enter is `\r`. A program reading raw keys (Claude Code, `PSReadLine`) takes
-/// `\n` as Ctrl+J, a new line in its input, so a final `\n` would not submit.
-/// Earlier line breaks stay `\n`, so a multi-line prompt is submitted once.
-fn typed_bytes(text: String) -> Vec<u8> {
+/// A program reading raw keys (Claude Code, `PSReadLine`) takes `\n` as Ctrl+J,
+/// a new line in its input, so the final one is sent as Enter. Earlier line
+/// breaks stay, so a multi-line prompt is submitted once.
+fn typed_writes(text: String) -> Vec<Vec<u8>> {
     let mut bytes = text.into_bytes();
-    if bytes.ends_with(b"\n") {
-        bytes.pop();
-        if bytes.ends_with(b"\r") {
-            bytes.pop();
-        }
-        bytes.push(b'\r');
+    let line_break = [&b"\r\n"[..], b"\n", b"\r"]
+        .into_iter()
+        .find(|ending| bytes.ends_with(ending));
+    let Some(line_break) = line_break else {
+        return vec![bytes];
+    };
+    bytes.truncate(bytes.len() - line_break.len());
+    if bytes.is_empty() {
+        vec![SUBMIT.to_vec()]
+    } else {
+        vec![bytes, SUBMIT.to_vec()]
     }
-    bytes
 }
 
 /// Parse a stable handle string (as `list_sessions` / `snapshot` report it) to
@@ -1856,7 +1864,7 @@ mod tests {
                 Box::pin(mcp.close_pane(Parameters(CloseArgs::default()))),
             ),
             "run_in_session" => (
-                vec![acted()],
+                vec![acted(), acted()],
                 Box::pin(mcp.run_in_session(Parameters(RunArgs {
                     session: "1".into(),
                     text: "ls\n".into(),
@@ -1865,6 +1873,7 @@ mod tests {
             "prompt_in_session" => (
                 vec![
                     Reply::Sessions(vec![idle_shell("1", "tab 0", "/proj")]),
+                    acted(),
                     acted(),
                     Reply::Waited(WaitOutcome {
                         status: Some(SessionStatus::Idle),
@@ -2334,7 +2343,7 @@ mod tests {
         let run = action_of(|mcp| async move {
             mcp.run_in_session(Parameters(RunArgs {
                 session: "3".into(),
-                text: "ls\n".into(),
+                text: "ls".into(),
             }))
             .await
         })
@@ -2343,22 +2352,47 @@ mod tests {
             run,
             Action::Run {
                 session: 3,
-                bytes: b"ls\r".to_vec(),
+                bytes: b"ls".to_vec(),
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn run_in_session_types_enter_in_a_write_of_its_own() {
+        let (handle, requests) = channel();
+        let acted = || Some(Reply::Acted(ActionOutcome::applied(Some("3".into()))));
+        let shell = spawn_test_shell_seq(requests, vec![acted(), acted()]);
+        TermherdMcp::new(handle)
+            .run_in_session(Parameters(RunArgs {
+                session: "3".into(),
+                text: "ls\n".into(),
+            }))
+            .await
+            .expect("the tool returns a result");
+        let run = |bytes: &[u8]| {
+            Request::Act(Action::Run {
+                session: 3,
+                bytes: bytes.to_vec(),
+            })
+        };
+        assert_eq!(
+            shell.await.expect("shell task"),
+            vec![run(b"ls"), run(b"\r")]
         );
     }
 
     #[test]
     fn a_final_line_break_is_typed_as_enter() {
-        for (text, typed) in [
-            ("ls\n", "ls\r"),
-            ("ls\r\n", "ls\r"),
-            ("\n", "\r"),
-            ("line one\nline two\n", "line one\nline two\r"),
-            ("no submit", "no submit"),
-            ("already enter\r", "already enter\r"),
+        let enter: &[u8] = b"\r";
+        for (text, writes) in [
+            ("ls\n", vec![&b"ls"[..], enter]),
+            ("ls\r\n", vec![b"ls", enter]),
+            ("ls\r", vec![b"ls", enter]),
+            ("\n", vec![enter]),
+            ("one\ntwo\n", vec![b"one\ntwo", enter]),
+            ("no submit", vec![b"no submit"]),
         ] {
-            assert_eq!(typed_bytes(text.into()), typed.as_bytes(), "{text:?}");
+            assert_eq!(typed_writes(text.into()), writes, "{text:?}");
         }
     }
 
@@ -2901,6 +2935,7 @@ mod tests {
             vec![
                 Some(Reply::Sessions(vec![idle_shell("7", "shell", "/tmp")])),
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Waited(WaitOutcome {
                     status: Some(SessionStatus::Idle),
                     error: None,
@@ -2977,6 +3012,7 @@ mod tests {
                     status: SessionStatus::Idle,
                     identity: ClaudeIdentity::default(),
                 }])),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Waited(WaitOutcome {
                     status: Some(SessionStatus::Idle),
