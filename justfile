@@ -10,10 +10,7 @@ default:
 run:
     cargo run -p termherd-app
 
-# The single-instance lock follows the temp dir on every OS: `TMPDIR` on Unix,
-# `TMP` on Windows (as a Windows path, hence `cygpath` under Git Bash). A
-# private one gives this build its own lock, so it neither sees nor is blocked
-# by the installed app's.
+# The instance lock follows the temp dir: `TMPDIR`, or `TMP` as a Windows path.
 [doc("Run a dev copy alongside the installed app (own lock via a private temp dir)")]
 run-isolated:
     d="$(mktemp -d)"; TMPDIR="$d" TMP="$(cygpath -w "$d" 2>/dev/null || echo "$d")" cargo run -p termherd-app
