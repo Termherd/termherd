@@ -111,6 +111,11 @@ pub struct Startup {
     /// Config files that existed but could not be used at startup, shown in
     /// the sidebar until dismissed.
     pub load_problems: Vec<crate::json_store::LoadProblem>,
+    /// Where state is read and written. `None`: nothing is persisted.
+    pub data_dir: Option<crate::paths::DataDir>,
+    /// The `settings.json` `main()` also hands the MCP server: resolved once,
+    /// so the agent never writes a file the app does not watch.
+    pub settings_file: Option<PathBuf>,
 }
 
 /// The settings the MCP `snapshot` tool reports that `core` cannot read —
@@ -138,8 +143,12 @@ pub fn run(
     // Restore the saved bounds, but discard a position that now lands off every
     // connected monitor (e.g. a second screen that has since been unplugged), so
     // the window can't open out of reach.
-    let config =
-        WindowConfig::load().with_onscreen_position(&crate::window_geometry::current_screens());
+    let config = startup
+        .data_dir
+        .as_ref()
+        .map_or_else(WindowConfig::default, WindowConfig::load)
+        .with_onscreen_position(&crate::window_geometry::current_screens());
+    let settings_file = startup.settings_file.clone();
     let position = match (config.x, config.y) {
         (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
         _ => window::Position::Centered,
@@ -155,7 +164,10 @@ pub fn run(
                     path_resolver: path_resolver.clone(),
                     pty: pty.clone(),
                     pty_output: pty_output.clone(),
-                    settings: Arc::new(live_settings::LiveSettings(pty.clone())),
+                    settings: Arc::new(live_settings::LiveSettings {
+                        pty: pty.clone(),
+                        file: settings_file.clone(),
+                    }),
                     claude_sessions: crate::paths::claude_dir()
                         .map(|claude| claude.join("sessions")),
                 },
@@ -214,8 +226,13 @@ struct Shell {
     bounds: WindowConfig,
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
+    /// Where the shell persists the user's state. `None`: nothing is written.
+    data_dir: Option<crate::paths::DataDir>,
     /// The `settings.json` the live-reload watch follows; resolved once.
     settings_file: Option<PathBuf>,
+    /// Where captures and screencasts land: one dir, so the latest is the
+    /// highest-named file in it.
+    captures: Option<PathBuf>,
     /// Claude Code's session-file directory, read for each pane's identity.
     claude_sessions: Option<PathBuf>,
     scan_error: Option<String>,
@@ -801,6 +818,8 @@ impl Shell {
             mcp_tokens,
         } = live_bridge;
         let (notification_clicks, notification_clicked) = notify_click::channel();
+        let settings_file = startup.settings_file;
+        let captures = startup.data_dir.as_ref().map(crate::capture::captures_dir);
         let mut core = termherd_core::App::new();
         core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
         core.apply(termherd_core::Event::CollapsedLoaded(startup.collapsed));
@@ -812,7 +831,7 @@ impl Shell {
             scanner,
             watch_root,
             claude_sessions,
-            settings_file: crate::settings::path(),
+            settings_file,
             scan_error: None,
             path_resolver,
             pty,
@@ -860,6 +879,8 @@ impl Shell {
             exiting: false,
             record: RecordState::new(RecordConfig::default()),
             config: config_input(&crate::settings::Settings::default()),
+            data_dir: startup.data_dir,
+            captures,
         };
         shell.adopt_settings(&startup.settings);
         shell
@@ -1797,6 +1818,8 @@ mod key_routing {
             metadata: Overlay::default(),
             collapsed: HashSet::new(),
             load_problems: Vec::new(),
+            data_dir: None,
+            settings_file: None,
         }
     }
 
@@ -1831,12 +1854,17 @@ mod key_routing {
 
     /// A `Shell` over the given PTY host, with no terminal open yet.
     fn shell_over(pty: Arc<dyn PtyHost>) -> Shell {
+        shell_over_with(pty, test_startup())
+    }
+
+    /// [`shell_over`], starting from `startup`.
+    fn shell_over_with(pty: Arc<dyn PtyHost>, startup: Startup) -> Shell {
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
         Shell::new(
             WindowConfig::default(),
             test_ports(pty, rx),
             test_live_bridge(),
-            test_startup(),
+            startup,
         )
     }
 
@@ -6487,7 +6515,9 @@ mod key_routing {
         let _ = shell.launch(cwd, Launch::Shell);
         let session = shell.core.workspace.focused_session().expect("focused");
 
-        pty.write(session, b"exit\r\n").expect("type exit");
+        // A bare `exit` returns the last command's status: macOS bash under an
+        // empty home exits unclean, and an unclean exit keeps the tab open.
+        pty.write(session, b"exit 0\r\n").expect("type exit");
 
         // Pump the adapter's events through the real update loop until the
         // auto-close lands (or the deadline proves it never does).
@@ -7344,6 +7374,91 @@ mod key_routing {
         assert!(shell.core.is_collapsed("/tmp/project"));
         let _ = shell.update(Message::ToggleCollapsed("/tmp/project".into()));
         assert!(!shell.core.is_collapsed("/tmp/project"));
+    }
+
+    /// A shell persisting under `dir`, the way `main()` wires the user's own.
+    fn shell_persisting_under(dir: &crate::paths::DataDir) -> Shell {
+        shell_over_with(
+            Arc::new(RecordingPty::default()),
+            Startup {
+                data_dir: Some(dir.clone()),
+                settings_file: Some(crate::settings::path(dir)),
+                ..test_startup()
+            },
+        )
+    }
+
+    #[test]
+    fn a_star_is_saved_under_the_data_dir_and_read_back_by_the_startup_load() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        browse_one(&mut shell, "sess");
+
+        let _ = shell.update(Message::ToggleStar("sess".into()));
+
+        let (overlay, problem) = crate::metadata_store::load(&dir);
+        assert_eq!(problem, None);
+        assert!(overlay.sessions["sess"].starred);
+    }
+
+    #[test]
+    fn a_fold_is_saved_under_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        browse_one(&mut shell, "sess");
+
+        let _ = shell.update(Message::ToggleCollapsed("/tmp/project".into()));
+
+        assert!(crate::collapsed_store::load(&dir).contains("/tmp/project"));
+    }
+
+    #[test]
+    fn a_settings_change_on_disk_is_reloaded_from_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        std::fs::write(crate::settings::path(&dir), r#"{ "theme": "light" }"#).expect("write");
+
+        let _ = shell.update(Message::SettingsFileChanged);
+
+        assert_eq!(
+            shell.appearance.theme,
+            crate::settings::ThemeChoice::Light,
+            "the watched file is the one the reload reads"
+        );
+    }
+
+    #[test]
+    fn a_capture_writes_its_dump_under_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut shell = shell_persisting_under(&crate::paths::DataDir::at(tmp.path()));
+
+        let _ = shell.run_action(Action::Capture);
+
+        let dumps: Vec<_> = std::fs::read_dir(tmp.path().join("captures"))
+            .expect("the captures dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        assert_eq!(dumps.len(), 1, "one JSON dump: {dumps:?}");
+    }
+
+    #[test]
+    fn closing_the_window_saves_its_bounds_under_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::Resized(Size::new(900.0, 600.0)),
+        ));
+
+        request_quit_from_the_window(&mut shell);
+
+        let saved = WindowConfig::load(&dir);
+        assert_eq!((saved.width, saved.height), (900.0, 600.0));
     }
 
     #[test]
