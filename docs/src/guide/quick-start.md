@@ -67,9 +67,10 @@ shows the matched line under the row so you can tell *why* it matched. See
 | Close the focused pane (a lone pane closes its tab) | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>W</kbd> |
 | Reopen the tab you just closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 
-Tabs also reorder by drag-and-drop. Split panes always share their space
-evenly — resizing them, by keyboard or by drag, is the remaining piece of
-`F-terminal-split`.
+Tabs also reorder by drag-and-drop. Drag the divider between split panes to
+resize them: the ratio updates as you drag, stays between 10% and 90% of the
+split's usable space, and the terminal grids resize on release. See
+[Tabs and splits](../workspace/tabs-and-splits.md) for details.
 
 ## 4. Watch what needs you
 

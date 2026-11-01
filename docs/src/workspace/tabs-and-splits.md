@@ -206,10 +206,11 @@ goes to the pane on the right, whatever the nesting.
 
 Closing the **last** pane in a tab closes the tab.
 
-**Drag-resize is not shipped yet.** Panes divide their space evenly; the
-remaining piece of `F-terminal-split` is a draggable divider. Two extra focus
-actions, `focus-next` and `focus-prev`, exist in the keymap with no default
-chord — bind them yourself if you prefer cycling to directional movement
+**Drag-resize a split** by dragging the handle between its panes. The ratio
+updates as you drag; each side stays between 10% and 90% of that split's usable
+space. Terminal sizes update when you release. Two extra focus actions,
+`focus-next` and `focus-prev`, exist in the keymap with no default chord — bind
+them yourself if you prefer cycling to directional movement
 ([`settings.json`](../reference/settings.md)).
 
 ## Closing, and what asks first

@@ -375,7 +375,8 @@ TermHerd does **not** register as an IDE and Claude uses the real editor.
 
 - **Terminal multiplexing is the new hard core.** Mitigation: the pane tree is
   pure `core` data (testable); `alacritty_terminal` does ANSI/grid; the widget
-  is render + input; split-resize can ship before drag-resize.
+  is render + input; fixed-ratio splits shipped first, and drag-resize now
+  updates the same pane tree.
 - **Native terminal widget cost** (selection, scrollback, unicode width).
   Mitigation: lean on `alacritty_terminal`; budgeted in `F-builtin-terminal`.
 - **GUI framework churn.** Mitigation: logic is in `core`; the GUI crate is
