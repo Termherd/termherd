@@ -8,6 +8,7 @@
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, PoisonError, RwLock, mpsc};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
@@ -39,6 +40,10 @@ const READ_BUF: usize = 8192;
 /// How long the terminal thread keeps draining trailing output after the
 /// waiter reported the process exit, before declaring the session over.
 const EOF_DRAIN_QUIET: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Shortest gap between two emitted screens. Each copies the whole grid, and
+/// one per read chunk queues them faster than the GUI drains them.
+const SCREEN_INTERVAL: Duration = Duration::from_millis(8);
 
 /// The PTY's input side, shared between user writes (the manager) and terminal
 /// replies (the parser). A `Mutex` serialises the two so responses never
@@ -405,7 +410,34 @@ pub(crate) fn spawn_term(
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
             let mut clean = false;
-            while let Ok(cmd) = ctrl_rx.recv() {
+            let mut unsent_change = false;
+            let mut last_sent: Option<Instant> = None;
+            let screen = |term: &Term<PtyResponder>| PtyEvent::Output {
+                session,
+                screen: snapshot(term, &current(&palette)),
+            };
+            loop {
+                let flush_at = last_sent
+                    .filter(|_| unsent_change)
+                    .map(|at| at + SCREEN_INTERVAL);
+                let cmd = match flush_at {
+                    Some(at) => {
+                        match ctrl_rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
+                            Ok(cmd) => cmd,
+                            Err(mpsc::RecvTimeoutError::Timeout) => {
+                                term_sink(screen(&term));
+                                last_sent = Some(Instant::now());
+                                unsent_change = false;
+                                continue;
+                            }
+                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
+                    }
+                    None => match ctrl_rx.recv() {
+                        Ok(cmd) => cmd,
+                        Err(_) => break,
+                    },
+                };
                 match cmd {
                     TermCmd::Bytes(bytes) => {
                         // OSC status comes from the raw bytes — alacritty
@@ -520,17 +552,16 @@ pub(crate) fn spawn_term(
                         break;
                     }
                 }
-                term_sink(PtyEvent::Output {
-                    session,
-                    screen: snapshot(&term, &current(&palette)),
-                });
+                unsent_change = true;
+                if last_sent.is_none_or(|at| at.elapsed() >= SCREEN_INTERVAL) {
+                    term_sink(screen(&term));
+                    last_sent = Some(Instant::now());
+                    unsent_change = false;
+                }
             }
             // A final snapshot so any drained bytes reach the screen the tab
             // keeps showing on an unclean exit.
-            term_sink(PtyEvent::Output {
-                session,
-                screen: snapshot(&term, &current(&palette)),
-            });
+            term_sink(screen(&term));
             term_sink(PtyEvent::Exited { session, clean });
         })
         .unwrap_or_else(|_| {
@@ -887,6 +918,54 @@ mod tests {
         assert_eq!(
             captured.lock().expect("capture lock").as_slice(),
             b"\x1b[<0;5;3M\x1b[<0;5;3m"
+        );
+    }
+
+    #[test]
+    fn a_burst_of_output_is_coalesced_and_ends_on_its_last_line() {
+        const CHUNKS: usize = 2000;
+        let screens = Arc::new(Mutex::new(Vec::new()));
+        let collected = screens.clone();
+        let sink: EventSink = Arc::new(move |event| {
+            if let PtyEvent::Output { screen, .. } = event {
+                collected.lock().expect("sink lock").push(screen);
+            }
+        });
+        let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(Arc::new(
+            Mutex::new(Vec::new()),
+        )))));
+        let session = SessionId(std::num::NonZeroU64::new(1).expect("nonzero"));
+        let (ctrl, ctrl_rx) = mpsc::channel();
+        let term = spawn_term(
+            session,
+            ctrl_rx,
+            (80, 24),
+            writer,
+            sink,
+            Arc::new(RwLock::new(Palette::default())),
+        );
+        for n in 1..=CHUNKS {
+            ctrl.send(TermCmd::Bytes(format!("line {n}\r\n").into_bytes()))
+                .expect("terminal thread alive");
+        }
+        drop(ctrl);
+        term.join().expect("terminal thread ends");
+        let screens = screens.lock().expect("sink lock");
+        assert!(
+            screens.len() < CHUNKS / 10,
+            "{} screens for {CHUNKS} chunks: output is not coalesced",
+            screens.len()
+        );
+        let last = screens.last().expect("at least the final screen");
+        let text: Vec<String> = last
+            .lines
+            .iter()
+            .map(|row| row.iter().map(|cell| cell.c).collect::<String>())
+            .collect();
+        assert!(
+            text.iter()
+                .any(|row| row.trim_end() == format!("line {CHUNKS}")),
+            "the last screen must show the last line, got {text:?}"
         );
     }
 }

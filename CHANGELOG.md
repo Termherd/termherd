@@ -73,6 +73,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A settings panel, live reload of `settings.json`, and the options on the
   live bridge (#292, #297, #298).
 
+### Fixed (a burst of output held memory and drew late)
+
+- A burst of terminal output no longer holds hundreds of megabytes or draws
+  seconds late (#414).
+
 ### Fixed (the test suite reset a developer's favorites)
 
 - Running the test suite no longer rewrites `~/.termherd`, which reset
