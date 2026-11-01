@@ -75,10 +75,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed (a burst of output held memory and drew late)
 
-- A burst of terminal output no longer leaves TermHerd holding hundreds of
-  megabytes, and the pane shows the end of the output as soon as the command
-  finishes instead of seconds later. A pane now redraws at most every 8 ms
-  while output streams in (#414).
+- A burst of terminal output no longer holds hundreds of megabytes or draws
+  seconds late (#414).
 
 ### Fixed (the bridge token written through a planted file)
 

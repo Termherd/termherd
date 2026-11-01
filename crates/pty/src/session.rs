@@ -41,12 +41,8 @@ const READ_BUF: usize = 8192;
 /// waiter reported the process exit, before declaring the session over.
 const EOF_DRAIN_QUIET: std::time::Duration = std::time::Duration::from_millis(50);
 
-/// The shortest gap between two screens the terminal thread emits. Output is
-/// parsed as fast as it arrives, but a snapshot of the whole grid goes out at
-/// most this often, and the last change always goes out once the gap has
-/// passed. One snapshot per read chunk outran the GUI under a burst of output:
-/// the stale screens queued by the hundred megabytes, the pane drew them
-/// seconds after the shell had finished, and the allocator kept the memory.
+/// Shortest gap between two emitted screens. Each copies the whole grid, and
+/// one per read chunk queues them faster than the GUI drains them.
 const SCREEN_INTERVAL: Duration = Duration::from_millis(8);
 
 /// The PTY's input side, shared between user writes (the manager) and terminal
@@ -414,26 +410,24 @@ pub(crate) fn spawn_term(
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
             let mut clean = false;
-            // `pending`: the grid changed since the last screen went out.
-            // `sent`: when that last screen went out (see SCREEN_INTERVAL).
-            let mut pending = false;
-            let mut sent: Option<Instant> = None;
+            let mut unsent_change = false;
+            let mut last_sent: Option<Instant> = None;
             let screen = |term: &Term<PtyResponder>| PtyEvent::Output {
                 session,
                 screen: snapshot(term, &current(&palette)),
             };
             loop {
-                // With a change held back, wait no longer than the gap allows
-                // before sending it; otherwise sleep until the next command.
-                let due = sent.filter(|_| pending).map(|at| at + SCREEN_INTERVAL);
-                let cmd = match due {
-                    Some(due) => {
-                        match ctrl_rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
+                let flush_at = last_sent
+                    .filter(|_| unsent_change)
+                    .map(|at| at + SCREEN_INTERVAL);
+                let cmd = match flush_at {
+                    Some(at) => {
+                        match ctrl_rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
                             Ok(cmd) => cmd,
                             Err(mpsc::RecvTimeoutError::Timeout) => {
                                 term_sink(screen(&term));
-                                sent = Some(Instant::now());
-                                pending = false;
+                                last_sent = Some(Instant::now());
+                                unsent_change = false;
                                 continue;
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -558,11 +552,11 @@ pub(crate) fn spawn_term(
                         break;
                     }
                 }
-                pending = true;
-                if sent.is_none_or(|at| at.elapsed() >= SCREEN_INTERVAL) {
+                unsent_change = true;
+                if last_sent.is_none_or(|at| at.elapsed() >= SCREEN_INTERVAL) {
                     term_sink(screen(&term));
-                    sent = Some(Instant::now());
-                    pending = false;
+                    last_sent = Some(Instant::now());
+                    unsent_change = false;
                 }
             }
             // A final snapshot so any drained bytes reach the screen the tab
@@ -927,9 +921,6 @@ mod tests {
         );
     }
 
-    /// A burst of output must not become a burst of screens: each one is a
-    /// copy of the whole grid, and the GUI drains them far slower than the
-    /// reader produces chunks. The last one must still show the end of it.
     #[test]
     fn a_burst_of_output_is_coalesced_and_ends_on_its_last_line() {
         const CHUNKS: usize = 2000;
