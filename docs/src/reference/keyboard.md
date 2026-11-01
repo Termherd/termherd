@@ -200,6 +200,5 @@ The [stdio MCP server](../mcp/stdio.md) publishes the action catalogue — each
 action with its default chords and the override `settings.json` sets for it,
 if any — as a resource at `termherd://keys/schema`. It is generated from the
 same in-code table this page describes, so it cannot drift from the binary you
-are running. Two gaps: the `activate-tab-N` family is not listed, and `copy` /
-`paste` show no default, because theirs differ per platform and are set
-outside that table — this page has them.
+are running, and its defaults are the running platform's. One gap: the
+`activate-tab-N` family is not listed.

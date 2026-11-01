@@ -611,11 +611,6 @@ mod tests {
         // image paste from Alt+V instead, so the key costs it nothing.
         use termherd_core::Action;
         use termherd_core::keymap::{MOD_CTRL, Platform, default_bindings};
-        let ctrl = KeyMods {
-            ctrl: true,
-            alt: false,
-            shift: false,
-        };
         let mut exemption_used = false;
         for platform in Platform::ALL {
             for (chord, action) in default_bindings(platform) {
@@ -631,7 +626,7 @@ mod tests {
                     continue;
                 }
                 let text = ch.to_string();
-                let bytes = key_bytes(TermKey::Char(ch), ctrl, Some(&text));
+                let bytes = key_bytes(TermKey::Char(ch), CTRL, Some(&text));
                 let control = matches!(bytes.as_deref(), Some([b]) if *b < 0x20 || *b == 0x7f);
                 assert!(
                     !control,

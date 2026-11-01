@@ -3207,19 +3207,14 @@ mod key_routing {
 
     /// The first default chord of `action` on this platform, read from the
     /// keymap's own catalogue, so these tests press the binding the running
-    /// app has — ⌘D on macOS is Ctrl+Shift+E elsewhere, not Ctrl+D.
+    /// app has — ⌘D on macOS is Alt+Shift+= elsewhere, not Ctrl+D.
     fn default_spec(action: &str) -> String {
-        let primary = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
         let spec = termherd_core::action_catalog()
             .into_iter()
             .find(|binding| binding.name == action)
             .and_then(|binding| binding.default_chords.first().copied())
             .expect("the action has a default chord");
-        spec.replace("mod", primary)
+        spec.replace("mod", termherd_core::Platform::current().primary_name())
     }
 
     #[test]
@@ -6411,20 +6406,17 @@ mod key_routing {
     fn command_chords_fire_without_terminal_focus() {
         // the chord dispatch runs before the terminal-focus guard, so the
         // very first shell can be opened by keyboard from the empty, search-
-        // focused workspace. New shell is Cmd+T on macOS, Ctrl+Shift+T
-        // elsewhere (bare Ctrl+T is the terminal's transpose).
-        let primary = if cfg!(target_os = "macos") {
-            Modifiers::LOGO
-        } else {
-            Modifiers::CTRL | Modifiers::SHIFT
-        };
+        // focused workspace. The chord is the keymap's own default, pressed
+        // as a real key event.
+        let chord = KeyChord::parse(&default_spec("new-shell-here")).expect("chord parses");
+        let event = super::input::event_of(&chord).expect("a letter chord synthesises");
         let (mut shell, pty) = empty_shell();
         assert_eq!(
             shell.focus,
             Focus::Search,
             "an empty workspace starts on search"
         );
-        let _ = shell.on_key(press(Key::Character("t".into()), primary, Some("t")));
+        let _ = shell.on_key(event);
         assert_eq!(
             pty.spawn_count(),
             1,
