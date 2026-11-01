@@ -88,6 +88,10 @@ mod tests {
     #[test]
     fn no_test_writes_the_data_dir_of_the_home_it_runs_in() {
         let home = tempfile::tempdir().expect("tempdir");
+        // Its own temp dir too: session ids restart at 1 in each process, so a
+        // shared one would let the two runs' real shells claim the same
+        // per-session startup files.
+        let tmp = tempfile::tempdir().expect("tempdir");
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
                 "--skip",
@@ -95,6 +99,9 @@ mod tests {
             ])
             .env("USERPROFILE", home.path())
             .env("HOME", home.path())
+            .env("TMPDIR", tmp.path())
+            .env("TMP", tmp.path())
+            .env("TEMP", tmp.path())
             .output()
             .expect("rerun the test binary");
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -115,7 +122,8 @@ mod tests {
         // A rerun that failed early, or ran nothing, leaves the dir absent too.
         assert!(
             output.status.success() && passed_count(&stdout) > 0,
-            "the rerun proves nothing unless the suite ran and passed:\n{stdout}"
+            "no data dir was written, but the rerun failed, so that proves nothing; \
+             the cause is the failing test reported below, not a write:\n{stdout}"
         );
     }
 }

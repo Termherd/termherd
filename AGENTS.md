@@ -472,8 +472,10 @@ exists). Do not relax them locally.
   user's favorites, folds and window bounds on each `cargo test`, and the
   loss only showed at the next launch (#407). `paths::DataDir::user()` is
   `main()`'s alone; a test that persists names its own temp dir, and
-  `no_test_writes_the_data_dir_of_the_home_it_runs_in` reruns the suite
-  under an empty home to catch the next store that forgets.
+  `no_test_writes_the_data_dir_of_the_home_it_runs_in` reruns the app's
+  unit-test binary under an empty home. It covers that binary only: not
+  `crates/app/tests/`, not another crate (the stdio `crates/mcp` server
+  resolves its own `settings.json`), and not `~/.claude`.
 - **One logging stack:** `tracing`. No `println!` outside tests.
 - **`unsafe_code = "deny"`** workspace-wide. The lone sanctioned exception is
   `crates/app/src/macos.rs` (AppKit FFI for the Cmd+Q quit path, the Edit menu

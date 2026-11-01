@@ -7416,6 +7416,22 @@ mod key_routing {
     }
 
     #[test]
+    fn a_settings_change_on_disk_is_reloaded_from_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        std::fs::write(crate::settings::path(&dir), r#"{ "theme": "light" }"#).expect("write");
+
+        let _ = shell.update(Message::SettingsFileChanged);
+
+        assert_eq!(
+            shell.appearance.theme,
+            crate::settings::ThemeChoice::Light,
+            "the watched file is the one the reload reads"
+        );
+    }
+
+    #[test]
     fn a_capture_writes_its_dump_under_the_data_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut shell = shell_persisting_under(&crate::paths::DataDir::at(tmp.path()));
