@@ -133,6 +133,12 @@ fn main() -> iced::Result {
             .collect(),
         data_dir,
         settings_file,
+        // "." without a home, so a launch always has a directory to start in.
+        fallback_cwd: paths::home_dir().map_or_else(
+            || ".".to_owned(),
+            |home| home.to_string_lossy().into_owned(),
+        ),
+        claude_dir: paths::ClaudeDir::user(),
     };
     // Terminal path candidates are checked against the real filesystem — the
     // one thing that tells `src/main.rs` from prose like `and/or`.

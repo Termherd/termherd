@@ -23,7 +23,7 @@ use super::bridge::{
 use super::input::event_of;
 use super::repos::RepoGesture;
 use super::routing::{KeyVerdict, KeyboardOwner};
-use super::{Focus, Message, Shell, home_dir};
+use super::{Focus, Message, Shell};
 
 impl Shell {
     /// Carry out one MCP [`Action`], returning the outcome to answer the caller
@@ -146,7 +146,11 @@ impl Shell {
             SessionKind::Shell => Launch::Shell,
             SessionKind::Claude => Launch::Claude(ClaudeLaunch::Fresh(None)),
         };
-        let (opened, task) = self.launch_at(project.unwrap_or_else(home_dir), launch, placement);
+        let (opened, task) = self.launch_at(
+            project.unwrap_or_else(|| self.fallback_cwd.clone()),
+            launch,
+            placement,
+        );
         let opened = opened.map(handle_of);
         (
             self.applied().with_detail(ActionDetail::Opened(opened)),

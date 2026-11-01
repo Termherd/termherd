@@ -7,7 +7,7 @@ use iced::Task;
 use termherd_core::workspace::SessionId;
 use termherd_core::{ClaudeLaunch, Effect, Launch, LaunchSpec, Placement};
 
-use super::{Focus, Message, Shell, home_dir};
+use super::{Focus, Message, Shell};
 
 /// A new Claude session id: a v4 UUID, the shape `claude --session-id` takes.
 /// Minted in the shell because `core` holds no source of randomness.
@@ -76,7 +76,9 @@ impl Shell {
     /// home directory when nothing is open — so the shortcut still works from an
     /// empty workspace.
     pub(super) fn new_shell_here(&mut self) -> Task<Message> {
-        let cwd = self.focused_cwd().unwrap_or_else(home_dir);
+        let cwd = self
+            .focused_cwd()
+            .unwrap_or_else(|| self.fallback_cwd.clone());
         self.launch(cwd, Launch::Shell)
     }
 

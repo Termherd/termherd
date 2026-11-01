@@ -12,6 +12,7 @@ use iced::widget::text_editor;
 
 use super::routing::KeyboardOwner;
 use super::{Message, Shell};
+use crate::paths::ClaudeDir;
 
 /// A plan / memory document open in the main pane (F-plans-memory). Holds the
 /// editable buffer plus the state the save path needs: where it lives, whether
@@ -53,8 +54,9 @@ impl OpenDoc {
         path: PathBuf,
         content: &str,
         mtime: Option<SystemTime>,
+        claude: Option<&ClaudeDir>,
     ) -> Self {
-        let writable = crate::docs::is_writable(&path);
+        let writable = crate::docs::is_writable(&path, claude);
         Self {
             label,
             path,
@@ -211,8 +213,9 @@ impl Shell {
         let path = doc.path.clone();
         let contents = doc.content.text();
         let open_mtime = doc.loaded_mtime;
+        let claude = self.claude_dir.clone();
         Task::perform(
-            async move { crate::docs::save(&path, &contents, open_mtime) },
+            async move { crate::docs::save(&path, &contents, open_mtime, claude.as_ref()) },
             Message::DocSaved,
         )
     }

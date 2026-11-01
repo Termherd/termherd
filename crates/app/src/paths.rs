@@ -42,7 +42,8 @@ impl DataDir {
 }
 
 /// Claude Code's own data dir, which termherd reads (plans, memory,
-/// per-process session files) and never owns.
+/// per-process session files) and never owns. Resolved in `main()` alone and
+/// injected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeDir(PathBuf);
 
@@ -51,6 +52,13 @@ impl ClaudeDir {
     #[must_use]
     pub fn user() -> Option<Self> {
         home_dir().map(|home| Self(home.join(".claude")))
+    }
+
+    /// A Claude dir rooted at `root`: a test's own.
+    #[cfg(test)]
+    #[must_use]
+    pub fn at(root: impl Into<PathBuf>) -> Self {
+        Self(root.into())
     }
 
     /// The directory itself: the boundary of the doc write-scope.
