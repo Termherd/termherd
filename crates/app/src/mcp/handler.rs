@@ -380,8 +380,10 @@ impl TermherdMcp {
                        not wait for the command to finish. To act on the result, \
                        follow with `wait_for_status` then `read_terminal`; do \
                        not poll `snapshot`, which races the transition you are \
-                       watching for. Include a trailing newline in `text` to \
-                       submit a command. Args: `session` (its stable handle), \
+                       watching for. A trailing newline in `text` is sent as \
+                       Enter and submits, in a shell or in Claude Code; earlier \
+                       newlines stay line breaks, so a multi-line prompt is \
+                       submitted once. Args: `session` (its stable handle), \
                        `text`. Returns the `focused_handle`."
     )]
     async fn run_in_session(
@@ -391,7 +393,7 @@ impl TermherdMcp {
         let session = parse_handle(&args.session)?;
         self.act(Action::Run {
             session,
-            bytes: args.text.into_bytes(),
+            bytes: typed_bytes(args.text),
         })
         .await
     }
@@ -542,7 +544,7 @@ impl TermherdMcp {
                        `wait_for_status` + `read_terminal`. Prompting a shell session is \
                        enabled by default; prompting a nested Claude session requires opt-in \
                        (via `allow_claude_nesting` setting or argument). Args: `session` \
-                       (handle), `text` (text/command to send; include trailing newline to submit), \
+                       (handle), `text` (text to send; a trailing newline is sent as Enter and submits), \
                        `statuses` (target statuses, default [\"idle\", \"attention\"]), \
                        `lines` (trailing lines to read back, default 40), `timeout_ms` \
                        (wait bound in ms, default 30000, capped at 300000), `allow_claude_nesting` \
@@ -572,7 +574,7 @@ impl TermherdMcp {
             .call(
                 Request::Act(Action::Run {
                     session,
-                    bytes: args.text.into_bytes(),
+                    bytes: typed_bytes(args.text),
                 }),
                 CALL_TIMEOUT,
             )
@@ -1163,7 +1165,7 @@ fn parse_claude_command(command: &str, argument: Option<&str>) -> Result<ClaudeC
 struct RunArgs {
     /// The stable handle of the target session.
     session: String,
-    /// Text to type; include a trailing newline to submit a command.
+    /// Text to type; a trailing newline is sent as Enter, which submits.
     text: String,
 }
 
@@ -1263,6 +1265,23 @@ fn no_pixels(reason: Option<String>) -> CallToolResult {
         "{reason}. Use `snapshot` or `read_terminal` instead — they read the \
          workspace without the window."
     ))])
+}
+
+/// The bytes typing `text` sends, its final line break pressed as Enter.
+///
+/// Enter is `\r`. A program reading raw keys (Claude Code, `PSReadLine`) takes
+/// `\n` as Ctrl+J, a new line in its input, so a final `\n` would not submit.
+/// Earlier line breaks stay `\n`, so a multi-line prompt is submitted once.
+fn typed_bytes(text: String) -> Vec<u8> {
+    let mut bytes = text.into_bytes();
+    if bytes.ends_with(b"\n") {
+        bytes.pop();
+        if bytes.ends_with(b"\r") {
+            bytes.pop();
+        }
+        bytes.push(b'\r');
+    }
+    bytes
 }
 
 /// Parse a stable handle string (as `list_sessions` / `snapshot` report it) to
@@ -1427,7 +1446,7 @@ struct ReadArgs {
 struct PromptInSessionArgs {
     /// The session handle to prompt.
     session: String,
-    /// Text to type into the session's terminal. Include a trailing newline to submit.
+    /// Text to type; a trailing newline is sent as Enter, which submits.
     text: String,
     /// Target activity statuses to wait for (default: ["idle", "attention"]).
     #[serde(default)]
@@ -2324,9 +2343,23 @@ mod tests {
             run,
             Action::Run {
                 session: 3,
-                bytes: b"ls\n".to_vec(),
+                bytes: b"ls\r".to_vec(),
             }
         );
+    }
+
+    #[test]
+    fn a_final_line_break_is_typed_as_enter() {
+        for (text, typed) in [
+            ("ls\n", "ls\r"),
+            ("ls\r\n", "ls\r"),
+            ("\n", "\r"),
+            ("line one\nline two\n", "line one\nline two\r"),
+            ("no submit", "no submit"),
+            ("already enter\r", "already enter\r"),
+        ] {
+            assert_eq!(typed_bytes(text.into()), typed.as_bytes(), "{text:?}");
+        }
     }
 
     #[tokio::test]

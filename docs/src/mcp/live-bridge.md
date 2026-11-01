@@ -89,7 +89,7 @@ tool-level error; the text reads keep working.
 | `focus_pane` | `session` | |
 | `rename_tab` | `tab`, `title` | `tab` is the 0-based index `snapshot` reports; a blank title reverts a shell tab to the derived one. A Claude tab is renamed by arming `/rename <title>` for confirmation, answered as `claude_command` is; a blank title, or the name it already shows, arms nothing and leaves it as it is |
 | `close_pane` | `pane`, `background` | a lone pane is its whole tab, which closes; `background: true` closes `pane` without focusing it first |
-| `run_in_session` | `session`, `text` | include a trailing newline to submit |
+| `run_in_session` | `session`, `text` | a trailing newline is sent as Enter and submits; see below |
 | `mouse_in_session` | `session`, `kind`, `col`, `row`, `button` | a mouse event at a **cell** of the terminal; see below |
 | `add_repo` | `path` | put a repository in the sidebar before it has any session |
 | `forget_repo` | `path` | drop an addition; the row survives on its sessions |
@@ -326,6 +326,12 @@ read_terminal(session, lines: 60)
 ```
 
 Alternatively, use `prompt_in_session` to run all three steps in **one** round trip.
+
+**A trailing newline submits.** Both tools send it as Enter, so it submits in
+a shell and in Claude Code alike. Earlier newlines are sent as they are: Claude
+Code and PowerShell take them as line breaks in their input, so a multi-line
+prompt is submitted once. A Unix shell runs each line; `cmd.exe` drops them,
+so send it one command per call.
 
 **Do not poll `snapshot` in a loop.** It races the transition you are watching
 for — that race is exactly why the wait tool exists.
