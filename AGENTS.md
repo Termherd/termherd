@@ -627,6 +627,15 @@ exists). Do not relax them locally.
   each of which read as green in the summary that had been looked at. Poll
   until the run is `completed`, then read the conclusion; a job list with a
   `pending` in it says nothing about the branch.
+- **No pull-request check runs macOS: dispatch `cross-os` before merging a
+  change to a real shell's environment.** #409 reran the suite under an
+  empty home, was green on ubuntu and Windows, and turned `main` red on
+  `macos-latest` (reverted in #415). `gh workflow run CI --ref <branch>`
+  runs `cross-os` on the branch.
+- **A test that types `exit` types `exit 0`.** A bare `exit` returns the
+  last command's status, so the test depends on the startup files of
+  whoever runs it: macOS bash under an empty home exits unclean, which keeps
+  the tab open by design (#416).
 - **An expectation defined as "whatever the other side said" cannot tell a
   wrong answer from a wrong question.** Comparing a declaration's key against
   the walk's own output is the right *shape* — it is what stops the two rules
