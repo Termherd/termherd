@@ -85,6 +85,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `run_in_session` and `prompt_in_session` send a trailing newline as Enter,
   so it submits in Claude Code as it does in a shell (#426).
 
+### Fixed (prompt_in_session answered before the prompt ran)
+
+- `prompt_in_session` waits for the session to start on the prompt before
+  waiting for it to settle, instead of reporting the status from before it
+  (#427).
+
 ### Fixed (a burst of output held memory and drew late)
 
 - A burst of terminal output no longer holds hundreds of megabytes or draws

@@ -80,6 +80,11 @@ const READ_BACK_TIMEOUT: Duration = Duration::from_millis(250);
 /// where Enter is a line break, so Enter must reach it in a read of its own.
 const ENTER_GAP: Duration = Duration::from_millis(50);
 
+/// How long `prompt_in_session` waits for its prompt to start. Claude Code
+/// shows busy within a few hundred milliseconds; a command that finished
+/// sooner costs this much.
+const START_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// The live-bridge MCP server handler. Holds only the bridge into the shell —
 /// cloned fresh per session by the transport's service factory.
 #[derive(Clone)]
@@ -465,7 +470,10 @@ impl TermherdMcp {
         description = "Wait until a session's activity reaches one of `statuses` \
                        (default: idle or attention), then report it. Pair it \
                        with `run_in_session`, which returns immediately: run, \
-                       wait, then `read_terminal`. Args: `session` (handle), \
+                       wait, then `read_terminal`. A status the session already \
+                       shows answers at once, and just after typing Claude \
+                       Code still shows the one from before: wait for `busy` \
+                       first. Args: `session` (handle), \
                        `statuses` (any of \"starting\", \"busy\", \"idle\", \
                        \"attention\", \"exited\"), `timeout_ms` (default 30000, \
                        capped at 300000). A session that exits settles the wait \
@@ -540,8 +548,9 @@ impl TermherdMcp {
     /// to settle, and read back its terminal text in a single round trip.
     #[tool(
         name = "prompt_in_session",
-        description = "Prompt a session, wait until its activity reaches target statuses \
-                       (default: idle or attention), and read back its terminal text in a \
+        description = "Prompt a session, wait until its activity leaves then reaches target \
+                       statuses (default: idle or attention; the leaving is awaited for up to \
+                       2 s), and read back its terminal text in a \
                        single round trip. The composed form of `run_in_session` + \
                        `wait_for_status` + `read_terminal`. Prompting a shell session is \
                        enabled by default; prompting a nested Claude session requires opt-in \
@@ -558,6 +567,7 @@ impl TermherdMcp {
         Parameters(args): Parameters<PromptInSessionArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let session = parse_handle(&args.session)?;
+        let targets = parse_statuses(args.statuses)?;
 
         // 1. Session lookup & Nesting opt-in verification
         let target_info = self.fetch_session_info(&args.session).await?;
@@ -574,8 +584,10 @@ impl TermherdMcp {
         let focused = self.type_text(session, args.text).await?;
 
         // 3. Step 2: Wait for status (wait_for_status primitive)
+        self.wait_for_start(session, &targets, wait_timeout(args.timeout_ms))
+            .await;
         let (status_str_val, timed_out) = self
-            .wait_for_session_status(session, args.statuses, args.timeout_ms)
+            .wait_for_session_status(session, targets, args.timeout_ms)
             .await?;
 
         // 4. Step 3: Read terminal (read_terminal primitive)
@@ -739,15 +751,35 @@ impl TermherdMcp {
             })
     }
 
-    /// Block until `session` reaches one of `statuses` (default: idle or attention).
+    /// Wait until `session` leaves `targets`, within `bound`. Just after typing
+    /// it still shows the status from before the prompt, which would settle the
+    /// wait on `targets` at once. Best effort: a timeout or a rejection here
+    /// is reported by that wait instead.
+    async fn wait_for_start(&self, session: u64, targets: &[SessionStatus], bound: Duration) {
+        let others: Vec<SessionStatus> = [
+            SessionStatus::Starting,
+            SessionStatus::Busy,
+            SessionStatus::Idle,
+            SessionStatus::Attention,
+        ]
+        .into_iter()
+        .filter(|status| !targets.contains(status))
+        .collect();
+        let request = Request::WaitForStatus {
+            session,
+            targets: others,
+        };
+        let _ = self.bridge.call(request, bound.min(START_TIMEOUT)).await;
+    }
+
+    /// Block until `session` reaches one of `targets`.
     /// Returns `(status_str, timed_out)`. On timeout, reads back the current status.
     async fn wait_for_session_status(
         &self,
         session: u64,
-        statuses: Option<Vec<String>>,
+        targets: Vec<SessionStatus>,
         timeout_ms: Option<u64>,
     ) -> Result<(Option<&'static str>, bool), ErrorData> {
-        let targets = parse_statuses(statuses)?;
         let timeout = wait_timeout(timeout_ms);
         match self
             .bridge
@@ -1876,6 +1908,10 @@ mod tests {
                     acted(),
                     acted(),
                     Reply::Waited(WaitOutcome {
+                        status: Some(SessionStatus::Busy),
+                        error: None,
+                    }),
+                    Reply::Waited(WaitOutcome {
                         status: Some(SessionStatus::Idle),
                         error: None,
                     }),
@@ -1887,10 +1923,7 @@ mod tests {
                 Box::pin(mcp.prompt_in_session(Parameters(PromptInSessionArgs {
                     session: "1".into(),
                     text: "echo hi\n".into(),
-                    statuses: None,
-                    lines: None,
-                    timeout_ms: None,
-                    allow_claude_nesting: None,
+                    ..Default::default()
                 }))),
             ),
             "mouse_in_session" => (
@@ -2937,6 +2970,10 @@ mod tests {
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Busy),
+                    error: None,
+                })),
+                Some(Reply::Waited(WaitOutcome {
                     status: Some(SessionStatus::Idle),
                     error: None,
                 })),
@@ -2960,6 +2997,57 @@ mod tests {
         assert_eq!(value["text"], "build ok\n");
         assert_eq!(value["rendered"], true);
         assert_eq!(value["focused_handle"], "7");
+        let waits: Vec<Vec<SessionStatus>> = shell
+            .await
+            .expect("shell task")
+            .into_iter()
+            .filter_map(|request| match request {
+                Request::WaitForStatus { targets, .. } => Some(targets),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            waits,
+            vec![
+                vec![SessionStatus::Starting, SessionStatus::Busy],
+                vec![SessionStatus::Idle, SessionStatus::Attention],
+            ],
+            "it waits for the prompt to leave idle before waiting for idle"
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_in_session_still_waits_when_the_prompt_never_shows_busy() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell_seq(
+            requests,
+            vec![
+                Some(Reply::Sessions(vec![idle_shell("7", "shell", "/tmp")])),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                None,
+                Some(Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Idle),
+                    error: None,
+                })),
+                Some(Reply::Terminal(TerminalRead {
+                    text: Some("done\n".into()),
+                    error: None,
+                })),
+            ],
+        );
+        let result = TermherdMcp::new(handle)
+            .prompt_in_session(Parameters(PromptInSessionArgs {
+                session: "7".into(),
+                text: "true\n".into(),
+                timeout_ms: Some(50),
+                ..Default::default()
+            }))
+            .await
+            .expect("prompt_in_session succeeds");
+        let value = result.structured_content.expect("structured content");
+        assert_eq!(value["status"], "idle");
+        assert_eq!(value["timed_out"], false);
         let _ = shell.await;
     }
 
@@ -3014,6 +3102,10 @@ mod tests {
                 }])),
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
                 Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                Some(Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Busy),
+                    error: None,
+                })),
                 Some(Reply::Waited(WaitOutcome {
                     status: Some(SessionStatus::Idle),
                     error: None,

@@ -291,6 +291,13 @@ current one, and `timed_out` is `true`. And a session that **exits** settles
 the wait whatever you asked for — it can no longer reach your target. Both
 behaviours exist so a wait can never silently park you.
 
+**A wait answers at once on a status the session already shows.** Just after
+typing, Claude Code still shows the status from before the prompt, for up to a
+few hundred milliseconds. `prompt_in_session` therefore first waits, up to 2 s,
+for the session to leave the target statuses; a command that finished sooner
+costs those 2 s. Composing the loop by hand, wait for `busy` before waiting for
+`idle`.
+
 ### Settings
 
 | Tool | Args | Returns |
