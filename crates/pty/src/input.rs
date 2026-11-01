@@ -599,16 +599,9 @@ mod tests {
 
     #[test]
     fn no_default_binding_claims_a_terminal_control_key() {
-        // A chord the keymap binds never reaches the pane, so a default on a
-        // chord this encoder turns into a C0 control byte (Ctrl+D is EOF,
-        // Ctrl+W deletes a word) takes that key from every program in it. The
-        // byte comes from the encoder itself, not a hand-typed list of
-        // control keys, so the two cannot drift. Ctrl+Shift+letter is not
-        // checked: the same byte stays reachable through the unshifted chord.
-        //
-        // One exemption, and it must still be there: Ctrl+V pastes on
-        // Windows, as in Windows Terminal. Claude Code on Windows takes its
-        // image paste from Alt+V instead, so the key costs it nothing.
+        // A bound chord never reaches the pane, so no default may be a chord
+        // this encoder turns into a C0 control byte. One exemption, asserted
+        // to still be in use: Ctrl+V pastes on Windows.
         use termherd_core::Action;
         use termherd_core::keymap::{MOD_CTRL, Platform, default_bindings};
         let mut exemption_used = false;

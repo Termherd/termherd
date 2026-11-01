@@ -188,7 +188,7 @@ All shortcuts are configurable via the `keys` section of the config file
 | Close tab / pane   | `Ctrl+Shift+W`             | `Cmd+W`       |
 | Rename tab         | `Ctrl+Shift+I`             | `Cmd+Shift+I` |
 | Tab menu (or right-click a tab) | `Ctrl+Shift+M` | `Cmd+Shift+M` |
-| Split vert. / horiz. | `Alt+Shift+Plus` / `Alt+Shift+Minus` | `Cmd+D` / `Cmd+Shift+D` |
+| Split vert. / horiz. | `Alt+Shift+Plus` / `Alt+Shift+Minus` or `D` | `Cmd+D` / `Cmd+Shift+D` |
 | Focus pane         | `Ctrl+Shift+←↑↓→`          | `Cmd+Shift+←↑↓→` |
 | Zoom in / out / reset | `Ctrl` + `+` / `-` / `0` | `Cmd` + `+` / `-` / `0` |
 | Focus search       | `Ctrl+Shift+F`             | `Cmd+F`       |

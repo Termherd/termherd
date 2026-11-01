@@ -15,13 +15,11 @@ chords that reach the clipboard:
 | Copy selection | <kbd>Cmd</kbd>+<kbd>C</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> |
 | Paste | <kbd>Cmd</kbd>+<kbd>V</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>; also <kbd>Ctrl</kbd>+<kbd>V</kbd> on Windows |
 
-Copy/paste is the one binding that is deliberately irregular per platform:
-on Windows and Linux <kbd>Ctrl</kbd>+<kbd>C</kbd> must stay the interrupt. On
-Windows <kbd>Ctrl</kbd>+<kbd>V</kbd> pastes too, as in Windows Terminal, and
-Claude Code takes its image paste from <kbd>Alt</kbd>+<kbd>V</kbd>; on Linux
-<kbd>Ctrl</kbd>+<kbd>V</kbd> reaches the program, where Claude Code pastes an
-image on it.
-<kbd>Ctrl</kbd>+<kbd>C</kbd> sends `SIGINT` on every platform.
+On Windows and Linux <kbd>Ctrl</kbd>+<kbd>C</kbd> must stay the interrupt; it
+sends `SIGINT` on every platform. On Windows <kbd>Ctrl</kbd>+<kbd>V</kbd>
+pastes too, as in Windows Terminal, and Claude Code takes its image paste from
+<kbd>Alt</kbd>+<kbd>V</kbd>; on Linux <kbd>Ctrl</kbd>+<kbd>V</kbd> reaches the
+program, where Claude Code pastes an image on it.
 
 ### Option as Meta (macOS)
 
@@ -82,8 +80,11 @@ See [`settings.json`](../reference/settings.md).
 ## Scrollback
 
 The wheel scrolls back through history.
-<kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Up</kbd> jumps to the top of the buffer,
-<kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Down</kbd> back to the bottom.
+<kbd>Cmd</kbd>+<kbd>Up</kbd> jumps to the top of the buffer and
+<kbd>Cmd</kbd>+<kbd>Down</kbd> back to the bottom on macOS;
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Home</kbd> / <kbd>End</kbd> on Windows
+and Linux, where <kbd>Ctrl</kbd>+<kbd>Up</kbd> / <kbd>Down</kbd> reach the
+program.
 
 ## Zoom
 

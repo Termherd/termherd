@@ -200,7 +200,7 @@
   //   new-claude-session-here   mod+Alt+T
   //   open-new-session          (unbound)
   //   split-vertical            mod+D ; Alt+Shift+= / Alt+Shift+plus off macOS
-  //   split-horizontal          mod+Shift+D ; Alt+Shift+- off macOS
+  //   split-horizontal          mod+Shift+D ; Alt+Shift+- / Alt+Shift+D off macOS
   //   focus-left / -right       mod+Shift+Left / Right
   //   focus-up / -down          mod+Shift+Up / Down
   //   focus-next / focus-prev   (unbound)

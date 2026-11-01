@@ -3205,16 +3205,13 @@ mod key_routing {
         outcome.steps
     }
 
-    /// The first default chord of `action` on this platform, read from the
-    /// keymap's own catalogue, so these tests press the binding the running
-    /// app has — ⌘D on macOS is Alt+Shift+= elsewhere, not Ctrl+D.
+    /// The first default chord of `action` on this platform.
     fn default_spec(action: &str) -> String {
-        let spec = termherd_core::action_catalog()
+        termherd_core::action_catalog(termherd_core::Platform::current())
             .into_iter()
             .find(|binding| binding.name == action)
-            .and_then(|binding| binding.default_chords.first().copied())
-            .expect("the action has a default chord");
-        spec.replace("mod", termherd_core::Platform::current().primary_name())
+            .and_then(|binding| binding.default_chords.into_iter().next())
+            .expect("the action has a default chord")
     }
 
     #[test]

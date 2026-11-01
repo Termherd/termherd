@@ -82,7 +82,7 @@ without Shift.
 | Action | Default | Does |
 | --- | --- | --- |
 | `split-vertical` | `mod+d`; `alt+shift+=`, `alt+shift+plus` off macOS | split side by side |
-| `split-horizontal` | `mod+shift+d`; `alt+shift+-` off macOS | split stacked |
+| `split-horizontal` | `mod+shift+d`; `alt+shift+-`, `alt+shift+d` off macOS | split stacked |
 | `focus-left` | `mod+shift+left` | focus the pane to the left |
 | `focus-right` | `mod+shift+right` | … to the right |
 | `focus-up` | `mod+shift+up` | … above |
@@ -104,20 +104,19 @@ without Shift.
 | `zoom-out` | `cmd+-` | `ctrl+-` |
 | `zoom-reset` | `cmd+0` | `ctrl+0` |
 
-Copy/paste is the one pair whose default is irregular per platform. On Windows
-and Linux <kbd>Ctrl</kbd>+<kbd>C</kbd> must stay the interrupt, so copy takes
-Shift; <kbd>Ctrl</kbd>+<kbd>C</kbd> sends `SIGINT` everywhere. Paste takes
-<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>, and on **Windows** plain
+On Windows and Linux <kbd>Ctrl</kbd>+<kbd>C</kbd> must stay the interrupt, so
+copy takes Shift; <kbd>Ctrl</kbd>+<kbd>C</kbd> sends `SIGINT` everywhere. Paste
+takes <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>, and on **Windows** plain
 <kbd>Ctrl</kbd>+<kbd>V</kbd> as well, as in Windows Terminal: Claude Code on
 Windows pastes an image on <kbd>Alt</kbd>+<kbd>V</kbd>, which still reaches it.
 On **Linux** <kbd>Ctrl</kbd>+<kbd>V</kbd> is left to the program, because
 Claude Code pastes an image on it there. To paste text on it anyway, bind
 `"paste": ["ctrl+v", "ctrl+shift+v"]`.
 
-On AZERTY, `-` shares the <kbd>6</kbd> key, and a number-row key is matched by
-its position, so <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> splits from the
-keypad minus only. Bind `split-horizontal` to another chord if you need it on
-the main row.
+`split-horizontal` also takes <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> off
+macOS. On AZERTY, `-` shares the <kbd>6</kbd> key, and a number-row key is
+matched by its position, so <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> works
+there from the keypad minus only.
 
 Off macOS, `scroll-top` and `scroll-bottom` take Windows Terminal's
 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Home</kbd> / <kbd>End</kbd>, leaving

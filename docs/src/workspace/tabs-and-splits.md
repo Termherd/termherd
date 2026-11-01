@@ -15,7 +15,7 @@ terminal, or many, split vertically and horizontally.
 │                        │                           │
 └────────────────────────┴───────────────────────────┘
    Cmd+D / Alt+Shift+Plus split side by side
-   Cmd+Shift+D / Alt+Shift+Minus split stacked
+   Cmd+Shift+D / Alt+Shift+Minus or D split stacked
 ```
 
 ## Tabs
@@ -197,7 +197,7 @@ of sync.
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |
 | Split vertical (side by side) | <kbd>Cmd</kbd>+<kbd>D</kbd> | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> |
-| Split horizontal (stacked) | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> |
+| Split horizontal (stacked) | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> or <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> |
 | Focus a neighbour | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>←↑↓→</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>←↑↓→</kbd> |
 
 A split opens a **fresh shell** beside the focused pane. Directional focus
