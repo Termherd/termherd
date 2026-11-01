@@ -375,8 +375,8 @@ fn next_job(
 }
 
 /// The terminal thread: owns the `alacritty_terminal` grid and applies every
-/// [`TermCmd`] (bytes → parse + status, resize, scroll), emitting a fresh
-/// `Screen` each time. It exits — and reports [`PtyEvent::Exited`] — when the
+/// [`TermCmd`] (bytes → parse + status, resize, scroll), emitting a `Screen`
+/// at most every [`SCREEN_INTERVAL`]. It exits — and reports [`PtyEvent::Exited`] — when the
 /// reader signals EOF or every command sender is dropped.
 pub(crate) fn spawn_term(
     session: SessionId,
