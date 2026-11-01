@@ -301,14 +301,17 @@ mod tests {
         let (program, args) = copy_command(&from.to_string_lossy(), &to.to_string_lossy());
         spawn_editor(program, &args).expect("the copy must start");
 
-        // Fire-and-forget means the child is not waited on, so poll for its
-        // effect rather than assert it has already landed.
+        // The child is not waited on, so poll for the content: the target
+        // exists before the copy ends, and Windows locks it until then.
+        let copied = || std::fs::read(&to).ok();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !to.exists() && std::time::Instant::now() < deadline {
+        while copied().as_deref() != Some(b"opened".as_slice())
+            && std::time::Instant::now() < deadline
+        {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert_eq!(
-            std::fs::read(&to).ok().as_deref(),
+            copied().as_deref(),
             Some(b"opened".as_slice()),
             "the arguments reached the program, in order"
         );
