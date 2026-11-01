@@ -88,8 +88,11 @@ TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app   # second instance
 ```
 
 `temp_dir()` honours `$TMPDIR`, so both run. On Windows it reads `TMP` (then
-`TEMP`), so set that instead. Launch detached when you need to keep
-interacting with the original window (e.g. to compare quit behaviour).
+`TEMP`), so set that instead — to a directory that **exists**, as `mktemp -d`
+guarantees. Pointed at a missing one, a Windows build never shows its window,
+stops answering, and logs nothing about why (#441). Launch detached when you
+need to keep interacting with the original window (e.g. to compare quit
+behaviour).
 
 **A second instance shares `~/.termherd/settings.json` with the first.** The
 lock moved, the settings did not: a theme picked in the test build is
@@ -110,7 +113,11 @@ home when a check needs real sessions.
 
 **A build from before the lock followed the temp dir on Windows and Linux does
 not see a newer one, nor the reverse**: the default lock name changed with it.
-Quit an older release before testing a newer build against it.
+Quit an older release before testing a newer build against it. A pull
+request branched before #413 is such a build: it would not start beside the
+user's release while testing #432. Build it merged instead —
+`git merge --no-commit origin/main`, build, `git merge --abort` — which is
+also the tree that will land.
 
 **A build an agent launches is not a build a user launches.** The agent's shell
 carries its own Claude session's `CLAUDE*` variables (`CLAUDECODE`,
