@@ -107,8 +107,14 @@ Never under `~/.claude`. Everything it owns lives in `~/.termherd`
 
 TermHerd is **single-instance**: an advisory lock file under the system temp
 directory. To run a second build alongside one that already holds the lock,
-point it at a throwaway temp dir so its lock path differs:
+point it at a throwaway temp dir so its lock differs. On macOS and Linux:
 
 ```bash
 TMPDIR=$(mktemp -d) cargo run -p termherd-app
+```
+
+On Windows, `TMP` decides the temp dir:
+
+```powershell
+$env:TMP = (New-Item -ItemType Directory "$env:TEMP\termherd-2").FullName; cargo run -p termherd-app
 ```

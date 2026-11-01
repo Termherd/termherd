@@ -77,7 +77,8 @@ RUST_LOG=info cargo run -p termherd-app
 # and the macOS menu repoint.
 ```
 
-The app is **single-instance** (an flock at `std::env::temp_dir()/…`). To run a
+The app is **single-instance**, and its lock follows `std::env::temp_dir()` on
+every OS (an flock there on macOS, a name hashed from it elsewhere). To run a
 build *alongside* one that already holds the lock — common, since a dev/agent
 session often runs *inside* a release `TermHerd.app` you can't quit — point the
 new process at a throwaway temp dir so its lock path differs:
@@ -86,8 +87,9 @@ new process at a throwaway temp dir so its lock path differs:
 TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app   # second instance
 ```
 
-`temp_dir()` honours `$TMPDIR`, so both run. Launch detached when you need to
-keep interacting with the original window (e.g. to compare quit behaviour).
+`temp_dir()` honours `$TMPDIR`, so both run. On Windows it reads `TMP` (then
+`TEMP`), so set that instead. Launch detached when you need to keep
+interacting with the original window (e.g. to compare quit behaviour).
 
 **A second instance shares `~/.termherd/settings.json` with the first.** The
 lock moved, the settings did not: a theme picked in the test build is
@@ -103,9 +105,12 @@ USERPROFILE=$(mktemp -d) TMPDIR=$(mktemp -d) cargo run -p termherd-app
 
 The fake home hides `~/.claude` as well, so that build starts with an empty
 sidebar and finds no session files: fine for a theme or layout check, wrong
-for anything that reads Claude's data. And the lock follows `TMPDIR` on macOS
-only (`instance.rs`); elsewhere its path is fixed, so two instances cannot run
-side by side there at all.
+for anything that reads Claude's data; copy `~/.claude/projects` into the fake
+home when a check needs real sessions.
+
+**A build from before the lock followed the temp dir on Windows and Linux does
+not see a newer one, nor the reverse**: the default lock name changed with it.
+Quit an older release before testing a newer build against it.
 
 **A build an agent launches is not a build a user launches.** The agent's shell
 carries its own Claude session's `CLAUDE*` variables (`CLAUDECODE`,
