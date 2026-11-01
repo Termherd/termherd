@@ -13,8 +13,10 @@ shipped** — the `split-*`/`focus-*`/`close-focused` keymap actions now drive
 `core` (recursive iced pane rendering from the `Workspace` tree, fixed-ratio
 50/50 splits, per-leaf PTY geometry), plus click-to-focus (`Event::FocusPane`)
 and directional keyboard focus that cycles within its axis (`Event::FocusDir`,
-`mod+shift+arrows`); `mod+w` collapses the focused pane rather than the whole
-tab. Default binds: `mod+d` / `mod+shift+d` split, `mod+shift+arrows` focus.
+`mod+shift+arrows`); `close-focused` collapses the focused pane rather than the
+whole tab. Default binds: `mod+d` / `mod+shift+d` split on macOS,
+Alt+Shift+Plus / Alt+Shift+Minus or D elsewhere (#406), `mod+shift+arrows`
+focus.
 **Drag-resize (#55) shipped:** draggable handles adjust each split from 10% to
 90% of its usable extent. `core::Workspace` remains the single source of
 truth, and the affected tab's PTYs resize on release.
