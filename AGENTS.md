@@ -688,6 +688,12 @@ exists). Do not relax them locally.
   screenshot cannot show the no-break space. Build the fixture from a capture
   of the live pane instead: `⌘⇧S` writes the visible text to
   `~/.termherd/captures/`, and `xxd` on that row shows the bytes.
+  Its **input** is read on bytes too, and not as a shell reads it: `\n` is
+  Ctrl+J, a line break in the prompt, and only `\r` is Enter. A burst of
+  about 64 bytes or more is taken as a paste, inside which even `\r` is a
+  line break, so Enter must arrive as a write of its own, after a gap
+  (#426, fixed in #430). `claude_command` still writes its Enter with no gap
+  (#439).
 
 ## Conventions
 
