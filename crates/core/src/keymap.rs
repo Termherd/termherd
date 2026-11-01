@@ -175,10 +175,29 @@ pub enum Action {
 /// (⌘ on macOS, Ctrl elsewhere); other modifiers are literal. An empty
 /// `default_chords` means "no built-in binding yet" (wired as the feature lands)
 /// or "bound explicitly in [`Keymap::defaults`]" (the platform-irregular pair).
+///
+/// `other_chords`, when set, replaces `default_chords` on Windows and Linux.
+/// `mod` is Ctrl there, and a bare Ctrl+letter is a terminal control key
+/// (Ctrl+D is EOF, Ctrl+W deletes a word): a binding on one would keep that
+/// byte from ever reaching the program in the pane. Those actions take
+/// Ctrl+Shift+letter instead, the Windows Terminal convention — a
+/// legacy-encoded program reads it as the same byte as the unshifted chord, so
+/// claiming it takes nothing away.
 struct ActionDef {
     action: Action,
     name: &'static str,
     default_chords: &'static [&'static str],
+    other_chords: Option<&'static [&'static str]>,
+}
+
+impl ActionDef {
+    /// The default chord specs this action carries on `platform`.
+    fn chords_for(&self, platform: Platform) -> &'static [&'static str] {
+        match (platform, self.other_chords) {
+            (Platform::Windows | Platform::Linux, Some(chords)) => chords,
+            _ => self.default_chords,
+        }
+    }
 }
 
 /// The single source of truth for the simple action vocabulary *and* its
@@ -193,116 +212,148 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::OpenNewSession,
         name: "open-new-session",
         default_chords: &[],
+        other_chords: None,
     },
     ActionDef {
         action: Action::CloseFocused,
         name: "close-focused",
         default_chords: &["mod+w"],
+        other_chords: Some(&["ctrl+shift+w"]),
     },
+    // Off macOS, Windows Terminal's pair: Alt+Shift+Plus splits side by side,
+    // Alt+Shift+Minus stacks.
     ActionDef {
         action: Action::SplitHorizontal,
         name: "split-horizontal",
         default_chords: &["mod+shift+d"],
+        other_chords: Some(&["alt+shift+-"]),
     },
+    // `=` is the key `+` shares on QWERTY and AZERTY, and a chord names its key
+    // before Shift; `plus` covers a layout with a key of its own for it.
     ActionDef {
         action: Action::SplitVertical,
         name: "split-vertical",
         default_chords: &["mod+d"],
+        other_chords: Some(&["alt+shift+=", "alt+shift+plus"]),
     },
     ActionDef {
         action: Action::FocusNext,
         name: "focus-next",
         default_chords: &[],
+        other_chords: None,
     },
     ActionDef {
         action: Action::FocusPrev,
         name: "focus-prev",
         default_chords: &[],
+        other_chords: None,
     },
     ActionDef {
         action: Action::FocusLeft,
         name: "focus-left",
         default_chords: &["mod+shift+left"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::FocusRight,
         name: "focus-right",
         default_chords: &["mod+shift+right"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::FocusUp,
         name: "focus-up",
         default_chords: &["mod+shift+up"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::FocusDown,
         name: "focus-down",
         default_chords: &["mod+shift+down"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::NextTab,
         name: "next-tab",
         default_chords: &["ctrl+tab"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::PrevTab,
         name: "prev-tab",
         default_chords: &["ctrl+shift+tab"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::FocusSearch,
         name: "focus-search",
         default_chords: &["mod+f"],
+        other_chords: Some(&["ctrl+shift+f"]),
     },
     ActionDef {
         action: Action::ToggleSidebar,
         name: "toggle-sidebar",
         default_chords: &["mod+b"],
+        other_chords: Some(&["ctrl+shift+b"]),
     },
     ActionDef {
         action: Action::OpenSettings,
         name: "open-settings",
         default_chords: &["mod+,"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::Copy,
         name: "copy",
         default_chords: &[],
+        other_chords: None,
     },
     ActionDef {
         action: Action::Paste,
         name: "paste",
         default_chords: &[],
+        other_chords: None,
     },
     ActionDef {
         action: Action::CopyAgentName,
         name: "copy-agent-name",
         default_chords: &[],
+        other_chords: None,
     },
     ActionDef {
         action: Action::SendToDesktop,
         name: "send-to-desktop",
         default_chords: &[],
+        other_chords: None,
     },
     ActionDef {
         action: Action::PickTabColor,
         name: "pick-tab-color",
         default_chords: &[],
+        other_chords: None,
     },
+    // Ctrl+Up / Ctrl+Down reach a program in the pane as modified cursor keys,
+    // so off macOS the scroll takes Windows Terminal's Ctrl+Shift+Home / End.
     ActionDef {
         action: Action::ScrollTop,
         name: "scroll-top",
         default_chords: &["mod+up"],
+        other_chords: Some(&["ctrl+shift+home"]),
     },
     ActionDef {
         action: Action::ScrollBottom,
         name: "scroll-bottom",
         default_chords: &["mod+down"],
+        other_chords: Some(&["ctrl+shift+end"]),
     },
+    // Off macOS, new-shell-here takes Ctrl+Shift+T, the new-tab chord of every
+    // Linux and Windows terminal, which moves reopen-closed-tab up to
+    // Ctrl+Alt+Shift+T.
     ActionDef {
         action: Action::NewShellHere,
         name: "new-shell-here",
         default_chords: &["mod+t"],
+        other_chords: Some(&["ctrl+shift+t"]),
     },
     // Terminal.app binds its "Edit Title" to ⌘⇧I. Elsewhere Ctrl+Shift+I
     // reaches a legacy-encoded program as the same byte as Ctrl+I (Tab), so
@@ -311,6 +362,7 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::RenameTab,
         name: "rename-tab",
         default_chords: &["mod+shift+i"],
+        other_chords: None,
     },
     // A letter, not punctuation: a press names its key without Shift, so a
     // character that takes Shift on some layout (`.` on AZERTY) is unreachable
@@ -320,26 +372,31 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::OpenTabMenu,
         name: "open-tab-menu",
         default_chords: &["mod+shift+m"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::NewClaudeSessionHere,
         name: "new-claude-session-here",
         default_chords: &["mod+alt+t"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::ReopenClosedTab,
         name: "reopen-closed-tab",
         default_chords: &["mod+shift+t"],
+        other_chords: Some(&["ctrl+alt+shift+t"]),
     },
     ActionDef {
         action: Action::Capture,
         name: "capture",
         default_chords: &["mod+shift+s"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::ToggleRecord,
         name: "toggle-record",
         default_chords: &["mod+shift+r"],
+        other_chords: None,
     },
     // Zoom: `=` is the unshifted face of the `+` key on QWERTY and the
     // unshifted key on AZERTY; the shifted `plus` spellings cover layouts
@@ -348,16 +405,19 @@ const ACTIONS: &[ActionDef] = &[
         action: Action::ZoomIn,
         name: "zoom-in",
         default_chords: &["mod+=", "mod+plus", "mod+shift+plus"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::ZoomOut,
         name: "zoom-out",
         default_chords: &["mod+-"],
+        other_chords: None,
     },
     ActionDef {
         action: Action::ZoomReset,
         name: "zoom-reset",
         default_chords: &["mod+0"],
+        other_chords: None,
     },
 ];
 
@@ -420,17 +480,18 @@ pub struct ActionBinding {
     pub default_chords: &'static [&'static str],
 }
 
-/// The bindable simple-action vocabulary with its defaults, in table order.
-/// Derives from the single [`ACTIONS`] source so a consumer (the MCP `keys`
-/// resource) never duplicates the table. The parameterized `activate-tab-N`
-/// family is named separately and is not included.
+/// The bindable simple-action vocabulary with the defaults of the platform this
+/// build runs on, in table order. Derives from the single [`ACTIONS`] source so
+/// a consumer (the MCP `keys` resource) never duplicates the table. The
+/// parameterized `activate-tab-N` family is named separately and is not
+/// included.
 #[must_use]
 pub fn action_catalog() -> Vec<ActionBinding> {
     ACTIONS
         .iter()
         .map(|def| ActionBinding {
             name: def.name,
-            default_chords: def.default_chords,
+            default_chords: def.chords_for(Platform::current()),
         })
         .collect()
 }
@@ -463,28 +524,34 @@ fn default_chord(spec: &str, platform: Platform) -> Option<KeyChord> {
 pub enum Platform {
     /// ⌘ is the primary modifier.
     MacOs,
-    /// Windows and Linux: Ctrl is the primary modifier.
-    Other,
+    /// Ctrl is the primary modifier, and Ctrl+V pastes, as in Windows
+    /// Terminal.
+    Windows,
+    /// Ctrl is the primary modifier; Ctrl+V is left to the program in the
+    /// pane, where Claude Code pastes an image on it.
+    Linux,
 }
 
 impl Platform {
     /// Every family, for a check that must hold wherever termherd runs.
-    pub const ALL: [Platform; 2] = [Platform::MacOs, Platform::Other];
+    pub const ALL: [Platform; 3] = [Platform::MacOs, Platform::Windows, Platform::Linux];
 
-    /// The family this build runs on.
+    /// The family this build runs on. Any other Unix counts as Linux.
     #[must_use]
     pub const fn current() -> Self {
         if cfg!(target_os = "macos") {
             Self::MacOs
+        } else if cfg!(target_os = "windows") {
+            Self::Windows
         } else {
-            Self::Other
+            Self::Linux
         }
     }
 
     const fn primary_mod(self) -> u8 {
         match self {
             Self::MacOs => MOD_CMD,
-            Self::Other => MOD_CTRL,
+            Self::Windows | Self::Linux => MOD_CTRL,
         }
     }
 
@@ -492,16 +559,20 @@ impl Platform {
     const fn primary_name(self) -> &'static str {
         match self {
             Self::MacOs => "cmd",
-            Self::Other => "ctrl",
+            Self::Windows | Self::Linux => "ctrl",
         }
     }
 }
 
 /// Every built-in binding on `platform`, one pair per chord. Regular actions
 /// come straight from the [`ACTIONS`] table's default chords. Copy/paste are
-/// the exception — the other platforms keep plain Ctrl+C/V as the terminal
-/// interrupt/literal and use Ctrl+Shift+C for copy — so they are listed
-/// explicitly here, as is the parameterized number row.
+/// the exception, so they are listed explicitly here, as is the parameterized
+/// number row. Off macOS plain Ctrl+C stays the interrupt and copy takes
+/// Ctrl+Shift+C. Paste takes Ctrl+Shift+V, and on Windows plain Ctrl+V as well
+/// — the one bare Ctrl+letter a default claims. Windows Terminal pastes on it,
+/// and Claude Code on Windows reads its image paste from Alt+V, so nothing in
+/// the pane loses a key it uses; on Linux Claude Code pastes images on Ctrl+V,
+/// so there it is left to the program.
 ///
 /// A list rather than a map, so a chord claimed twice stays visible to a test
 /// instead of being settled silently by whichever pair came last.
@@ -510,7 +581,7 @@ pub fn default_bindings(platform: Platform) -> Vec<(KeyChord, Action)> {
     let mut pairs: Vec<(KeyChord, Action)> = ACTIONS
         .iter()
         .flat_map(|def| {
-            def.default_chords
+            def.chords_for(platform)
                 .iter()
                 .filter_map(move |spec| default_chord(spec, platform))
                 .map(move |chord| (chord, def.action))
@@ -521,11 +592,13 @@ pub fn default_bindings(platform: Platform) -> Vec<(KeyChord, Action)> {
             (KeyChord::new("c", MOD_CMD), Action::Copy),
             (KeyChord::new("v", MOD_CMD), Action::Paste),
         ]),
-        Platform::Other => pairs.extend([
+        Platform::Windows | Platform::Linux => pairs.extend([
             (KeyChord::new("c", MOD_CTRL | MOD_SHIFT), Action::Copy),
-            (KeyChord::new("v", MOD_CTRL), Action::Paste),
             (KeyChord::new("v", MOD_CTRL | MOD_SHIFT), Action::Paste),
         ]),
+    }
+    if platform == Platform::Windows {
+        pairs.push((KeyChord::new("v", MOD_CTRL), Action::Paste));
     }
     // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9. The digit is
     // 1-based for the user; the action carries the 0-based index.
@@ -623,24 +696,66 @@ mod tests {
     }
 
     #[test]
-    fn defaults_resolve_copy_and_paste_for_the_platform() {
-        let map = Keymap::defaults();
-        if cfg!(target_os = "macos") {
-            assert_eq!(map.lookup(&KeyChord::new("c", MOD_CMD)), Some(Action::Copy));
+    fn defaults_bind_the_splits_per_platform() {
+        // iTerm's ⌘D / ⌘⇧D on macOS; Windows Terminal's Alt+Shift+Plus /
+        // Minus elsewhere, since Ctrl+D is the terminal's end-of-file.
+        let mac = Keymap::defaults_for(Platform::MacOs);
+        assert_eq!(
+            mac.lookup(&KeyChord::new("d", MOD_CMD)),
+            Some(Action::SplitVertical)
+        );
+        assert_eq!(
+            mac.lookup(&KeyChord::new("d", MOD_CMD | MOD_SHIFT)),
+            Some(Action::SplitHorizontal)
+        );
+        for platform in [Platform::Windows, Platform::Linux] {
+            let map = Keymap::defaults_for(platform);
+            for key in ["=", "+"] {
+                assert_eq!(
+                    map.lookup(&KeyChord::new(key, MOD_ALT | MOD_SHIFT)),
+                    Some(Action::SplitVertical),
+                    "alt+shift+{key} on {platform:?}"
+                );
+            }
             assert_eq!(
-                map.lookup(&KeyChord::new("v", MOD_CMD)),
-                Some(Action::Paste)
+                map.lookup(&KeyChord::new("-", MOD_ALT | MOD_SHIFT)),
+                Some(Action::SplitHorizontal)
             );
-        } else {
+            assert_eq!(map.lookup(&KeyChord::new("d", MOD_CTRL)), None);
+        }
+    }
+
+    #[test]
+    fn defaults_resolve_copy_and_paste_for_the_platform() {
+        let mac = Keymap::defaults_for(Platform::MacOs);
+        assert_eq!(mac.lookup(&KeyChord::new("c", MOD_CMD)), Some(Action::Copy));
+        assert_eq!(
+            mac.lookup(&KeyChord::new("v", MOD_CMD)),
+            Some(Action::Paste)
+        );
+        for platform in [Platform::Windows, Platform::Linux] {
+            let map = Keymap::defaults_for(platform);
             assert_eq!(
                 map.lookup(&KeyChord::new("c", MOD_CTRL | MOD_SHIFT)),
                 Some(Action::Copy)
             );
             assert_eq!(
-                map.lookup(&KeyChord::new("v", MOD_CTRL)),
+                map.lookup(&KeyChord::new("v", MOD_CTRL | MOD_SHIFT)),
                 Some(Action::Paste)
             );
         }
+        // Bare Ctrl+V pastes on Windows, as in Windows Terminal (Claude Code
+        // takes its image paste from Alt+V there), and is left to the program
+        // on Linux, where Claude Code pastes an image on it.
+        assert_eq!(
+            Keymap::defaults_for(Platform::Windows).lookup(&KeyChord::new("v", MOD_CTRL)),
+            Some(Action::Paste)
+        );
+        assert_eq!(
+            Keymap::defaults_for(Platform::Linux).lookup(&KeyChord::new("v", MOD_CTRL)),
+            None
+        );
+        let map = Keymap::defaults();
         // Tab cycling is bound on every platform.
         assert_eq!(
             map.lookup(&KeyChord::new("tab", MOD_CTRL)),
@@ -652,14 +767,12 @@ mod tests {
 
     #[test]
     fn toggle_sidebar_binds_to_the_platform_b_chord() {
-        let map = Keymap::defaults();
-        let mods = if cfg!(target_os = "macos") {
-            MOD_CMD
-        } else {
-            MOD_CTRL
-        };
         assert_eq!(
-            map.lookup(&KeyChord::new("b", mods)),
+            Keymap::defaults_for(Platform::MacOs).lookup(&KeyChord::new("b", MOD_CMD)),
+            Some(Action::ToggleSidebar)
+        );
+        assert_eq!(
+            Keymap::defaults_for(Platform::Linux).lookup(&KeyChord::new("b", MOD_CTRL | MOD_SHIFT)),
             Some(Action::ToggleSidebar)
         );
         assert_eq!(
@@ -715,13 +828,14 @@ mod tests {
     #[test]
     fn action_catalog_mirrors_the_source_table() {
         // The public catalogue is the read-only face of ACTIONS; it must expose
-        // every entry, name and defaults intact, so an out-of-crate consumer
-        // (the MCP `keys` resource) never drifts from the single source.
+        // every entry, name and this platform's defaults intact, so an
+        // out-of-crate consumer (the MCP `keys` resource) never drifts from the
+        // single source.
         let catalog = action_catalog();
         assert_eq!(catalog.len(), ACTIONS.len());
         for (entry, def) in catalog.iter().zip(ACTIONS.iter()) {
             assert_eq!(entry.name, def.name);
-            assert_eq!(entry.default_chords, def.default_chords);
+            assert_eq!(entry.default_chords, def.chords_for(Platform::current()));
         }
     }
 
@@ -732,7 +846,7 @@ mod tests {
         // Fail here instead so it never ships.
         for platform in Platform::ALL {
             for def in ACTIONS {
-                for spec in def.default_chords {
+                for spec in def.chords_for(platform) {
                     assert!(
                         default_chord(spec, platform).is_some(),
                         "default chord spec `{spec}` for {:?} must parse on {platform:?}",
@@ -806,16 +920,28 @@ mod tests {
     }
 
     #[test]
-    fn defaults_bind_scroll_top_and_bottom_to_the_primary_modifier_arrows() {
-        let map = Keymap::defaults();
+    fn defaults_bind_scroll_top_and_bottom_per_platform() {
+        let mac = Keymap::defaults_for(Platform::MacOs);
         assert_eq!(
-            map.lookup(&KeyChord::new("up", primary_mod())),
+            mac.lookup(&KeyChord::new("up", MOD_CMD)),
             Some(Action::ScrollTop)
         );
         assert_eq!(
-            map.lookup(&KeyChord::new("down", primary_mod())),
+            mac.lookup(&KeyChord::new("down", MOD_CMD)),
             Some(Action::ScrollBottom)
         );
+        // Elsewhere Ctrl+Up / Ctrl+Down stay the program's cursor keys.
+        let other = Keymap::defaults_for(Platform::Linux);
+        assert_eq!(
+            other.lookup(&KeyChord::new("home", MOD_CTRL | MOD_SHIFT)),
+            Some(Action::ScrollTop)
+        );
+        assert_eq!(
+            other.lookup(&KeyChord::new("end", MOD_CTRL | MOD_SHIFT)),
+            Some(Action::ScrollBottom)
+        );
+        assert_eq!(other.lookup(&KeyChord::new("up", MOD_CTRL)), None);
+        assert_eq!(other.lookup(&KeyChord::new("down", MOD_CTRL)), None);
         assert_eq!(
             Action::from_config_name("scroll-top"),
             Some(Action::ScrollTop)
@@ -827,22 +953,27 @@ mod tests {
     }
 
     #[test]
-    fn defaults_bind_the_context_tab_chords_to_the_primary_modifier_t() {
-        // New shell (mod+T), new Claude session (mod+Alt+T) and reopen
-        // closed tab (mod+Shift+T) all hang off T with the platform primary mod.
-        let map = Keymap::defaults();
-        assert_eq!(
-            map.lookup(&KeyChord::new("t", primary_mod())),
-            Some(Action::NewShellHere)
-        );
-        assert_eq!(
-            map.lookup(&KeyChord::new("t", primary_mod() | MOD_ALT)),
-            Some(Action::NewClaudeSessionHere)
-        );
-        assert_eq!(
-            map.lookup(&KeyChord::new("t", primary_mod() | MOD_SHIFT)),
-            Some(Action::ReopenClosedTab)
-        );
+    fn defaults_bind_the_context_tab_chords_to_t() {
+        // New shell, new Claude session and reopen closed tab all hang off T:
+        // ⌘T / ⌘⌥T / ⌘⇧T on macOS; elsewhere bare Ctrl+T is the terminal's
+        // transpose, so the new shell takes Ctrl+Shift+T and reopen moves up.
+        let mac = Keymap::defaults_for(Platform::MacOs);
+        let other = Keymap::defaults_for(Platform::Linux);
+        for (map, mods, action) in [
+            (&mac, MOD_CMD, Action::NewShellHere),
+            (&mac, MOD_CMD | MOD_ALT, Action::NewClaudeSessionHere),
+            (&mac, MOD_CMD | MOD_SHIFT, Action::ReopenClosedTab),
+            (&other, MOD_CTRL | MOD_SHIFT, Action::NewShellHere),
+            (&other, MOD_CTRL | MOD_ALT, Action::NewClaudeSessionHere),
+            (
+                &other,
+                MOD_CTRL | MOD_ALT | MOD_SHIFT,
+                Action::ReopenClosedTab,
+            ),
+        ] {
+            assert_eq!(map.lookup(&KeyChord::new("t", mods)), Some(action));
+        }
+        assert_eq!(other.lookup(&KeyChord::new("t", MOD_CTRL)), None);
         // The three names answer in the config vocabulary too.
         assert_eq!(
             Action::from_config_name("new-shell-here"),
@@ -892,7 +1023,7 @@ mod tests {
             Some(Action::RenameTab)
         );
         assert_eq!(
-            Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new("i", MOD_CTRL | MOD_SHIFT)),
+            Keymap::defaults_for(Platform::Linux).lookup(&KeyChord::new("i", MOD_CTRL | MOD_SHIFT)),
             Some(Action::RenameTab)
         );
     }
@@ -904,7 +1035,7 @@ mod tests {
             Some(Action::OpenTabMenu)
         );
         assert_eq!(
-            Keymap::defaults_for(Platform::Other).lookup(&KeyChord::new("m", MOD_CTRL | MOD_SHIFT)),
+            Keymap::defaults_for(Platform::Linux).lookup(&KeyChord::new("m", MOD_CTRL | MOD_SHIFT)),
             Some(Action::OpenTabMenu)
         );
         assert_eq!(

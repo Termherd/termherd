@@ -596,4 +596,52 @@ mod tests {
         );
         assert_eq!(bytes[4], 255);
     }
+
+    #[test]
+    fn no_default_binding_claims_a_terminal_control_key() {
+        // A chord the keymap binds never reaches the pane, so a default on a
+        // chord this encoder turns into a C0 control byte (Ctrl+D is EOF,
+        // Ctrl+W deletes a word) takes that key from every program in it. The
+        // byte comes from the encoder itself, not a hand-typed list of
+        // control keys, so the two cannot drift. Ctrl+Shift+letter is not
+        // checked: the same byte stays reachable through the unshifted chord.
+        //
+        // One exemption, and it must still be there: Ctrl+V pastes on
+        // Windows, as in Windows Terminal. Claude Code on Windows takes its
+        // image paste from Alt+V instead, so the key costs it nothing.
+        use termherd_core::Action;
+        use termherd_core::keymap::{MOD_CTRL, Platform, default_bindings};
+        let ctrl = KeyMods {
+            ctrl: true,
+            alt: false,
+            shift: false,
+        };
+        let mut exemption_used = false;
+        for platform in Platform::ALL {
+            for (chord, action) in default_bindings(platform) {
+                if chord.mods != MOD_CTRL {
+                    continue;
+                }
+                let mut chars = chord.key.chars();
+                let (Some(ch), None) = (chars.next(), chars.next()) else {
+                    continue;
+                };
+                if (platform, ch, action) == (Platform::Windows, 'v', Action::Paste) {
+                    exemption_used = true;
+                    continue;
+                }
+                let text = ch.to_string();
+                let bytes = key_bytes(TermKey::Char(ch), ctrl, Some(&text));
+                let control = matches!(bytes.as_deref(), Some([b]) if *b < 0x20 || *b == 0x7f);
+                assert!(
+                    !control,
+                    "{action:?} claims Ctrl+{ch} on {platform:?}, which the pane reads as {bytes:?}"
+                );
+            }
+        }
+        assert!(
+            exemption_used,
+            "Windows no longer pastes on Ctrl+V: drop the exemption above"
+        );
+    }
 }

@@ -592,7 +592,7 @@ impl Settings {
     pub fn option_as_meta_on(&self, platform: Platform) -> OptionAsMeta {
         match platform {
             Platform::MacOs => self.terminal.option_as_meta,
-            Platform::Other => OptionAsMeta::Both,
+            Platform::Windows | Platform::Linux => OptionAsMeta::Both,
         }
     }
 
@@ -889,10 +889,9 @@ mod tests {
     #[test]
     fn alt_is_meta_on_both_sides_off_macos_whatever_the_setting() {
         let settings = option_as_meta_from(r#""none""#);
-        assert_eq!(
-            settings.option_as_meta_on(Platform::Other),
-            OptionAsMeta::Both
-        );
+        for platform in [Platform::Windows, Platform::Linux] {
+            assert_eq!(settings.option_as_meta_on(platform), OptionAsMeta::Both);
+        }
     }
 
     #[test]

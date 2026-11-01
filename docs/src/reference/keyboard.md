@@ -9,6 +9,18 @@ Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 <kbd>Ctrl</kbd> everywhere else. It is a shorthand for reading this table —
 **not** valid chord syntax. Write concrete modifiers in your own bindings.
 
+**On Windows and Linux, defaults leave the terminal's control keys alone.**
+A bare <kbd>Ctrl</kbd>+letter is one — <kbd>Ctrl</kbd>+<kbd>D</kbd> is
+end-of-file, <kbd>Ctrl</kbd>+<kbd>W</kbd> deletes a word — and a chord
+TermHerd binds never reaches the program in the pane. So where `mod` would land
+on one, the action takes <kbd>Ctrl</kbd>+<kbd>Shift</kbd> instead, as Windows
+Terminal does; the rows below name that chord *off macOS*. A program reading
+the legacy keyboard encoding sees <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+letter as the
+same byte as the unshifted chord, so nothing is taken from it. The splits
+follow Windows Terminal too: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> side
+by side, <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> stacked. The one
+exception is paste on Windows, below.
+
 ## The full action vocabulary
 
 ### Tabs
@@ -18,10 +30,10 @@ Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 | `next-tab` | `ctrl+tab` | next tab (Ctrl on every platform) |
 | `prev-tab` | `ctrl+shift+tab` | previous tab |
 | `activate-tab-1` … `-9` | `mod+1` … `mod+9` | jump to tab N |
-| `new-shell-here` | `mod+t` | new shell in the focused session's directory |
+| `new-shell-here` | `mod+t`; `ctrl+shift+t` off macOS | new shell in the focused session's directory |
 | `new-claude-session-here` | `mod+alt+t` | new Claude session in that directory |
-| `reopen-closed-tab` | `mod+shift+t` | reopen the tab you just closed |
-| `close-focused` | `mod+w` | close the focused pane; a lone pane closes its tab |
+| `reopen-closed-tab` | `mod+shift+t`; `ctrl+alt+shift+t` off macOS | reopen the tab you just closed |
+| `close-focused` | `mod+w`; `ctrl+shift+w` off macOS | close the focused pane; a lone pane closes its tab |
 | `rename-tab` | `mod+shift+i` | rename the focused tab, as a double-click does |
 | `open-tab-menu` | `mod+shift+m` | open the focused tab's menu, as a right-click does |
 | `pick-tab-color` | *(unbound)* | pick the focused tab's colour |
@@ -69,8 +81,8 @@ without Shift.
 
 | Action | Default | Does |
 | --- | --- | --- |
-| `split-vertical` | `mod+d` | split side by side |
-| `split-horizontal` | `mod+shift+d` | split stacked |
+| `split-vertical` | `mod+d`; `alt+shift+=`, `alt+shift+plus` off macOS | split side by side |
+| `split-horizontal` | `mod+shift+d`; `alt+shift+-` off macOS | split stacked |
 | `focus-left` | `mod+shift+left` | focus the pane to the left |
 | `focus-right` | `mod+shift+right` | … to the right |
 | `focus-up` | `mod+shift+up` | … above |
@@ -83,18 +95,33 @@ without Shift.
 | Action | Default (macOS) | Default (Windows / Linux) |
 | --- | --- | --- |
 | `copy` | `cmd+c` | `ctrl+shift+c` |
-| `paste` | `cmd+v` | `ctrl+v`, `ctrl+shift+v` |
+| `paste` | `cmd+v` | `ctrl+shift+v`; also `ctrl+v` on Windows |
 | `copy-agent-name` | *(unbound)* | *(unbound)* |
 | `send-to-desktop` | *(unbound)* | *(unbound)* |
-| `scroll-top` | `cmd+up` | `ctrl+up` |
-| `scroll-bottom` | `cmd+down` | `ctrl+down` |
+| `scroll-top` | `cmd+up` | `ctrl+shift+home` |
+| `scroll-bottom` | `cmd+down` | `ctrl+shift+end` |
 | `zoom-in` | `cmd+=`, `cmd+plus`, `cmd+shift+plus` | `ctrl+…` (same three) |
 | `zoom-out` | `cmd+-` | `ctrl+-` |
 | `zoom-reset` | `cmd+0` | `ctrl+0` |
 
-Copy/paste is the one pair whose default is irregular per platform: on Windows
+Copy/paste is the one pair whose default is irregular per platform. On Windows
 and Linux <kbd>Ctrl</kbd>+<kbd>C</kbd> must stay the interrupt, so copy takes
-Shift. <kbd>Ctrl</kbd>+<kbd>C</kbd> sends `SIGINT` everywhere.
+Shift; <kbd>Ctrl</kbd>+<kbd>C</kbd> sends `SIGINT` everywhere. Paste takes
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>, and on **Windows** plain
+<kbd>Ctrl</kbd>+<kbd>V</kbd> as well, as in Windows Terminal: Claude Code on
+Windows pastes an image on <kbd>Alt</kbd>+<kbd>V</kbd>, which still reaches it.
+On **Linux** <kbd>Ctrl</kbd>+<kbd>V</kbd> is left to the program, because
+Claude Code pastes an image on it there. To paste text on it anyway, bind
+`"paste": ["ctrl+v", "ctrl+shift+v"]`.
+
+On AZERTY, `-` shares the <kbd>6</kbd> key, and a number-row key is matched by
+its position, so <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> splits from the
+keypad minus only. Bind `split-horizontal` to another chord if you need it on
+the main row.
+
+Off macOS, `scroll-top` and `scroll-bottom` take Windows Terminal's
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Home</kbd> / <kbd>End</kbd>, leaving
+<kbd>Ctrl</kbd>+<kbd>↑</kbd> / <kbd>↓</kbd> to the program in the pane.
 
 `copy-agent-name` copies the peer name of the Claude in the focused pane:
 the name `/list-agents` shows and another Claude session addresses it by, such
@@ -120,8 +147,8 @@ layout with an unshifted `+` key, such as German QWERTZ, `mod+plus` matches and
 
 | Action | Default | Does |
 | --- | --- | --- |
-| `focus-search` | `mod+f` | focus the sidebar search box |
-| `toggle-sidebar` | `mod+b` | show / hide the sidebar |
+| `focus-search` | `mod+f`; `ctrl+shift+f` off macOS | focus the sidebar search box |
+| `toggle-sidebar` | `mod+b`; `ctrl+shift+b` off macOS | show / hide the sidebar |
 | `open-settings` | `mod+,` | open / close the [settings panel](../workspace/settings-panel.md) |
 | `capture` | `mod+shift+s` | write a state dump + screenshot |
 | `toggle-record` | `mod+shift+r` | start / stop a GIF screencast |

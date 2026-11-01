@@ -178,20 +178,20 @@ All shortcuts are configurable via the `keys` section of the config file
 | Action             | Windows / Linux            | macOS         |
 | ------------------ | -------------------------- | ------------- |
 | Copy selection     | `Ctrl+Shift+C`             | `Cmd+C`       |
-| Paste              | `Ctrl+V` / `Ctrl+Shift+V`  | `Cmd+V`       |
+| Paste              | `Ctrl+Shift+V`; also `Ctrl+V` on Windows | `Cmd+V` |
 | Next / prev tab    | `Ctrl+Tab` / `Ctrl+Shift+Tab` | (same)     |
 | Jump to tab 1–9    | `Ctrl+1` … `Ctrl+9`        | `Cmd+1` … `Cmd+9` |
-| Scroll top/bottom  | `Ctrl+Up` / `Ctrl+Down`    | `Cmd+Up` / `Cmd+Down` |
-| New shell here     | `Ctrl+T`                   | `Cmd+T`       |
+| Scroll top/bottom  | `Ctrl+Shift+Home` / `End`  | `Cmd+Up` / `Cmd+Down` |
+| New shell here     | `Ctrl+Shift+T`             | `Cmd+T`       |
 | New Claude here    | `Ctrl+Alt+T`               | `Cmd+Alt+T`   |
-| Reopen closed tab  | `Ctrl+Shift+T`             | `Cmd+Shift+T` |
-| Close tab / pane   | `Ctrl+W`                   | `Cmd+W`       |
+| Reopen closed tab  | `Ctrl+Alt+Shift+T`         | `Cmd+Shift+T` |
+| Close tab / pane   | `Ctrl+Shift+W`             | `Cmd+W`       |
 | Rename tab         | `Ctrl+Shift+I`             | `Cmd+Shift+I` |
 | Tab menu (or right-click a tab) | `Ctrl+Shift+M` | `Cmd+Shift+M` |
-| Split vert. / horiz. | `Ctrl+D` / `Ctrl+Shift+D` | `Cmd+D` / `Cmd+Shift+D` |
+| Split vert. / horiz. | `Alt+Shift+Plus` / `Alt+Shift+Minus` | `Cmd+D` / `Cmd+Shift+D` |
 | Focus pane         | `Ctrl+Shift+←↑↓→`          | `Cmd+Shift+←↑↓→` |
 | Zoom in / out / reset | `Ctrl` + `+` / `-` / `0` | `Cmd` + `+` / `-` / `0` |
-| Focus search       | `Ctrl+F`                   | `Cmd+F`       |
+| Focus search       | `Ctrl+Shift+F`             | `Cmd+F`       |
 | Capture state dump | `Ctrl+Shift+S`             | `Cmd+Shift+S` |
 | Record GIF (start/stop) | `Ctrl+Shift+R`        | `Cmd+Shift+R` |
 | Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C`      |

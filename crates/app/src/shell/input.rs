@@ -94,6 +94,8 @@ fn named_key(name: &str) -> Option<keyboard::key::Named> {
         "down" => Some(Named::ArrowDown),
         "left" => Some(Named::ArrowLeft),
         "right" => Some(Named::ArrowRight),
+        "home" => Some(Named::Home),
+        "end" => Some(Named::End),
         _ => None,
     }
 }
@@ -191,6 +193,9 @@ fn key_name(key: &keyboard::Key) -> Option<String> {
         keyboard::Key::Named(Named::ArrowDown) => Some("down".to_string()),
         keyboard::Key::Named(Named::ArrowLeft) => Some("left".to_string()),
         keyboard::Key::Named(Named::ArrowRight) => Some("right".to_string()),
+        // Home / End name the scroll-to-top / bottom chords off macOS.
+        keyboard::Key::Named(Named::Home) => Some("home".to_string()),
+        keyboard::Key::Named(Named::End) => Some("end".to_string()),
         _ => None,
     }
 }
@@ -617,7 +622,7 @@ mod tests {
         // `key_name` never produces these, so no real press could resolve such a
         // binding either. Reporting nothing is the faithful answer; inventing an
         // event would give the MCP surface a reach the keyboard lacks.
-        for name in ["f2", "space", "pageup", "home"] {
+        for name in ["f2", "space", "pageup"] {
             assert_eq!(
                 event_of(&KeyChord::new(name, keymap::MOD_CMD)),
                 None,
@@ -668,7 +673,7 @@ mod tests {
         fn arbitrary_nameable_chords_round_trip(
             name in proptest::sample::select(vec![
                 "a", "z", "0", "5", "9", "-", "=", "+",
-                "tab", "enter", "escape", "up", "down", "left", "right",
+                "tab", "enter", "escape", "up", "down", "left", "right", "home", "end",
             ]),
             mods in 0u8..16,
         ) {
@@ -725,7 +730,7 @@ mod tests {
                 "{physical:?} on macOS"
             );
             assert_eq!(
-                default_action_of(Platform::Other, "m", physical, ctrl_shift),
+                default_action_of(Platform::Linux, "m", physical, ctrl_shift),
                 Some(Action::OpenTabMenu),
                 "{physical:?} on Windows and Linux"
             );
