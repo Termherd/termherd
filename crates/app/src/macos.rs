@@ -48,13 +48,22 @@ use objc2::{msg_send, sel};
 use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
 use objc2_foundation::{MainThreadMarker, NSNotFound, NSRange, NSString, NSUInteger, ns_string};
 
+/// Apply every repair above. Call once, on the main thread, after the window
+/// opened: winit installs its default menu and the window's view only then.
+pub fn install(mtm: MainThreadMarker) {
+    route_quit_through_close(mtm);
+    add_character_palette_item(mtm);
+    add_window_menu(mtm);
+    route_stray_text_through_ime(mtm);
+}
+
 /// Repoint the app-menu **Quit** item from `terminate:` to `performClose:` so
 /// quitting flows through the iced runtime instead of AppKit terminating the
 /// process out from under it. Fire-once at startup, on the main thread.
 ///
 /// Best-effort: a missing menu or item only means Cmd+Q keeps its old AppKit
 /// behaviour, so we log and return rather than ever blocking launch.
-pub fn route_quit_through_close(mtm: MainThreadMarker) {
+fn route_quit_through_close(mtm: MainThreadMarker) {
     let app = NSApplication::sharedApplication(mtm);
 
     let terminate = sel!(terminate:);
@@ -128,7 +137,7 @@ pub fn route_quit_through_close(mtm: MainThreadMarker) {
 /// would take Cmd+X/C/V away from termherd's own rebindable keymap.
 /// Fire-once like the Quit reroute; a menu already holding the item is left
 /// alone.
-pub fn add_character_palette_item(mtm: MainThreadMarker) {
+fn add_character_palette_item(mtm: MainThreadMarker) {
     let app = NSApplication::sharedApplication(mtm);
     let palette = sel!(orderFrontCharacterPalette:);
     let control_command = NSEventModifierFlags::NSEventModifierFlagControl
@@ -164,7 +173,7 @@ pub fn add_character_palette_item(mtm: MainThreadMarker) {
 /// No Close item: ⌘W stays with termherd's own keymap (close a pane), as Cut,
 /// Copy and Paste do in the Edit menu. Fire-once; a menu already holding
 /// Minimize is left alone.
-pub fn add_window_menu(mtm: MainThreadMarker) {
+fn add_window_menu(mtm: MainThreadMarker) {
     let app = NSApplication::sharedApplication(mtm);
     // SAFETY: plain AppKit menu reads and construction on the main thread
     // (`mtm`), as in `add_character_palette_item`. The actions are NSWindow
@@ -272,7 +281,7 @@ fn replays_as_composition(insertion: Insertion) -> bool {
 ///
 /// Best-effort like the Quit reroute: if winit's view class or methods are not
 /// where 0.30 puts them, log and leave input exactly as winit delivers it.
-pub fn route_stray_text_through_ime(_mtm: MainThreadMarker) {
+fn route_stray_text_through_ime(_mtm: MainThreadMarker) {
     let Some(view) = AnyClass::get(WINIT_VIEW) else {
         tracing::warn!("no {WINIT_VIEW} class; Character Viewer text stays dropped");
         return;

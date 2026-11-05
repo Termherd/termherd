@@ -167,11 +167,8 @@ impl Shell {
     ) -> Task<Message> {
         match event {
             window::Event::Opened { .. } => {
-                // Reroute the macOS menu Quit item (and ⌘Q) through the iced
-                // runtime, give Ctrl+Cmd+Space its Character Viewer menu item
-                // and ⌘M a Window menu, and route the text the Character
-                // Viewer inserts, which winit would drop, through the input
-                // method. Done here, not in the boot closure: iced
+                // Install the macOS AppKit repairs (`crate::macos`). Done
+                // here, not in the boot closure: iced
                 // constructs the app state *before* `run_app`, so the boot
                 // closure runs ahead of winit's `applicationDidFinishLaunching`
                 // (where the default menu is installed) and ahead of the
@@ -180,12 +177,7 @@ impl Shell {
                 // window); no-op on other platforms.
                 #[cfg(target_os = "macos")]
                 match objc2_foundation::MainThreadMarker::new() {
-                    Some(mtm) => {
-                        crate::macos::route_quit_through_close(mtm);
-                        crate::macos::add_character_palette_item(mtm);
-                        crate::macos::add_window_menu(mtm);
-                        crate::macos::route_stray_text_through_ime(mtm);
-                    }
+                    Some(mtm) => crate::macos::install(mtm),
                     // We expect to be on the main thread here; if not, skipping
                     // would silently leave Cmd+Q on AppKit's hard-kill
                     // `terminate:` and Character Viewer text dropped, with no

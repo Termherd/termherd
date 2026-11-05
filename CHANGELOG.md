@@ -7,6 +7,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (termherd:// links in the terminal)
+
+- A `termherd://` URL in terminal output is a link: Cmd/Ctrl+hover underlines
+  it, Cmd/Ctrl+click hands it to the OS. termherd does not handle the scheme
+  yet (#446).
+
 ### Changed (a second instance on Windows and Linux)
 
 - The single-instance lock follows the temp directory on Windows and Linux, as

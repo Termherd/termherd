@@ -53,6 +53,29 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
+/// What trying the single-instance lock found.
+enum Claim {
+    Held(SingleInstance),
+    /// The lock could not be created at all.
+    Unavailable,
+    TakenByAnother,
+}
+
+fn claim() -> Claim {
+    let name = lock_name();
+    match SingleInstance::new(&name) {
+        Ok(instance) if instance.is_single() => Claim::Held(instance),
+        Ok(_) => Claim::TakenByAnother,
+        Err(e) => {
+            warn!(
+                error = %e, lock = %name,
+                "single-instance lock unavailable; launching without it"
+            );
+            Claim::Unavailable
+        }
+    }
+}
+
 /// Acquire the single-instance guard, returning it to hold for the process
 /// lifetime — or `None` when the lock subsystem is unavailable.
 ///
@@ -60,22 +83,13 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// failure to *create* the lock must not stop the app from launching: that was
 /// the "double-click does nothing, no error" bug on the `.app` bundle.
 pub fn acquire_single_instance() -> Option<SingleInstance> {
-    let name = lock_name();
-    match SingleInstance::new(&name) {
-        Ok(instance) => {
-            if !instance.is_single() {
-                warn!("another termherd instance is already running; exiting");
-                // Non-zero so a launcher can tell this from a clean shutdown.
-                std::process::exit(2);
-            }
-            Some(instance)
-        }
-        Err(e) => {
-            warn!(
-                error = %e, lock = %name,
-                "single-instance lock unavailable; launching without it"
-            );
-            None
+    match claim() {
+        Claim::Held(instance) => Some(instance),
+        Claim::Unavailable => None,
+        Claim::TakenByAnother => {
+            warn!("another termherd instance is already running; exiting");
+            // Non-zero so a launcher can tell this from a clean shutdown.
+            std::process::exit(2);
         }
     }
 }
