@@ -104,6 +104,7 @@ issues #18–#29.
 | [F-session-reveal](#f-session-reveal) | feature | sessions, workspace | ☐ | Reveal a session's directory and transcript in the OS file manager. |
 | [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
+| [F-url-scheme](#f-url-scheme) | feature | workspace, packaging | ☐ | Open a tab from an HTML link: a `termherd://` URL scheme. |
 | [F-worktree-launch](#f-worktree-launch) | feature | sessions, sidebar | ☐ | Start a Claude session in a fresh git worktree, grouped under its project. |
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
@@ -1289,6 +1290,18 @@ Presentational only: the session keeps running and its status still flows
 session asking for attention reactivates it; dragging a tab into the parked
 zone parks it. A natural entry for [F-tab-context-menu](#f-tab-context-menu).
 Torture report: `.personal/feature-torture/reports/F-tab-park.md`.
+
+<a id="f-url-scheme"></a>
+
+### F-url-scheme
+
+Open a tab from an HTML link: a `termherd://` URL scheme.
+
+Filed as #446. A page (docs, a dashboard, a report) links straight into the
+running instance. Three pieces: the scheme registered with each OS, a relay
+from a second launch to the running instance, and a target key that survives a
+restart (the MCP `handle` does not). The terminal already detects the scheme
+as a link. Discovery from outside overlaps [F-mcp-attach](#f-mcp-attach).
 
 <a id="f-worktree-launch"></a>
 
