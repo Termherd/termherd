@@ -98,11 +98,13 @@ unshifted key on AZERTY, so between them the same gesture works across layouts.
 
 ## Clickable links
 
-URLs in terminal output (`http`, `https`, `file`, `ftp`) are detected per row.
-Hold <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>: the link under the pointer underlines and
-the cursor becomes a hand; <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click opens it in
-your OS default handler. Trailing prose punctuation and unbalanced brackets are
-trimmed from the match.
+URLs in terminal output (`http`, `https`, `file`, `ftp`, `termherd`) are
+detected per row. Hold <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>: the link under the
+pointer underlines and the cursor becomes a hand;
+<kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click opens it in your OS default handler.
+Trailing prose punctuation and unbalanced brackets are trimmed from the match.
+termherd does not register itself as the `termherd://` handler yet, so the OS
+has nowhere to send such a link.
 
 **Hidden hyperlinks** work the same way. A program can print a label over a
 URL it never shows — the OSC 8 escape, which `gh`, `ls --hyperlink`, `cargo`
