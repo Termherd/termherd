@@ -757,6 +757,26 @@ mod tests {
     }
 
     #[test]
+    fn focus_dir_wraps_through_the_outermost_split_of_its_axis() {
+        // Three columns built as nested vertical splits:
+        //   Vertical( sid1 , Vertical( sid2 , sid3 ) )
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+        ws.split(SplitDir::Vertical, sid(3));
+        assert_eq!(ws.focused_session(), Some(sid(3)));
+
+        // Right from the rightmost wraps to the far left, not to the inner
+        // split's own left pane (sid2).
+        assert_eq!(ws.focus_dir(Direction::Right), Some(()));
+        assert_eq!(ws.focused_session(), Some(sid(1)));
+        // Left from the leftmost wraps to the far right, descending through the
+        // inner split to its rightmost leaf.
+        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
+        assert_eq!(ws.focused_session(), Some(sid(3)));
+    }
+
+    #[test]
     fn focus_pane_of_moves_focus_to_the_leaf_hosting_a_session() {
         let mut ws = Workspace::new();
         ws.open(sid(1), "a");
