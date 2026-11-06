@@ -122,6 +122,21 @@ struct TabTitles {
 }
 
 impl Tab {
+    /// A tab hosting `session` alone, titled after its launch.
+    fn new(session: SessionId, title: String) -> Self {
+        Self {
+            root: Pane::Leaf(session),
+            focus: Vec::new(),
+            title: title.clone(),
+            custom_title: None,
+            color: None,
+            titles: TabTitles {
+                launch: title,
+                ..TabTitles::default()
+            },
+        }
+    }
+
     /// Every session hosted by this tab, in left-to-right pane order. A tab
     /// without splits yields exactly one id; closing the tab kills them all.
     #[must_use]
@@ -222,18 +237,12 @@ impl Workspace {
     /// it, returning its index. Into an empty workspace the new tab is the only
     /// one, so it is active all the same.
     pub fn append(&mut self, session: SessionId, title: impl Into<String>) -> usize {
-        let title = title.into();
-        self.tabs.push(Tab {
-            root: Pane::Leaf(session),
-            focus: Vec::new(),
-            title: title.clone(),
-            custom_title: None,
-            color: None,
-            titles: TabTitles {
-                launch: title,
-                ..TabTitles::default()
-            },
-        });
+        self.insert_tab(Tab::new(session, title.into()))
+    }
+
+    /// Place a new tab in the strip, returning its index.
+    fn insert_tab(&mut self, tab: Tab) -> usize {
+        self.tabs.push(tab);
         self.tabs.len() - 1
     }
 
@@ -371,9 +380,16 @@ impl Workspace {
             return Vec::new();
         }
         let sessions = self.tabs.remove(index).sessions();
-        let last = self.tabs.len().saturating_sub(1);
-        self.active = index_after_removal(self.active, index).unwrap_or(index.min(last));
+        self.active = self.active_after_removing(index);
         sessions
+    }
+
+    /// The active index once the tab at `removed` has left the strip: the same
+    /// tab when it survives, else the one that slid into its slot, else the new
+    /// last tab.
+    fn active_after_removing(&self, removed: usize) -> usize {
+        index_after_removal(self.active, removed)
+            .unwrap_or_else(|| removed.min(self.tabs.len().saturating_sub(1)))
     }
 
     /// Session id of the focused pane in the active tab, if any.
