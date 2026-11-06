@@ -64,10 +64,13 @@ impl Activity {
         let folded = fold_status(marked, signals);
         // Only Claude's own idle title is held: a shell's marks are explicit
         // command boundaries, and nothing but work could make them a blip.
-        let goes_idle = self.status == SessionStatus::Busy && marked == SessionStatus::Busy;
+        let held_title =
+            marks.is_empty() && self.status == SessionStatus::Busy && folded == SessionStatus::Idle;
+        // Work inside the chunk ends the idle that stood before it.
+        let worked = signals.contains(&OscSignal::Busy);
         self.idle_due = match self.idle_due {
-            Some(due) if folded == SessionStatus::Idle => Some(due),
-            None if goes_idle && folded == SessionStatus::Idle => Some(now + IDLE_HOLD),
+            Some(due) if held_title && !worked => Some(due),
+            _ if held_title => Some(now + IDLE_HOLD),
             _ => None,
         };
         if self.idle_due.is_none() {
@@ -85,15 +88,14 @@ impl Activity {
     }
 
     /// Publish a held idle whose hold has run out by `now`, and report whether
-    /// the status moved.
+    /// it did. A held idle always moves the status: only a busy one is held.
     pub(crate) fn settle(&mut self, now: Instant) -> bool {
         if self.idle_due.is_none_or(|due| due > now) {
             return false;
         }
         self.idle_due = None;
-        let moved = self.status != SessionStatus::Idle;
         self.status = SessionStatus::Idle;
-        moved
+        true
     }
 
     /// The status the terminal last reported, held idle included.
@@ -569,6 +571,41 @@ mod tests {
         activity.observe(&[], &[PromptMark::Done], t0);
         assert_eq!(activity.status, Idle);
         assert_eq!(activity.due(), None);
+    }
+
+    #[test]
+    fn a_shell_mark_during_a_held_idle_is_published_at_once() {
+        // Claude exits inside the hold and the shell reports its prompt.
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        activity.observe(&[], &[PromptMark::Done, PromptMark::Ready], t0 + ms(10));
+        assert_eq!(activity.status, Idle);
+        assert_eq!(activity.due(), None);
+    }
+
+    #[test]
+    fn work_inside_a_chunk_restarts_the_hold() {
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        activity.observe(&[OscSignal::Busy, OscSignal::Idle], &[], t0 + ms(100));
+        assert_eq!(activity.due(), Some(t0 + ms(100) + IDLE_HOLD));
+    }
+
+    #[test]
+    fn plain_output_during_the_hold_keeps_it_running() {
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        activity.observe(&[OscSignal::Title("x".into())], &[], t0 + ms(50));
+        assert_eq!(activity.due(), Some(t0 + IDLE_HOLD));
+    }
+
+    #[test]
+    fn the_hold_outlasts_the_observed_blip_with_room_to_spare() {
+        // The blip measured on Windows lasted about 20 ms.
+        assert!(IDLE_HOLD >= 5 * ms(20), "{IDLE_HOLD:?}");
     }
 
     mod idle_hold {

@@ -303,7 +303,8 @@ busy stretches, such as when a background subagent's result restarts the
 agent, Claude Code can show its idle title for a few milliseconds. termherd
 holds that title back for 150 ms and reports `idle` only if no work resumed in
 the meantime, so the status, the tab dot and every wait trail the real end of
-a turn by that much. A shell's prompt marks are not held.
+a turn by that much. A shell's prompt marks are not held, and a session that
+exits during the hold reports `exited` with no `idle` before it.
 
 ### Settings
 

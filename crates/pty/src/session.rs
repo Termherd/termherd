@@ -442,13 +442,16 @@ pub(crate) fn spawn_term(
                     .filter(|_| unsent_change)
                     .map(|at| at + SCREEN_INTERVAL);
                 let deadline = [flush_at, activity.due()].into_iter().flatten().min();
-                let cmd = match next_cmd(&ctrl_rx, deadline) {
+                let next = next_cmd(&ctrl_rx, deadline);
+                // A queued command never lets the deadline fire, so a held idle
+                // that has stood is published before whatever comes next.
+                let (before, now) = (activity.status, Instant::now());
+                if activity.settle(now) {
+                    report_status(session, before, &activity, &term_sink);
+                }
+                let cmd = match next {
                     Next::Cmd(cmd) => cmd,
                     Next::Due => {
-                        let (before, now) = (activity.status, Instant::now());
-                        if activity.settle(now) {
-                            report_status(session, before, &activity, &term_sink);
-                        }
                         if flush_at.is_some_and(|at| at <= now) {
                             term_sink(screen(&term));
                             last_sent = Some(now);
@@ -699,21 +702,47 @@ mod tests {
     /// fold test can make: it is the terminal thread that decodes both dialects
     /// and decides what is worth emitting.
     fn statuses_reported(chunks: &[&str]) -> Vec<SessionStatus> {
-        let paced: Vec<_> = chunks
-            .iter()
-            .map(|chunk| (*chunk, Duration::ZERO))
-            .collect();
-        statuses_reported_paced(&paced)
+        let steps: Vec<_> = chunks.iter().map(|chunk| (*chunk, Then::Go)).collect();
+        statuses_reported_paced(&steps)
     }
 
-    /// [`statuses_reported`], pausing after each chunk for as long as it says.
-    fn statuses_reported_paced(chunks: &[(&str, Duration)]) -> Vec<SessionStatus> {
+    /// What a test does after sending a chunk.
+    #[derive(Clone, Copy)]
+    enum Then {
+        Go,
+        /// Wait until the thread has reported this many statuses in all.
+        Reported(usize),
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum Seen {
+        Status(SessionStatus),
+        Screen(String),
+    }
+
+    /// [`statuses_reported`], waiting after a chunk where a step says so.
+    fn statuses_reported_paced(steps: &[(&str, Then)]) -> Vec<SessionStatus> {
+        events_seen(steps)
+            .into_iter()
+            .filter_map(|seen| match seen {
+                Seen::Status(status) => Some(status),
+                Seen::Screen(_) => None,
+            })
+            .collect()
+    }
+
+    /// Drive a real terminal thread over `steps` and collect the statuses and
+    /// screens it publishes, in order.
+    fn events_seen(steps: &[(&str, Then)]) -> Vec<Seen> {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let collected = seen.clone();
         let sink: EventSink = Arc::new(move |event| {
-            if let PtyEvent::Status { status, .. } = event {
-                collected.lock().expect("sink lock").push(status);
-            }
+            let entry = match event {
+                PtyEvent::Status { status, .. } => Seen::Status(status),
+                PtyEvent::Output { screen, .. } => Seen::Screen(screen.text()),
+                _ => return,
+            };
+            collected.lock().expect("sink lock").push(entry);
         });
         let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(Arc::new(
             Mutex::new(Vec::new()),
@@ -730,10 +759,23 @@ mod tests {
                 Palette::named("solarized-light").expect("known scheme"),
             )),
         );
-        for (chunk, pause) in chunks {
+        let reported = || {
+            let seen = seen.lock().expect("sink lock");
+            seen.iter()
+                .filter(|seen| matches!(seen, Seen::Status(_)))
+                .count()
+        };
+        for (chunk, then) in steps {
             ctrl.send(TermCmd::Bytes(chunk.as_bytes().to_vec()))
                 .expect("terminal thread alive");
-            std::thread::sleep(*pause);
+            if let Then::Reported(count) = then {
+                // Generous: a loaded CI runner may be slow to run the timer,
+                // and the assertion, not this wait, says what went wrong.
+                let give_up = Instant::now() + Duration::from_secs(10);
+                while reported() < *count && Instant::now() < give_up {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
         }
         drop(ctrl);
         term.join().expect("terminal thread ends");
@@ -775,12 +817,9 @@ mod tests {
         // prompt once it stands, and the OSC 9 ping outranks both.
         assert_eq!(
             statuses_reported_paced(&[
-                ("\u{1b}]0;\u{280B} Thinking…\u{07}", Duration::ZERO),
-                (
-                    "\u{1b}]0;\u{2733} claude\u{07}",
-                    3 * crate::status::IDLE_HOLD
-                ),
-                ("\u{1b}]9;allow Bash?\u{07}", Duration::ZERO),
+                ("\u{1b}]0;\u{280B} Thinking…\u{07}", Then::Go),
+                ("\u{1b}]0;\u{2733} claude\u{07}", Then::Reported(2)),
+                ("\u{1b}]9;allow Bash?\u{07}", Then::Go),
             ]),
             vec![
                 SessionStatus::Busy,
@@ -798,17 +837,23 @@ mod tests {
         // waiting-for-input ping once it has sat idle for a minute. The next
         // turn must clear that ping: only work does. Each idle stands, as it
         // did in the recording, so none is mistaken for a blip mid-turn.
-        let (now, stands) = (Duration::ZERO, 3 * crate::status::IDLE_HOLD);
+        let now = Then::Go;
         assert_eq!(
             statuses_reported_paced(&[
                 ("\u{1b}]0;\u{2733} Claude Code\u{07}", now),
                 ("\u{1b}]0;\u{25D0} Claude Code\u{07}", now),
                 ("\u{1b}]0;\u{25D0} Sleep command test\u{07}", now),
                 ("\u{1b}]0;\u{25D1} Sleep command test\u{07}", now),
-                ("\u{1b}]0;\u{2733} Sleep command test\u{07}", stands),
+                (
+                    "\u{1b}]0;\u{2733} Sleep command test\u{07}",
+                    Then::Reported(3)
+                ),
                 ("\u{1b}]9;Claude is waiting for your input\u{07}", now),
                 ("\u{1b}]0;\u{25D0} Sleep command test\u{07}", now),
-                ("\u{1b}]0;\u{2733} Sleep command test\u{07}", stands),
+                (
+                    "\u{1b}]0;\u{2733} Sleep command test\u{07}",
+                    Then::Reported(6)
+                ),
             ]),
             vec![
                 SessionStatus::Idle,
@@ -841,13 +886,31 @@ mod tests {
         // timer has to publish it.
         assert_eq!(
             statuses_reported_paced(&[
-                ("\u{1b}]0;\u{25D0} Claude Code\u{07}", Duration::ZERO),
-                (
-                    "\u{1b}]0;\u{2733} Claude Code\u{07}",
-                    3 * crate::status::IDLE_HOLD
-                ),
+                ("\u{1b}]0;\u{25D0} Claude Code\u{07}", Then::Go),
+                ("\u{1b}]0;\u{2733} Claude Code\u{07}", Then::Reported(2)),
             ]),
             vec![SessionStatus::Busy, SessionStatus::Idle]
+        );
+    }
+
+    #[test]
+    fn output_during_a_held_idle_still_reaches_the_screen() {
+        // The hold's timer shares the loop with the screen's: output written
+        // under a held idle must be drawn before the idle is published.
+        let seen = events_seen(&[
+            ("\u{1b}]0;\u{25D0} Claude Code\u{07}", Then::Go),
+            ("\u{1b}]0;\u{2733} Claude Code\u{07}", Then::Go),
+            ("hello", Then::Reported(2)),
+        ]);
+        let drawn = seen
+            .iter()
+            .position(|seen| matches!(seen, Seen::Screen(text) if text.contains("hello")));
+        let idle = seen
+            .iter()
+            .position(|seen| *seen == Seen::Status(SessionStatus::Idle));
+        assert!(
+            drawn.is_some() && drawn < idle,
+            "drawn at {drawn:?}, idle at {idle:?}"
         );
     }
 
