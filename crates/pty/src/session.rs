@@ -374,6 +374,27 @@ fn next_job(
     }
 }
 
+/// What the terminal thread wakes up to.
+enum Next {
+    Cmd(TermCmd),
+    /// The deadline passed with no command.
+    Due,
+    /// Every command sender is gone.
+    Closed,
+}
+
+/// Block for the next command, or until `deadline` when there is one.
+fn next_cmd(rx: &mpsc::Receiver<TermCmd>, deadline: Option<Instant>) -> Next {
+    let Some(at) = deadline else {
+        return rx.recv().map_or(Next::Closed, Next::Cmd);
+    };
+    match rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
+        Ok(cmd) => Next::Cmd(cmd),
+        Err(mpsc::RecvTimeoutError::Timeout) => Next::Due,
+        Err(mpsc::RecvTimeoutError::Disconnected) => Next::Closed,
+    }
+}
+
 /// The terminal thread: owns the `alacritty_terminal` grid and applies every
 /// [`TermCmd`] (bytes → parse + status, resize, scroll), emitting a `Screen`
 /// at most every [`SCREEN_INTERVAL`]. It exits — and reports [`PtyEvent::Exited`] — when the
@@ -420,23 +441,15 @@ pub(crate) fn spawn_term(
                 let flush_at = last_sent
                     .filter(|_| unsent_change)
                     .map(|at| at + SCREEN_INTERVAL);
-                let cmd = match flush_at {
-                    Some(at) => {
-                        match ctrl_rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
-                            Ok(cmd) => cmd,
-                            Err(mpsc::RecvTimeoutError::Timeout) => {
-                                term_sink(screen(&term));
-                                last_sent = Some(Instant::now());
-                                unsent_change = false;
-                                continue;
-                            }
-                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                        }
+                let cmd = match next_cmd(&ctrl_rx, flush_at) {
+                    Next::Cmd(cmd) => cmd,
+                    Next::Due => {
+                        term_sink(screen(&term));
+                        last_sent = Some(Instant::now());
+                        unsent_change = false;
+                        continue;
                     }
-                    None => match ctrl_rx.recv() {
-                        Ok(cmd) => cmd,
-                        Err(_) => break,
-                    },
+                    Next::Closed => break,
                 };
                 match cmd {
                     TermCmd::Bytes(bytes) => {
