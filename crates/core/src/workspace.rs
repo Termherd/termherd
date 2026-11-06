@@ -57,6 +57,25 @@ impl Branch {
     }
 }
 
+/// One step through an ordered cycle of tabs or panes, wrapping at both ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    Next,
+    Prev,
+}
+
+impl Step {
+    /// The index one step from `current` in a cycle of `len` items; `None`
+    /// when the cycle is empty.
+    fn index_after(self, current: usize, len: usize) -> Option<usize> {
+        let offset = match self {
+            Step::Next => 1,
+            Step::Prev => len.checked_sub(1)?,
+        };
+        (current + offset).checked_rem(len)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pane {
     Leaf(SessionId),
@@ -429,12 +448,12 @@ impl Workspace {
     /// Move focus to the next pane in the active tab (FR6), left to right and
     /// wrapping. No-op without an active tab.
     pub fn focus_next(&mut self) -> Option<()> {
-        self.cycle_focus(1)
+        self.cycle_focus(Step::Next)
     }
 
     /// Move focus to the previous pane in the active tab (FR6), wrapping.
     pub fn focus_prev(&mut self) -> Option<()> {
-        self.cycle_focus(-1)
+        self.cycle_focus(Step::Prev)
     }
 
     /// Move focus to the leaf hosting `session` in the active tab
@@ -480,29 +499,21 @@ impl Workspace {
         Some(())
     }
 
-    fn cycle_focus(&mut self, delta: i32) -> Option<()> {
+    fn cycle_focus(&mut self, step: Step) -> Option<()> {
         let tab = self.tabs.get_mut(self.active)?;
-        let paths = leaf_paths(&tab.root);
-        if paths.is_empty() {
-            return None;
-        }
+        let mut paths = leaf_paths(&tab.root);
         let current = paths.iter().position(|p| *p == tab.focus).unwrap_or(0);
-        let len = paths.len() as i32;
-        let next = (current as i32 + delta).rem_euclid(len) as usize;
-        tab.focus = paths[next].clone();
+        let next = step.index_after(current, paths.len())?;
+        tab.focus = paths.swap_remove(next);
         Some(())
     }
 
-    /// The active-tab index after cycling by `delta`, wrapping around both ends
+    /// The active-tab index one `step` away, wrapping around both ends
     /// (FR9 `NextTab` / `PrevTab`). `None` when there are no tabs, so the caller
     /// no-ops rather than switching to a tab that isn't there.
     #[must_use]
-    pub fn cycled_tab(&self, delta: i32) -> Option<usize> {
-        let count = self.tabs.len();
-        if count == 0 {
-            return None;
-        }
-        Some((self.active as i32 + delta).rem_euclid(count as i32) as usize)
+    pub fn cycled_tab(&self, step: Step) -> Option<usize> {
+        step.index_after(self.active, self.tabs.len())
     }
 }
 
@@ -740,18 +751,19 @@ mod tests {
     #[test]
     fn cycled_tab_wraps_both_directions() {
         assert_eq!(
-            Workspace::new().cycled_tab(1),
+            Workspace::new().cycled_tab(Step::Next),
             None,
             "no tabs: nothing to cycle to"
         );
+        assert_eq!(Workspace::new().cycled_tab(Step::Prev), None);
 
         let ws = workspace_with_tabs(3);
         assert_eq!(ws.active, 2);
 
         // Forward from the last tab wraps round to the first.
-        assert_eq!(ws.cycled_tab(1), Some(0));
+        assert_eq!(ws.cycled_tab(Step::Next), Some(0));
         // Backward from the last tab steps to the middle.
-        assert_eq!(ws.cycled_tab(-1), Some(1));
+        assert_eq!(ws.cycled_tab(Step::Prev), Some(1));
         // The query is pure — it computes the next index, it does not switch.
         assert_eq!(ws.active, 2, "cycled_tab must not mutate the active index");
     }

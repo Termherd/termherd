@@ -41,4 +41,4 @@ pub use snapshot::{
     SessionKind, SidebarSnapshot, SnapshotFilter, SnapshotInputs, TabSnapshot, TerminalScope,
     WorkspaceSnapshot,
 };
-pub use workspace::{Branch, Pane, SessionId, SplitDir, Tab, Workspace};
+pub use workspace::{Branch, Pane, SessionId, SplitDir, Step, Tab, Workspace};

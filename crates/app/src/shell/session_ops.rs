@@ -6,7 +6,7 @@
 use iced::{Task, window};
 
 use termherd_core::Effect;
-use termherd_core::workspace::{SessionId, index_after_removal};
+use termherd_core::workspace::{SessionId, Step, index_after_removal};
 
 use super::{Focus, Message, Shell, TabDrag};
 
@@ -152,11 +152,11 @@ impl Shell {
         Task::batch([self.perform(effects), self.resize_panes()])
     }
 
-    /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
+    /// Switch the active tab one `step`, wrapping around (FR9 `NextTab` /
     /// `PrevTab`). `None` when nothing is open, so a caller learns the cycle had
     /// nowhere to go instead of being told the tab changed.
-    pub(super) fn cycle_tab(&mut self, delta: i32) -> Option<Task<Message>> {
-        let next = self.core.workspace.cycled_tab(delta)?;
+    pub(super) fn cycle_tab(&mut self, step: Step) -> Option<Task<Message>> {
+        let next = self.core.workspace.cycled_tab(step)?;
         Some(self.activate_tab(next))
     }
 

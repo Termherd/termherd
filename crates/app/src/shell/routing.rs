@@ -6,7 +6,7 @@
 use iced::advanced::widget::{operate, operation::focusable};
 use iced::keyboard::{Key, key::Named};
 use iced::{Task, keyboard};
-use termherd_core::workspace::{Direction, SplitDir};
+use termherd_core::workspace::{Direction, SplitDir, Step};
 use termherd_core::{Action, ClaudeCommand, ScrollTarget, keymap};
 use termherd_pty::{KeyMods, TermKey};
 
@@ -224,8 +224,8 @@ impl Shell {
             Action::SendToDesktop => self
                 .arm_focused_claude_command(ClaudeCommand::Desktop)
                 .ok_or(Inertia::NoContext)?,
-            Action::NextTab => self.cycle_tab(1).ok_or(Inertia::NoContext)?,
-            Action::PrevTab => self.cycle_tab(-1).ok_or(Inertia::NoContext)?,
+            Action::NextTab => self.cycle_tab(Step::Next).ok_or(Inertia::NoContext)?,
+            Action::PrevTab => self.cycle_tab(Step::Prev).ok_or(Inertia::NoContext)?,
             Action::CloseFocused => self.close_focused_pane().ok_or(Inertia::NoContext)?,
             Action::RenameTab => self
                 .start_tab_rename(self.core.workspace.active)
