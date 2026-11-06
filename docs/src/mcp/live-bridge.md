@@ -298,6 +298,13 @@ for the session to leave the target statuses; a command that finished sooner
 costs those 2 s. Composing the loop by hand, wait for `busy` before waiting for
 `idle`.
 
+**A Claude session reads idle only once its idle title stands.** Between two
+busy stretches, such as when a background subagent's result restarts the
+agent, Claude Code can show its idle title for a few milliseconds. termherd
+holds that title back for 150 ms and reports `idle` only if no work resumed in
+the meantime, so the status, the tab dot and every wait trail the real end of
+a turn by that much. A shell's prompt marks are not held.
+
 ### Settings
 
 | Tool | Args | Returns |

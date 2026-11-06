@@ -441,12 +441,19 @@ pub(crate) fn spawn_term(
                 let flush_at = last_sent
                     .filter(|_| unsent_change)
                     .map(|at| at + SCREEN_INTERVAL);
-                let cmd = match next_cmd(&ctrl_rx, flush_at) {
+                let deadline = [flush_at, activity.due()].into_iter().flatten().min();
+                let cmd = match next_cmd(&ctrl_rx, deadline) {
                     Next::Cmd(cmd) => cmd,
                     Next::Due => {
-                        term_sink(screen(&term));
-                        last_sent = Some(Instant::now());
-                        unsent_change = false;
+                        let (before, now) = (activity.status, Instant::now());
+                        if activity.settle(now) {
+                            report_status(session, before, &activity, &term_sink);
+                        }
+                        if flush_at.is_some_and(|at| at <= now) {
+                            term_sink(screen(&term));
+                            last_sent = Some(now);
+                            unsent_change = false;
+                        }
                         continue;
                     }
                     Next::Closed => break,
@@ -459,7 +466,7 @@ pub(crate) fn spawn_term(
                         let signals = decode_chunk(&text);
                         let marks = decode_marks(&text);
                         let before = activity.status;
-                        activity.observe(&signals, &marks);
+                        activity.observe(&signals, &marks, Instant::now());
                         report_status(session, before, &activity, &term_sink);
                         // Forward each OSC 9 notification's text to the OS,
                         // independent of the status fold above — the in-app
@@ -692,6 +699,15 @@ mod tests {
     /// fold test can make: it is the terminal thread that decodes both dialects
     /// and decides what is worth emitting.
     fn statuses_reported(chunks: &[&str]) -> Vec<SessionStatus> {
+        let paced: Vec<_> = chunks
+            .iter()
+            .map(|chunk| (*chunk, Duration::ZERO))
+            .collect();
+        statuses_reported_paced(&paced)
+    }
+
+    /// [`statuses_reported`], pausing after each chunk for as long as it says.
+    fn statuses_reported_paced(chunks: &[(&str, Duration)]) -> Vec<SessionStatus> {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let collected = seen.clone();
         let sink: EventSink = Arc::new(move |event| {
@@ -714,9 +730,10 @@ mod tests {
                 Palette::named("solarized-light").expect("known scheme"),
             )),
         );
-        for chunk in chunks {
+        for (chunk, pause) in chunks {
             ctrl.send(TermCmd::Bytes(chunk.as_bytes().to_vec()))
                 .expect("terminal thread alive");
+            std::thread::sleep(*pause);
         }
         drop(ctrl);
         term.join().expect("terminal thread ends");
@@ -755,12 +772,15 @@ mod tests {
     #[test]
     fn claude_titles_still_report_activity_through_the_terminal_thread() {
         // The other dialect, unchanged: a spinner title is work, `✳` is a
-        // prompt, and the OSC 9 ping outranks both.
+        // prompt once it stands, and the OSC 9 ping outranks both.
         assert_eq!(
-            statuses_reported(&[
-                "\u{1b}]0;\u{280B} Thinking…\u{07}",
-                "\u{1b}]0;\u{2733} claude\u{07}",
-                "\u{1b}]9;allow Bash?\u{07}",
+            statuses_reported_paced(&[
+                ("\u{1b}]0;\u{280B} Thinking…\u{07}", Duration::ZERO),
+                (
+                    "\u{1b}]0;\u{2733} claude\u{07}",
+                    3 * crate::status::IDLE_HOLD
+                ),
+                ("\u{1b}]9;allow Bash?\u{07}", Duration::ZERO),
             ]),
             vec![
                 SessionStatus::Busy,
@@ -776,17 +796,19 @@ mod tests {
         // termherd's environment: `✳` at its prompt, `◐`/`◑` alternating
         // while it works — tool calls included — then `✳` again, and the
         // waiting-for-input ping once it has sat idle for a minute. The next
-        // turn must clear that ping: only work does.
+        // turn must clear that ping: only work does. Each idle stands, as it
+        // did in the recording, so none is mistaken for a blip mid-turn.
+        let (now, stands) = (Duration::ZERO, 3 * crate::status::IDLE_HOLD);
         assert_eq!(
-            statuses_reported(&[
-                "\u{1b}]0;\u{2733} Claude Code\u{07}",
-                "\u{1b}]0;\u{25D0} Claude Code\u{07}",
-                "\u{1b}]0;\u{25D0} Sleep command test\u{07}",
-                "\u{1b}]0;\u{25D1} Sleep command test\u{07}",
-                "\u{1b}]0;\u{2733} Sleep command test\u{07}",
-                "\u{1b}]9;Claude is waiting for your input\u{07}",
-                "\u{1b}]0;\u{25D0} Sleep command test\u{07}",
-                "\u{1b}]0;\u{2733} Sleep command test\u{07}",
+            statuses_reported_paced(&[
+                ("\u{1b}]0;\u{2733} Claude Code\u{07}", now),
+                ("\u{1b}]0;\u{25D0} Claude Code\u{07}", now),
+                ("\u{1b}]0;\u{25D0} Sleep command test\u{07}", now),
+                ("\u{1b}]0;\u{25D1} Sleep command test\u{07}", now),
+                ("\u{1b}]0;\u{2733} Sleep command test\u{07}", stands),
+                ("\u{1b}]9;Claude is waiting for your input\u{07}", now),
+                ("\u{1b}]0;\u{25D0} Sleep command test\u{07}", now),
+                ("\u{1b}]0;\u{2733} Sleep command test\u{07}", stands),
             ]),
             vec![
                 SessionStatus::Idle,
@@ -796,6 +818,36 @@ mod tests {
                 SessionStatus::Busy,
                 SessionStatus::Idle,
             ]
+        );
+    }
+
+    #[test]
+    fn a_brief_idle_title_between_two_busy_ones_is_not_reported() {
+        // A background subagent's result restarting the agent: `✳` for
+        // about 20 ms between two busy glyphs.
+        assert_eq!(
+            statuses_reported(&[
+                "\u{1b}]0;\u{25D0} Claude Code\u{07}",
+                "\u{1b}]0;\u{2733} Claude Code\u{07}",
+                "\u{1b}]0;\u{25D1} Claude Code\u{07}",
+            ]),
+            vec![SessionStatus::Busy]
+        );
+    }
+
+    #[test]
+    fn an_idle_title_that_stands_past_the_hold_is_reported_with_no_further_output() {
+        // Nothing follows Claude's last title of a turn: the thread's own
+        // timer has to publish it.
+        assert_eq!(
+            statuses_reported_paced(&[
+                ("\u{1b}]0;\u{25D0} Claude Code\u{07}", Duration::ZERO),
+                (
+                    "\u{1b}]0;\u{2733} Claude Code\u{07}",
+                    3 * crate::status::IDLE_HOLD
+                ),
+            ]),
+            vec![SessionStatus::Busy, SessionStatus::Idle]
         );
     }
 

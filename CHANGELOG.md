@@ -86,6 +86,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A settings panel, live reload of `settings.json`, and the options on the
   live bridge (#292, #297, #298).
 
+### Fixed (a Claude session read idle for an instant mid-turn)
+
+- A Claude session no longer reads `idle` when Claude Code shows its idle title
+  for a moment between two busy stretches, as when a background subagent's
+  result restarts the agent: the title has to stand for 150 ms first. A wait on
+  `idle` no longer settles mid-turn (#427).
+
 ### Fixed (a newline sent over MCP did not submit to Claude Code)
 
 - `run_in_session` and `prompt_in_session` send a trailing newline as Enter,
