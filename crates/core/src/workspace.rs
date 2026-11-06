@@ -664,6 +664,69 @@ mod tests {
         SessionId(NonZeroU64::new(n).unwrap_or(NonZeroU64::MIN))
     }
 
+    /// A workspace holding `count` single-session tabs, active on the last one.
+    fn workspace_with_tabs(count: usize) -> Workspace {
+        let mut ws = Workspace::new();
+        for n in 0..count {
+            ws.open(sid(n as u64 + 1), format!("t{n}"));
+        }
+        ws
+    }
+
+    /// One tab, `1 | 2`, focus on 2.
+    fn side_by_side() -> Workspace {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+        ws
+    }
+
+    /// One tab, `1 | 2 | 3` built as `Vertical(1, Vertical(2, 3))`, focus on 3.
+    fn three_columns() -> Workspace {
+        let mut ws = side_by_side();
+        ws.split(SplitDir::Vertical, sid(3));
+        ws
+    }
+
+    /// One tab, 1 on the left, 2 stacked over 3 on the right:
+    /// `Vertical(1, Horizontal(2, 3))`, focus on 3.
+    fn column_beside_stack() -> Workspace {
+        let mut ws = side_by_side();
+        ws.split(SplitDir::Horizontal, sid(3));
+        ws
+    }
+
+    /// One tab, 1 on top, `2 | 3` below: `Horizontal(1, Vertical(2, 3))`,
+    /// focus on 3.
+    fn row_over_columns() -> Workspace {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Horizontal, sid(2));
+        ws.split(SplitDir::Vertical, sid(3));
+        ws
+    }
+
+    /// Move focus one step and report where it landed; `None` when the move
+    /// was refused.
+    fn step(ws: &mut Workspace, dir: Direction) -> Option<SessionId> {
+        ws.focus_dir(dir)?;
+        ws.focused_session()
+    }
+
+    /// The ratio of the split at `path` in the first tab.
+    fn ratio_at(ws: &Workspace, path: &[Branch]) -> f32 {
+        match navigate(&ws.tabs[0].root, path) {
+            Some(Pane::Split { ratio, .. }) => *ratio,
+            other => panic!("expected a split at {path:?}, found {other:?}"),
+        }
+    }
+
+    /// The session ids hosted by each tab, in tab order — a stable identity to
+    /// assert reordering against.
+    fn tab_order(ws: &Workspace) -> Vec<SessionId> {
+        ws.tabs.iter().map(|t| t.sessions()[0]).collect()
+    }
+
     #[test]
     fn open_creates_a_tab_with_the_session() {
         let mut ws = Workspace::new();
@@ -676,12 +739,13 @@ mod tests {
 
     #[test]
     fn cycled_tab_wraps_both_directions() {
-        let mut ws = Workspace::new();
-        assert_eq!(ws.cycled_tab(1), None, "no tabs: nothing to cycle to");
+        assert_eq!(
+            Workspace::new().cycled_tab(1),
+            None,
+            "no tabs: nothing to cycle to"
+        );
 
-        ws.open(sid(1), "a"); // tab 0
-        ws.open(sid(2), "b"); // tab 1
-        ws.open(sid(3), "c"); // tab 2, now active
+        let ws = workspace_with_tabs(3);
         assert_eq!(ws.active, 2);
 
         // Forward from the last tab wraps round to the first.
@@ -718,74 +782,50 @@ mod tests {
 
     #[test]
     fn focus_dir_moves_and_wraps_within_a_vertical_split() {
-        // Two panes side by side (sid1 | sid2), focus on sid2 (the new pane).
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
+        let mut ws = side_by_side();
         assert_eq!(ws.focused_session(), Some(sid(2)));
 
         // Left steps to the pane on the left.
-        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(1)));
+        assert_eq!(step(&mut ws, Direction::Left), Some(sid(1)));
         // Left again from the leftmost wraps to the rightmost (cyclic on axis).
-        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(2)));
+        assert_eq!(step(&mut ws, Direction::Left), Some(sid(2)));
         // Right from the rightmost wraps back to the leftmost.
-        assert_eq!(ws.focus_dir(Direction::Right), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(1)));
+        assert_eq!(step(&mut ws, Direction::Right), Some(sid(1)));
 
         // Up/Down find no horizontal split to traverse: no-op.
-        assert_eq!(ws.focus_dir(Direction::Up), None);
+        assert_eq!(step(&mut ws, Direction::Up), None);
         assert_eq!(ws.focused_session(), Some(sid(1)));
     }
 
     #[test]
     fn focus_dir_traverses_the_matching_axis_in_a_nested_split() {
-        // Left column sid1; right column stacked sid2 over sid3.
-        //   Vertical( sid1 , Horizontal( sid2 , sid3 ) )
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2)); // focus sid2 (right)
-        ws.split(SplitDir::Horizontal, sid(3)); // focus sid3 (bottom-right)
+        let mut ws = column_beside_stack();
         assert_eq!(ws.focused_session(), Some(sid(3)));
 
         // Up moves within the right column to sid2.
-        assert_eq!(ws.focus_dir(Direction::Up), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(2)));
+        assert_eq!(step(&mut ws, Direction::Up), Some(sid(2)));
         // Left crosses the outer vertical split to the left column.
-        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(1)));
+        assert_eq!(step(&mut ws, Direction::Left), Some(sid(1)));
         // Right crosses back; the edge nearest the divider is sid2 (top-right).
-        assert_eq!(ws.focus_dir(Direction::Right), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(2)));
+        assert_eq!(step(&mut ws, Direction::Right), Some(sid(2)));
     }
 
     #[test]
     fn focus_dir_wraps_through_the_outermost_split_of_its_axis() {
-        // Three columns built as nested vertical splits:
-        //   Vertical( sid1 , Vertical( sid2 , sid3 ) )
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-        ws.split(SplitDir::Vertical, sid(3));
+        let mut ws = three_columns();
         assert_eq!(ws.focused_session(), Some(sid(3)));
 
         // Right from the rightmost wraps to the far left, not to the inner
         // split's own left pane (sid2).
-        assert_eq!(ws.focus_dir(Direction::Right), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(1)));
+        assert_eq!(step(&mut ws, Direction::Right), Some(sid(1)));
         // Left from the leftmost wraps to the far right, descending through the
         // inner split to its rightmost leaf.
-        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(3)));
+        assert_eq!(step(&mut ws, Direction::Left), Some(sid(3)));
     }
 
     #[test]
     fn focus_pane_of_moves_focus_to_the_leaf_hosting_a_session() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        // A split moves focus to the new pane (sid(2)).
-        ws.split(SplitDir::Vertical, sid(2));
+        let mut ws = side_by_side();
         assert_eq!(ws.focused_session(), Some(sid(2)));
 
         // Clicking the other pane jumps focus to the leaf hosting sid(1).
@@ -799,9 +839,7 @@ mod tests {
 
     #[test]
     fn focus_pane_of_does_not_reach_into_another_tab() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let mut ws = workspace_with_tabs(2);
         // A click cannot land on an inactive tab, so this stays a no-op — the
         // guarantee `reveal_pane_of` exists to lift.
         assert_eq!(ws.focus_pane_of(sid(1)), None);
@@ -811,9 +849,7 @@ mod tests {
 
     #[test]
     fn reveal_pane_of_activates_the_tab_hosting_the_session() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
+        let mut ws = side_by_side();
         ws.open(sid(3), "b");
         assert_eq!(ws.active, 1);
 
@@ -826,9 +862,7 @@ mod tests {
 
     #[test]
     fn reveal_pane_of_leaves_everything_untouched_for_an_unhosted_session() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let mut ws = workspace_with_tabs(2);
         assert_eq!(ws.reveal_pane_of(sid(99)), None);
         assert_eq!(ws.active, 1, "the active tab must not move");
         assert_eq!(ws.focused_session(), Some(sid(2)));
@@ -881,9 +915,7 @@ mod tests {
 
     #[test]
     fn tab_of_locates_the_hosting_tab_as_a_stable_rename_anchor() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let ws = workspace_with_tabs(2);
         assert_eq!(ws.tab_of(sid(2)), Some(1));
         assert_eq!(ws.tab_of(sid(9)), None);
     }
@@ -910,10 +942,7 @@ mod tests {
 
     #[test]
     fn open_multiple_makes_latest_active() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
-        ws.open(sid(3), "c");
+        let ws = workspace_with_tabs(3);
         assert_eq!(ws.tabs.len(), 3);
         assert_eq!(ws.active, 2);
         assert_eq!(ws.focused_session(), Some(sid(3)));
@@ -939,75 +968,42 @@ mod tests {
 
     #[test]
     fn set_split_ratio_updates_the_requested_tab_and_nested_path() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-        ws.split(SplitDir::Horizontal, sid(3));
+        let mut ws = column_beside_stack();
         ws.open(sid(4), "b");
 
         assert_eq!(ws.set_split_ratio(0, &[Branch::B], 0.25), Some(()));
-        let Pane::Split { ratio, b, .. } = &ws.tabs[0].root else {
-            panic!("expected a root split");
-        };
-        assert_eq!(*ratio, 0.5, "the root split remains unchanged");
-        let Pane::Split { ratio, .. } = b.as_ref() else {
-            panic!("expected a nested split");
-        };
-        assert_eq!(*ratio, 0.25);
+        assert_eq!(ratio_at(&ws, &[]), 0.5, "the root split remains unchanged");
+        assert_eq!(ratio_at(&ws, &[Branch::B]), 0.25);
         assert_eq!(ws.active, 1, "the explicitly targeted tab stays in place");
     }
 
     #[test]
     fn set_split_ratio_keeps_each_pane_at_least_ten_percent() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-
+        let mut ws = side_by_side();
         assert_eq!(ws.set_split_ratio(0, &[], 0.0), Some(()));
-        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
-            panic!("expected a root split");
-        };
-        assert_eq!(*ratio, 0.1);
+        assert_eq!(ratio_at(&ws, &[]), 0.1);
         assert_eq!(ws.set_split_ratio(0, &[], 1.0), Some(()));
-        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
-            panic!("expected a root split");
-        };
-        assert_eq!(*ratio, 0.9);
+        assert_eq!(ratio_at(&ws, &[]), 0.9);
     }
 
     #[test]
     fn set_split_ratio_rejects_non_finite_values() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-
+        let mut ws = side_by_side();
         assert_eq!(ws.set_split_ratio(0, &[], f32::NAN), None);
-        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
-            panic!("expected a root split");
-        };
-        assert_eq!(*ratio, 0.5);
+        assert_eq!(ratio_at(&ws, &[]), 0.5);
     }
 
     #[test]
     fn set_split_ratio_rejects_a_leaf_or_missing_tab() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-
+        let mut ws = side_by_side();
         assert_eq!(ws.set_split_ratio(0, &[Branch::A], 0.25), None);
         assert_eq!(ws.set_split_ratio(9, &[], 0.25), None);
-        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
-            panic!("expected a root split");
-        };
-        assert_eq!(*ratio, 0.5);
+        assert_eq!(ratio_at(&ws, &[]), 0.5);
     }
 
     #[test]
     fn nested_splits_keep_focus_on_newest_leaf() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Horizontal, sid(2));
-        ws.split(SplitDir::Vertical, sid(3));
+        let ws = row_over_columns();
         // focus is at B,B inside two nested splits
         assert_eq!(ws.tabs[0].focus, vec![Branch::B, Branch::B]);
         assert_eq!(ws.focused_session(), Some(sid(3)));
@@ -1023,9 +1019,7 @@ mod tests {
 
     #[test]
     fn activate_switches_the_active_tab_and_rejects_out_of_range() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let mut ws = workspace_with_tabs(2);
         assert_eq!(ws.active, 1);
         assert!(ws.activate(0).is_some());
         assert_eq!(ws.active, 0);
@@ -1033,15 +1027,6 @@ mod tests {
         // Out of range leaves the active tab untouched.
         assert!(ws.activate(9).is_none());
         assert_eq!(ws.active, 0);
-    }
-
-    /// A workspace holding `count` single-session tabs, active on the last one.
-    fn workspace_with_tabs(count: usize) -> Workspace {
-        let mut ws = Workspace::new();
-        for n in 0..count {
-            ws.open(sid(n as u64 + 1), format!("t{n}"));
-        }
-        ws
     }
 
     proptest::proptest! {
@@ -1098,20 +1083,14 @@ mod tests {
 
     #[test]
     fn tab_sessions_lists_every_leaf_in_pane_order() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-        ws.split(SplitDir::Horizontal, sid(3));
+        let ws = column_beside_stack();
         assert_eq!(ws.tabs[0].sessions(), vec![sid(1), sid(2), sid(3)]);
     }
 
     #[test]
     fn close_tab_returns_its_sessions_and_keeps_active_valid() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
-        ws.open(sid(3), "c");
-        // Active is the last tab (c). Closing an earlier tab shifts it down.
+        let mut ws = workspace_with_tabs(3);
+        // Active is the last tab. Closing an earlier tab shifts it down.
         assert_eq!(ws.active, 2);
         assert_eq!(ws.close_tab(0), vec![sid(1)]);
         assert_eq!(ws.tabs.len(), 2);
@@ -1121,9 +1100,7 @@ mod tests {
 
     #[test]
     fn closing_the_active_last_tab_focuses_the_new_last() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let mut ws = workspace_with_tabs(2);
         assert_eq!(ws.active, 1);
         assert_eq!(ws.close_tab(1), vec![sid(2)]);
         assert_eq!(ws.active, 0);
@@ -1132,9 +1109,7 @@ mod tests {
 
     #[test]
     fn close_tab_kills_all_sessions_in_a_split() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
+        let mut ws = side_by_side();
         assert_eq!(ws.close_tab(0), vec![sid(1), sid(2)]);
         assert!(ws.tabs.is_empty());
         assert_eq!(ws.active, 0);
@@ -1142,10 +1117,8 @@ mod tests {
 
     #[test]
     fn tab_of_locates_the_hosting_tab_including_inside_a_split() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
-        ws.split(SplitDir::Vertical, sid(3)); // sid 3 joins tab "b" as a split
+        let mut ws = workspace_with_tabs(2);
+        ws.split(SplitDir::Vertical, sid(3)); // sid 3 joins tab 1 as a split
         assert_eq!(ws.tab_of(sid(1)), Some(0));
         assert_eq!(ws.tab_of(sid(2)), Some(1));
         assert_eq!(ws.tab_of(sid(3)), Some(1), "a split member maps to its tab");
@@ -1154,8 +1127,7 @@ mod tests {
 
     #[test]
     fn close_tab_out_of_range_is_a_noop() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
+        let mut ws = workspace_with_tabs(1);
         assert!(ws.close_tab(5).is_empty());
         assert_eq!(ws.tabs.len(), 1);
         assert_eq!(ws.active, 0);
@@ -1163,9 +1135,7 @@ mod tests {
 
     #[test]
     fn close_focused_collapses_the_split_onto_the_sibling() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2)); // focus on B (sid 2)
+        let mut ws = side_by_side();
         // Closing the focused pane removes sid 2 and leaves just sid 1.
         assert_eq!(ws.close_focused(), Some(sid(2)));
         assert_eq!(ws.tabs.len(), 1);
@@ -1175,10 +1145,8 @@ mod tests {
 
     #[test]
     fn close_focused_on_a_single_pane_tab_closes_the_tab() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
-        // Active tab is the single-leaf "b"; closing its pane closes the tab.
+        let mut ws = workspace_with_tabs(2);
+        // Active tab is the single-leaf tab 1; closing its pane closes the tab.
         assert_eq!(ws.close_focused(), Some(sid(2)));
         assert_eq!(ws.tabs.len(), 1);
         assert_eq!(ws.focused_session(), Some(sid(1)));
@@ -1186,10 +1154,7 @@ mod tests {
 
     #[test]
     fn close_focused_in_a_nested_split_keeps_a_leaf_focused() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Horizontal, sid(2));
-        ws.split(SplitDir::Vertical, sid(3)); // focus B,B = sid 3
+        let mut ws = row_over_columns();
         assert_eq!(ws.close_focused(), Some(sid(3)));
         // The sibling (sid 2) takes the inner split's place and is focused.
         assert_eq!(ws.focused_session(), Some(sid(2)));
@@ -1198,9 +1163,7 @@ mod tests {
 
     #[test]
     fn close_pane_of_collapses_an_unfocused_leaf_and_keeps_focus() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2)); // focus on B (sid 2)
+        let mut ws = side_by_side();
         // Closing the *unfocused* pane (sid 1) must not steal focus from sid 2.
         assert_eq!(ws.close_pane_of(sid(1)), Some(sid(1)));
         assert_eq!(ws.tabs[0].root, Pane::Leaf(sid(2)));
@@ -1209,9 +1172,7 @@ mod tests {
 
     #[test]
     fn close_pane_of_the_focused_leaf_moves_focus_to_the_sibling() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2)); // focus on B (sid 2)
+        let mut ws = side_by_side();
         assert_eq!(ws.close_pane_of(sid(2)), Some(sid(2)));
         assert_eq!(ws.tabs[0].root, Pane::Leaf(sid(1)));
         assert_eq!(ws.focused_session(), Some(sid(1)));
@@ -1219,9 +1180,7 @@ mod tests {
 
     #[test]
     fn close_pane_of_reaches_into_an_inactive_tab_without_switching() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
+        let mut ws = side_by_side();
         ws.open(sid(3), "b"); // active tab is now "b"
         assert_eq!(ws.close_pane_of(sid(2)), Some(sid(2)));
         assert_eq!(ws.tabs[0].root, Pane::Leaf(sid(1)));
@@ -1232,9 +1191,7 @@ mod tests {
 
     #[test]
     fn close_pane_of_a_root_leaf_closes_the_whole_tab() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let mut ws = workspace_with_tabs(2);
         assert_eq!(ws.close_pane_of(sid(1)), Some(sid(1)));
         assert_eq!(ws.tabs.len(), 1);
         assert_eq!(ws.focused_session(), Some(sid(2)));
@@ -1242,18 +1199,14 @@ mod tests {
 
     #[test]
     fn close_pane_of_an_unknown_session_is_a_noop() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
+        let mut ws = workspace_with_tabs(1);
         assert_eq!(ws.close_pane_of(sid(9)), None);
         assert_eq!(ws.tabs.len(), 1);
     }
 
     #[test]
     fn focus_next_and_prev_cycle_through_panes() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-        ws.split(SplitDir::Vertical, sid(3)); // leaves in order: 1, 2, 3; focus on 3
+        let mut ws = three_columns();
         assert_eq!(ws.focused_session(), Some(sid(3)));
         // Wrap forward to the first leaf, then walk back.
         assert!(ws.focus_next().is_some());
@@ -1269,12 +1222,6 @@ mod tests {
         let mut ws = Workspace::new();
         assert!(ws.focus_next().is_none());
         assert!(ws.close_focused().is_none());
-    }
-
-    /// The session ids hosted by each tab, in tab order — a stable identity to
-    /// assert reordering against.
-    fn tab_order(ws: &Workspace) -> Vec<SessionId> {
-        ws.tabs.iter().map(|t| t.sessions()[0]).collect()
     }
 
     #[test]
