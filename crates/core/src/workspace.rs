@@ -29,14 +29,14 @@ pub enum Direction {
 }
 
 impl Direction {
-    /// The split orientation this move traverses, and whether it heads toward
-    /// the B (right/bottom) branch.
-    fn axis_toward_b(self) -> (SplitDir, bool) {
+    /// The split orientation this move traverses, and the branch it heads
+    /// toward: B is right/bottom, A is left/top.
+    fn axis_toward(self) -> (SplitDir, Branch) {
         match self {
-            Direction::Right => (SplitDir::Vertical, true),
-            Direction::Left => (SplitDir::Vertical, false),
-            Direction::Down => (SplitDir::Horizontal, true),
-            Direction::Up => (SplitDir::Horizontal, false),
+            Direction::Right => (SplitDir::Vertical, Branch::B),
+            Direction::Left => (SplitDir::Vertical, Branch::A),
+            Direction::Down => (SplitDir::Horizontal, Branch::B),
+            Direction::Up => (SplitDir::Horizontal, Branch::A),
         }
     }
 }
@@ -46,6 +46,15 @@ impl Direction {
 pub enum Branch {
     A,
     B,
+}
+
+impl Branch {
+    fn opposite(self) -> Self {
+        match self {
+            Branch::A => Branch::B,
+            Branch::B => Branch::A,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -464,10 +473,10 @@ impl Workspace {
     /// the far edge it wraps to the opposite end. Returns `None` (focus
     /// unchanged) when no split of that orientation exists to move through.
     pub fn focus_dir(&mut self, dir: Direction) -> Option<()> {
-        let (axis, toward_b) = dir.axis_toward_b();
+        let (axis, toward) = dir.axis_toward();
         let tab = self.tabs.get_mut(self.active)?;
-        tab.focus = step_across(&tab.root, &tab.focus, axis, toward_b)
-            .or_else(|| wrap_around(&tab.root, &tab.focus, axis, toward_b))?;
+        tab.focus = step_across(&tab.root, &tab.focus, axis, toward)
+            .or_else(|| wrap_around(&tab.root, &tab.focus, axis, toward))?;
         Some(())
     }
 
@@ -557,31 +566,26 @@ fn ancestor_is(root: &Pane, path: &[Branch], axis: SplitDir) -> bool {
 }
 
 /// Descend from the node at `path` to the leaf on the edge nearest the pane we
-/// arrived from: moving toward B (right/down) lands on the sibling's leftmost /
-/// topmost leaf, moving toward A on its rightmost / bottommost.
-fn descend_edge(root: &Pane, path: &mut Vec<Branch>, toward_b: bool) {
+/// arrived from, that is on the side opposite to `toward`: moving right lands
+/// on the leftmost leaf, moving up on the bottommost.
+fn descend_edge(root: &Pane, path: &mut Vec<Branch>, toward: Branch) {
     while let Some(Pane::Split { .. }) = navigate(root, path) {
-        path.push(if toward_b { Branch::A } else { Branch::B });
+        path.push(toward.opposite());
     }
 }
 
 /// A directional step: across the nearest ancestor split of `axis` where the
-/// focused subtree sits on the branch we can leave in this direction.
+/// focused subtree sits on the branch we can leave toward `toward`.
 fn step_across(
     root: &Pane,
     focus: &[Branch],
     axis: SplitDir,
-    toward_b: bool,
+    toward: Branch,
 ) -> Option<Vec<Branch>> {
-    let (near, far) = if toward_b {
-        (Branch::A, Branch::B)
-    } else {
-        (Branch::B, Branch::A)
-    };
     (0..focus.len()).rev().find_map(|i| {
         let parent = &focus[..i];
-        (focus[i] == near && ancestor_is(root, parent, axis))
-            .then(|| edge_leaf(root, parent, far, toward_b))
+        (focus[i] == toward.opposite() && ancestor_is(root, parent, axis))
+            .then(|| edge_leaf(root, parent, toward, toward))
     })
 }
 
@@ -591,20 +595,20 @@ fn wrap_around(
     root: &Pane,
     focus: &[Branch],
     axis: SplitDir,
-    toward_b: bool,
+    toward: Branch,
 ) -> Option<Vec<Branch>> {
-    let near = if toward_b { Branch::A } else { Branch::B };
     (0..focus.len()).find_map(|i| {
         let parent = &focus[..i];
-        ancestor_is(root, parent, axis).then(|| edge_leaf(root, parent, near, toward_b))
+        ancestor_is(root, parent, axis).then(|| edge_leaf(root, parent, toward.opposite(), toward))
     })
 }
 
-/// The path into `branch` of the split at `parent`, descended to its edge leaf.
-fn edge_leaf(root: &Pane, parent: &[Branch], branch: Branch, toward_b: bool) -> Vec<Branch> {
+/// The path into `branch` of the split at `parent`, descended to the edge leaf
+/// a move `toward` arrives on.
+fn edge_leaf(root: &Pane, parent: &[Branch], branch: Branch, toward: Branch) -> Vec<Branch> {
     let mut path = parent.to_vec();
     path.push(branch);
-    descend_edge(root, &mut path, toward_b);
+    descend_edge(root, &mut path, toward);
     path
 }
 
