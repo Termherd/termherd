@@ -88,7 +88,6 @@ issues #18–#29.
 | [F-capture](#f-capture) | feature | workspace | ☐ | Capture termherd along a fidelity ladder: debug dumps, promo, bug repros. |
 | [F-file-browser](#f-file-browser) | feature | workspace, sidebar | ☐ | A file tree for the focused repository, floating or as a right pane. |
 | [F-launch-profiles](#f-launch-profiles) | feature | sessions | ☐ | Persistent per-project `--add-dir`, applied to fresh and resumed launches. |
-| [F-layout-restore](#f-layout-restore) | feature | workspace, sessions | ☐ | Restore tabs, splits and resumable sessions at launch. |
 | [F-mcp-attach](#f-mcp-attach) | feature | mcp, workspace | ☐ | The attach rung: reach the live bridge from outside a spawned session. |
 | [F-mcp-control-surface](#f-mcp-control-surface) | feature | mcp | ☐ | Termherd exposes its own control and orchestration surface as an MCP server. |
 | [F-mcp-ide-bridge](#f-mcp-ide-bridge) | feature | mcp | ☐ | A live MCP/IDE bridge to Claude — termherd as the client, not the server. |
@@ -107,6 +106,7 @@ issues #18–#29.
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
 | [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ✅ | A `rename-tab` keymap action opening the focused tab's inline rename. |
+| [F-layout-restore](#f-layout-restore) | feature | workspace, sessions | ✅ | Restore tabs, splits and resumable sessions at launch. |
 | [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
 | [F-mcp-background-tab](#f-mcp-background-tab) | feature | mcp, workspace | ✅ | Open and close a tab over MCP without moving the user's focus. |
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
@@ -932,18 +932,6 @@ resume }` (`crates/core/src/app.rs`) and the command is *typed* into the shell
 (`launch_command`, `crates/pty/src/lib.rs`), so the one real cost is
 cross-shell path quoting (pwsh vs bash)
 
-<a id="f-layout-restore"></a>
-
-### F-layout-restore
-
-Restore tabs, splits and resumable sessions at launch.
-
-The window position survives a restart (FR12); the workspace inside it does
-not. `Workspace` is plain data and sessions already resume (FR4), so this is
-saving and replaying the tree.
-
-Issue: #421.
-
 <a id="f-mcp-attach"></a>
 
 ### F-mcp-attach
@@ -1363,6 +1351,18 @@ cannot tell from Ctrl+I (Tab). It opens the field a double-click opens, filled
 with the tab's current name, and reports `inert` / `no-context` with no tab
 open. Over MCP, `enter` commits the field and `escape` abandons it, using the
 same commit message as the widget submit (#246).
+
+<a id="f-layout-restore"></a>
+
+### F-layout-restore
+
+Restore tabs, splits and resumable sessions at launch.
+
+The window position survives a restart (FR12); the workspace inside it does
+not. `Workspace` is plain data and sessions already resume (FR4), so this is
+saving and replaying the tree.
+
+Issue: #421.
 
 <a id="f-mcp-agent-loop"></a>
 

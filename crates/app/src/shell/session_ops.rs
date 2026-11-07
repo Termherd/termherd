@@ -234,6 +234,7 @@ impl Shell {
             window::Event::CloseRequested => {
                 if let Some(dir) = &self.data_dir {
                     self.bounds.save(dir);
+                    crate::layout_store::save(dir, &self.core.layout());
                 }
                 self.request_quit(id)
             }

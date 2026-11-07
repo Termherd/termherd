@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 
+use super::layout::Layout;
 use crate::browser::SessionRecord;
 use crate::claude_command::{ClaudeColor, ClaudeCommand, PromptInput};
 use crate::metadata::Overlay;
@@ -137,6 +138,10 @@ pub enum Event {
     ReopenClosedTab {
         fresh_claude_id: String,
     },
+    /// Replay a saved strip at launch, after any tab already open: one session
+    /// per pane, each with the launch it resumes. Fresh Claude panes carry the
+    /// ids the shell minted ([`Layout::with_fresh_ids`]).
+    RestoreLayout(Layout),
     /// Give the tab at `index` a manual name, overriding its derived title
     /// (FR5). A blank title clears the override; the manual name is never
     /// clobbered by a later OSC/digest update. A pure relabel — no PTY touched.

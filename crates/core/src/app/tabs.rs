@@ -84,7 +84,7 @@ impl App {
     /// last, re-key included, when the scan has its transcript; otherwise as it
     /// was launched. A fresh tab whose transcript was never written then
     /// starts a new conversation, since there is nothing to resume.
-    fn reopen_launch(&self, session: &LiveSession) -> Launch {
+    pub(super) fn reopen_launch(&self, session: &LiveSession) -> Launch {
         if let Launch::Claude(_) = session.launch
             && let Some(id) = session.claude_session_id()
             && self.record_for(id).is_some()

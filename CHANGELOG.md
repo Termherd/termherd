@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (the tab strip comes back at launch)
+
+- Quitting writes the tab strip to `~/.termherd/layout.json`, and the next
+  launch reopens it: tabs in order, splits with their ratios and focused
+  pane, tab names and colours, parked tabs, and the tab you were on. Each
+  pane restarts in its directory; a Claude pane resumes its conversation
+  (#421).
+
 ### Fixed (the session scan stays inside `~/.claude/projects`)
 
 - The sidebar's scan no longer follows a symlink under `~/.claude/projects`,

@@ -46,6 +46,12 @@ refused a command setting `HOME` (it injects git config), so use
 USERPROFILE=$(mktemp -d) TMPDIR=$(mktemp -d) cargo run -p termherd-app
 ```
 
+The home matters twice over since the tab strip is restored at launch: a
+second instance on the user's `~/.termherd` reopens their tabs from
+`layout.json`, so each Claude pane runs `claude --resume` on a conversation
+the first instance is still holding, and whichever quits last writes the
+file.
+
 The fake home hides `~/.claude` as well, so that build starts with an empty
 sidebar and finds no session files: fine for a theme or layout check, wrong
 for anything that reads Claude's data; copy `~/.claude/projects` into the fake

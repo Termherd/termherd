@@ -47,10 +47,11 @@ What a live change reaches:
 A program that read the terminal's colours when it started — Claude Code
 picks its light or dark look that way — keeps its choice until it restarts.
 
-Two neighbouring files are TermHerd's, not yours to edit: `window.json` (size
-and position — a position left off every connected monitor is dropped, so the
-window re-centers instead of opening out of reach) and `metadata.json` (stars,
-archives, custom titles, and the repositories you added by hand).
+Three neighbouring files are TermHerd's, not yours to edit: `window.json`
+(size and position — a position left off every connected monitor is dropped,
+so the window re-centers instead of opening out of reach), `layout.json` (the
+tab strip a launch reopens) and `metadata.json` (stars, archives, custom
+titles, and the repositories you added by hand).
 
 ## Options
 

@@ -99,6 +99,8 @@ pub struct Startup {
     pub metadata: Overlay,
     /// Folded project paths restored from disk.
     pub collapsed: HashSet<String>,
+    /// The tab strip the last run left, replayed at launch.
+    pub layout: termherd_core::Layout,
     /// Config files that existed but could not be used at startup, shown in
     /// the sidebar until dismissed.
     pub load_problems: Vec<crate::json_store::LoadProblem>,
@@ -150,7 +152,7 @@ pub fn run(
     let pty_output = PtyOutput::new(pty_rx);
     iced::application(
         move || {
-            let mut shell = Shell::new(
+            Shell::start(
                 config,
                 Ports {
                     scanner: scanner.clone(),
@@ -165,9 +167,7 @@ pub fn run(
                 },
                 live_bridge.clone(),
                 startup.clone(),
-            );
-            let initial_scan = shell.rescan();
-            (shell, initial_scan)
+            )
         },
         Shell::update,
         Shell::view,
@@ -796,6 +796,21 @@ pub(crate) struct Ports {
 }
 
 impl Shell {
+    /// The shell as a launch builds it: the first scan under way and the strip
+    /// the last run left replayed.
+    fn start(
+        bounds: WindowConfig,
+        ports: Ports,
+        live_bridge: LiveBridge,
+        startup: Startup,
+    ) -> (Self, Task<Message>) {
+        let layout = startup.layout.clone();
+        let mut shell = Self::new(bounds, ports, live_bridge, startup);
+        let initial_scan = shell.rescan();
+        let restore = shell.restore_layout(layout);
+        (shell, Task::batch([initial_scan, restore]))
+    }
+
     fn new(bounds: WindowConfig, ports: Ports, live_bridge: LiveBridge, startup: Startup) -> Self {
         let Ports {
             scanner,
@@ -1828,6 +1843,7 @@ mod key_routing {
             settings: crate::settings::Settings::default(),
             metadata: Overlay::default(),
             collapsed: HashSet::new(),
+            layout: termherd_core::Layout::default(),
             load_problems: Vec::new(),
             data_dir: None,
             settings_file: None,
@@ -7675,6 +7691,85 @@ mod key_routing {
         let _ = shell.update(Message::ToggleCollapsed("/tmp/project".into()));
 
         assert!(crate::collapsed_store::load(&dir).contains("/tmp/project"));
+    }
+
+    /// A strip of two tabs, the first split in two, as a last run left it.
+    fn saved_strip() -> termherd_core::Layout {
+        use termherd_core::{PaneLaunch, PaneLayout, TabLayout};
+        let shell_in = |cwd: &str| {
+            PaneLayout::Leaf(PaneLaunch {
+                cwd: Some(cwd.into()),
+                launch: Launch::Shell,
+            })
+        };
+        let tab = |root| TabLayout {
+            root,
+            focus: Vec::new(),
+            custom_title: None,
+            color: None,
+            parked: false,
+        };
+        termherd_core::Layout {
+            tabs: vec![
+                tab(PaneLayout::Split {
+                    dir: termherd_core::workspace::SplitDir::Vertical,
+                    ratio: 0.5,
+                    a: Box::new(shell_in("/tmp/a")),
+                    b: Box::new(shell_in("/tmp/b")),
+                }),
+                tab(shell_in("/tmp/c")),
+            ],
+            active: 1,
+        }
+    }
+
+    #[test]
+    fn a_launch_replays_the_strip_the_last_run_left() {
+        let pty = Arc::new(RecordingPty::default());
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let (shell, _boot) = Shell::start(
+            WindowConfig::default(),
+            test_ports(pty.clone(), rx),
+            test_live_bridge(),
+            Startup {
+                layout: saved_strip(),
+                ..test_startup()
+            },
+        );
+        assert_eq!(pty.spawn_count(), 3, "one PTY per saved pane");
+        assert_eq!(shell.core.workspace.tabs.len(), 2);
+        assert_eq!(shell.core.workspace.active, 1, "the saved tab is shown");
+        assert_eq!(shell.focus, Focus::Terminal, "the keys go to it");
+    }
+
+    #[test]
+    fn a_launch_with_nothing_saved_opens_no_tab() {
+        let pty = Arc::new(RecordingPty::default());
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let (shell, _boot) = Shell::start(
+            WindowConfig::default(),
+            test_ports(pty.clone(), rx),
+            test_live_bridge(),
+            test_startup(),
+        );
+        assert_eq!(pty.spawn_count(), 0);
+        assert!(shell.core.workspace.tabs.is_empty());
+    }
+
+    #[test]
+    fn quitting_writes_the_strip_the_next_launch_replays() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        let _ = shell.launch("/tmp/a".to_string(), Launch::Shell);
+        let _ = shell.run_action(Action::SplitVertical);
+        let _ = shell.launch("/tmp/c".to_string(), Launch::Shell);
+
+        request_quit_from_the_window(&mut shell);
+
+        let (saved, _) = crate::layout_store::load(&dir);
+        assert_eq!(saved, shell.core.layout());
+        assert_eq!(saved.tabs.len(), 2, "both tabs were written");
     }
 
     #[test]

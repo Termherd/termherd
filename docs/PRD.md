@@ -196,7 +196,8 @@ Abbreviated acceptance criteria.
 ### Shell
 
 - FR11 — Single-instance: a second launch focuses the existing window (Q8).
-- FR12 — Window bounds persist and restore.
+- FR12 — Window bounds persist and restore, and so does the tab strip inside
+  the window (`layout.json`, `F-layout-restore`).
 
 ## 7. Non-functional requirements
 
