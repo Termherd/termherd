@@ -7,6 +7,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security (the live bridge checks Host and Origin itself)
+
+- The MCP live bridge refuses, with a 403, a request whose `Host` or `Origin`
+  is not `127.0.0.1`, `localhost` or `[::1]` on its own port. It used to rely
+  on the MCP library's default Host check, and checked no Origin (#293).
+
 ### Fixed (the session scan stays inside `~/.claude/projects`)
 
 - The sidebar's scan no longer follows a symlink under `~/.claude/projects`,
