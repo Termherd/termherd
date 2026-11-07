@@ -219,7 +219,7 @@ action's default. The full vocabulary and its defaults are in
 "keys": {
   "copy": "ctrl+y",
   "paste": ["ctrl+shift+v", "shift+insert"],
-  "activate-tab-1": "alt+1"
+  "activate-tab-1": "ctrl+1"
 }
 ```
 
