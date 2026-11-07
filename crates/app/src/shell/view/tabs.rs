@@ -14,8 +14,8 @@ use termherd_core::ClaudeColor;
 
 use super::modals::modal_card;
 use super::{
-    COLOR_MARK_WIDTH, CardFacts, card_frame, card_secondary_line, claude_color, clip, color_swatch,
-    detail_lines, kind_icon, session_card, status_dot,
+    COLOR_MARK_WIDTH, CardFacts, active_chip_fill, card_frame, card_secondary_line, claude_color,
+    clip, color_swatch, detail_lines, kind_icon, session_card, status_dot,
 };
 use crate::shell::{Message, Shell, tab_rename_id};
 use crate::strings;
@@ -307,7 +307,7 @@ fn tab_chip_style(
 ) -> container::Style {
     let palette = theme.extended_palette();
     let outline = color.and_then(|c| claude_color(c, palette));
-    let bg = active.then_some(palette.primary.base.color);
+    let bg = active.then(|| active_chip_fill(palette));
     let fg = tab_chip_text(theme, active);
     let fade = |c: Color| super::mix(c, palette.background.base.color, 0.55);
     let (outline_color, outline_width) = match outline {

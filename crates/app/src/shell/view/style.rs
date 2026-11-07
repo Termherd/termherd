@@ -60,7 +60,13 @@ fn on_surface(hue: Color, palette: &Extended) -> Color {
     } else {
         (mix(hue, Color::BLACK, LIGHT_SURFACE_DARKEN), Color::BLACK)
     };
-    let surfaces = mark_surfaces(palette).map(luminance);
+    shade_until_it_reads(start, away, &mark_surfaces(palette))
+}
+
+/// The first shade on the way from `start` to `away` that clears
+/// [`MARK_FLOOR`] on every one of `surfaces`, else `away` itself.
+fn shade_until_it_reads(start: Color, away: Color, surfaces: &[Color]) -> Color {
+    let surfaces: Vec<f32> = surfaces.iter().copied().map(luminance).collect();
     (0..=SHADE_STEPS)
         .map(|step| mix(start, away, f32::from(step) / f32::from(SHADE_STEPS)))
         .find(|shade| {
@@ -70,6 +76,11 @@ fn on_surface(hue: Color, palette: &Extended) -> Color {
                 .all(|s| contrast_ratio(shade, *s) >= MARK_FLOOR)
         })
         .unwrap_or(away)
+}
+
+/// The active tab chip's fill.
+pub(super) fn active_chip_fill(palette: &Extended) -> Color {
+    palette.primary.base.color
 }
 
 /// The backgrounds a mark must read on. Not the active tab chip's fill: its
