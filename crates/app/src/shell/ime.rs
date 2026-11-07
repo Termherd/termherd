@@ -60,6 +60,15 @@ impl<Message> ImeArea<'_, Message> {
             height: self.cell.height,
         }
     }
+
+    /// The input method this area asks the runtime for while it is focused.
+    fn input_method(&self, bounds: Rectangle) -> InputMethod {
+        InputMethod::Enabled {
+            cursor: self.ime_cursor(bounds),
+            purpose: input_method::Purpose::Terminal,
+            preedit: None,
+        }
+    }
 }
 
 /// The composed text the terminal takes from `event`, if any. A disabled area
@@ -151,12 +160,7 @@ impl<Message> Widget<Message, iced::Theme, iced::Renderer> for ImeArea<'_, Messa
         // every frame the terminal is focused; dropping it would let the
         // runtime disable the IME again and re-break dead keys.
         if self.enabled && matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
-            let ime = InputMethod::<String>::Enabled {
-                cursor: self.ime_cursor(layout.bounds()),
-                purpose: input_method::Purpose::Terminal,
-                preedit: None,
-            };
-            shell.request_input_method(&ime);
+            shell.request_input_method(&self.input_method(layout.bounds()));
         }
     }
 
