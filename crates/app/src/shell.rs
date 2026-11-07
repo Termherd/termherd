@@ -7740,6 +7740,11 @@ mod key_routing {
         assert_eq!(shell.core.workspace.tabs.len(), 2);
         assert_eq!(shell.core.workspace.active, 1, "the saved tab is shown");
         assert_eq!(shell.focus, Focus::Terminal, "the keys go to it");
+        assert_eq!(
+            pty.resizes().len(),
+            3,
+            "every pane is sized at once, the tabs behind the shown one too"
+        );
     }
 
     #[test]
