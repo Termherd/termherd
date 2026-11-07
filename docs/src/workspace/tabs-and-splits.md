@@ -206,9 +206,11 @@ flowing. Hovering a parked tab still shows its card.
 A parked tab comes back when you select it: click it, jump to it by number, or
 reopen its session from the sidebar. It then takes its place at the end of
 the unparked tabs. A session in it that asks for attention brings it back as
-well, without switching to it. Dragging a tab past the last unparked tab
-parks it, and dragging a parked tab before it unparks it. New tabs open
-before the parked ones, and a closed parked tab reopens unparked.
+well, without switching to it — unless every tab was parked, since a parked
+tab is shown only then. Dragging a tab past the last unparked tab parks it,
+and dragging a parked tab before it unparks it. New tabs open before the
+parked ones, and a closed parked tab reopens unparked. The tab menu offers
+*Park tab* on unparked tabs only.
 
 ## Splits
 

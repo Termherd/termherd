@@ -383,7 +383,8 @@ impl Workspace {
     }
 
     /// Unpark the parked tab at `index`: it moves to the end of the unparked
-    /// group, returning its new index. The active tab stays the same tab.
+    /// group, returning its new index. The active tab stays the same tab,
+    /// unless every tab was parked: the unparked one then becomes active.
     /// `None`, changing nothing, for an unparked or missing tab.
     pub fn unpark(&mut self, index: usize) -> Option<usize> {
         if !self.tabs.get(index)?.parked {
@@ -575,14 +576,8 @@ impl Workspace {
     /// tab and the focus untouched — when no tab hosts it.
     pub fn reveal_pane_of(&mut self, session: SessionId) -> Option<()> {
         let index = self.tab_of(session)?;
-        let previous = self.active;
         self.activate(index)?;
-        // Restore the previous tab if the leaf turns out to be unreachable, so a
-        // failed reveal changes nothing at all.
-        self.focus_pane_of(session).or_else(|| {
-            self.active = previous;
-            None
-        })
+        self.focus_pane_of(session)
     }
 
     /// Move pane focus one step in a spatial direction (FR6), cycling within

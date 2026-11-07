@@ -153,15 +153,13 @@ impl Shell {
     /// terminal, a pending confirmation is dropped, and the panes are sized
     /// to the tab now shown.
     pub(super) fn settle_after_tab_switch(&mut self) -> Task<Message> {
+        self.tab_switch_settled = true;
         self.focus = Focus::Terminal;
         self.closing = None;
         self.archiving = None;
         self.resize_panes()
     }
 
-    /// Switch the active tab one `step`, wrapping around (FR9 `NextTab` /
-    /// `PrevTab`). `None` when nothing is open, so a caller learns the cycle had
-    /// nowhere to go instead of being told the tab changed.
     /// Park the active tab, or unpark it when it is parked. `None` with no tab
     /// open, so the caller reports the action as inert.
     pub(super) fn toggle_park_active_tab(&mut self) -> Option<Task<Message>> {
@@ -174,6 +172,10 @@ impl Shell {
         ]))
     }
 
+    /// Switch the active tab one `step` among the unparked tabs, wrapping
+    /// around (FR9 `NextTab` / `PrevTab`). `None` when no tab is unparked, so a
+    /// caller learns the cycle had nowhere to go instead of being told the tab
+    /// changed.
     pub(super) fn cycle_tab(&mut self, step: Step) -> Option<Task<Message>> {
         let next = self.core.workspace.cycled_tab(step)?;
         Some(self.activate_tab(next))
