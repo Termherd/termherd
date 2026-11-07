@@ -277,6 +277,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_paste_prompt_names_the_lines_and_the_tab() {
+        let tail = "It did not ask for bracketed paste, so each line runs as it arrives.";
+        assert_eq!(
+            paste_prompt(1, "zsh"),
+            format!("Paste 1 line into “zsh”? {tail}")
+        );
+        assert_eq!(
+            paste_prompt(3, ""),
+            format!("Paste 3 lines into this terminal? {tail}")
+        );
+    }
+
+    #[test]
     fn a_disabled_menu_entry_names_its_refusal_in_a_few_words() {
         let labels = [
             (CommandRefusal::UnknownSession, "session gone"),

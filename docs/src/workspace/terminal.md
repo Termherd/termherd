@@ -23,6 +23,21 @@ pastes too, as in Windows Terminal, and Claude Code takes its image paste from
 <kbd>Alt</kbd>+<kbd>V</kbd>; on Linux <kbd>Ctrl</kbd>+<kbd>V</kbd> reaches the
 program, where Claude Code pastes an image on it.
 
+### A paste that would run line by line
+
+A program that turns on *bracketed paste* — Claude Code, zsh, fish, bash 5.1
+and later, vim — receives a paste as one block, so its line breaks stay text.
+A program that never turned it on, such as `sh` or `cmd.exe`, cannot tell a
+paste from typing: each line break is an Enter, and each line runs as it
+arrives, including one you did not see on the page you copied from.
+
+So a paste holding a line break — a trailing one included — into such a
+terminal waits for you. A prompt names the tab and the number of lines;
+**Paste** (or <kbd>Enter</kbd>) sends the text unchanged, **Cancel** (or
+<kbd>Escape</kbd>) drops it. The paste chord and the right-click paste both
+ask. A single line with no line break, or any paste into a program that turned
+bracketed paste on, is written at once.
+
 ### Option as Meta (macOS)
 
 The **left** Option key is Meta: <kbd>⌥B</kbd> / <kbd>⌥F</kbd> move by word,
@@ -58,7 +73,9 @@ so nothing reaches the clipboard unless you asked for it:
   pointer**, which need not be the focused one, and is bracketed when that pane
   asked for bracketed paste. The click also focuses that pane, so the keys you
   type next go where you just pasted. A confirmation prompt refuses it, exactly
-  as it refuses the paste chord — the pointer is not a way past a prompt.
+  as it refuses the paste chord — the pointer is not a way past a prompt. A
+  multi-line paste into a pane without bracketed paste
+  [asks first](#a-paste-that-would-run-line-by-line).
 
 ### When the program reads the mouse
 
