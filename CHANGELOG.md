@@ -13,6 +13,25 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is not `127.0.0.1`, `localhost` or `[::1]` on its own port. It used to rely
   on the MCP library's default Host check, and checked no Origin (#293).
 
+### Fixed (the session scan stays inside `~/.claude/projects`)
+
+- The sidebar's scan no longer follows a symlink under `~/.claude/projects`,
+  so a link there can no longer surface another file's content in the sidebar
+  and search. A transcript over 256 MiB is read as its first and last 128 MiB
+  instead of whole, and titles, slugs, version, model and effort are cut to
+  120 characters (#290).
+
+### Fixed (zoom in with Cmd/Ctrl + Shift + `+`)
+
+- <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> (<kbd>Ctrl</kbd> off macOS)
+  zooms in on QWERTY and AZERTY. It used to reach the terminal, and Claude
+  Code's prompt with it: a press names its key before Shift, so it arrived as
+  `mod+shift+=`, which nothing bound. Zoom-in now binds `mod+=`,
+  `mod+shift+=` and `mod+plus` (the keypad `+`). The never-matching
+  `mod+shift+plus` default is gone, and so is `alt+shift+plus` from
+  `split-vertical`, which keeps `alt+shift+=`. A `settings.json` override
+  spelling `shift+plus` for the main-row key should write `shift+=` (#370).
+
 ### Added (more keys in chords and in the terminal)
 
 - Chords can name `pageup`, `pagedown`, `insert`, `delete`, `backspace`,
