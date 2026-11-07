@@ -12,7 +12,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - An agent connecting to the live MCP bridge now reads how to use it: address
   sessions by handle, act then wait (`busy` before `idle`) then read, never
   poll `snapshot`, and take a screenshot last. It used to say only that it
-  would "later" drive sessions, which it has done for months.
+  would "later" drive sessions, which it has done for months. `press_keys` no
+  longer claims that `escape` cannot leave a session rename.
 
 ### Added (termherd:// links in the terminal)
 
