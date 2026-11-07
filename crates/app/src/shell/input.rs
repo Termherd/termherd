@@ -47,8 +47,8 @@ pub(super) fn chord_of(
 /// it would consume for a human, and `escape` / `enter` reach it — a chord
 /// resolved straight to its keymap action could never do that.
 ///
-/// `None` for a chord naming a key no event can carry (`"f2"`, `"space"`): those
-/// bind to nothing today, so no round trip is owed.
+/// `None` for a chord naming a key no event can carry (`"f13"`, `"capslock"`):
+/// no real press resolves such a binding either, so no round trip is owed.
 ///
 /// The number row is rebuilt by *physical* position, mirroring how `chord_of`
 /// reads it — otherwise `cmd+1` would come back as the character `1` and fail to
@@ -81,23 +81,70 @@ pub(super) fn event_of(chord: &KeyChord) -> Option<keyboard::Event> {
 const NON_DIGIT: keyboard::key::Physical =
     keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified);
 
-/// The named key a chord name spells, or `None` when it names a character. The
-/// inverse of [`key_name`]'s named arms, and deliberately no wider: a name this
-/// does not know is a key no binding can hold.
-fn named_key(name: &str) -> Option<keyboard::key::Named> {
+/// A named key as the three sides of the shell see it: the name a chord spells
+/// it by, the key iced reports, and the key the terminal codec encodes.
+#[derive(Debug, Clone, Copy)]
+struct NamedKey {
+    name: &'static str,
+    key: keyboard::key::Named,
+    term: TermKey,
+}
+
+const fn named(name: &'static str, key: keyboard::key::Named, term: TermKey) -> NamedKey {
+    NamedKey { name, key, term }
+}
+
+/// The named keys a chord can spell and a terminal receives. The one table
+/// every direction reads, so a key nameable on a real press is nameable over
+/// MCP and the reverse, and a nameable key bound to nothing reaches the
+/// terminal. A named key missing here reaches neither.
+const NAMED_KEYS: &[NamedKey] = {
     use keyboard::key::Named;
-    match name {
-        "tab" => Some(Named::Tab),
-        "enter" => Some(Named::Enter),
-        "escape" => Some(Named::Escape),
-        "up" => Some(Named::ArrowUp),
-        "down" => Some(Named::ArrowDown),
-        "left" => Some(Named::ArrowLeft),
-        "right" => Some(Named::ArrowRight),
-        "home" => Some(Named::Home),
-        "end" => Some(Named::End),
-        _ => None,
-    }
+    &[
+        named("tab", Named::Tab, TermKey::Tab),
+        named("enter", Named::Enter, TermKey::Enter),
+        named("escape", Named::Escape, TermKey::Escape),
+        // Arrow keys carry chord names so bindings like `mod+up` (scroll) and
+        // `mod+shift+left` (pane focus) resolve, instead of leaking the raw
+        // cursor sequence to the shell.
+        named("up", Named::ArrowUp, TermKey::Up),
+        named("down", Named::ArrowDown, TermKey::Down),
+        named("left", Named::ArrowLeft, TermKey::Left),
+        named("right", Named::ArrowRight, TermKey::Right),
+        // Home / End name the scroll-to-top / bottom chords off macOS.
+        named("home", Named::Home, TermKey::Home),
+        named("end", Named::End, TermKey::End),
+        named("pageup", Named::PageUp, TermKey::PageUp),
+        named("pagedown", Named::PageDown, TermKey::PageDown),
+        named("insert", Named::Insert, TermKey::Insert),
+        named("delete", Named::Delete, TermKey::Delete),
+        named("backspace", Named::Backspace, TermKey::Backspace),
+        named("space", Named::Space, TermKey::Space),
+        named("f1", Named::F1, TermKey::F1),
+        named("f2", Named::F2, TermKey::F2),
+        named("f3", Named::F3, TermKey::F3),
+        named("f4", Named::F4, TermKey::F4),
+        named("f5", Named::F5, TermKey::F5),
+        named("f6", Named::F6, TermKey::F6),
+        named("f7", Named::F7, TermKey::F7),
+        named("f8", Named::F8, TermKey::F8),
+        named("f9", Named::F9, TermKey::F9),
+        named("f10", Named::F10, TermKey::F10),
+        named("f11", Named::F11, TermKey::F11),
+        named("f12", Named::F12, TermKey::F12),
+    ]
+};
+
+/// The table row for an iced named key, or `None` for a key outside it.
+fn row_of(key: keyboard::key::Named) -> Option<&'static NamedKey> {
+    NAMED_KEYS.iter().find(|row| row.key == key)
+}
+
+/// The named key a chord name spells, or `None` when it names a character.
+fn named_key(name: &str) -> Option<keyboard::key::Named> {
+    NAMED_KEYS
+        .iter()
+        .find_map(|row| (row.name == name).then_some(row.key))
 }
 
 /// A single-digit chord name as a number-row key: the character it types plus
@@ -174,29 +221,16 @@ fn physical_digit_name(physical: &keyboard::key::Physical) -> Option<String> {
     Some(digit.to_string())
 }
 
-/// The keymap name of an iced key: a lowercased character, or a handful of
-/// named keys that bindings use. `None` for keys no shortcut can target.
+/// The keymap name of an iced key: a lowercased character, or a named key from
+/// [`NAMED_KEYS`]. `None` for keys no shortcut can target.
 fn key_name(key: &keyboard::Key) -> Option<String> {
-    use keyboard::key::Named;
     match key {
         keyboard::Key::Character(c) => c
             .chars()
             .next()
             .map(|ch| ch.to_ascii_lowercase().to_string()),
-        keyboard::Key::Named(Named::Tab) => Some("tab".to_string()),
-        keyboard::Key::Named(Named::Enter) => Some("enter".to_string()),
-        keyboard::Key::Named(Named::Escape) => Some("escape".to_string()),
-        // Arrow keys carry chord names so bindings like `mod+up` (scroll) and
-        // `mod+shift+left` (pane focus) resolve — without this they fall through
-        // to the terminal, leaking the raw cursor sequence to the shell.
-        keyboard::Key::Named(Named::ArrowUp) => Some("up".to_string()),
-        keyboard::Key::Named(Named::ArrowDown) => Some("down".to_string()),
-        keyboard::Key::Named(Named::ArrowLeft) => Some("left".to_string()),
-        keyboard::Key::Named(Named::ArrowRight) => Some("right".to_string()),
-        // Home / End name the scroll-to-top / bottom chords off macOS.
-        keyboard::Key::Named(Named::Home) => Some("home".to_string()),
-        keyboard::Key::Named(Named::End) => Some("end".to_string()),
-        _ => None,
+        keyboard::Key::Named(named) => row_of(*named).map(|row| row.name.to_owned()),
+        keyboard::Key::Unidentified => None,
     }
 }
 
@@ -220,25 +254,10 @@ pub(super) fn numpad_char(location: keyboard::Location, text: Option<&str>) -> O
 /// (`termherd_pty::key_bytes`). `None` for keys with no terminal sequence, so
 /// they reach no PTY. The byte protocol itself lives in the terminal adapter.
 pub(super) fn to_term_key(key: &keyboard::Key) -> Option<TermKey> {
-    use keyboard::Key;
-    use keyboard::key::Named;
     match key {
-        Key::Character(c) => c.chars().next().map(TermKey::Char),
-        Key::Named(Named::Enter) => Some(TermKey::Enter),
-        Key::Named(Named::Tab) => Some(TermKey::Tab),
-        Key::Named(Named::Backspace) => Some(TermKey::Backspace),
-        Key::Named(Named::Escape) => Some(TermKey::Escape),
-        Key::Named(Named::Space) => Some(TermKey::Space),
-        Key::Named(Named::ArrowUp) => Some(TermKey::Up),
-        Key::Named(Named::ArrowDown) => Some(TermKey::Down),
-        Key::Named(Named::ArrowLeft) => Some(TermKey::Left),
-        Key::Named(Named::ArrowRight) => Some(TermKey::Right),
-        Key::Named(Named::Home) => Some(TermKey::Home),
-        Key::Named(Named::End) => Some(TermKey::End),
-        Key::Named(Named::Delete) => Some(TermKey::Delete),
-        Key::Named(Named::PageUp) => Some(TermKey::PageUp),
-        Key::Named(Named::PageDown) => Some(TermKey::PageDown),
-        _ => None,
+        keyboard::Key::Character(c) => c.chars().next().map(TermKey::Char),
+        keyboard::Key::Named(named) => row_of(*named).map(|row| row.term),
+        keyboard::Key::Unidentified => None,
     }
 }
 
@@ -386,8 +405,13 @@ mod tests {
             to_term_key(&Key::Named(Named::PageDown)),
             Some(TermKey::PageDown)
         );
+        assert_eq!(to_term_key(&Key::Named(Named::F2)), Some(TermKey::F2));
+        assert_eq!(
+            to_term_key(&Key::Named(Named::Insert)),
+            Some(TermKey::Insert)
+        );
         // Keys with no terminal sequence reach no PTY.
-        assert_eq!(to_term_key(&Key::Named(Named::F2)), None);
+        assert_eq!(to_term_key(&Key::Named(Named::CapsLock)), None);
         assert_eq!(to_term_key(&Key::Unidentified), None);
     }
 
@@ -487,9 +511,17 @@ mod tests {
             chord_of(&Key::Named(Named::ArrowUp), &NON_DIGIT, Modifiers::LOGO),
             Some(KeyChord::new("up", keymap::MOD_CMD))
         );
-        // Keys no shortcut targets carry no chord.
         assert_eq!(
             chord_of(&Key::Named(Named::F2), &NON_DIGIT, Modifiers::default()),
+            Some(KeyChord::new("f2", 0))
+        );
+        // Keys no shortcut targets carry no chord.
+        assert_eq!(
+            chord_of(
+                &Key::Named(Named::CapsLock),
+                &NON_DIGIT,
+                Modifiers::default()
+            ),
             None
         );
     }
@@ -618,11 +650,53 @@ mod tests {
     }
 
     #[test]
+    fn the_editing_and_function_keys_are_nameable() {
+        // Each of these has a terminal sequence, so a chord naming it must reach
+        // the keymap on a real press and be synthesisable over `press_keys`.
+        let names = [
+            "pageup",
+            "pagedown",
+            "delete",
+            "backspace",
+            "space",
+            "insert",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain((1..=12).map(|n| format!("f{n}")));
+        for name in names {
+            let chord = KeyChord::new(name.as_str(), 0);
+            assert_eq!(round_trip(&chord).as_ref(), Some(&chord), "`{name}`");
+        }
+    }
+
+    #[test]
+    fn every_named_key_round_trips() {
+        // Read from the table the code uses, so a row added later is covered.
+        for row in NAMED_KEYS {
+            let chord = KeyChord::new(row.name, keymap::MOD_SHIFT);
+            assert_eq!(round_trip(&chord).as_ref(), Some(&chord), "`{}`", row.name);
+        }
+    }
+
+    #[test]
+    fn no_two_rows_share_a_name_or_a_key() {
+        // Lookups take the first match, so a second row for the same name or
+        // key would be dead in one direction and live in the other.
+        for (i, row) in NAMED_KEYS.iter().enumerate() {
+            for other in &NAMED_KEYS[i + 1..] {
+                assert_ne!(row.name, other.name);
+                assert_ne!(row.key, other.key, "`{}` and `{}`", row.name, other.name);
+            }
+        }
+    }
+
+    #[test]
     fn a_chord_no_key_event_can_carry_synthesises_nothing() {
         // `key_name` never produces these, so no real press could resolve such a
         // binding either. Reporting nothing is the faithful answer; inventing an
         // event would give the MCP surface a reach the keyboard lacks.
-        for name in ["f2", "space", "pageup"] {
+        for name in ["f13", "capslock", "printscreen"] {
             assert_eq!(
                 event_of(&KeyChord::new(name, keymap::MOD_CMD)),
                 None,
@@ -671,10 +745,12 @@ mod tests {
         /// modifier set survives the round trip.
         #[test]
         fn arbitrary_nameable_chords_round_trip(
-            name in proptest::sample::select(vec![
-                "a", "z", "0", "5", "9", "-", "=", "+",
-                "tab", "enter", "escape", "up", "down", "left", "right", "home", "end",
-            ]),
+            name in proptest::sample::select(
+                ["a", "z", "0", "5", "9", "-", "=", "+"]
+                    .into_iter()
+                    .chain(NAMED_KEYS.iter().map(|row| row.name))
+                    .collect::<Vec<_>>()
+            ),
             mods in 0u8..16,
         ) {
             let chord = KeyChord::new(name, mods);

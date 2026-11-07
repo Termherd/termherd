@@ -661,7 +661,10 @@ impl TermherdMcp {
                        Chords use the same syntax as the `keys` section of \
                        settings.json — \"cmd+shift+s\", \"ctrl+tab\", \
                        \"escape\" — and resolve through the *live* keymap, so \
-                       this exercises whatever the user rebound. Args: `keys` \
+                       this exercises whatever the user rebound. A key is one \
+                       character or one of tab, enter, escape, space, \
+                       backspace, delete, insert, up, down, left, right, home, \
+                       end, pageup, pagedown, f1–f12. Args: `keys` \
                        (chords, applied in order). Returns one `steps` entry per \
                        chord — `ran` (with the action's name), `inert` (the \
                        action exists but has no surface yet, so nothing \
@@ -3497,7 +3500,7 @@ mod tests {
                         "cmd+w".into(),
                         "cmd+d".into(),
                         "x".into(),
-                        "f2".into(),
+                        "f13".into(),
                         "cmd+n".into(),
                         "cmd+shift+t".into(),
                     ],
@@ -3530,7 +3533,7 @@ mod tests {
                     { "press": "cmd+w", "result": "ran", "action": "close-focused" },
                     { "press": "cmd+d", "result": "overlay", "overlay": "tab-close-confirm" },
                     { "press": "x", "result": "typed" },
-                    { "press": "f2", "result": "unbound" },
+                    { "press": "f13", "result": "unbound" },
                     { "press": "cmd+n", "result": "inert",
                       "action": "open-new-session", "reason": "no-surface" },
                     { "press": "cmd+shift+t", "result": "inert",
