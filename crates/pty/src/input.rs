@@ -530,6 +530,7 @@ mod tests {
         // Ctrl+Space is NUL; the bracket family fills 0x1b–0x1d.
         assert_eq!(bytes(TermKey::Char(' '), CTRL, Some(" ")), Some(vec![0]));
         assert_eq!(bytes(TermKey::Char('['), CTRL, Some("[")), Some(vec![27]));
+        assert_eq!(bytes(TermKey::Char('\\'), CTRL, Some("\\")), Some(vec![28]));
         assert_eq!(bytes(TermKey::Char(']'), CTRL, Some("]")), Some(vec![29]));
     }
 
