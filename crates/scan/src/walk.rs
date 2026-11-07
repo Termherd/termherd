@@ -15,6 +15,7 @@ use termherd_core::ports::ScanError;
 
 use crate::cache::{CachedCwd, CachedDigest, ScanCache, file_sig};
 use crate::derive::{cached_cwd, derive_cwd, jsonl_files};
+use crate::entry::{is_dir, read_transcript};
 use crate::repo::sidebar_key;
 
 /// Result of walking a projects root: the derived session records, plus the
@@ -38,7 +39,7 @@ pub(crate) fn scan_root(root: &Path, cache: &mut ScanCache) -> Result<ScanOutcom
     let mut next = ScanCache::default();
     for folder in folders.flatten() {
         let dir = folder.path();
-        if !dir.is_dir() {
+        if !is_dir(&dir) {
             continue;
         }
         match scan_folder(&dir, cache, &mut next) {
@@ -89,9 +90,7 @@ fn scan_folder(dir: &Path, old: &ScanCache, next: &mut ScanCache) -> Option<Vec<
         let sig = file_sig(&path);
         let digest = match (sig, old.digests.get(&path)) {
             (Some(sig), Some(hit)) if hit.sig == sig => hit.digest.clone(),
-            _ => fs::read_to_string(&path)
-                .ok()
-                .and_then(|c| digest_session(&c)),
+            _ => read_transcript(&path).and_then(|c| digest_session(&c)),
         };
         if let Some(sig) = sig {
             next.digests.insert(
