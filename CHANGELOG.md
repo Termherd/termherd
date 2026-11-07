@@ -7,6 +7,25 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (the session scan stays inside `~/.claude/projects`)
+
+- The sidebar's scan no longer follows a symlink under `~/.claude/projects`,
+  so a link there can no longer surface another file's content in the sidebar
+  and search. A transcript over 256 MiB is read as its first and last 128 MiB
+  instead of whole, and titles, slugs, version, model and effort are cut to
+  120 characters (#290).
+
+### Fixed (zoom in with Cmd/Ctrl + Shift + `+`)
+
+- <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> (<kbd>Ctrl</kbd> off macOS)
+  zooms in on QWERTY and AZERTY. It used to reach the terminal, and Claude
+  Code's prompt with it: a press names its key before Shift, so it arrived as
+  `mod+shift+=`, which nothing bound. Zoom-in now binds `mod+=`,
+  `mod+shift+=` and `mod+plus` (the keypad `+`). The never-matching
+  `mod+shift+plus` default is gone, and so is `alt+shift+plus` from
+  `split-vertical`, which keeps `alt+shift+=`. A `settings.json` override
+  spelling `shift+plus` for the main-row key should write `shift+=` (#370).
+
 ### Added (more keys in chords and in the terminal)
 
 - Chords can name `pageup`, `pagedown`, `insert`, `delete`, `backspace`,
@@ -15,6 +34,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - F1 to F12 and Insert reach the terminal with their xterm sequences: htop's
   F10, mc's function-key bar and vim mappings receive them. They used to
   send nothing (#321).
+
+### Fixed (double-click selection of a path or URL)
+
+- A double-click on a path or URL selects what a link click opens: a
+  sentence's closing `.` and a compiler's trailing `:` are left out, a `:42`
+  suffix is kept, a URL's `?query` is included and an OSC 8 label selects
+  whole. It used to take the raw run of path characters (#442).
 
 ### Fixed (Ctrl+Space in the terminal)
 
@@ -40,8 +66,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added (termherd:// links in the terminal)
 
 - A `termherd://` URL in terminal output is a link: Cmd/Ctrl+hover underlines
-  it, Cmd/Ctrl+click hands it to the OS. termherd does not handle the scheme
-  yet (#446).
+  it, Cmd/Ctrl+click hands it to the OS.
+
+### Added (opening a tab from a termherd:// link)
+
+- `termherd://open?repo=<absolute path>` shows the tab working in that repo,
+  or opens a shell there. A link never types into a session nor starts
+  Claude, and anything else is refused. The macOS `.app`, the `.deb` and the
+  Windows installer register the scheme; a link reaching a second launch is
+  handed to the running instance (#446). A release from before this one, still
+  running, never reads the hand-over: quit it first.
 
 ### Changed (a second instance on Windows and Linux)
 

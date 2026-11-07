@@ -212,7 +212,34 @@ and dragging a parked tab before it unparks it. New tabs open before the
 parked ones, and a closed parked tab reopens unparked. The tab menu offers
 *Park tab* on unparked tabs only.
 
-## Splits
+### Opening a tab from a link
+
+A page can link straight into termherd: a README, a dashboard, a report
+listing repos. The link names a repo by its absolute path, percent-encoded:
+
+```text
+termherd://open?repo=/Users/me/work/my%20repo
+termherd://open?repo=C:%5CUsers%5Cme%5Cwork
+```
+
+termherd shows the tab already working in that repo: a pane whose current
+directory is the repo or a folder inside it. That pane takes the focus, and a
+parked tab is unparked. When no pane works there, termherd opens a shell in the
+repo, in front. A link never types into a session and never starts Claude: it
+only shows a tab or opens a shell. Anything else is refused whole and opens
+nothing: another action, another parameter, a relative path, a network share
+(`//host/share`), a path with a control character. When termherd is not
+running, the link starts it.
+
+A shell is still a shell: opening one runs your shell's startup files and
+prompt in that directory, as `cd` would. A prompt that runs `git status` reads
+the repo's own git configuration, so follow a link into a repo only when you
+would `cd` into it. Each link opens at most one shell, but nothing limits how
+many links a page sends.
+
+The installers register the scheme: the macOS `.app`, the `.deb`, and the
+Windows installer. The AppImage installs nothing, so it registers nothing, and
+neither does a build run with `cargo run`.
 
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |

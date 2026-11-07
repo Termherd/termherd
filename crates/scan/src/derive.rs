@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use termherd_claude::derive::extract_cwd;
 
 use crate::cache::{ScanCache, file_sig};
+use crate::entry::{is_dir, is_file, read_transcript};
 
 /// The folder's previously derived cwd, if the transcript it came from still
 /// carries the same signature.
@@ -23,7 +24,7 @@ pub(crate) fn cached_cwd(dir: &Path, cache: &ScanCache) -> Option<(PathBuf, Stri
 pub(crate) fn derive_cwd(dir: &Path, direct_jsonls: &[PathBuf]) -> Option<(PathBuf, String)> {
     direct_jsonls
         .iter()
-        .find_map(|p| Some((p.clone(), extract_cwd(&fs::read_to_string(p).ok()?)?)))
+        .find_map(|p| Some((p.clone(), extract_cwd(&read_transcript(p)?)?)))
         .or_else(|| subdir_cwd(dir))
 }
 
@@ -35,7 +36,7 @@ pub(crate) fn jsonl_files(dir: &Path) -> Vec<PathBuf> {
     entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.is_file() && p.extension().is_some_and(|e| e == "jsonl"))
+        .filter(|p| is_file(p) && p.extension().is_some_and(|e| e == "jsonl"))
         .collect()
 }
 
@@ -46,13 +47,13 @@ fn subdir_cwd(dir: &Path) -> Option<(PathBuf, String)> {
     let entries = fs::read_dir(dir).ok()?;
     for entry in entries.flatten() {
         let sub = entry.path();
-        if !sub.is_dir() {
+        if !is_dir(&sub) {
             continue;
         }
         let mut candidates = jsonl_files(&sub);
         candidates.extend(jsonl_files(&sub.join("subagents")).into_iter().take(1));
         for candidate in candidates {
-            if let Ok(content) = fs::read_to_string(&candidate)
+            if let Some(content) = read_transcript(&candidate)
                 && let Some(cwd) = extract_cwd(&content)
             {
                 return Some((candidate, cwd));
