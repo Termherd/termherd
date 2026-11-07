@@ -35,6 +35,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   F10, mc's function-key bar and vim mappings receive them. They used to
   send nothing (#321).
 
+### Fixed (double-click selection of a path or URL)
+
+- A double-click on a path or URL selects what a link click opens: a
+  sentence's closing `.` and a compiler's trailing `:` are left out, a `:42`
+  suffix is kept, a URL's `?query` is included and an OSC 8 label selects
+  whole. It used to take the raw run of path characters (#442).
+
 ### Fixed (Ctrl+Space in the terminal)
 
 - Ctrl+Space sends NUL, which Emacs reads as set-mark and zsh's
