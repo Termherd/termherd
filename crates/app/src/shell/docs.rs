@@ -67,6 +67,19 @@ impl OpenDoc {
             feedback: None,
         }
     }
+
+    fn record_save(&mut self, result: Result<SystemTime, crate::docs::SaveError>) {
+        match result {
+            Ok(new_mtime) => {
+                self.loaded_mtime = Some(new_mtime);
+                self.dirty = false;
+                self.feedback = Some(DocFeedback::Saved);
+            }
+            Err(error) => {
+                self.feedback = Some(DocFeedback::Error(error.to_string()));
+            }
+        }
+    }
 }
 
 /// The outcome of the last save attempt, surfaced in the editor header.
@@ -143,16 +156,7 @@ impl Shell {
         result: Result<SystemTime, crate::docs::SaveError>,
     ) -> Task<Message> {
         if let Some(doc) = &mut self.open_doc {
-            match result {
-                Ok(new_mtime) => {
-                    doc.loaded_mtime = Some(new_mtime);
-                    doc.dirty = false;
-                    doc.feedback = Some(DocFeedback::Saved);
-                }
-                Err(error) => {
-                    doc.feedback = Some(DocFeedback::Error(error.to_string()));
-                }
-            }
+            doc.record_save(result);
         }
         Task::none()
     }
