@@ -347,9 +347,6 @@ struct Shell {
     /// the slot the pointer is currently over. `None` when no drag is active.
     /// Transient pointer state only — the tab order itself lives in `core`.
     tab_drag: Option<TabDrag>,
-    /// Set by [`Self::settle_after_tab_switch`] within one message, so
-    /// [`Self::update`] settles a tab switch once, and only one no handler did.
-    tab_switch_settled: bool,
     split_drag: Option<SplitDrag>,
     cursor_position: Point,
     /// Set once the quit path has asked the iced runtime to terminate.
@@ -375,7 +372,6 @@ struct TabDrag {
 /// first pane, so the index can be found again once `core` reorders the strip:
 /// parking, unparking and opening before the parked group all shift tabs.
 struct TabAnchors {
-    shown: Option<SessionId>,
     closing: Option<(usize, SessionId)>,
     drag: Option<(TabDrag, SessionId, SessionId)>,
     split: Option<(usize, SessionId)>,
@@ -386,7 +382,6 @@ impl TabAnchors {
         let workspace = &shell.core.workspace;
         let session_at = |index: usize| workspace.tabs.get(index).map(Tab::first_session);
         Self {
-            shown: session_at(workspace.active),
             closing: shell
                 .closing
                 .and_then(|index| Some((index, session_at(index)?))),
@@ -423,18 +418,6 @@ impl TabAnchors {
         {
             drag.tab = now;
         }
-    }
-
-    /// Whether the message changed which tab is shown.
-    fn shown_changed(&self, shell: &Shell) -> bool {
-        let workspace = &shell.core.workspace;
-        let still_shown = |session| {
-            workspace
-                .tabs
-                .get(workspace.active)
-                .is_some_and(|tab| tab.hosts(session))
-        };
-        self.shown.is_some_and(|session| !still_shown(session))
     }
 }
 
@@ -930,7 +913,6 @@ impl Shell {
             alt_sides: AltSides::default(),
             option_as_meta: OptionAsMeta::default(),
             tab_drag: None,
-            tab_switch_settled: false,
             split_drag: None,
             cursor_position: Point::new(0.0, 0.0),
             exiting: false,
@@ -1002,20 +984,12 @@ impl Shell {
 
     /// The iced `update`: every message goes through [`Self::dispatch`]. The
     /// tab indices the shell holds then follow their tabs through any reorder
-    /// the message caused, and a change of the shown tab no handler settled is
-    /// settled here: a drag that parks it, or attention that unparks another
-    /// while every tab is parked.
+    /// the message caused.
     fn update(&mut self, message: Message) -> Task<Message> {
         let anchors = TabAnchors::of(self);
-        self.tab_switch_settled = false;
         let task = self.dispatch(message);
-        let settle = if anchors.shown_changed(self) && !self.tab_switch_settled {
-            self.settle_after_tab_switch()
-        } else {
-            Task::none()
-        };
         anchors.follow(self);
-        Task::batch([task, settle])
+        task
     }
 
     // A flat `match` over every `Message` variant — the app's central event

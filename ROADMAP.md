@@ -1835,9 +1835,9 @@ the tab menu, and `parked` on the snapshot. Attention unparks without taking
 the focus; a drag takes the zone it lands in.
 
 Deferred to a later tidy-first (#454): shell tab state stored by session rather
-than as an index re-anchored after each message, a `core` effect for a
-change of the shown tab, and one drop-zone rule shared by the strip view and
-`Workspace::move_tab`.
+than as an index re-anchored after each message, and one drop-zone rule shared
+by the strip view and `Workspace::move_tab`. The third slice is done (#446):
+`core` reports a change of the shown tab as `Effect::TabShown`.
 
 <a id="f-tab-title-sync"></a>
 

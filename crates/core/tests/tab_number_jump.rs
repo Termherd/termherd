@@ -17,7 +17,10 @@ fn launch(app: &mut App, title: &str) {
         placement: Placement::Foreground,
     }));
     assert!(
-        matches!(effects.as_slice(), [Effect::Spawn(_)]),
+        matches!(
+            effects.as_slice(),
+            [Effect::Spawn(_)] | [Effect::Spawn(_), Effect::TabShown]
+        ),
         "launching a session should request a spawn",
     );
 }

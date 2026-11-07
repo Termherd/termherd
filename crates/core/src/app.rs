@@ -164,10 +164,22 @@ impl App {
     }
 
     /// Apply an event, returning the effects the runtime must carry out.
-    /// **Pure**: no I/O, no clock, no panic. A flat dispatcher: each arm is a
-    /// one-line delegate to a domain helper, or an inline field update that
-    /// yields no effect.
+    /// **Pure**: no I/O, no clock, no panic. Ends with [`Effect::TabShown`]
+    /// when the tab shown before no longer is, whichever event moved it, and
+    /// on every tab gesture, which settles the view even on the tab it shows.
     pub fn apply(&mut self, event: Event) -> Vec<Effect> {
+        let shown = self.workspace.shown_session();
+        let gesture = matches!(event, Event::ActivateTab(_) | Event::ToggleParkTab(_));
+        let mut effects = self.dispatch(event);
+        if gesture || shown.is_some_and(|session| !self.workspace.shows(session)) {
+            effects.push(Effect::TabShown);
+        }
+        effects
+    }
+
+    /// A flat dispatcher: each arm is a one-line delegate to a domain helper,
+    /// or an inline field update that yields no effect.
+    fn dispatch(&mut self, event: Event) -> Vec<Effect> {
         match event {
             Event::ScanCompleted(records) => {
                 self.sidebar.projects = group_projects(records);
@@ -360,7 +372,6 @@ mod tests {
             Event::Zoom(Zoom::In),
             Event::ToggleExpanded("/p".into()),
             Event::ShowArchivedToggled(true),
-            Event::ActivateTab(0),
             Event::MoveTab { from: 0, to: 0 },
             Event::WindowFocusChanged(false),
             Event::StatusChanged {
@@ -387,5 +398,40 @@ mod tests {
                 "{label} must stay effect-free (the shell routes it through perform)"
             );
         }
+    }
+
+    fn shows_another_tab(effects: &[Effect]) -> bool {
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::TabShown))
+    }
+
+    #[test]
+    fn a_tab_gesture_reports_a_tab_shown_even_on_the_tab_already_shown() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        assert!(shows_another_tab(&app.apply(Event::ActivateTab(0))));
+        assert!(shows_another_tab(&app.apply(Event::ActivateTab(9))));
+        assert!(shows_another_tab(&app.apply(Event::ToggleParkTab(0))));
+    }
+
+    #[test]
+    fn any_event_that_moves_the_shown_tab_reports_it() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        launch(&mut app, "b");
+        launch(&mut app, "c");
+        app.apply(Event::ToggleParkTab(0));
+        // [b c | a], c shown: dragging c into the parked zone shows b.
+        let effects = app.apply(Event::MoveTab { from: 1, to: 2 });
+        assert!(shows_another_tab(&effects));
+    }
+
+    #[test]
+    fn an_event_that_leaves_the_shown_tab_reports_nothing() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        let effects = app.apply(Event::MoveTab { from: 0, to: 0 });
+        assert!(!shows_another_tab(&effects));
     }
 }
