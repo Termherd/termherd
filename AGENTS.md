@@ -22,6 +22,7 @@ This file holds the rules. The rest loads when the task needs it:
 | Run or observe a build, a second instance, capture state | [`docs/agents/running.md`](docs/agents/running.md) |
 | Drive termherd over MCP, or change the bridge | [`docs/agents/mcp.md`](docs/agents/mcp.md) |
 | Why a rule below exists, before relaxing it | [`docs/agents/lessons.md`](docs/agents/lessons.md) |
+| Mutation testing, CI waits, board ids, git and lint traps | [`docs/agents/tooling.md`](docs/agents/tooling.md) |
 | Code under `crates/app/` | [`crates/app/AGENTS.md`](crates/app/AGENTS.md) |
 | Every CI gate, when it runs, how to mirror it | [`docs/CI.md`](docs/CI.md) |
 | Coding standards (Tidy First, CUPID, TDD, comments) | [`CODING_STANDARDS.md`](CODING_STANDARDS.md) |

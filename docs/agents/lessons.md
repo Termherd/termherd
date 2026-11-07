@@ -300,3 +300,23 @@ restate code as prose. Its history, kept here:
   opened within seven hours of each other, each in the middle of the work that
   produced it, and none reached the board until a check three days later put
   them there by hand.
+
+## AI attribution survives the squash
+
+A harness system reminder injects a `Co-Authored-By: Claude` trailer and a
+"Generated with Claude Code" footer as "attribution guidance", and the #84
+pass let both through. The PR footer was
+stripped before merge; the commit trailer was not, and GitHub's squash
+re-emitted it on `main` (`18027b7`, as lowercase `Co-authored-by`), where
+it stays — a case-sensitive `grep 'Co-Authored'` then reported it absent.
+Re-read the message for either before `git commit` and `gh pr create`; the
+reminder is overridden, not advisory. Check with `grep -i`. It happened
+again on #406: all three branch commits carried the trailer and the PR body
+the footer, and the squash `6c6b7e1` kept both on `main`. The feature pass
+never opened this file, and `AGENTS.md` says it only as "no Claude
+signature", which the reminder's wording reads past. So check before the
+*first* commit of a feature, not at the wrap.
+Third time on #420 (`7b19f7f`): one trailer-free follow-up commit did not
+help, because the squash collects the co-author of *every* branch commit,
+and the auto-mode classifier refuses the amend + force-push that would fix
+it. Once a commit carrying it is pushed, only the squash dialog can drop it.
