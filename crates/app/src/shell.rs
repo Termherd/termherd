@@ -3376,6 +3376,44 @@ mod key_routing {
     }
 
     #[test]
+    fn toggle_park_tab_parks_the_active_tab_and_focuses_an_unparked_one() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let second = shell.core.workspace.tabs[1].first_session();
+
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::TogglePark)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("toggle-park-tab".to_owned())]
+        );
+        let workspace = &shell.core.workspace;
+        assert!(workspace.tabs[1].is_parked());
+        assert_eq!(workspace.tabs[1].first_session(), second);
+        assert_eq!(
+            workspace.focused_session().map(|s| s.0.get()),
+            Some(first),
+            "the unparked tab takes over"
+        );
+    }
+
+    #[test]
+    fn a_user_bound_chord_parks_the_tab_through_the_live_keymap() {
+        let (mut shell, _pty, _first) = shell_with_two_tabs();
+        let chord = "ctrl+alt+shift+p";
+        let mut keymap = Keymap::defaults();
+        keymap.set(
+            Action::TogglePark,
+            [KeyChord::parse(chord).expect("a test chord parses")],
+        );
+        shell.keymap = keymap;
+
+        assert_eq!(
+            press_chord(&mut shell, chord),
+            PressStep::Ran("toggle-park-tab".to_owned())
+        );
+        assert!(shell.core.workspace.tabs[1].is_parked());
+    }
+
+    #[test]
     fn a_named_action_runs_without_going_through_the_keymap() {
         // The behaviour half: `run_action` names the action directly, so it
         // keeps working after a rebind that would break the chord.
@@ -3469,6 +3507,8 @@ mod key_routing {
             (Action::SendToDesktop, "send-to-desktop"),
             // No tab, so nothing to colour.
             (Action::PickTabColor, "pick-tab-color"),
+            // No tab, so nothing to park.
+            (Action::TogglePark, "toggle-park-tab"),
         ] {
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
@@ -8152,6 +8192,20 @@ mod key_routing {
             write_session_file(dir.path(), 4399, "termherd-b0");
             let _ = shell.update(Message::OpenTabMenu(0));
             assert!(offered(&shell), "a named Claude in front of a shell pane");
+        }
+
+        #[test]
+        fn park_tab_is_offered_on_every_tab_and_parks_the_tab_the_menu_opened_on() {
+            assert!(entries(NOTHING).any(|entry| entry.action == Action::TogglePark));
+            let mut shell = shell_with_three_tabs();
+            let anchor = shell.core.workspace.tabs[0].first_session();
+
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let at = position_of(&shell, Action::TogglePark);
+            let _ = shell.update(Message::RunTabMenuEntry(at));
+
+            let index = shell.core.workspace.tab_of(anchor).expect("still open");
+            assert!(shell.core.workspace.tabs[index].is_parked());
         }
 
         const NOTHING: Offers = Offers {

@@ -109,6 +109,9 @@ pub struct Tab {
     pub color: Option<ClaudeColor>,
     /// Every source [`Self::title`] is resolved from.
     titles: TabTitles,
+    /// Out of the tab cycle, at the strip's end. Private: [`Workspace`] keeps
+    /// every parked tab after every unparked one.
+    parked: bool,
 }
 
 /// The sources a tab's derived title is resolved from, each kept apart so a
@@ -134,7 +137,15 @@ impl Tab {
                 launch: title,
                 ..TabTitles::default()
             },
+            parked: false,
         }
+    }
+
+    /// Whether the tab is parked: shown as a compact chip after the unparked
+    /// tabs, and skipped by the tab cycle. Its sessions keep running.
+    #[must_use]
+    pub fn is_parked(&self) -> bool {
+        self.parked
     }
 
     /// Every session hosted by this tab, in left-to-right pane order. A tab
@@ -233,17 +244,23 @@ impl Workspace {
         self.active = self.append(session, title);
     }
 
-    /// Open a session as a new tab at the end of the strip without activating
-    /// it, returning its index. Into an empty workspace the new tab is the only
-    /// one, so it is active all the same.
+    /// Open a session as a new tab after the unparked tabs without activating
+    /// it, returning its index. When no other tab is unparked, the new tab is
+    /// active all the same.
     pub fn append(&mut self, session: SessionId, title: impl Into<String>) -> usize {
         self.insert_tab(Tab::new(session, title.into()))
     }
 
-    /// Place a new tab in the strip, returning its index.
+    /// Place a new unparked tab before the parked group, returning its index.
     fn insert_tab(&mut self, tab: Tab) -> usize {
-        self.tabs.push(tab);
-        self.tabs.len() - 1
+        let at = self.first_parked();
+        self.tabs.insert(at, tab);
+        // An active index at or past `at` named a parked tab, which only holds
+        // while every tab is parked: the new tab takes over.
+        if self.active >= at {
+            self.active = at;
+        }
+        at
     }
 
     /// Index of the tab hosting `session`, if any. A session lives in exactly
@@ -342,32 +359,100 @@ impl Workspace {
             .map(Tab::display_title)
     }
 
-    /// Make the tab at `index` active (FR5). Returns `None` if the index is
-    /// out of range, leaving the active tab unchanged.
-    pub fn activate(&mut self, index: usize) -> Option<()> {
-        if index < self.tabs.len() {
-            self.active = index;
-            Some(())
-        } else {
-            None
+    /// Index of the first parked tab: the number of unparked tabs, since every
+    /// parked tab sits after them. The strip's length when none is parked.
+    #[must_use]
+    pub fn first_parked(&self) -> usize {
+        self.tabs
+            .iter()
+            .position(Tab::is_parked)
+            .unwrap_or(self.tabs.len())
+    }
+
+    /// Park the unparked tab at `index`: it moves to the front of the parked
+    /// group. When it was active, the active tab becomes the unparked one that
+    /// slides into its slot, else the new last unparked tab; with none left it
+    /// stays active. `None`, changing nothing, for a parked or missing tab.
+    pub fn park(&mut self, index: usize) -> Option<()> {
+        if self.tabs.get(index)?.parked {
+            return None;
         }
+        let front_of_parked = self.first_parked() - 1;
+        self.relocate(index, front_of_parked, true);
+        Some(())
+    }
+
+    /// Unpark the parked tab at `index`: it moves to the end of the unparked
+    /// group, returning its new index. The active tab stays the same tab.
+    /// `None`, changing nothing, for an unparked or missing tab.
+    pub fn unpark(&mut self, index: usize) -> Option<usize> {
+        if !self.tabs.get(index)?.parked {
+            return None;
+        }
+        let end_of_unparked = self.first_parked();
+        self.relocate(index, end_of_unparked, false);
+        Some(end_of_unparked)
+    }
+
+    /// Make the tab at `index` active (FR5), unparking it first when it is
+    /// parked. Returns `None` if the index is out of range, leaving the active
+    /// tab unchanged.
+    pub fn activate(&mut self, index: usize) -> Option<()> {
+        let tab = self.tabs.get(index)?;
+        self.active = if tab.parked {
+            self.unpark(index)?
+        } else {
+            index
+        };
+        Some(())
     }
 
     /// Move the tab at `from` so it lands at index `to` (FR5 drag-reorder),
-    /// shifting the tabs in between. The active tab is kept pointing at
-    /// the *same* tab, whether it was the moved one or merely shifted by it.
-    /// Returns `None` (no change) if either index is out of range; `from == to`
-    /// is a successful no-op.
+    /// shifting the tabs in between. The tab takes the zone it lands in, parked
+    /// or not; landing on the boundary keeps its own. The active tab is kept
+    /// pointing at the *same* tab, whether it was the moved one or merely
+    /// shifted by it, unless the move parked it. Returns `None` (no change) if
+    /// either index is out of range; `from == to` is a successful no-op.
     pub fn move_tab(&mut self, from: usize, to: usize) -> Option<()> {
         if from >= self.tabs.len() || to >= self.tabs.len() {
             return None;
         }
         if from != to {
-            let tab = self.tabs.remove(from);
-            self.tabs.insert(to, tab);
-            self.active = shift_index(self.active, from, to);
+            let was_parked = self.tabs[from].parked;
+            let unparked_besides = self.first_parked() - usize::from(!was_parked);
+            let parked = match to.cmp(&unparked_besides) {
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Equal => was_parked,
+                std::cmp::Ordering::Greater => true,
+            };
+            self.relocate(from, to, parked);
         }
         Some(())
+    }
+
+    /// Move the tab at `from` to index `to` of the resulting strip with
+    /// `parked` as its state. The callers pick a `to` that keeps every parked
+    /// tab after every unparked one. The active index follows its tab, unless
+    /// that tab is now parked while unparked tabs remain: then the unparked tab
+    /// in the slot it left takes over, else the last unparked one.
+    fn relocate(&mut self, from: usize, to: usize, parked: bool) {
+        let mut tab = self.tabs.remove(from);
+        tab.parked = parked;
+        self.tabs.insert(to, tab);
+        self.active = shift_index(self.active, from, to);
+        if self.tabs[self.active].parked && self.first_parked() > 0 {
+            self.active = self.unparked_fallback(from);
+        }
+    }
+
+    /// The unparked tab nearest `slot`: the one at it, else the last unparked
+    /// one. The last tab when every tab is parked.
+    fn unparked_fallback(&self, slot: usize) -> usize {
+        let unparked = match self.first_parked() {
+            0 => self.tabs.len(),
+            count => count,
+        };
+        slot.min(unparked.saturating_sub(1))
     }
 
     /// Close the tab at `index` (FR5), returning the sessions it hosted so the
@@ -385,11 +470,9 @@ impl Workspace {
     }
 
     /// The active index once the tab at `removed` has left the strip: the same
-    /// tab when it survives, else the one that slid into its slot, else the new
-    /// last tab.
+    /// tab when it survives, else the unparked tab nearest its slot.
     fn active_after_removing(&self, removed: usize) -> usize {
-        index_after_removal(self.active, removed)
-            .unwrap_or_else(|| removed.min(self.tabs.len().saturating_sub(1)))
+        index_after_removal(self.active, removed).unwrap_or_else(|| self.unparked_fallback(removed))
     }
 
     /// Session id of the focused pane in the active tab, if any.
@@ -488,12 +571,12 @@ impl Workspace {
     /// its tab first, then focusing the leaf. The counterpart of
     /// [`Workspace::focus_pane_of`], which only reaches the *active* tab because
     /// a click cannot land anywhere else; a caller addressing a pane by handle
-    /// can. Returns `None` — leaving both the active tab and the focus untouched
-    /// — when no tab hosts it.
+    /// can. A parked tab is unparked. Returns `None` — leaving both the active
+    /// tab and the focus untouched — when no tab hosts it.
     pub fn reveal_pane_of(&mut self, session: SessionId) -> Option<()> {
         let index = self.tab_of(session)?;
         let previous = self.active;
-        self.active = index;
+        self.activate(index)?;
         // Restore the previous tab if the leaf turns out to be unreachable, so a
         // failed reveal changes nothing at all.
         self.focus_pane_of(session).or_else(|| {
@@ -524,12 +607,13 @@ impl Workspace {
         Some(())
     }
 
-    /// The active-tab index one `step` away, wrapping around both ends
-    /// (FR9 `NextTab` / `PrevTab`). `None` when there are no tabs, so the caller
-    /// no-ops rather than switching to a tab that isn't there.
+    /// The active-tab index one `step` away among the unparked tabs, wrapping
+    /// around both ends (FR9 `NextTab` / `PrevTab`). `None` when no tab is
+    /// unparked, so the caller no-ops rather than switching to a tab that isn't
+    /// in the cycle.
     #[must_use]
     pub fn cycled_tab(&self, step: Step) -> Option<usize> {
-        step.index_after(self.active, self.tabs.len())
+        step.index_after(self.active, self.first_parked())
     }
 }
 
@@ -1328,6 +1412,308 @@ mod tests {
                 proptest::prop_assert_eq!(ws.tabs[ws.active].sessions()[0], active_before);
             } else {
                 proptest::prop_assert_eq!(result, None);
+            }
+        }
+    }
+
+    mod park {
+        use proptest::collection::vec;
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// `unparked` then `parked` single-session tabs, ids 1.. in strip
+        /// order, active on the last unparked tab, or on the last tab when
+        /// every one is parked.
+        fn strip(unparked: usize, parked: usize) -> Workspace {
+            let mut ws = workspace_with_tabs(unparked + parked);
+            for tab in &mut ws.tabs[unparked..] {
+                tab.parked = true;
+            }
+            ws.active = unparked
+                .checked_sub(1)
+                .unwrap_or(ws.tabs.len().saturating_sub(1));
+            ws
+        }
+
+        fn parked_ids(ws: &Workspace) -> Vec<SessionId> {
+            ws.tabs
+                .iter()
+                .filter(|tab| tab.is_parked())
+                .map(Tab::first_session)
+                .collect()
+        }
+
+        fn active_id(ws: &Workspace) -> SessionId {
+            ws.tabs[ws.active].first_session()
+        }
+
+        /// The ordering rules every mutator keeps: parked tabs form the strip's
+        /// tail, `active` names a tab, and that tab is parked only when every
+        /// tab is.
+        fn strip_rules_hold(ws: &Workspace) -> Result<(), String> {
+            let boundary = ws.first_parked();
+            if ws.tabs[boundary..].iter().any(|tab| !tab.is_parked()) {
+                return Err(format!("an unparked tab sits after index {boundary}"));
+            }
+            if ws.tabs.is_empty() {
+                return Ok(());
+            }
+            if ws.active >= ws.tabs.len() {
+                return Err(format!("active {} is out of range", ws.active));
+            }
+            if ws.tabs[ws.active].is_parked() && boundary > 0 {
+                return Err("the active tab is parked while unparked tabs remain".into());
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn parking_moves_a_tab_to_the_front_of_the_parked_group() {
+            let mut ws = strip(3, 1);
+            assert_eq!(ws.park(0), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(2), sid(3), sid(1), sid(4)]);
+            assert_eq!(parked_ids(&ws), vec![sid(1), sid(4)]);
+            assert_eq!(ws.first_parked(), 2);
+            assert_eq!(
+                active_id(&ws),
+                sid(3),
+                "parking another tab keeps the active one"
+            );
+        }
+
+        #[test]
+        fn parking_the_active_tab_activates_the_unparked_tab_sliding_into_its_slot() {
+            let mut ws = strip(3, 0);
+            ws.activate(1);
+            assert_eq!(ws.park(1), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(3), sid(2)]);
+            assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[test]
+        fn parking_the_last_unparked_active_tab_activates_the_new_last_unparked() {
+            let mut ws = strip(3, 1);
+            assert_eq!(ws.park(2), Some(()));
+            assert_eq!(parked_ids(&ws), vec![sid(3), sid(4)]);
+            assert_eq!(active_id(&ws), sid(2));
+        }
+
+        #[test]
+        fn parking_the_only_unparked_tab_keeps_it_active() {
+            let mut ws = strip(1, 1);
+            assert_eq!(ws.park(0), Some(()));
+            assert_eq!(parked_ids(&ws), vec![sid(1), sid(2)]);
+            assert_eq!(ws.first_parked(), 0);
+            assert_eq!(active_id(&ws), sid(1));
+        }
+
+        #[test]
+        fn park_refuses_a_parked_or_missing_tab() {
+            let mut ws = strip(2, 1);
+            assert_eq!(ws.park(2), None);
+            assert_eq!(ws.park(9), None);
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(3)]);
+            assert_eq!(parked_ids(&ws), vec![sid(3)]);
+            assert_eq!(active_id(&ws), sid(2));
+        }
+
+        #[test]
+        fn unparking_moves_a_tab_to_the_end_of_the_unparked_group() {
+            let mut ws = strip(2, 2);
+            assert_eq!(ws.unpark(3), Some(2));
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(4), sid(3)]);
+            assert_eq!(parked_ids(&ws), vec![sid(3)]);
+            assert_eq!(active_id(&ws), sid(2), "unparking does not activate");
+        }
+
+        #[test]
+        fn unpark_refuses_an_unparked_or_missing_tab() {
+            let mut ws = strip(2, 1);
+            assert_eq!(ws.unpark(0), None);
+            assert_eq!(ws.unpark(9), None);
+            assert_eq!(parked_ids(&ws), vec![sid(3)]);
+        }
+
+        #[test]
+        fn activating_a_parked_tab_unparks_it() {
+            let mut ws = strip(2, 2);
+            assert_eq!(ws.activate(3), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(4), sid(3)]);
+            assert_eq!(parked_ids(&ws), vec![sid(3)]);
+            assert_eq!(active_id(&ws), sid(4));
+        }
+
+        #[test]
+        fn new_tabs_open_before_the_parked_group() {
+            let mut ws = strip(2, 1);
+            ws.open(sid(9), "nine");
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(9), sid(3)]);
+            assert_eq!(active_id(&ws), sid(9));
+            assert_eq!(ws.append(sid(8), "eight"), 3);
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(9), sid(8), sid(3)]);
+            assert_eq!(active_id(&ws), sid(9));
+            assert_eq!(parked_ids(&ws), vec![sid(3)]);
+        }
+
+        #[test]
+        fn closing_the_active_tab_never_falls_back_onto_a_parked_tab() {
+            let mut ws = strip(2, 1);
+            assert_eq!(ws.close_tab(1), vec![sid(2)]);
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(3)]);
+            assert_eq!(active_id(&ws), sid(1));
+        }
+
+        #[test]
+        fn the_tab_cycle_skips_parked_tabs() {
+            let ws = strip(3, 2);
+            assert_eq!(ws.cycled_tab(Step::Next), Some(0));
+            assert_eq!(ws.cycled_tab(Step::Prev), Some(1));
+        }
+
+        #[test]
+        fn the_tab_cycle_has_nowhere_to_go_when_every_tab_is_parked() {
+            let ws = strip(0, 2);
+            assert_eq!(ws.cycled_tab(Step::Next), None);
+            assert_eq!(ws.cycled_tab(Step::Prev), None);
+        }
+
+        #[test]
+        fn revealing_a_pane_in_a_parked_tab_unparks_it() {
+            let mut ws = strip(2, 1);
+            assert_eq!(ws.reveal_pane_of(sid(3)), Some(()));
+            assert_eq!(parked_ids(&ws), vec![]);
+            assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[test]
+        fn dragging_a_tab_into_the_parked_zone_parks_it() {
+            let mut ws = strip(3, 2);
+            assert_eq!(ws.move_tab(0, 3), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(2), sid(3), sid(4), sid(1), sid(5)]);
+            assert_eq!(parked_ids(&ws), vec![sid(4), sid(1), sid(5)]);
+            assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[test]
+        fn dragging_a_parked_tab_into_the_unparked_zone_unparks_it() {
+            let mut ws = strip(3, 2);
+            assert_eq!(ws.move_tab(4, 0), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(5), sid(1), sid(2), sid(3), sid(4)]);
+            assert_eq!(parked_ids(&ws), vec![sid(4)]);
+            assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[test]
+        fn a_drop_on_the_boundary_keeps_the_tab_in_its_zone() {
+            let mut ws = strip(3, 2);
+            assert_eq!(ws.move_tab(0, 2), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(2), sid(3), sid(1), sid(4), sid(5)]);
+            assert_eq!(parked_ids(&ws), vec![sid(4), sid(5)]);
+
+            let mut ws = strip(3, 2);
+            assert_eq!(ws.move_tab(4, 3), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(3), sid(5), sid(4)]);
+            assert_eq!(parked_ids(&ws), vec![sid(5), sid(4)]);
+        }
+
+        #[test]
+        fn dragging_the_active_tab_into_the_parked_zone_activates_the_last_unparked() {
+            let mut ws = strip(3, 2);
+            assert_eq!(ws.move_tab(2, 4), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(4), sid(5), sid(3)]);
+            assert_eq!(parked_ids(&ws), vec![sid(4), sid(5), sid(3)]);
+            assert_eq!(active_id(&ws), sid(2));
+        }
+
+        #[test]
+        fn dragging_among_parked_tabs_keeps_the_active_one_when_every_tab_is_parked() {
+            let mut ws = strip(0, 3);
+            assert_eq!(active_id(&ws), sid(3));
+            assert_eq!(ws.move_tab(0, 1), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(2), sid(1), sid(3)]);
+            assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[derive(Debug, Clone)]
+        enum Op {
+            Open,
+            Append,
+            Park(usize),
+            Unpark(usize),
+            Activate(usize),
+            Move(usize, usize),
+            Close(usize),
+            Reveal(u64),
+        }
+
+        fn op() -> impl Strategy<Value = Op> {
+            prop_oneof![
+                Just(Op::Open),
+                Just(Op::Append),
+                (0usize..8).prop_map(Op::Park),
+                (0usize..8).prop_map(Op::Unpark),
+                (0usize..8).prop_map(Op::Activate),
+                (0usize..8, 0usize..8).prop_map(|(from, to)| Op::Move(from, to)),
+                (0usize..8).prop_map(Op::Close),
+                (1u64..12).prop_map(Op::Reveal),
+            ]
+        }
+
+        fn apply(ws: &mut Workspace, op: &Op, last_id: &mut u64) {
+            match *op {
+                Op::Open => {
+                    *last_id += 1;
+                    ws.open(sid(*last_id), "opened");
+                }
+                Op::Append => {
+                    *last_id += 1;
+                    ws.append(sid(*last_id), "appended");
+                }
+                Op::Park(index) => {
+                    ws.park(index);
+                }
+                Op::Unpark(index) => {
+                    ws.unpark(index);
+                }
+                Op::Activate(index) => {
+                    ws.activate(index);
+                }
+                Op::Move(from, to) => {
+                    ws.move_tab(from, to);
+                }
+                Op::Close(index) => {
+                    ws.close_tab(index);
+                }
+                Op::Reveal(id) => {
+                    ws.reveal_pane_of(sid(id));
+                }
+            }
+        }
+
+        proptest! {
+            #[test]
+            fn every_mutator_keeps_parked_tabs_after_unparked_ones(ops in vec(op(), 0..40)) {
+                let mut ws = strip(3, 2);
+                let mut last_id = 5;
+                for op in &ops {
+                    apply(&mut ws, op, &mut last_id);
+                    prop_assert_eq!(strip_rules_hold(&ws), Ok(()), "after {:?}", op);
+                }
+            }
+
+            #[test]
+            fn the_tab_cycle_never_lands_on_a_parked_tab(ops in vec(op(), 0..40)) {
+                let mut ws = strip(3, 2);
+                let mut last_id = 5;
+                for op in &ops {
+                    apply(&mut ws, op, &mut last_id);
+                }
+                for step in [Step::Next, Step::Prev] {
+                    if let Some(index) = ws.cycled_tab(step) {
+                        prop_assert!(!ws.tabs[index].is_parked(), "{:?} landed on {}", step, index);
+                    }
+                }
             }
         }
     }

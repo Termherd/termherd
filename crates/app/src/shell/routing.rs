@@ -238,6 +238,7 @@ impl Shell {
                 self.open_color_picker().ok_or(Inertia::NoContext)?;
                 Task::none()
             }
+            Action::TogglePark => self.toggle_park_active_tab().ok_or(Inertia::NoContext)?,
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))

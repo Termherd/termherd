@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (parking a tab)
+
+- Park a tab with the tab menu's *Park tab* or the new `toggle-park-tab`
+  action (no default chord): it shrinks to its status dot and kind mark at the
+  strip's end and leaves the tab cycle, its sessions still running. Selecting
+  it, dragging it back, or a session in it asking for attention unparks it.
+  The MCP `snapshot` reports `parked` per tab (#353).
+
 ### Added (termherd:// links in the terminal)
 
 - A `termherd://` URL in terminal output is a link: Cmd/Ctrl+hover underlines

@@ -219,6 +219,9 @@ pub struct ProjectSnapshot {
 pub struct TabSnapshot {
     /// Whether this is the active tab.
     pub active: bool,
+    /// Whether the tab is parked: a compact chip at the strip's end, out of
+    /// the tab cycle. Its sessions keep running.
+    pub parked: bool,
     /// The label the user sees.
     pub title: String,
     /// Most-urgent activity among the tab's sessions, or `None` if none live.

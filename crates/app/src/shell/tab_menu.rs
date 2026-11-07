@@ -92,6 +92,11 @@ pub(super) const ENTRIES: &[Entry] = &[
         offered: Offered::OnEveryTab,
     },
     Entry {
+        action: Action::TogglePark,
+        label: strings::TAB_MENU_PARK,
+        offered: Offered::OnEveryTab,
+    },
+    Entry {
         action: Action::CloseFocused,
         label: strings::TAB_MENU_CLOSE,
         offered: Offered::OnEveryTab,

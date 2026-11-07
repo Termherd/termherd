@@ -155,6 +155,18 @@ impl Shell {
     /// Switch the active tab one `step`, wrapping around (FR9 `NextTab` /
     /// `PrevTab`). `None` when nothing is open, so a caller learns the cycle had
     /// nowhere to go instead of being told the tab changed.
+    /// Park the active tab, or unpark it when it is parked. `None` with no tab
+    /// open, so the caller reports the action as inert.
+    pub(super) fn toggle_park_active_tab(&mut self) -> Option<Task<Message>> {
+        let index = self.core.workspace.active;
+        self.core.workspace.tabs.get(index)?;
+        let effects = self.core.apply(termherd_core::Event::ToggleParkTab(index));
+        self.focus = Focus::Terminal;
+        self.closing = None;
+        self.archiving = None;
+        Some(Task::batch([self.perform(effects), self.resize_panes()]))
+    }
+
     pub(super) fn cycle_tab(&mut self, step: Step) -> Option<Task<Message>> {
         let next = self.core.workspace.cycled_tab(step)?;
         Some(self.activate_tab(next))

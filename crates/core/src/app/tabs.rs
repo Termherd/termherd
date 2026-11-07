@@ -48,6 +48,21 @@ impl App {
         sessions.into_iter().map(Effect::Kill).collect()
     }
 
+    /// Park the tab at `index`, or unpark it when it is parked. A missing tab
+    /// changes nothing. No effects either way: the sessions keep running.
+    pub(super) fn toggle_park_tab(&mut self, index: usize) -> Vec<Effect> {
+        match self.workspace.tabs.get(index).map(|tab| tab.is_parked()) {
+            Some(true) => {
+                self.workspace.unpark(index);
+            }
+            Some(false) => {
+                self.workspace.park(index);
+            }
+            None => {}
+        }
+        Vec::new()
+    }
+
     /// Push the tab at `index` onto the reopen stack, capturing the kind,
     /// directory and label needed to recreate it. Reduced to the tab's first
     /// pane — reopen restores one terminal, not a whole split. A no-op for an
@@ -991,5 +1006,96 @@ mod tests {
             1,
             "an exited session no longer counts"
         );
+    }
+
+    #[test]
+    fn toggling_park_parks_an_unparked_tab_then_unparks_it() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        let _second = launch(&mut app, "b");
+
+        assert!(
+            app.apply(Event::ToggleParkTab(0)).is_empty(),
+            "parking touches no PTY"
+        );
+        let parked_at = app.workspace.tab_of(first).expect("still open");
+        assert_eq!(parked_at, 1, "a parked tab joins the strip's end");
+        assert!(app.workspace.tabs[parked_at].is_parked());
+
+        assert!(app.apply(Event::ToggleParkTab(parked_at)).is_empty());
+        let back = app.workspace.tab_of(first).expect("still open");
+        assert!(!app.workspace.tabs[back].is_parked());
+    }
+
+    #[test]
+    fn toggling_park_on_a_missing_tab_changes_nothing() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        assert!(app.apply(Event::ToggleParkTab(5)).is_empty());
+        assert!(!app.workspace.tabs[0].is_parked());
+    }
+
+    #[test]
+    fn attention_in_a_parked_tab_unparks_it_without_taking_focus() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        let second = launch(&mut app, "b");
+        app.apply(Event::ToggleParkTab(0));
+        let parked_at = app.workspace.tab_of(first).expect("still open");
+        assert!(
+            app.workspace.tabs[parked_at].is_parked(),
+            "precondition: parked"
+        );
+
+        app.apply(Event::StatusChanged {
+            session: first,
+            status: SessionStatus::Attention,
+        });
+        let back = app.workspace.tab_of(first).expect("still open");
+        assert!(!app.workspace.tabs[back].is_parked());
+        assert_eq!(
+            app.workspace.focused_session(),
+            Some(second),
+            "focus stays put"
+        );
+    }
+
+    #[test]
+    fn a_busy_session_leaves_its_parked_tab_parked() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        launch(&mut app, "b");
+        app.apply(Event::ToggleParkTab(0));
+        let parked_at = app.workspace.tab_of(first).expect("still open");
+        assert!(
+            app.workspace.tabs[parked_at].is_parked(),
+            "precondition: parked"
+        );
+
+        app.apply(Event::StatusChanged {
+            session: first,
+            status: SessionStatus::Busy,
+        });
+        assert!(app.workspace.tabs[parked_at].is_parked());
+    }
+
+    #[test]
+    fn a_reopened_tab_comes_back_unparked() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        let second = launch(&mut app, "b");
+        app.apply(Event::ToggleParkTab(1));
+        let parked_at = app.workspace.tab_of(second).expect("still open");
+        assert!(
+            app.workspace.tabs[parked_at].is_parked(),
+            "precondition: parked"
+        );
+        app.apply(Event::CloseTab(parked_at));
+
+        app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
+        assert_eq!(app.workspace.tabs.len(), 2);
+        assert!(app.workspace.tabs.iter().all(|tab| !tab.is_parked()));
     }
 }
