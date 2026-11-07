@@ -16,6 +16,14 @@ code under `crates/app/`. The incidents behind them are in
   `#[tokio::test]`.
   [Why](../../docs/agents/lessons.md#no-spawn_blocking-inside-an-iced-task)
 
+## Shell state
+
+- **A tab index the shell keeps is a copy of a position `core` may move.**
+  New shell state names a tab by a session it hosts; `Shell::update`
+  re-anchors `closing`, `tab_drag` and `split_drag` by session after each
+  message (`TabAnchors`).
+  [Why](../../docs/agents/lessons.md#a-tab-index-is-a-copy-core-may-move)
+
 ## The keyboard ladder
 
 - Every overlay rung can be left with `escape`; the sweep over

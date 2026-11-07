@@ -63,6 +63,7 @@ struct ProjectDto {
 #[derive(Serialize)]
 struct TabDto {
     active: bool,
+    parked: bool,
     title: String,
     /// Most-urgent status among the tab's sessions, or `None` if none live.
     status: Option<&'static str>,
@@ -160,6 +161,7 @@ impl From<&WorkspaceSnapshot> for SnapshotDto {
                 tabs.iter()
                     .map(|tab| TabDto {
                         active: tab.active,
+                        parked: tab.parked,
                         title: tab.title.clone(),
                         status: tab.status.map(status_str),
                         panes: tab.panes.iter().map(pane_dto).collect(),

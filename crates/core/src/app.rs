@@ -230,6 +230,7 @@ impl App {
                 Vec::new()
             }
             Event::CloseTab(index) => self.close_tab(index),
+            Event::ToggleParkTab(index) => self.toggle_park_tab(index),
             Event::MoveTab { from, to } => {
                 self.workspace.move_tab(from, to);
                 Vec::new()

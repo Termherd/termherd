@@ -195,6 +195,7 @@
   //   rename-tab                mod+Shift+I (inline rename of the focused tab)
   //   open-tab-menu             mod+Shift+M (the focused tab's menu)
   //   pick-tab-color            (unbound) the focused tab's colour list
+  //   toggle-park-tab           (unbound) park the focused tab, or unpark it
   //   reopen-closed-tab         mod+Shift+T ; Ctrl+Alt+Shift+T off macOS
   //   new-shell-here            mod+T ; Ctrl+Shift+T off macOS
   //   new-claude-session-here   mod+Alt+T

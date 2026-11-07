@@ -484,7 +484,8 @@ impl App {
     }
 
     /// Record `session`'s new activity. An exited session stays exited: a late
-    /// report from its dying terminal must not revive it.
+    /// report from its dying terminal must not revive it. A session asking for
+    /// attention unparks its tab, without taking the focus.
     pub(super) fn status_changed(
         &mut self,
         session: SessionId,
@@ -494,6 +495,11 @@ impl App {
             && s.status != SessionStatus::Exited
         {
             s.status = status;
+            if status == SessionStatus::Attention
+                && let Some(index) = self.workspace.tab_of(session)
+            {
+                self.workspace.unpark(index);
+            }
         }
         Vec::new()
     }

@@ -146,15 +146,24 @@ mod tests {
             tabs: Some(vec![
                 TabSnapshot {
                     active: false,
+                    parked: false,
                     title: "proj".to_owned(),
                     status: Some(SessionStatus::Idle),
                     panes: vec![pane(3, SessionStatus::Idle)],
                 },
                 TabSnapshot {
                     active: true,
+                    parked: false,
                     title: "repo".to_owned(),
                     status: Some(SessionStatus::Busy),
                     panes: vec![pane(6, SessionStatus::Idle), pane(7, SessionStatus::Busy)],
+                },
+                TabSnapshot {
+                    active: false,
+                    parked: true,
+                    title: "long run".to_owned(),
+                    status: Some(SessionStatus::Busy),
+                    panes: vec![pane(8, SessionStatus::Busy)],
                 },
             ]),
             terminals: BTreeMap::from([(7, "$ cargo test".to_owned())]),
@@ -186,6 +195,8 @@ mod tests {
         assert_eq!(json["tabs"][0]["status"], "idle");
         assert_eq!(json["tabs"][1]["panes"][1]["handle"], "7");
         assert_eq!(json["tabs"][1]["panes"][1]["status"], "busy");
+        assert_eq!(json["tabs"][1]["parked"], false);
+        assert_eq!(json["tabs"][2]["parked"], true);
         assert_eq!(json["terminals"]["7"], "$ cargo test");
     }
 

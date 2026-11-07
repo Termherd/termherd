@@ -77,6 +77,15 @@ about *where the future runs*, not about which file it lives in: a `tokio::`
 call is fine in code the runtime spawned (`shell::bridge`, `app::mcp`) and in
 a `#[tokio::test]`, and wrong in anything handed to `Task::perform`.
 
+## A tab index is a copy core may move
+
+Parking (#353) let `core` reorder the strip on its own, after a drag or a
+parked session asking for attention, and the shell's `closing`, `tab_drag`
+and `split_drag` kept the old slot: an armed close confirmation would have
+closed the neighbour. `Shell::update` re-anchors them by session after each
+message (`TabAnchors`). New shell state names a tab by a session it hosts,
+as the tab rename already did.
+
 ## An invariant expressed twice drifts
 
 **An invariant expressed twice will drift — extract the predicate.** Two

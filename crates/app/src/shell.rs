@@ -22,7 +22,7 @@ use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::widget::text_editor;
 use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost};
-use termherd_core::workspace::SessionId;
+use termherd_core::workspace::{SessionId, Tab};
 use termherd_core::{
     ClaudeLaunch, ConfigInput, Keymap, Launch, Overlay, PointerEvent, ScrollTarget, SelectOp,
     SessionRecord, SessionStatus,
@@ -347,6 +347,9 @@ struct Shell {
     /// the slot the pointer is currently over. `None` when no drag is active.
     /// Transient pointer state only — the tab order itself lives in `core`.
     tab_drag: Option<TabDrag>,
+    /// Set by [`Self::settle_after_tab_switch`] within one message, so
+    /// [`Self::update`] settles a tab switch once, and only one no handler did.
+    tab_switch_settled: bool,
     split_drag: Option<SplitDrag>,
     cursor_position: Point,
     /// Set once the quit path has asked the iced runtime to terminate.
@@ -366,6 +369,73 @@ struct Shell {
 struct TabDrag {
     from: usize,
     over: usize,
+}
+
+/// The tabs the shell's index-keyed state names, each with the session of its
+/// first pane, so the index can be found again once `core` reorders the strip:
+/// parking, unparking and opening before the parked group all shift tabs.
+struct TabAnchors {
+    shown: Option<SessionId>,
+    closing: Option<(usize, SessionId)>,
+    drag: Option<(TabDrag, SessionId, SessionId)>,
+    split: Option<(usize, SessionId)>,
+}
+
+impl TabAnchors {
+    fn of(shell: &Shell) -> Self {
+        let workspace = &shell.core.workspace;
+        let session_at = |index: usize| workspace.tabs.get(index).map(Tab::first_session);
+        Self {
+            shown: session_at(workspace.active),
+            closing: shell
+                .closing
+                .and_then(|index| Some((index, session_at(index)?))),
+            drag: shell
+                .tab_drag
+                .and_then(|drag| Some((drag, session_at(drag.from)?, session_at(drag.over)?))),
+            split: shell
+                .split_drag
+                .as_ref()
+                .and_then(|drag| Some((drag.tab, session_at(drag.tab)?))),
+        }
+    }
+
+    /// Point the state the message left untouched back at its tabs. A tab no
+    /// longer found is left to the message, which already dealt with its close.
+    fn follow(self, shell: &mut Shell) {
+        let workspace = &shell.core.workspace;
+        if let Some((index, session)) = self.closing
+            && shell.closing == Some(index)
+            && let Some(now) = workspace.tab_of(session)
+        {
+            shell.closing = Some(now);
+        }
+        if let Some((drag, from, over)) = self.drag
+            && shell.tab_drag == Some(drag)
+            && let (Some(from), Some(over)) = (workspace.tab_of(from), workspace.tab_of(over))
+        {
+            shell.tab_drag = Some(TabDrag { from, over });
+        }
+        if let Some((index, session)) = self.split
+            && let Some(drag) = shell.split_drag.as_mut()
+            && drag.tab == index
+            && let Some(now) = workspace.tab_of(session)
+        {
+            drag.tab = now;
+        }
+    }
+
+    /// Whether the message changed which tab is shown.
+    fn shown_changed(&self, shell: &Shell) -> bool {
+        let workspace = &shell.core.workspace;
+        let still_shown = |session| {
+            workspace
+                .tabs
+                .get(workspace.active)
+                .is_some_and(|tab| tab.hosts(session))
+        };
+        self.shown.is_some_and(|session| !still_shown(session))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -860,6 +930,7 @@ impl Shell {
             alt_sides: AltSides::default(),
             option_as_meta: OptionAsMeta::default(),
             tab_drag: None,
+            tab_switch_settled: false,
             split_drag: None,
             cursor_position: Point::new(0.0, 0.0),
             exiting: false,
@@ -929,14 +1000,32 @@ impl Shell {
         )
     }
 
-    // The iced `update` is a flat `match` over every `Message` variant — the
-    // app's central event dispatcher, whose arms delegate to the domain modules
-    // (launch, session_ops, effects, geometry, routing, …). The length here is
-    // breadth (one arm per message), not nested complexity, and splitting the
-    // dispatch itself would only scatter it — the allow is by design, not a
-    // deferred cleanup.
-    #[allow(clippy::too_many_lines)]
+    /// The iced `update`: every message goes through [`Self::dispatch`]. The
+    /// tab indices the shell holds then follow their tabs through any reorder
+    /// the message caused, and a change of the shown tab no handler settled is
+    /// settled here: a drag that parks it, or attention that unparks another
+    /// while every tab is parked.
     fn update(&mut self, message: Message) -> Task<Message> {
+        let anchors = TabAnchors::of(self);
+        self.tab_switch_settled = false;
+        let task = self.dispatch(message);
+        let settle = if anchors.shown_changed(self) && !self.tab_switch_settled {
+            self.settle_after_tab_switch()
+        } else {
+            Task::none()
+        };
+        anchors.follow(self);
+        Task::batch([task, settle])
+    }
+
+    // A flat `match` over every `Message` variant — the app's central event
+    // dispatcher, whose arms delegate to the domain modules (launch,
+    // session_ops, effects, geometry, routing, …). The length here is breadth
+    // (one arm per message), not nested complexity, and splitting the dispatch
+    // itself would only scatter it — the allow is by design, not a deferred
+    // cleanup.
+    #[allow(clippy::too_many_lines)]
+    fn dispatch(&mut self, message: Message) -> Task<Message> {
         self.drop_stale_lists();
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
         // is open discards it — the blur-cancels-edit convention. Only genuine
@@ -3376,6 +3465,44 @@ mod key_routing {
     }
 
     #[test]
+    fn toggle_park_tab_parks_the_active_tab_and_focuses_an_unparked_one() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let second = shell.core.workspace.tabs[1].first_session();
+
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::TogglePark)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("toggle-park-tab".to_owned())]
+        );
+        let workspace = &shell.core.workspace;
+        assert!(workspace.tabs[1].is_parked());
+        assert_eq!(workspace.tabs[1].first_session(), second);
+        assert_eq!(
+            workspace.focused_session().map(|s| s.0.get()),
+            Some(first),
+            "the unparked tab takes over"
+        );
+    }
+
+    #[test]
+    fn a_user_bound_chord_parks_the_tab_through_the_live_keymap() {
+        let (mut shell, _pty, _first) = shell_with_two_tabs();
+        let chord = "ctrl+alt+shift+p";
+        let mut keymap = Keymap::defaults();
+        keymap.set(
+            Action::TogglePark,
+            [KeyChord::parse(chord).expect("a test chord parses")],
+        );
+        shell.keymap = keymap;
+
+        assert_eq!(
+            press_chord(&mut shell, chord),
+            PressStep::Ran("toggle-park-tab".to_owned())
+        );
+        assert!(shell.core.workspace.tabs[1].is_parked());
+    }
+
+    #[test]
     fn a_named_action_runs_without_going_through_the_keymap() {
         // The behaviour half: `run_action` names the action directly, so it
         // keeps working after a rebind that would break the chord.
@@ -3469,6 +3596,8 @@ mod key_routing {
             (Action::SendToDesktop, "send-to-desktop"),
             // No tab, so nothing to colour.
             (Action::PickTabColor, "pick-tab-color"),
+            // No tab, so nothing to park.
+            (Action::TogglePark, "toggle-park-tab"),
         ] {
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
@@ -4597,7 +4726,7 @@ mod key_routing {
             .workspace
             .tabs
             .iter()
-            .map(|t| t.sessions()[0])
+            .map(Tab::first_session)
             .collect()
     }
 
@@ -4608,6 +4737,123 @@ mod key_routing {
         let _ = shell.launch("/tmp/c".to_string(), Launch::Shell);
         assert_eq!(shell.core.workspace.tabs.len(), 3);
         shell
+    }
+
+    /// Three tabs, every one parked, in launch order, with the last one active
+    /// — the one state in which the active tab is parked.
+    fn shell_with_three_parked_tabs() -> (Shell, [SessionId; 3]) {
+        let mut shell = shell_with_three_tabs();
+        let ids = [0, 1, 2].map(|index| shell.core.workspace.tabs[index].first_session());
+        for index in [2, 1, 0] {
+            let _ = shell.core.apply(termherd_core::Event::ToggleParkTab(index));
+        }
+        shell.core.workspace.active = 2;
+        assert_eq!(tab_order(&shell), ids, "precondition: launch order");
+        assert_eq!(
+            shell.core.workspace.first_parked(),
+            0,
+            "precondition: all parked"
+        );
+        (shell, ids)
+    }
+
+    fn attention(shell: &mut Shell, session: SessionId) {
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: termherd_core::SessionStatus::Attention,
+        });
+    }
+
+    #[test]
+    fn an_armed_close_follows_its_tab_when_attention_reorders_the_strip() {
+        let (mut shell, [_, _, last]) = shell_with_three_parked_tabs();
+        shell.closing = Some(2);
+
+        attention(&mut shell, last);
+
+        let moved_to = shell.core.workspace.tab_of(last);
+        assert_eq!(moved_to, Some(0), "precondition: unparked to the front");
+        assert_eq!(shell.closing, moved_to, "the prompt still names its tab");
+    }
+
+    #[test]
+    fn attention_that_changes_the_active_tab_resets_the_prompts_and_the_keys() {
+        let (mut shell, [_, middle, _]) = shell_with_three_parked_tabs();
+        shell.closing = Some(2);
+        shell.focus = Focus::Search;
+
+        attention(&mut shell, middle);
+
+        assert_eq!(
+            shell.core.workspace.focused_session(),
+            Some(middle),
+            "precondition: the only unparked tab is now active"
+        );
+        assert_eq!(
+            shell.closing, None,
+            "the prompt named a tab no longer shown"
+        );
+        assert_eq!(shell.focus, Focus::Terminal);
+    }
+
+    #[test]
+    fn dragging_the_shown_tab_into_the_parked_zone_settles_on_the_tab_now_shown() {
+        let mut shell = shell_with_three_tabs();
+        let _ = shell.core.apply(termherd_core::Event::ToggleParkTab(0));
+        // [b c | a], c shown.
+        let b = shell.core.workspace.tabs[0].first_session();
+        assert_eq!(shell.core.workspace.active, 1, "precondition: c shown");
+        shell.focus = Focus::Search;
+
+        let _ = shell.update(Message::TabDragStart(1));
+        let _ = shell.update(Message::TabDragOver(2));
+        let _ = shell.update(Message::TabDragEnd);
+
+        assert_eq!(shell.core.workspace.focused_session(), Some(b));
+        assert_eq!(
+            shell.focus,
+            Focus::Terminal,
+            "the keys follow the tab shown"
+        );
+    }
+
+    #[test]
+    fn a_split_drag_keeps_its_tab_when_attention_reorders_the_strip() {
+        let (mut shell, [_, _, last]) = shell_with_three_parked_tabs();
+        shell.split_drag = Some(SplitDrag {
+            tab: 2,
+            path: Vec::new(),
+            dir: termherd_core::workspace::SplitDir::Vertical,
+            ratio: 0.5,
+            start: Point::new(0.0, 0.0),
+            extent: 100.0,
+        });
+
+        attention(&mut shell, last);
+
+        let drag = shell.split_drag.as_ref().expect("the drag survives");
+        assert_eq!(Some(drag.tab), shell.core.workspace.tab_of(last));
+    }
+
+    #[test]
+    fn a_tab_drag_keeps_its_tabs_when_attention_reorders_the_strip() {
+        let mut shell = shell_with_three_tabs();
+        let _ = shell.launch("/tmp/d".to_string(), Launch::Shell);
+        // [a | b c d]: three parked tabs behind the first.
+        for _ in 0..3 {
+            let _ = shell.core.apply(termherd_core::Event::ToggleParkTab(1));
+        }
+        assert_eq!(shell.core.workspace.first_parked(), 1, "precondition");
+        let carried = shell.core.workspace.tabs[3].first_session();
+        let over = shell.core.workspace.tabs[2].first_session();
+        let _ = shell.update(Message::TabDragStart(3));
+        let _ = shell.update(Message::TabDragOver(2));
+
+        attention(&mut shell, over);
+
+        let drag = shell.tab_drag.expect("the drag survives");
+        assert_eq!(Some(drag.from), shell.core.workspace.tab_of(carried));
+        assert_eq!(Some(drag.over), shell.core.workspace.tab_of(over));
     }
 
     #[test]
@@ -8154,9 +8400,36 @@ mod key_routing {
             assert!(offered(&shell), "a named Claude in front of a shell pane");
         }
 
+        #[test]
+        fn park_tab_is_not_offered_on_a_parked_tab() {
+            // Only reachable with every tab parked: the menu then opens over a
+            // parked tab, and its action would unpark it.
+            let (mut shell, _) = shell_with_three_parked_tabs();
+            let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::OpenTabMenu)]);
+            assert_eq!(
+                outcome.steps,
+                vec![PressStep::Ran("open-tab-menu".to_owned())]
+            );
+            assert!(!listed(&shell).contains(&Action::TogglePark));
+        }
+
+        #[test]
+        fn park_tab_is_offered_on_an_unparked_tab_and_parks_the_tab_the_menu_opened_on() {
+            let mut shell = shell_with_three_tabs();
+            let anchor = shell.core.workspace.tabs[0].first_session();
+
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let at = position_of(&shell, Action::TogglePark);
+            let _ = shell.update(Message::RunTabMenuEntry(at));
+
+            let index = shell.core.workspace.tab_of(anchor).expect("still open");
+            assert!(shell.core.workspace.tabs[index].is_parked());
+        }
+
         const NOTHING: Offers = Offers {
             agent_named: false,
             color_pickable: false,
+            unparked: false,
         };
 
         /// The entries that `offers` adds over a pane that allows nothing.
@@ -8173,6 +8446,7 @@ mod key_routing {
             let everything = Offers {
                 agent_named: true,
                 color_pickable: true,
+                unparked: true,
             };
             assert_eq!(entries(everything).count(), ENTRIES.len());
             let named = Offers {
@@ -8185,6 +8459,11 @@ mod key_routing {
                 ..NOTHING
             };
             assert_eq!(added_by(pickable), vec![Action::PickTabColor]);
+            let unparked = Offers {
+                unparked: true,
+                ..NOTHING
+            };
+            assert_eq!(added_by(unparked), vec![Action::TogglePark]);
         }
 
         #[test]
