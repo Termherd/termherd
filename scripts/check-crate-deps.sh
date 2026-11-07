@@ -5,9 +5,10 @@ set -euo pipefail
 
 declare -A allowed=(
     [termherd-claude]=""
+    [termherd-private-fs]=""
     [termherd-core]="termherd-claude"
     [termherd-scan]="termherd-core termherd-claude"
-    [termherd-pty]="termherd-core termherd-claude"
+    [termherd-pty]="termherd-core termherd-claude termherd-private-fs"
     [termherd-mcp]="termherd-core termherd-claude"
     [termherd-app]="termherd-core termherd-claude termherd-scan termherd-pty termherd-mcp"
 )

@@ -82,7 +82,7 @@ pub(crate) fn launch_command(
 pub(crate) fn write_title_settings(private: &PrivateFiles, session: SessionId) -> Option<PathBuf> {
     let path = private.settings(session);
     let json = r#"{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":"0"}}"#;
-    match write_private(&path, json) {
+    match termherd_private_fs::write_file(&path, json) {
         Ok(()) => Some(path),
         Err(error) => {
             tracing::warn!(
@@ -102,7 +102,7 @@ pub(crate) fn write_title_settings(private: &PrivateFiles, session: SessionId) -
 /// *decides* lives there, pure and unit-tested. It lives in this module because
 /// the files are secrets-adjacent in the same sense as the mcp config: they are
 /// executed by the user's shell, so they go through the same private-write
-/// discipline (see [`private_dir`]).
+/// discipline (see [`termherd_private_fs::create_dir`]).
 ///
 /// A shell with no recipe, or a directory that cannot be made privately, leaves
 /// the command untouched: that session then falls back on the foreground process
@@ -158,14 +158,15 @@ fn write_startup_files(dir: &Path, files: &[(PathBuf, String)]) -> std::io::Resu
         return Ok(());
     }
     // Session ids restart at 1 with each run, so a directory left behind by a
-    // crashed one would collide — and [`private_dir`] refuses to adopt what it
-    // finds, which would cost that session its marks *for good*. Clearing first
+    // crashed one would collide — and [`termherd_private_fs::create_dir`]
+    // refuses to adopt what it finds, which would cost that session its marks
+    // *for good*. Clearing first
     // keeps that refusal aimed at directories we could not have written: in a
     // shared temp directory another user's entry cannot be removed either.
     let _ = std::fs::remove_dir_all(dir);
-    private_dir(dir)?;
+    termherd_private_fs::create_dir(dir)?;
     for (path, contents) in files {
-        write_private(path, contents)?;
+        termherd_private_fs::write_file(path, contents)?;
     }
     Ok(())
 }
@@ -221,28 +222,6 @@ impl PrivateFiles {
     }
 }
 
-/// Create `path` as a directory only this user can reach (`0o700` on Unix), and
-/// **fail if it already exists**.
-///
-/// Both halves are load-bearing. The default temp directory is per-user on
-/// macOS but is the shared, world-writable `/tmp` on Linux, and what goes in
-/// here is not merely read — it is *sourced by the user's login shell*. A
-/// directory another local user pre-created under the name we are about to use
-/// would let them choose what that shell executes. Refusing to adopt an existing
-/// directory turns that into a fallback to the foreground poll; the private mode
-/// keeps the files unreadable and unwritable to anyone else afterwards.
-#[cfg(unix)]
-fn private_dir(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
-
-    std::fs::DirBuilder::new().mode(0o700).create(path)
-}
-
-#[cfg(not(unix))]
-fn private_dir(path: &Path) -> std::io::Result<()> {
-    std::fs::create_dir(path)
-}
-
 /// Write the `mcpServers` config for a Claude launch and return its path, so
 /// `launch_command` can point `--mcp-config` at it. The file — not argv — holds
 /// the bearer token. Both fields are known-safe for a bare JSON string (a
@@ -258,7 +237,7 @@ pub(crate) fn write_mcp_config(
         r#"{{"mcpServers":{{"termherd":{{"type":"http","url":"{}","headers":{{"Authorization":"Bearer {}"}}}}}}}}"#,
         config.url, config.token
     );
-    match write_private(&path, &json) {
+    match termherd_private_fs::write_file(&path, &json) {
         Ok(()) => Some(path),
         Err(error) => {
             tracing::warn!(
@@ -269,31 +248,6 @@ pub(crate) fn write_mcp_config(
         }
     }
 }
-
-/// Create `path` afresh, owner-only (`0o600` on Unix), holding `contents`.
-///
-/// Never writes through an entry already there: on Linux's shared `/tmp`, a
-/// planted file keeps its own mode and a planted symlink redirects the write.
-/// Our own leftover is removed first; an entry we cannot remove fails the write.
-fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let _ = std::fs::remove_file(path);
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    owner_only(&mut options);
-    options.open(path)?.write_all(contents.as_bytes())
-}
-
-#[cfg(unix)]
-fn owner_only(options: &mut std::fs::OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    options.mode(0o600);
-}
-
-#[cfg(not(unix))]
-fn owner_only(_: &mut std::fs::OpenOptions) {}
 
 /// What [`apply_terminal_env`] advertises as the host terminal. Claude CLI only
 /// emits its status / notification OSC sequences (the busy / idle / attention
@@ -576,25 +530,6 @@ mod tests {
         assert!(!overlay.exists(), "the settings overlay is gone");
     }
 
-    #[test]
-    fn a_directory_that_is_already_there_is_never_adopted() {
-        // The startup files are *sourced by the user's login shell*, and the
-        // default temp directory is the shared `/tmp` on Linux. Adopting a
-        // directory already in place would let whoever created it choose what
-        // that shell runs. Our own leftovers are cleared first
-        // (`write_startup_files`); what survives that clearing is, by
-        // construction, a directory another user owns — and it must be refused.
-        let planted = std::env::temp_dir().join("termherd-planted-94");
-        let _ = std::fs::remove_dir_all(&planted);
-        std::fs::create_dir_all(&planted).expect("plant the directory");
-
-        assert!(
-            private_dir(&planted).is_err(),
-            "an existing directory must never be adopted"
-        );
-        let _ = std::fs::remove_dir_all(&planted);
-    }
-
     fn session(id: u64) -> SessionId {
         SessionId(std::num::NonZeroU64::new(id).expect("nonzero"))
     }
@@ -653,37 +588,6 @@ mod tests {
                 .permissions()
                 .mode();
             assert_eq!(mode & 0o777, 0o600, "got {mode:o}");
-        }
-
-        #[test]
-        fn an_entry_that_cannot_be_removed_is_refused_not_written_through() {
-            // A read-only directory stands in for a sticky `/tmp`: its entry
-            // cannot be unlinked, yet can still be opened for writing.
-            let dir = std::env::temp_dir().join("termherd-locked-85");
-            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir(&dir).expect("the directory");
-            let planted = dir.join("termherd-mcp-85.json");
-            std::fs::write(&planted, "planted").expect("plant the file");
-            std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o666))
-                .expect("open it to everyone");
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500))
-                .expect("lock the directory");
-            if std::fs::File::create(dir.join("probe")).is_ok() {
-                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-                    .expect("unlock for cleanup");
-                let _ = std::fs::remove_dir_all(&dir);
-                eprintln!("skipped: root ignores the directory's mode");
-                return;
-            }
-
-            let outcome = write_private(&planted, "token");
-            let contents = std::fs::read_to_string(&planted).expect("readable");
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-                .expect("unlock for cleanup");
-            let _ = std::fs::remove_dir_all(&dir);
-            assert!(outcome.is_err(), "an entry we could not remove was adopted");
-            assert_eq!(contents, "planted", "and the token was written through it");
         }
 
         #[test]

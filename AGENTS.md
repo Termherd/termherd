@@ -93,6 +93,9 @@ app  ──►  core  ◄──  adapters          (adapters depend on core, nev
 - `crates/mcp` — the stdio MCP server binary (`termherd-mcp`) and the pure
   settings-option catalogue; depends on `core` and `claude`, and `app` links
   its library for the live bridge's option tools.
+- `crates/private-fs` — owner-only files and directories (`0600` / `0700`),
+  the one home of that permission fork; depends on no other crate, so `pty`
+  and `app` both write private files through it.
 - Unbuilt: the `store` adapter (Should, PRD rev. 4), and the IDE bridge
   `docs/ARCHITECTURE.md` §15 sketches as an `mcp` adapter
   (`F-mcp-ide-bridge`, termherd as an MCP *client* — not `crates/mcp`).
