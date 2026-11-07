@@ -50,6 +50,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deleted after each capture or screencast. Only files TermHerd named are
   ever touched (#288).
 
+### Fixed (closing a shell running a program asks first)
+
+- Under the default `confirmWhenActive`, closing a tab or quitting now asks
+  while a shell runs a program in front of it (`vim`, `less`, `htop`, a long
+  `make`), even when its status reads `idle`. macOS and Linux read which
+  process owns the terminal; Windows counts a program on the alternate
+  screen (#143).
+
 ### Fixed (a dead key shows its pending character)
 
 - A dead key (`^`, `¨`, `` ` ``, `~` on a French layout) shows its pending

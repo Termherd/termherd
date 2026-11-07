@@ -565,6 +565,7 @@ mod tests {
                     | PtyEvent::Notification { .. }
                     | PtyEvent::Cwd { .. }
                     | PtyEvent::ForegroundJob { .. }
+                    | PtyEvent::AltScreen { .. }
                     | PtyEvent::SelectionCopied { .. },
                 ) => continue,
                 Ok(PtyEvent::Exited { .. }) => break,
