@@ -30,7 +30,7 @@ set -euo pipefail
 # Files that MAY contain OS-conditional cfg, each with why it is a sanctioned
 # home. Keep this list minimal and justified.
 declare -A allowed=(
-    [crates/app/src/main.rs]="gates the macos module (mod macos) — the composition root wiring the AppKit glue in"
+    [crates/app/src/main.rs]="gates the macos module (mod macos) and its link relay — the composition root wiring the AppKit glue in"
     [crates/app/src/instance.rs]="single-instance lock naming differs per OS (path vs mutex-name vs abstract socket)"
     [crates/app/src/window_geometry.rs]="Linux window placement needs a fallback the other platforms don't"
     [crates/app/src/shell/effects/os.rs]="the OS effect handoffs — the shell's one sanctioned per-OS dispatch site"

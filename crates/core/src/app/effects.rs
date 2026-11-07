@@ -102,4 +102,7 @@ pub enum Effect {
     /// encoder without writing a file. Emitted when a recording is stopped before
     /// the first frame.
     CancelRecording,
+    /// Another tab is shown, or a tab gesture asked for one: the runtime
+    /// settles the view on the tab now shown.
+    TabShown,
 }

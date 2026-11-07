@@ -14,8 +14,8 @@ use termherd_core::ClaudeColor;
 
 use super::modals::modal_card;
 use super::{
-    COLOR_MARK_WIDTH, CardFacts, card_frame, card_secondary_line, claude_color, clip, color_swatch,
-    detail_lines, kind_icon, session_card, status_dot,
+    Backdrop, COLOR_MARK_WIDTH, CardFacts, active_chip_fill, card_frame, card_secondary_line,
+    claude_color, clip, color_swatch, detail_lines, kind_icon, session_card, status_dot,
 };
 use crate::shell::{Message, Shell, tab_rename_id};
 use crate::strings;
@@ -64,7 +64,12 @@ impl Shell {
             // rename editor so editing a title never hides what the tab runs.
             let mut inner = row![].spacing(6).align_y(iced::Center);
             if let Some(status) = self.core.tab_status(index) {
-                inner = inner.push(status_dot(status));
+                let backdrop = if active {
+                    Backdrop::ActiveChip
+                } else {
+                    Backdrop::Chrome
+                };
+                inner = inner.push(status_dot(status, backdrop));
             }
             if let Some(kind) = self.core.tab_kind(index) {
                 inner = inner.push(kind_icon(kind));
@@ -162,12 +167,24 @@ impl Shell {
     }
 
     /// The open tab menu's card: the focused tab's title, then one line per
-    /// entry, the selected one filled. `None` when no menu is open.
+    /// entry, the selected one filled, a disabled one greyed with why beneath
+    /// its label. `None` when no menu is open.
     pub(in crate::shell) fn tab_menu_card(&self) -> Option<Element<'_, Message>> {
         let menu = self.live_tab_menu()?;
-        let lines = menu
-            .entries()
-            .map(|entry| text(entry.label).size(12).into());
+        let lines = menu.lines().map(|line| {
+            let label = text(line.entry.label).size(12);
+            match line.refusal {
+                None => ListLine::runnable(label),
+                Some(refusal) => ListLine {
+                    content: column![
+                        label,
+                        card_secondary_line(strings::tab_menu_refusal(refusal).to_owned())
+                    ]
+                    .into(),
+                    runnable: false,
+                },
+            }
+        });
         Some(list_card(
             vec![list_heading(self.active_tab_title())],
             lines,
@@ -187,13 +204,14 @@ impl Shell {
             heading.push(card_secondary_line(strings::color_pick_refused(reason)));
         }
         let lines = ClaudeColor::ALL.into_iter().map(|color| {
-            row![
-                color_swatch(color),
-                text(strings::color_choice(color)).size(12)
-            ]
-            .spacing(8)
-            .align_y(iced::Center)
-            .into()
+            ListLine::runnable(
+                row![
+                    color_swatch(color),
+                    text(strings::color_choice(color)).size(12)
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+            )
         });
         Some(list_card(
             heading,
@@ -255,25 +273,41 @@ fn list_heading<'a>(title: &str) -> Element<'a, Message> {
     text(clip(title, 32)).size(11).into()
 }
 
+/// One line of a [`list_card`]: what it shows, and whether a click runs it.
+struct ListLine<'a> {
+    content: Element<'a, Message>,
+    runnable: bool,
+}
+
+impl<'a> ListLine<'a> {
+    fn runnable(content: impl Into<Element<'a, Message>>) -> Self {
+        Self {
+            content: content.into(),
+            runnable: true,
+        }
+    }
+}
+
 /// A list drawn over the window for the focused tab: its title, then one
-/// line per entry, the `selected` one filled. A click on a line runs it and
-/// hovering selects it, so the pointer moves the selection the arrows move.
+/// line per entry, the `selected` one filled. A click on a runnable line runs
+/// it and hovering any line selects it, so the pointer moves the selection
+/// the arrows move.
 fn list_card<'a>(
     heading: Vec<Element<'a, Message>>,
-    lines: impl Iterator<Item = Element<'a, Message>>,
+    lines: impl Iterator<Item = ListLine<'a>>,
     selected: usize,
     on_run: fn(usize) -> Message,
     on_hover: fn(usize) -> Message,
 ) -> Element<'a, Message> {
     let mut card = column(heading).spacing(2).width(240);
-    for (position, label) in lines.enumerate() {
+    for (position, line) in lines.enumerate() {
         let style = if position == selected {
             button::primary
         } else {
             button::text
         };
-        let line = button(label)
-            .on_press(on_run(position))
+        let line = button(line.content)
+            .on_press_maybe(line.runnable.then(|| on_run(position)))
             .style(style)
             .width(Fill)
             .padding([4, 8]);
@@ -307,7 +341,7 @@ fn tab_chip_style(
 ) -> container::Style {
     let palette = theme.extended_palette();
     let outline = color.and_then(|c| claude_color(c, palette));
-    let bg = active.then_some(palette.primary.base.color);
+    let bg = active.then(|| active_chip_fill(palette));
     let fg = tab_chip_text(theme, active);
     let fade = |c: Color| super::mix(c, palette.background.base.color, 0.55);
     let (outline_color, outline_width) = match outline {
@@ -356,4 +390,22 @@ fn tab_card(title: String, facts: &CardFacts, cwd: Option<String>) -> Element<'s
         card = card.push(card_secondary_line(cwd));
     }
     card_frame(card)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_active_chip_paints_the_fill_its_status_dot_is_shaded_for() {
+        // The dot reads on the chip only if both name the same fill.
+        let theme = iced::Theme::Dracula;
+        let fill = active_chip_fill(theme.extended_palette());
+
+        let active = tab_chip_style(&theme, true, false, None);
+        let idle = tab_chip_style(&theme, false, false, None);
+
+        assert_eq!(active.background, Some(iced::Background::Color(fill)));
+        assert_eq!(idle.background, None);
+    }
 }

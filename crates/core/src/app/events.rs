@@ -195,6 +195,15 @@ pub enum Event {
     /// still reports sessions for it; it disappears only when nothing else
     /// justified its presence.
     ForgetRepo(String),
+    /// A `termherd://open` link: show the tab working in this repo, or open
+    /// a shell there. Never types into a session nor launches Claude.
+    OpenRepo {
+        /// The repo as the link wrote it, where a new shell opens.
+        path: String,
+        /// The same repo as the filesystem resolves it, when that differs: a
+        /// pane may report either spelling, so either one matches.
+        resolved: Option<String>,
+    },
     /// Toggle a session's archived flag, by Claude session id.
     ToggleArchive(String),
     /// Set (or clear, when empty) a session's custom title.

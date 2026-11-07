@@ -1051,7 +1051,7 @@ mod tests {
             placement: Placement::Foreground,
         }));
         let id = match spawn.as_slice() {
-            [Effect::Spawn(spec)] => spec.session,
+            [Effect::Spawn(spec)] | [Effect::Spawn(spec), Effect::TabShown] => spec.session,
             other => panic!("expected Spawn, got {other:?}"),
         };
 
@@ -1320,7 +1320,7 @@ mod tests {
             clean: true,
         });
         // The kill releases the adapter's PTY handles for the dead process.
-        assert!(matches!(effects.as_slice(), [Effect::Kill(k)] if *k == done));
+        assert!(matches!(effects.as_slice(), [Effect::Kill(k), Effect::TabShown] if *k == done));
         assert_eq!(app.workspace.tabs.len(), 1);
         assert!(
             !app.sessions.contains_key(&done),
@@ -1337,7 +1337,7 @@ mod tests {
             session: id,
             clean: true,
         });
-        assert!(matches!(effects.as_slice(), [Effect::Kill(k)] if *k == id));
+        assert!(matches!(effects.as_slice(), [Effect::Kill(k), Effect::TabShown] if *k == id));
         assert!(
             app.workspace.tabs.is_empty(),
             "the tab closes; the app stays"
@@ -1353,7 +1353,7 @@ mod tests {
             .apply(Event::SplitFocused(SplitDir::Vertical))
             .as_slice()
         {
-            [Effect::Spawn(spec)] => spec.session,
+            [Effect::Spawn(spec)] | [Effect::Spawn(spec), Effect::TabShown] => spec.session,
             other => panic!("expected Spawn, got {other:?}"),
         };
         let effects = app.apply(Event::PtyExited {
@@ -1383,7 +1383,7 @@ mod tests {
             }))
             .as_slice()
         {
-            [Effect::Spawn(spec)] => spec.session,
+            [Effect::Spawn(spec)] | [Effect::Spawn(spec), Effect::TabShown] => spec.session,
             other => panic!("expected Spawn, got {other:?}"),
         };
         app.apply(Event::PtyExited {
@@ -1434,7 +1434,7 @@ mod tests {
             session: id,
             clean: true,
         });
-        assert!(matches!(effects.as_slice(), [Effect::Kill(k)] if *k == id));
+        assert!(matches!(effects.as_slice(), [Effect::Kill(k), Effect::TabShown] if *k == id));
         assert!(app.workspace.tabs.is_empty());
     }
 
@@ -1537,7 +1537,7 @@ mod tests {
             placement: Placement::Foreground,
         }));
         let id = match spawn.as_slice() {
-            [Effect::Spawn(spec)] => spec.session,
+            [Effect::Spawn(spec)] | [Effect::Spawn(spec), Effect::TabShown] => spec.session,
             other => panic!("expected Spawn, got {other:?}"),
         };
 
@@ -1621,7 +1621,7 @@ mod tests {
             }))
             .as_slice()
         {
-            [Effect::Spawn(spec)] => spec.session,
+            [Effect::Spawn(spec)] | [Effect::Spawn(spec), Effect::TabShown] => spec.session,
             other => panic!("expected Spawn, got {other:?}"),
         }
     }
@@ -1694,7 +1694,7 @@ mod tests {
             fresh_claude_id: "minted".into(),
         });
         assert!(
-            matches!(reopened.as_slice(), [Effect::Spawn(_)]),
+            matches!(reopened.as_slice(), [Effect::Spawn(_), Effect::TabShown]),
             "the closed tab is on the reopen stack, got {reopened:?}"
         );
     }

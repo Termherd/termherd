@@ -6,9 +6,11 @@ escape-sequence handling, scrollback, selection, colours.
 
 ## Selection and clipboard
 
-Drag with the mouse to select; a double-click selects the word or filename
-under the pointer; <kbd>Shift</kbd>+click extends the current selection. The
-chords that reach the clipboard:
+Drag with the mouse to select; a double-click selects the word under the
+pointer, or the whole URL or path when there is one — exactly the span a
+[link click](#clickable-links) opens, so a sentence's closing `.` is left out
+and a `:42` suffix kept; <kbd>Shift</kbd>+click extends the current selection.
+The chords that reach the clipboard:
 
 | | macOS | Windows / Linux |
 | --- | --- | --- |
@@ -104,8 +106,8 @@ detected per row. Hold <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>: the link under the
 pointer underlines and the cursor becomes a hand;
 <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+click opens it in your OS default handler.
 Trailing prose punctuation and unbalanced brackets are trimmed from the match.
-termherd does not register itself as the `termherd://` handler yet, so the OS
-has nowhere to send such a link.
+A `termherd://` link comes back to termherd itself: see
+[Opening a tab from a link](tabs-and-splits.md#opening-a-tab-from-a-link).
 
 **Hidden hyperlinks** work the same way. A program can print a label over a
 URL it never shows — the OSC 8 escape, which `gh`, `ls --hyperlink`, `cargo`
@@ -167,7 +169,8 @@ shell, and it is split on whitespace *before* `{path}` is filled in — so a
 filename containing spaces or `&` can never become a second argument.
 
 One limit remains, known and accepted: a path that wraps across two lines is
-not detected, the same limit URLs have.
+not detected, the same limit URLs have; a double-click on it selects only the
+part on the clicked line.
 
 ## Colours and font
 
@@ -187,3 +190,15 @@ directory it was launched in forever. That live `cwd` is what
 opens a new shell in, what path resolution tries first, and what `snapshot`
 reports over
 [MCP](../mcp/index.md).
+
+## The environment a pane starts with
+
+A pane inherits TermHerd's environment, with two kinds of change: the
+terminal identity Claude's status stream needs (see
+[Status](status.md)), and nothing of a Claude Code session TermHerd itself
+was started from. Started from a Claude Code shell, TermHerd would otherwise
+pass that session's `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
+messaging socket and the like to every pane, and a Claude launched there took
+itself for part of the parent session and could not be named. Variables you
+set yourself, such as `CLAUDE_CONFIG_DIR` or an API key, still reach every
+pane.

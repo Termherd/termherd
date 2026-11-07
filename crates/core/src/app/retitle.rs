@@ -75,7 +75,7 @@ mod tests {
             }))
             .as_slice()
         {
-            [Effect::Spawn(spec)] => spec.session,
+            [Effect::Spawn(spec)] | [Effect::Spawn(spec), Effect::TabShown] => spec.session,
             other => panic!("expected Spawn, got {other:?}"),
         }
     }
