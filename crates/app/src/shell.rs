@@ -7992,6 +7992,23 @@ mod key_routing {
     }
 
     #[test]
+    fn turning_capture_redaction_off_on_disk_reaches_the_capture() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        assert!(shell.redact_captures, "on by default");
+        std::fs::write(
+            crate::settings::path(&dir),
+            r#"{ "capture": { "redact": false } }"#,
+        )
+        .expect("write");
+
+        let _ = shell.update(Message::SettingsFileChanged);
+
+        assert!(!shell.redact_captures);
+    }
+
+    #[test]
     fn a_capture_writes_its_dump_under_the_data_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut shell = shell_persisting_under(&crate::paths::DataDir::at(tmp.path()));

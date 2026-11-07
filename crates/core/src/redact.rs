@@ -231,6 +231,16 @@ mod tests {
                 "export AWS_SESSION_TOKEN=[redacted] done".to_owned(),
             ),
             (
+                "quoted aws secret with spaces",
+                "export AWS_SECRET_KEY=\"correct horse battery staple\" done".to_owned(),
+                "export AWS_SECRET_KEY=[redacted] done".to_owned(),
+            ),
+            (
+                "aws secret whose closing quote the screen cut off",
+                format!("AWS_SECRET_ACCESS_KEY=\"{SECRET_KEY}"),
+                "AWS_SECRET_ACCESS_KEY=[redacted]".to_owned(),
+            ),
+            (
                 "openai style key",
                 "key: sk-proj-abcdefghijklmnopqrstuvwx1234".to_owned(),
                 "key: [redacted]".to_owned(),
@@ -305,6 +315,14 @@ mod tests {
                 "unset AWS_SECRET_ACCESS_KEY",
             ),
             ("a short aws value", "AWS_SECRET_ACCESS_KEY=changeme"),
+            (
+                "a short aws value cut off",
+                "AWS_SECRET_ACCESS_KEY=\"change",
+            ),
+            (
+                "a long aws setting that is not a secret",
+                "AWS_PROFILE=production-account-admin",
+            ),
             ("bearer in prose", "the Bearer of this note"),
             (
                 "a public key",
