@@ -79,7 +79,7 @@ pub(crate) fn launch_command(
 /// `--settings` arrived in Claude Code **1.0.61**: an older CLI rejects the
 /// flag and the launch fails outright, rather than merely losing its status.
 /// The floor the README states is higher still, for `--session-id`.
-pub(crate) fn write_title_settings(private: &PrivateFiles, session: SessionId) -> Option<PathBuf> {
+pub fn write_title_settings(private: &PrivateFiles, session: SessionId) -> Option<PathBuf> {
     let path = private.settings(session);
     let json = r#"{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":"0"}}"#;
     match termherd_private_fs::write_file(&path, json) {
@@ -211,12 +211,16 @@ impl PrivateFiles {
             .join(format!("{SHELL_DIR_PREFIX}{}", session.0.get()))
     }
 
-    fn mcp_config(&self, session: SessionId) -> PathBuf {
+    /// Where [`write_mcp_config`] puts `session`'s mcp config.
+    #[must_use]
+    pub fn mcp_config(&self, session: SessionId) -> PathBuf {
         self.0
             .join(format!("termherd-mcp-{}.json", session.0.get()))
     }
 
-    fn settings(&self, session: SessionId) -> PathBuf {
+    /// Where [`write_title_settings`] puts `session`'s settings overlay.
+    #[must_use]
+    pub fn settings(&self, session: SessionId) -> PathBuf {
         self.0
             .join(format!("termherd-settings-{}.json", session.0.get()))
     }
@@ -227,7 +231,7 @@ impl PrivateFiles {
 /// the bearer token. Both fields are known-safe for a bare JSON string (a
 /// loopback url and a hex token), so no escaping is needed. `None` (logged, not
 /// fatal) if the write fails: the session then launches without the live bridge.
-pub(crate) fn write_mcp_config(
+pub fn write_mcp_config(
     private: &PrivateFiles,
     session: SessionId,
     config: &McpConfig,
@@ -556,77 +560,6 @@ mod tests {
             contents.contains("CLAUDE_CODE_DISABLE_TERMINAL_TITLE"),
             "got {contents}"
         );
-    }
-
-    /// What another user could plant first at a predictable name in `/tmp`.
-    #[cfg(unix)]
-    mod planted {
-        use std::os::unix::fs::PermissionsExt;
-
-        use super::*;
-
-        fn mcp_config() -> McpConfig {
-            McpConfig {
-                url: "http://127.0.0.1:1/mcp".to_owned(),
-                token: "feedface".to_owned(),
-            }
-        }
-
-        #[test]
-        fn a_file_planted_world_readable_does_not_receive_the_token_as_is() {
-            let (_tmp, private) = scratch();
-            let session = session(81);
-            let path = private.mcp_config(session);
-            std::fs::write(&path, "").expect("plant the file");
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
-                .expect("open it to everyone");
-
-            let written =
-                write_mcp_config(&private, session, &mcp_config()).expect("the config is written");
-            let mode = std::fs::metadata(&written)
-                .expect("metadata")
-                .permissions()
-                .mode();
-            assert_eq!(mode & 0o777, 0o600, "got {mode:o}");
-        }
-
-        #[test]
-        fn a_symlink_planted_at_either_path_is_never_written_through() {
-            type Writer = fn(&PrivateFiles, SessionId) -> Option<PathBuf>;
-            type Named = fn(&PrivateFiles, SessionId) -> PathBuf;
-            let writers: [(&str, u64, Named, Writer); 2] = [
-                ("mcp config", 82, PrivateFiles::mcp_config, |p, s| {
-                    write_mcp_config(p, s, &mcp_config())
-                }),
-                (
-                    "settings overlay",
-                    83,
-                    PrivateFiles::settings,
-                    write_title_settings,
-                ),
-            ];
-            for (name, id, path_of, write) in writers {
-                let (_tmp, private) = scratch();
-                let session = session(id);
-                let victim = std::env::temp_dir().join(format!("termherd-victim-{id}"));
-                std::fs::write(&victim, "victim").expect("the victim's file");
-                let path = path_of(&private, session);
-                std::os::unix::fs::symlink(&victim, &path).expect("plant the symlink");
-
-                let _ = write(&private, session);
-                assert_eq!(
-                    std::fs::read_to_string(&victim).expect("victim readable"),
-                    "victim",
-                    "the {name} write followed the planted symlink"
-                );
-                let kind = std::fs::symlink_metadata(&path).map(|meta| meta.file_type());
-                assert!(
-                    !kind.is_ok_and(|kind| kind.is_symlink()),
-                    "the {name} path is still the planted symlink"
-                );
-                let _ = std::fs::remove_file(&victim);
-            }
-        }
     }
 
     #[test]

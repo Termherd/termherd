@@ -38,7 +38,6 @@ declare -A allowed=(
     [crates/pty/src/kill.rs]="the kill reconciliation quarantine — Unix reaps, Windows does not"
     [crates/pty/src/status.rs]="the foreground process group is a Unix-only notion — portable_pty declares its accessor under cfg(unix), so the fork is compile-time"
     [crates/scan/src/open_file.rs]="a FIFO or symlink in place of a session file is refused at open (O_NONBLOCK, O_NOFOLLOW), flags Unix alone has"
-    [crates/pty/src/launch.rs]="its tests plant world-readable files and symlinks, which only Unix permissions can express"
     [crates/private-fs/src/lib.rs]="owner-only files and directories (0600 / 0700) need Unix-only permission APIs — the one home of that fork"
 )
 
