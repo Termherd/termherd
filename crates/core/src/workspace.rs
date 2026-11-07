@@ -157,6 +157,13 @@ impl Tab {
         out
     }
 
+    /// Whether one of this tab's panes hosts `session`. Unlike
+    /// [`Self::sessions`], it allocates nothing.
+    #[must_use]
+    pub fn hosts(&self, session: SessionId) -> bool {
+        pane_hosts(&self.root, session)
+    }
+
     /// The session in this tab's first (leftmost) pane — the one the tab is
     /// named after, and whose conversation it stands for.
     #[must_use]
@@ -217,6 +224,13 @@ impl Tab {
     }
 }
 
+fn pane_hosts(pane: &Pane, session: SessionId) -> bool {
+    match pane {
+        Pane::Leaf(leaf) => *leaf == session,
+        Pane::Split { a, b, .. } => pane_hosts(a, session) || pane_hosts(b, session),
+    }
+}
+
 fn collect_leaves(pane: &Pane, out: &mut Vec<SessionId>) {
     match pane {
         Pane::Leaf(session) => out.push(*session),
@@ -271,9 +285,17 @@ impl Workspace {
     /// sibling close would shift.
     #[must_use]
     pub fn tab_of(&self, session: SessionId) -> Option<usize> {
-        self.tabs
-            .iter()
-            .position(|tab| tab.sessions().contains(&session))
+        self.tabs.iter().position(|tab| tab.hosts(session))
+    }
+
+    /// Park the tab at `index`, or unpark it when it is parked. `None`,
+    /// changing nothing, for a missing tab.
+    pub fn toggle_park(&mut self, index: usize) -> Option<()> {
+        if self.tabs.get(index)?.parked {
+            self.unpark(index).map(drop)
+        } else {
+            self.park(index)
+        }
     }
 
     /// Split the focused leaf in the active tab, opening `new` on side B.

@@ -35,6 +35,12 @@ pub enum ColorKeeper {
 }
 
 impl App {
+    /// Park or unpark a tab. Pure ordering: no effect to perform.
+    pub(super) fn toggle_park_tab(&mut self, index: usize) -> Vec<Effect> {
+        self.workspace.toggle_park(index);
+        Vec::new()
+    }
+
     /// Close a tab (FR5): drop its sessions from the live registry and ask the
     /// runtime to kill each PTY. An out-of-range index yields no effects.
     /// Snapshots the tab onto the reopen stack first, so the close can be
@@ -46,21 +52,6 @@ impl App {
             self.sessions.remove(id);
         }
         sessions.into_iter().map(Effect::Kill).collect()
-    }
-
-    /// Park the tab at `index`, or unpark it when it is parked. A missing tab
-    /// changes nothing. No effects either way: the sessions keep running.
-    pub(super) fn toggle_park_tab(&mut self, index: usize) -> Vec<Effect> {
-        match self.workspace.tabs.get(index).map(|tab| tab.is_parked()) {
-            Some(true) => {
-                self.workspace.unpark(index);
-            }
-            Some(false) => {
-                self.workspace.park(index);
-            }
-            None => {}
-        }
-        Vec::new()
     }
 
     /// Push the tab at `index` onto the reopen stack, capturing the kind,

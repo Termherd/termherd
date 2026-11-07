@@ -59,7 +59,7 @@ impl Shell {
             let renaming_this = self
                 .tab_rename
                 .as_ref()
-                .is_some_and(|(anchor, _)| tab.sessions().contains(anchor));
+                .is_some_and(|(anchor, _)| tab.hosts(*anchor));
             // The status dot, then the kind mark — shared by the chip and its
             // rename editor so editing a title never hides what the tab runs.
             let mut inner = row![].spacing(6).align_y(iced::Center);

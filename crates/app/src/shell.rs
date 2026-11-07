@@ -417,9 +417,9 @@ impl TabAnchors {
             shell.tab_drag = Some(TabDrag { from, over });
         }
         if let Some((index, session)) = self.split
-            && let Some(now) = workspace.tab_of(session)
             && let Some(drag) = shell.split_drag.as_mut()
             && drag.tab == index
+            && let Some(now) = workspace.tab_of(session)
         {
             drag.tab = now;
         }
@@ -428,8 +428,13 @@ impl TabAnchors {
     /// Whether the message changed which tab is shown.
     fn shown_changed(&self, shell: &Shell) -> bool {
         let workspace = &shell.core.workspace;
-        self.shown
-            .is_some_and(|session| workspace.tab_of(session) != Some(workspace.active))
+        let still_shown = |session| {
+            workspace
+                .tabs
+                .get(workspace.active)
+                .is_some_and(|tab| tab.hosts(session))
+        };
+        self.shown.is_some_and(|session| !still_shown(session))
     }
 }
 
@@ -4721,7 +4726,7 @@ mod key_routing {
             .workspace
             .tabs
             .iter()
-            .map(|t| t.sessions()[0])
+            .map(Tab::first_session)
             .collect()
     }
 
@@ -4743,14 +4748,7 @@ mod key_routing {
             let _ = shell.core.apply(termherd_core::Event::ToggleParkTab(index));
         }
         shell.core.workspace.active = 2;
-        let order: Vec<SessionId> = shell
-            .core
-            .workspace
-            .tabs
-            .iter()
-            .map(termherd_core::workspace::Tab::first_session)
-            .collect();
-        assert_eq!(order, ids, "precondition: launch order");
+        assert_eq!(tab_order(&shell), ids, "precondition: launch order");
         assert_eq!(
             shell.core.workspace.first_parked(),
             0,
