@@ -94,9 +94,10 @@ program.
 steps the font size up, down, and back to the configured base. Zoom is a
 runtime state — it does not rewrite `terminal.font_size` in your settings.
 
-Three chords are bound to zoom-in, not one: `mod+=`, `mod+plus` and
-`mod+shift+plus`. `=` is the unshifted face of the `+` key on QWERTY and the
-unshifted key on AZERTY, so between them the same gesture works across layouts.
+Three chords are bound to zoom-in, not one: `mod+=`, `mod+shift+=` and
+`mod+plus`. On QWERTY and AZERTY `+` is the shifted face of the `=` key, so
+zoom-in answers that key with or without Shift; `mod+plus` is the keypad
+<kbd>+</kbd>.
 
 ## Clickable links
 
