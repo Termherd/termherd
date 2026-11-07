@@ -6,6 +6,7 @@
 //! resulting spans, so every one is exhaustively unit-testable.
 
 use iced::{Point, Rectangle, mouse};
+use termherd_core::paths::is_path_char;
 use termherd_core::{ProbeKind, SelectSide, TargetProbe};
 use termherd_pty::Screen;
 
@@ -122,30 +123,22 @@ pub(super) fn target_at(screen: &Screen, col: u16, row: u16) -> Option<TargetPro
     })
 }
 
-/// Whether a character belongs to a double-click "word". Alphanumerics
-/// plus the punctuation that holds filenames and paths together, so a unit like
-/// `~/src/main.rs:42` selects whole; whitespace and bracketing punctuation
-/// (quotes, parens, commas) are boundaries.
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '\\' | '~' | ':' | '@' | '+')
-}
-
 /// The word / filename under grid cell `(col, row)` as an inclusive cell range
 /// `(anchor, head)`, or `None` when the cell is not part of a word (e.g. blank).
-/// A word is the maximal run of [`is_word_char`] cells around `col` — this is
+/// A word is the maximal run of [`is_path_char`] cells around `col` — this is
 /// what a double-click selects.
 pub(super) fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16), (u16, u16))> {
     let line = screen.lines.get(row as usize)?;
     let here = col as usize;
-    if !line.get(here).is_some_and(|cell| is_word_char(cell.c)) {
+    if !line.get(here).is_some_and(|cell| is_path_char(cell.c)) {
         return None;
     }
     let mut start = here;
-    while start > 0 && is_word_char(line[start - 1].c) {
+    while start > 0 && is_path_char(line[start - 1].c) {
         start -= 1;
     }
     let mut end = here;
-    while end + 1 < line.len() && is_word_char(line[end + 1].c) {
+    while end + 1 < line.len() && is_path_char(line[end + 1].c) {
         end += 1;
     }
     Some(((start as u16, row), (end as u16, row)))
