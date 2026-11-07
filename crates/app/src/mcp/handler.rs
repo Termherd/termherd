@@ -661,16 +661,17 @@ impl TermherdMcp {
                        Chords use the same syntax as the `keys` section of \
                        settings.json — \"cmd+shift+s\", \"ctrl+tab\", \
                        \"escape\" — and resolve through the *live* keymap, so \
-                       this exercises whatever the user rebound. Args: `keys` \
+                       this exercises whatever the user rebound. A key is one \
+                       character or one of tab, enter, escape, space, \
+                       backspace, delete, insert, up, down, left, right, home, \
+                       end, pageup, pagedown, f1–f12. Args: `keys` \
                        (chords, applied in order). Returns one `steps` entry per \
                        chord — `ran` (with the action's name), `inert` (the \
                        action exists but has no surface yet, so nothing \
                        happened; do not retry), `overlay` (an open prompt \
-                       consumed it; \"escape\" usually cancels and \"enter\" \
+                       consumed it; \"escape\" leaves any prompt and \"enter\" \
                        confirms — but on `quit-confirm` \"enter\" quits the app, \
-                       killing every session and this connection, and \
-                       `session-rename` answers to neither, so only a human can \
-                       clear that one), \
+                       killing every session and this connection), \
                        `typed` (bound to nothing, so it reached the focused \
                        terminal), `unbound` (nothing claimed it) — plus the \
                        resulting `focused_handle`. Use `run_action` instead \
@@ -981,8 +982,19 @@ impl ServerHandler for TermherdMcp {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = server;
         info.instructions = Some(
-            "termherd's live bridge: read and (later) drive the terminal \
-             sessions it is hosting."
+            "termherd's live bridge: read and drive the terminal sessions and \
+             the workspace of the termherd hosting you. Address a session by \
+             the `handle` `list_sessions` gives, never by Claude's resume id. \
+             Act, wait, observe: `run_in_session` returns at once, so follow \
+             it with `wait_for_status` — `busy` before `idle`, since just \
+             after typing a session still shows its old status — then \
+             `read_terminal`. `prompt_in_session` does all three for a \
+             prompt. Never poll `snapshot` to wait. `press_keys` and \
+             `run_action` drive termherd's own interface, not a terminal; an \
+             open prompt takes their keys, and `escape` leaves any prompt; \
+             `enter` on the quit prompt quits termherd and this connection. \
+             Take a `screenshot` last: it weighs hundreds of times a \
+             `snapshot`."
                 .into(),
         );
         info
@@ -1990,6 +2002,40 @@ mod tests {
             ),
             other => panic!("tool {other:?} is new: add it to the structuredContent sweep"),
         }
+    }
+
+    #[test]
+    fn the_instructions_teach_the_wait_order_and_name_only_served_tools() {
+        let text = TermherdMcp::new(channel().0)
+            .get_info()
+            .instructions
+            .expect("the server states its instructions");
+        let served: Vec<String> = TermherdMcp::tool_router()
+            .list_all()
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+
+        let named: Vec<&str> = text
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .filter(|word| word.contains('_') && !word.contains(' '))
+            .collect();
+        assert!(
+            named.contains(&"wait_for_status"),
+            "the loop names its tools: {named:?}"
+        );
+        for tool in &named {
+            assert!(
+                served.iter().any(|name| name == tool),
+                "the instructions name `{tool}`, which the server does not serve"
+            );
+        }
+        assert!(
+            text.contains("`busy` before `idle`"),
+            "a wait placed just after typing answers on the old status"
+        );
     }
 
     #[tokio::test]
@@ -3454,7 +3500,7 @@ mod tests {
                         "cmd+w".into(),
                         "cmd+d".into(),
                         "x".into(),
-                        "f2".into(),
+                        "f13".into(),
                         "cmd+n".into(),
                         "cmd+shift+t".into(),
                     ],
@@ -3487,7 +3533,7 @@ mod tests {
                     { "press": "cmd+w", "result": "ran", "action": "close-focused" },
                     { "press": "cmd+d", "result": "overlay", "overlay": "tab-close-confirm" },
                     { "press": "x", "result": "typed" },
-                    { "press": "f2", "result": "unbound" },
+                    { "press": "f13", "result": "unbound" },
                     { "press": "cmd+n", "result": "inert",
                       "action": "open-new-session", "reason": "no-surface" },
                     { "press": "cmd+shift+t", "result": "inert",

@@ -134,6 +134,7 @@ issues #18–#29.
 | --- | --- | --- | --- | --- |
 | [F-i18n](#f-i18n) | feature | workspace | ☐ | Internationalization — parked; the English-first externalization shipped. |
 | [F-keymap-advanced](#f-keymap-advanced) | feature | keymap, terminal | ☐ | The keymap concerns from the gist that still need design. |
+| [F-mcp-self-diagnosis](#f-mcp-self-diagnosis) | feature | mcp | ☐ | Ship with the bridge what an agent now learns from this repo's docs. |
 | [F-search-ux](#f-search-ux) | feature | sidebar | ☐ | Search activation and scope; the one real gap was a match snippet. |
 | [F-favorites](#f-favorites) | feature | sidebar | ✅ | Favorites in the sidebar — one concept with the session star. |
 
@@ -1940,6 +1941,35 @@ Keymap concerns from the gist that need design, layered on the shipped
   #59: `terminal.option_as_meta` (`none` / `left` / `right` / `both`, default
   `left`) picks which macOS Option key is Meta; the other one types the glyph
   the layout composes
+
+<a id="f-mcp-self-diagnosis"></a>
+
+### F-mcp-self-diagnosis
+
+Ship with the bridge what an agent now learns from this repo's docs.
+
+Design-first; nothing here is scoped. The review of the agent context files
+on 2026-11-07 moved the calling rules into the server's instructions, and
+left four things an agent outside this repo still cannot learn or do from the
+bridge alone:
+
+- **Guidance as MCP resources or prompts.** The diagnosis recipes live only
+  in a project skill (`drive-termherd`), so a client
+  launched from another repo never reads them. The stdio server already
+  publishes `termherd://keys/schema`; a guide resource, or MCP prompts per
+  recipe, would travel the same way.
+- **The PTY bytes a press produced.** The ground truth for a keyboard defect
+  is a fresh shell running `stty raw -echo` and `dd | xxd` while
+  [F-mcp-keys](#f-mcp-keys) presses. A tool that answers the bytes written to
+  a session would replace the recipe and the second shell.
+- **The clipboard.** Checking what `copy` wrote needs `pbcopy` / `pbpaste`
+  outside the sandbox, on macOS only. A read of termherd's own last
+  clipboard write would make the check cross-platform and sandbox-free.
+- **A wait that cannot answer on the old status.** `wait_for_status` still
+  answers at once on the status from before a prompt, which is why every
+  caller is told to wait for `busy` first; `prompt_in_session` fixed it for
+  its own loop only (#435). A wait for the next transition would make the
+  rule unnecessary. Related open defect: #436.
 
 <a id="f-search-ux"></a>
 

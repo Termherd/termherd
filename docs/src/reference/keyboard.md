@@ -191,6 +191,15 @@ a key with `+`. Aliases: `control` for `ctrl`, `option` for `alt`, and
 }
 ```
 
+A key is a single character (`a`, `1`, `;`) or one of these names: `tab`,
+`enter`, `escape`, `space`, `backspace`, `delete`, `insert`, `up`, `down`,
+`left`, `right`, `home`, `end`, `pageup`, `pagedown`, and `f1` to `f12`. A
+chord naming any other key never matches a press.
+
+A binding wins over the terminal. Bind `space`, `backspace` or a letter with
+no modifier, or with Shift alone, and that key stops reaching the program in
+the pane.
+
 One chord or a list of chords per action. Unknown action names and unparsable
 chords are logged and skipped — they do not invalidate the rest of the file.
 

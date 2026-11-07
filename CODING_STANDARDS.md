@@ -37,6 +37,9 @@ Rules of thumb:
   behaviour change reviewable as a small, intentional diff.
 - If a tidy ends up changing observable behaviour, it wasn't a tidy. Revert
   and split.
+- New tests, and the scaffolding that lets a red test compile (a new enum
+  variant, a no-op message), are behaviour work: the tidy commit lands before
+  them, with the suite green.
 
 Acceptable commit shapes:
 
@@ -149,8 +152,8 @@ CUPID describes what good code *is*; YAGNI protects against building what you
 don't need yet.
 
 - No abstraction for a second adapter that doesn't exist. A concrete adapter is
-  fine until the next one actually lands (`mcp` is Unsure — don't pre-abstract
-  for it).
+  fine until the next one actually lands (the IDE bridge `F-mcp-ide-bridge` is
+  Unsure — don't pre-abstract for it).
 - No trait with a single implementation — **except a port** that deliberately
   decouples `core` from an adapter. That is the hexagonal contract, not
   speculation; the distinction is whether the trait exists to invert a
@@ -220,29 +223,30 @@ Reflect rules:
 - **Reflect after Green-but-no-Refactor cycles too.** "There was nothing to
   clean" is itself a signal — either the design is good or you're not looking
   hard enough.
-- **Always surface findings to the user with a recommendation.** Every
-  reflection that produces a finding (a new test worth pinning, a surprise that
-  suggests a missing concept, a smell you noticed) gets a one-line decision
-  prompt: *"apply now / add to today / add to the roadmap / forget it"*. Do not
+- **Always surface findings to the user as a decision.** Every reflection
+  that produces a finding (a new test worth pinning, a surprise that suggests a
+  missing concept, a smell you noticed) gets a one-line decision prompt:
+  *"apply now / add to today / add to the roadmap / forget it"*. Do not
   silently carry findings forward and do not silently apply them.
 
-  Recommend the best move per the principles, and say *why* in one short
-  clause. Heuristics:
+  The user picks. Give a recommendation only when asked, then name the move
+  and its *why* in one short clause. Heuristics:
   - **Apply now** — the finding closes a still-open hole from the cycle just
     finished, the fix is small, and skipping it would leave the work
     half-done. (e.g. forward contract test landed → reverse test is ~30 LOC →
     apply now closes the lesson.)
   - **Add to today** — same-session work, but it would derail the current
     task; better as the next discrete cycle.
-  - **Add to the roadmap** — useful but not on the critical path; capture it in
-    [`ROADMAP.md`](ROADMAP.md) so it's not lost.
+  - **Add to the roadmap** — useful but not on the critical path; capture it as
+    a feature file in `.roadmap/features/` (never in the generated
+    `ROADMAP.md`) so it's not lost.
   - **Forget it** — speculative, low-leverage, or you're not sure it's real.
     Recording every passing thought is its own debt.
 
-  Default leans toward *apply now* when the finding is small and directly tied
-  to the cycle that surfaced it (Tidy First: keep the diff coherent). Lean
-  toward *roadmap* when the finding is larger than the cycle it interrupted
-  (CUPID-Composable: don't bundle unrelated work).
+  *Apply now* fits a finding that is small and directly tied to the cycle that
+  surfaced it (Tidy First: keep the diff coherent); *roadmap* fits one larger
+  than the cycle it interrupted (CUPID-Composable: don't bundle unrelated
+  work).
 
 ### Testing in `termherd`
 
@@ -373,83 +377,35 @@ Types:
 - `refactor`: code change that neither fixes a bug nor adds a feature
 - `test`: adding or fixing tests
 - `chore`: build tooling, dependencies
+- `ci`: CI workflows
 - `perf`: performance improvement
 
-Scopes in this repo are either a **milestone** (`m0`, `m1`, `m2`) or a
-**crate/area** (`core`, `claude`, `pty`, `scan`, `app`, `ci`, `dist`, `docs`).
+The scope names where the change lands: a crate (`core`, `claude`, `pty`,
+`scan`, `mcp`, `app`), a module or surface (`tabs`, `keymap`, `instance`), or
+a doc area (`agents`, `standards`, `roadmap`, `ci`).
 
 Breaking changes include `BREAKING CHANGE:` in the footer or `!` after the
-type. Commit messages carry **no "Claude" signature** (per the global user
-instruction).
+type. No AI signature, in commits or anywhere else — see the conventions in
+[`AGENTS.md`](AGENTS.md).
 
 ---
 
 ## Toolchain & Layout
 
-### Workspace layout
+### Workspace layout, toolchain and CI
 
-Hexagonal workspace — adapters depend on `core`, never the reverse:
+The crate map and the dependency rule are in [`AGENTS.md`](AGENTS.md)
+(*Architecture*), the local commands under its *Commands*, and every CI gate
+in [`docs/CI.md`](docs/CI.md). Two rules live only here:
 
-```text
-crates/
-├── core/    # domain: App state machine, Workspace, ports, keymap (no I/O)
-├── claude/  # pure CLI-format codec: path · derive · digest · osc · jsonl
-├── scan/    # filesystem discovery adapter (implements ProjectScanner)
-├── pty/     # terminal adapter, actor-per-session (implements PtyHost)
-└── app/     # iced GUI shell; constructs adapters in main() and injects them
-```
-
-When adding code, ask *which crate does this belong in?* If the answer is
-"`core` should call this adapter directly," the answer is wrong — add a port
-trait in `core::ports` and have the adapter implement it.
-
-### Toolchain policy
-
-- `rust-toolchain.toml` pins **exactly `1.95.0`, edition 2024** (Q10). Unlike
-  projects that track `stable`, termherd pins an exact minor version — do **not**
-  bump it without updating the pin and re-checking CI in the same commit.
-- `Cargo.toml [workspace.package]` declares `rust-version = "1.95"`. Keep it in
-  lockstep with the toolchain pin; bumping one without the other is a bug.
-
-### Clippy & lints
-
-Lints are declared once at the workspace root and tightened per crate:
-
-- `[workspace.lints.rust]`: `unsafe_code = "deny"` everywhere.
-- `[workspace.lints.clippy]`: `unwrap_used`, `expect_used`, `panic`, `todo`,
-  `unimplemented` = `warn` by default.
-- `core` and `claude` tighten `unwrap_used`/`expect_used`/`panic` to **`deny`**
-  in their own `Cargo.toml` (Q5): production code in those crates must return
-  typed errors.
-- `clippy.toml` opts tests out (`allow-unwrap-in-tests` and friends).
-- CI runs `cargo clippy --workspace --all-targets -- -D warnings`: **every
-  warning is blocking.** Mirror it locally before pushing.
-
-### CI gates you can mirror locally
-
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace          # `cargo test --workspace` locally
-cargo deny check                       # if cargo-deny installed
-cargo machete                          # unused deps; if cargo-machete installed
-just check-deps                        # hexagonal crate dependency rule
-just check-arch                        # module boundaries + OS-cfg containment
-markdownlint-cli2                      # 80-col prose; see .markdownlint-cli2.jsonc
-just roadmap                           # ROADMAP.md still matches .roadmap/
-just docs                              # the user manual builds (mdbook)
-```
-
-This block is a *local loop*, not the gate list: `just check-arch` runs with
-`cargo fmt` in `rustfmt & arch`, while `deny`, `machete`, and `just check-deps`
-run together in `cargo-checks`. Two blocking gates have no local mirror at all
-— `portable`, because it is a *Windows* run, and `actionlint`. CodeQL runs too,
-but it is a post-merge baseline and not in `ci-success`, so it blocks nothing.
-
-For the **full picture** — every gate, what it
-protects, when it runs (PR / merge / schedule / release), how to mirror it, and
-the sanctioned exceptions — see the CI reference & runbook at
-[`docs/CI.md`](docs/CI.md).
+- `Cargo.toml [workspace.package]` declares `rust-version = "1.95"`. Keep it
+  in lockstep with the `rust-toolchain.toml` pin; bumping one without the
+  other is a bug.
+- Lints are declared once at the workspace root and tightened per crate:
+  `unsafe_code = "deny"` everywhere; `unwrap_used`, `expect_used`, `panic`,
+  `todo`, `unimplemented` warn by default, and `core` and `claude` raise the
+  first three to `deny` (Q5). `clippy.toml` opts tests out, and CI runs clippy
+  with `-D warnings`, so every warning is blocking.
 
 Markdown prose wraps at **80 columns** (tables and code blocks are exempt). This
 file obeys that rule; keep it that way when you edit.
