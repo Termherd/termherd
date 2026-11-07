@@ -15,6 +15,43 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pane restarts in its directory; a Claude pane resumes its conversation
   (#421).
 
+### Fixed (a long Claude command is submitted)
+
+- A confirmed Claude command with a long argument, such as a `/rename` to a
+  long name from the tab menu or MCP `claude_command`, is submitted. Claude
+  Code used to read the line and its Enter as one paste, and waited for a
+  second Enter. Enter now follows the line after a pause, as
+  `run_in_session` and `prompt_in_session` already did (#439).
+
+### Fixed (a TermHerd started from a Claude session)
+
+- A TermHerd started from inside a Claude Code session no longer passes that
+  session's identity (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
+  its messaging socket, …) to every pane. A Claude launched in such a
+  TermHerd now writes its session file again, so its agent name, hover card
+  and MCP identity are found (#356).
+
+### Fixed (the tab menu says why *Tab colour…* is unavailable)
+
+- On a Claude tab that cannot take `/color` right now — busy, a draft in its
+  prompt, or the view scrolled off the prompt — the tab menu lists
+  *Tab colour…* greyed out with the reason, instead of hiding it. Over MCP,
+  `enter` on it reports `refused` with the reason and keeps the menu open
+  (#373).
+
+### Fixed (the active tab's status dot reads on its fill)
+
+- The status dot on the active tab is shaded against that tab's fill rather
+  than the window background, so it keeps 3:1 contrast on every theme. On
+  stock Dark a busy dot sat near 2.5:1 on the blue chip, on Dracula near
+  1.3:1 (#382).
+
+### Security (the live bridge checks Host and Origin itself)
+
+- The MCP live bridge refuses, with a 403, a request whose `Host` or `Origin`
+  is not `127.0.0.1`, `localhost` or `[::1]` on its own port. It used to rely
+  on the MCP library's default Host check, and checked no Origin (#293).
+
 ### Fixed (the session scan stays inside `~/.claude/projects`)
 
 - The sidebar's scan no longer follows a symlink under `~/.claude/projects`,

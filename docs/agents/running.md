@@ -65,15 +65,16 @@ user's release while testing #432. Build it merged instead —
 `git merge --no-commit origin/main`, build, `git merge --abort` — which is
 also the tree that will land.
 
-**A build an agent launches is not a build a user launches.** The agent's shell
-carries its own Claude session's `CLAUDE*` variables (`CLAUDECODE`,
-`CLAUDE_CODE_CHILD_SESSION`, the session id and messaging socket), and termherd
-passes its whole environment on to every PTY. A Claude started in that build
-then wrote no `~/.claude/sessions/<pid>.json`, so nothing it hosted could be
-named: the agent-name copy read as broken in manual testing and worked at once
-from a plain terminal. Until termherd strips those variables (#356), verify
-anything that reads Claude's session files from a build the user starts in an
-ordinary terminal.
+**A build an agent launches used to differ from a build a user launches.** The
+agent's shell carries its own Claude session's `CLAUDE*` variables
+(`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, the session id and messaging
+socket), and termherd passed its whole environment on to every PTY. A Claude
+started in that build then wrote no `~/.claude/sessions/<pid>.json`, so nothing
+it hosted could be named. termherd now strips the session-scoped ones before a
+spawn (`INHERITED_SESSION_VARS` in `crates/pty/src/launch.rs`, #356). When a
+new Claude Code release exports another variable naming its session, a build
+an agent launches is where it shows first: compare `env | grep -i claude` in
+an agent shell against that list.
 
 **`cargo test` used to need `env -u ZDOTDIR` when run from inside a termherd
 shell — it no longer does.** That shell exports

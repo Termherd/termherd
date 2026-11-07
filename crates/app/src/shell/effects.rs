@@ -10,9 +10,10 @@ mod os;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use iced::{Task, window};
+use termherd_core::claude_command::SUBMIT;
 use termherd_core::{
     Effect, Launch, McpConfig, OpenTarget, Section, SessionId, SnapshotFilter, SnapshotInputs,
     SpawnSpec, TerminalScope, WorkspaceSnapshot, ports::PtyError,
@@ -25,6 +26,17 @@ use super::bridge::Request;
 use super::notify_click::Posting;
 use super::{Message, Shell};
 use os::{notify, notify_clickable, notify_replacing, open_path, open_url, spawn_editor};
+
+/// Pause before a submit's Enter. Claude Code takes a burst of about 64 bytes
+/// or more for a paste, where Enter is a line break, so Enter must reach it in
+/// a read of its own.
+pub(super) const ENTER_GAP: Duration = Duration::from_millis(50);
+
+/// Wait out [`ENTER_GAP`]. The sleep blocks inside the future, as the scan and
+/// the PNG encode do: iced's executor here has no tokio timer to await.
+pub(super) async fn enter_gap() {
+    std::thread::sleep(ENTER_GAP);
+}
 
 /// Open a resolved file. The configured command fails *visibly* — a click
 /// that opens nothing is indistinguishable from a click that missed, and
@@ -73,6 +85,9 @@ impl Shell {
                 spawned
             }
             Effect::Write { session, bytes } => self.pty.write(session, &bytes),
+            Effect::Submit { session } => {
+                return Task::perform(enter_gap(), move |()| Message::SubmitDue(session));
+            }
             Effect::Resize {
                 session,
                 cols,
@@ -146,6 +161,16 @@ impl Shell {
             tracing::warn!(%error, "pty effect failed");
         }
         Task::none()
+    }
+
+    /// Press Enter in `session` once its submit's pause has passed. Through
+    /// `core`, so a session that exited during the pause is not written to.
+    pub(super) fn press_enter(&mut self, session: SessionId) -> Task<Message> {
+        let effects = self.core.apply(termherd_core::Event::TerminalInput {
+            session,
+            bytes: SUBMIT.to_vec(),
+        });
+        self.perform(effects)
     }
 
     /// Tell `core` when `session`'s PTY started, by the wall clock it has no

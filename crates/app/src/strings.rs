@@ -5,7 +5,7 @@
 //! user-facing literal should live in the view/shell code. Static labels are
 //! `const`s; strings built from runtime values are functions.
 
-use termherd_core::ClaudeColor;
+use termherd_core::{ClaudeColor, CommandRefusal, SessionStatus};
 
 // --- Sidebar ---
 pub const SEARCH_PLACEHOLDER: &str = "Search…";
@@ -135,6 +135,25 @@ pub const TAB_MENU_SPLIT_DOWN: &str = "Split down";
 pub const TAB_MENU_PARK: &str = "Park tab";
 pub const TAB_MENU_CLOSE: &str = "Close pane";
 
+/// Why a menu entry that asks Claude is disabled, in the few words a menu line
+/// has room for; the full reason is the refusal's own text.
+#[must_use]
+pub fn tab_menu_refusal(refusal: &CommandRefusal) -> &'static str {
+    match refusal {
+        CommandRefusal::UnknownSession => "session gone",
+        CommandRefusal::NotClaude => "not a Claude session",
+        CommandRefusal::NotIdle(status) => match status {
+            SessionStatus::Starting => "Claude starting",
+            SessionStatus::Busy => "Claude busy",
+            SessionStatus::Attention => "Claude waiting for an answer",
+            SessionStatus::Exited => "session exited",
+            SessionStatus::Idle => "Claude not at its prompt",
+        },
+        CommandRefusal::DraftPresent(_) => "draft in prompt",
+        CommandRefusal::PromptNotVisible => "prompt not on screen",
+    }
+}
+
 // --- Tab colour picker ---
 /// A colour as the picker lists it. `default` is listed as the absence of a
 /// colour it gives the tab, not as a colour of its own.
@@ -239,6 +258,39 @@ pub const SETTINGS_CLAUDE_NOTE: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_disabled_menu_entry_names_its_refusal_in_a_few_words() {
+        let labels = [
+            (CommandRefusal::UnknownSession, "session gone"),
+            (CommandRefusal::NotClaude, "not a Claude session"),
+            (
+                CommandRefusal::NotIdle(SessionStatus::Starting),
+                "Claude starting",
+            ),
+            (CommandRefusal::NotIdle(SessionStatus::Busy), "Claude busy"),
+            (
+                CommandRefusal::NotIdle(SessionStatus::Attention),
+                "Claude waiting for an answer",
+            ),
+            (
+                CommandRefusal::NotIdle(SessionStatus::Exited),
+                "session exited",
+            ),
+            (
+                CommandRefusal::NotIdle(SessionStatus::Idle),
+                "Claude not at its prompt",
+            ),
+            (
+                CommandRefusal::DraftPresent("x".to_owned()),
+                "draft in prompt",
+            ),
+            (CommandRefusal::PromptNotVisible, "prompt not on screen"),
+        ];
+        for (refusal, label) in labels {
+            assert_eq!(tab_menu_refusal(&refusal), label, "{refusal:?}");
+        }
+    }
 
     #[test]
     fn the_quit_prompt_names_each_cost_it_has_and_no_other() {

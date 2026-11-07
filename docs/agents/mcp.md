@@ -174,10 +174,14 @@ needs it, not before.
 only from a session termherd spawned, so the launcher itself cannot drive it)
 and the pointer at termherd's own chrome (#301 — the sidebar, tabs and gutters
 still have no mouse). Neither blocks the other.
-Three defects are open beside them: the bridge's hardening (#293; #284 is
-fixed), a `read_terminal` that can return the screen from before the status it
-waited for (#436), and a long `claude_command` that Claude reads as a paste
-(#439). Two defects are fixed. A status reading `idle` while Claude still
+One defect is open beside them: a `read_terminal` that can return the
+screen from before the status it waited for (#436). The bridge's hardening
+is done: #284, then #293, which moved the Host/Origin check from rmcp's
+defaults into termherd's own gate (403 before the token's 401). Three other
+defects are fixed. A long `claude_command` that Claude read as a paste
+(#439): every submit, the command's and `run_in_session`'s, is now
+`Effect::Submit`, whose Enter the shell's effect executor alone writes after
+`ENTER_GAP`. A status reading `idle` while Claude still
 works (#427): `prompt_in_session` no longer settles on the status from before
 its prompt (#435; a bare `wait_for_status` still needs `busy` first), and
 Claude's idle title must stand 150 ms (`pty::status::IDLE_HOLD`) before a

@@ -689,6 +689,8 @@ enum Message {
         request: termherd_core::PathRequest,
         resolved: Option<termherd_core::ResolvedPath>,
     },
+    /// The pause before a submit's Enter has passed; press it now.
+    SubmitDue(termherd_core::SessionId),
     /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
     /// runs off the UI thread, so this only spawns it.
@@ -1469,6 +1471,7 @@ impl Shell {
                     .apply(termherd_core::Event::PathResolved { request, resolved });
                 self.perform(effects)
             }
+            Message::SubmitDue(session) => self.press_enter(session),
             Message::CaptureScreenshot {
                 screenshot,
                 png_path,
@@ -1727,8 +1730,8 @@ mod key_routing {
     use std::sync::Mutex as StdMutex;
     use termherd_core::ports::{PtyError, ScanError};
     use termherd_core::{
-        Action, PointerEvent, PointerKind, PointerRoute, SelectSide, SessionKind, SnapshotFilter,
-        SpawnSpec,
+        Action, CommandRefusal, PointerEvent, PointerKind, PointerRoute, SelectSide, SessionKind,
+        SnapshotFilter, SpawnSpec,
     };
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
@@ -2320,6 +2323,55 @@ mod key_routing {
         });
         assert_eq!(outcome.error, None);
         assert_eq!(pty.writes(), vec![b"ls\n".to_vec()], "the bytes were typed");
+    }
+
+    #[test]
+    fn submit_action_presses_enter_only_once_its_pause_is_due() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Submit {
+            session: session.0.get(),
+        });
+        assert_eq!(outcome.error, None);
+        assert!(pty.writes().is_empty(), "no Enter inside the pause");
+
+        let _ = shell.update(Message::SubmitDue(session));
+        assert_eq!(pty.writes_seen(), vec![(session, b"\r".to_vec())]);
+    }
+
+    #[test]
+    fn submit_action_rejects_an_unknown_handle() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Submit { session: 999 });
+        assert!(outcome.error.is_some_and(|e| e.contains("999")));
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn a_submit_due_after_its_session_exited_writes_nothing() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.core.apply(termherd_core::Event::PtyExited {
+            session,
+            clean: true,
+        });
+        let _ = shell.update(Message::SubmitDue(session));
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn the_enter_gap_waits_out_the_whole_pause() {
+        let start = std::time::Instant::now();
+        block_on(effects::enter_gap());
+        assert!(start.elapsed() >= effects::ENTER_GAP);
+    }
+
+    /// Drive a future to completion on a throwaway runtime.
+    fn block_on(future: impl std::future::Future<Output = ()>) {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime")
+            .block_on(future);
     }
 
     #[test]
@@ -5430,7 +5482,7 @@ mod key_routing {
         let _ = press_all(&mut shell, &["enter"]);
         assert_eq!(
             pty.writes().len(),
-            2,
+            1,
             "once the draft is gone, enter types it"
         );
     }
@@ -5451,7 +5503,7 @@ mod key_routing {
             pending.enter_ignored_until = Some(Instant::now() - std::time::Duration::from_secs(1));
         }
         let _ = shell.update(Message::Key(enter));
-        assert_eq!(pty.writes().len(), 2, "after it, enter confirms");
+        assert_eq!(pty.writes().len(), 1, "after it, enter confirms");
     }
 
     #[test]
@@ -5533,13 +5585,17 @@ mod key_routing {
         );
         assert_eq!(
             pty.writes_seen(),
-            vec![
-                (session, b"\x15/rename api work".to_vec()),
-                (session, b"\r".to_vec()),
-            ],
-            "the draft is cleared and the line typed, then Enter on its own"
+            vec![(session, b"\x15/rename api work".to_vec())],
+            "the draft is cleared and the line typed, with no Enter in the burst"
         );
         assert!(shell.keyboard_owner().is_none(), "and the prompt lets go");
+
+        let _ = shell.update(Message::SubmitDue(session));
+        assert_eq!(
+            pty.writes_seen().last(),
+            Some(&(session, b"\r".to_vec())),
+            "Enter follows on its own once the pause is due"
+        );
     }
 
     #[test]
@@ -5611,7 +5667,7 @@ mod key_routing {
                 .claude_command
                 .as_ref()
                 .and_then(|p| p.refused.clone()),
-            Some(termherd_core::CommandRefusal::NotIdle(SessionStatus::Busy)),
+            Some(CommandRefusal::NotIdle(SessionStatus::Busy)),
             "the prompt stays open and says why"
         );
     }
@@ -6779,6 +6835,7 @@ mod key_routing {
         use std::time::{Duration, Instant};
 
         let _serialised = one_real_pty_at_a_time();
+        let private = tempfile::tempdir().expect("tempdir");
 
         let (tx, rx) = mpsc::channel::<PtyEvent>();
         let sink: termherd_pty::EventSink = Arc::new(move |ev| {
@@ -6788,6 +6845,7 @@ mod key_routing {
             sink,
             None,
             termherd_pty::Palette::default(),
+            termherd_pty::PrivateFiles::new(private.path()),
         ));
         let mut shell = shell_over(pty.clone());
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
@@ -6849,6 +6907,7 @@ mod key_routing {
             return;
         }
         let _serialised = one_real_pty_at_a_time();
+        let private = tempfile::tempdir().expect("tempdir");
 
         let (tx, rx) = mpsc::channel::<PtyEvent>();
         let sink: termherd_pty::EventSink = Arc::new(move |ev| {
@@ -6861,6 +6920,7 @@ mod key_routing {
                 args: Vec::new(),
             }),
             termherd_pty::Palette::default(),
+            termherd_pty::PrivateFiles::new(private.path()),
         ));
         let mut shell = shell_over(pty.clone());
         // Named for this process: two concurrent runs must not race over one
@@ -8265,7 +8325,7 @@ mod key_routing {
 
     mod tab_menu {
         use super::*;
-        use crate::shell::tab_menu::{ENTRIES, Offers, TabMenu, entries, step};
+        use crate::shell::tab_menu::{ENTRIES, Offers, TabMenu, lines, step};
 
         /// Move the open menu's selection onto `action` with arrow presses, as
         /// a caller with no pointer would.
@@ -8278,8 +8338,8 @@ mod key_routing {
             shell
                 .live_tab_menu()
                 .expect("a menu is open")
-                .entries()
-                .map(|entry| entry.action)
+                .lines()
+                .map(|line| line.entry.action)
                 .collect()
         }
 
@@ -8526,18 +8586,30 @@ mod key_routing {
             assert!(shell.core.workspace.tabs[index].is_parked());
         }
 
-        const NOTHING: Offers = Offers {
-            agent_named: false,
-            color_pickable: false,
-            unparked: false,
-        };
+        const BUSY: CommandRefusal = CommandRefusal::NotIdle(SessionStatus::Busy);
+
+        fn nothing() -> Offers {
+            Offers {
+                agent_named: false,
+                color_refusal: Some(BUSY),
+                unparked: false,
+            }
+        }
 
         /// The entries that `offers` adds over a pane that allows nothing.
-        fn added_by(offers: Offers) -> Vec<Action> {
-            let bare: Vec<Action> = entries(NOTHING).map(|entry| entry.action).collect();
-            entries(offers)
-                .map(|entry| entry.action)
+        fn added_by(offers: &Offers) -> Vec<Action> {
+            let bare = nothing();
+            let bare: Vec<Action> = lines(&bare).map(|line| line.entry.action).collect();
+            lines(offers)
+                .map(|line| line.entry.action)
                 .filter(|action| !bare.contains(action))
+                .collect()
+        }
+
+        /// The entries `offers` lists disabled, with the refusal each shows.
+        fn disabled(offers: &Offers) -> Vec<(Action, CommandRefusal)> {
+            lines(offers)
+                .filter_map(|line| Some((line.entry.action, line.refusal?.clone())))
                 .collect()
         }
 
@@ -8545,25 +8617,139 @@ mod key_routing {
         fn each_entry_that_depends_on_the_pane_depends_on_its_own_condition() {
             let everything = Offers {
                 agent_named: true,
-                color_pickable: true,
+                color_refusal: None,
                 unparked: true,
             };
-            assert_eq!(entries(everything).count(), ENTRIES.len());
+            assert_eq!(lines(&everything).count(), ENTRIES.len());
+            assert_eq!(disabled(&everything), vec![]);
             let named = Offers {
                 agent_named: true,
-                ..NOTHING
+                ..nothing()
             };
-            assert_eq!(added_by(named), vec![Action::CopyAgentName]);
-            let pickable = Offers {
-                color_pickable: true,
-                ..NOTHING
-            };
-            assert_eq!(added_by(pickable), vec![Action::PickTabColor]);
+            assert_eq!(added_by(&named), vec![Action::CopyAgentName]);
             let unparked = Offers {
                 unparked: true,
-                ..NOTHING
+                ..nothing()
             };
-            assert_eq!(added_by(unparked), vec![Action::TogglePark]);
+            assert_eq!(added_by(&unparked), vec![Action::TogglePark]);
+        }
+
+        #[test]
+        fn tab_colour_is_listed_on_every_tab_and_disabled_with_the_refusal_alone() {
+            // Hidden, an entry that is unavailable right now reads as missing.
+            let refused = nothing();
+            assert!(lines(&refused).any(|line| line.entry.action == Action::PickTabColor));
+            assert_eq!(disabled(&refused), vec![(Action::PickTabColor, BUSY)]);
+            let pickable = Offers {
+                color_refusal: None,
+                ..nothing()
+            };
+            assert_eq!(disabled(&pickable), vec![]);
+            assert_eq!(added_by(&pickable), vec![]);
+        }
+
+        /// The open menu's colour entry: its position, and its refusal.
+        fn colour_line(shell: &Shell) -> (usize, Option<CommandRefusal>) {
+            shell
+                .live_tab_menu()
+                .expect("a menu is open")
+                .lines()
+                .enumerate()
+                .find(|(_, line)| line.entry.action == Action::PickTabColor)
+                .map(|(at, line)| (at, line.refusal.cloned()))
+                .expect("tab colour is listed")
+        }
+
+        #[test]
+        fn an_idle_claude_and_a_shell_list_tab_colour_enabled() {
+            let (mut claude, _pty, _session) = shell_with_idle_claude();
+            let _ = claude.update(Message::OpenTabMenu(0));
+            assert_eq!(colour_line(&claude).1, None);
+
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert_eq!(colour_line(&shell).1, None);
+        }
+
+        #[test]
+        fn a_draft_in_claudes_prompt_disables_tab_colour_and_names_the_draft() {
+            let (mut shell, _pty, session) = shell_with_idle_claude();
+            shell
+                .screens
+                .insert(session, screen_rows(&[RULE, "❯ half typed", RULE]));
+
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            assert_eq!(
+                colour_line(&shell).1,
+                Some(CommandRefusal::DraftPresent("half typed".to_owned()))
+            );
+            assert!(
+                shell.tab_menu_card().is_some(),
+                "drawn, disabled line and all"
+            );
+        }
+
+        #[test]
+        fn a_view_scrolled_off_claudes_prompt_disables_tab_colour() {
+            let (mut shell, _pty, session) = shell_with_idle_claude();
+            shell.screens.insert(
+                session,
+                Screen {
+                    scrolled: true,
+                    ..empty_prompt()
+                },
+            );
+
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            assert_eq!(
+                colour_line(&shell).1,
+                Some(CommandRefusal::PromptNotVisible)
+            );
+        }
+
+        /// A Claude whose prompt holds a draft, its tab menu open.
+        fn menu_over_a_draft() -> (Shell, Arc<RecordingPty>) {
+            let (mut shell, pty, session) = shell_with_idle_claude();
+            shell
+                .screens
+                .insert(session, screen_rows(&[RULE, "❯ half typed", RULE]));
+            let _ = shell.update(Message::OpenTabMenu(0));
+            (shell, pty)
+        }
+
+        #[test]
+        fn enter_on_a_disabled_entry_refuses_with_its_reason_and_keeps_the_menu() {
+            let (mut shell, pty) = menu_over_a_draft();
+            let (at, refusal) = colour_line(&shell);
+            let refusal = refusal.expect("disabled");
+
+            let _ = select(&mut shell, Action::PickTabColor);
+            let enter = press_chord(&mut shell, "enter");
+
+            assert_eq!(
+                enter,
+                PressStep::Refused {
+                    overlay: "tab-menu".to_owned(),
+                    reason: refusal.to_string(),
+                }
+            );
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+            assert_eq!(selected(&shell), Some(at), "the selection stays put");
+            assert!(shell.color_picker.is_none(), "no picker opened");
+            assert!(pty.writes().is_empty());
+        }
+
+        #[test]
+        fn a_click_on_a_disabled_entry_runs_nothing_and_keeps_the_menu() {
+            let (mut shell, _pty) = menu_over_a_draft();
+            let (at, _) = colour_line(&shell);
+
+            let _ = shell.update(Message::RunTabMenuEntry(at));
+
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+            assert!(shell.color_picker.is_none(), "no picker opened");
         }
 
         #[test]
@@ -8655,7 +8841,7 @@ mod key_routing {
         #[test]
         fn no_tab_is_offered_an_empty_menu() {
             // The precondition `step` relies on: it never wraps a list of none.
-            assert!(entries(NOTHING).count() > 0);
+            assert!(lines(&nothing()).count() > 0);
         }
     }
 
@@ -8751,7 +8937,7 @@ mod key_routing {
         }
 
         #[test]
-        fn a_busy_claude_is_offered_no_picker_from_the_keymap_or_the_menu() {
+        fn a_busy_claude_is_offered_no_picker_from_the_keymap_and_a_disabled_menu_entry() {
             // The line would queue behind its work.
             let (mut shell, _pty, session) = shell_with_idle_claude();
             let _ = shell.update(Message::PtyStatus {
@@ -8765,13 +8951,16 @@ mod key_routing {
             assert_eq!(outcome.steps, vec![inert("pick-tab-color", "no-context")]);
             assert!(shell.keyboard_owner().is_none());
             let _ = shell.update(Message::OpenTabMenu(0));
-            assert!(
-                shell
-                    .live_tab_menu()
-                    .expect("open")
-                    .entries()
-                    .all(|entry| entry.action != Action::PickTabColor),
-                "the menu does not offer a list that cannot work"
+            let colour = shell
+                .live_tab_menu()
+                .expect("open")
+                .lines()
+                .find(|line| line.entry.action == Action::PickTabColor)
+                .map(|line| line.refusal.cloned());
+            assert_eq!(
+                colour,
+                Some(Some(CommandRefusal::NotIdle(SessionStatus::Busy))),
+                "the menu lists the entry, disabled with why, rather than hide it"
             );
         }
 
@@ -8835,8 +9024,8 @@ mod key_routing {
             let at = shell
                 .live_tab_menu()
                 .expect("open")
-                .entries()
-                .position(|entry| entry.action == Action::PickTabColor)
+                .lines()
+                .position(|line| line.entry.action == Action::PickTabColor)
                 .expect("listed");
 
             let (verdict, _task) = shell.run_tab_menu_entry(at);

@@ -205,6 +205,7 @@ impl App {
             Event::TerminalInput { session, bytes } => {
                 self.if_live(session, Effect::Write { session, bytes })
             }
+            Event::TerminalSubmit { session } => self.if_live(session, Effect::Submit { session }),
             Event::TerminalResized {
                 session,
                 cols,
@@ -233,12 +234,7 @@ impl App {
                 self.workspace.set_live_title(session, title);
                 Vec::new()
             }
-            Event::SessionCwdChanged { session, cwd } => {
-                if let Some(s) = self.sessions.get_mut(&session) {
-                    s.cwd = Some(cwd);
-                }
-                Vec::new()
-            }
+            Event::SessionCwdChanged { session, cwd } => self.session_cwd_changed(session, cwd),
             Event::ForegroundJobChanged { session, job } => {
                 self.foreground_job_changed(session, job)
             }
@@ -339,6 +335,13 @@ impl App {
                 prompt,
             } => self.send_claude_command(session, &command, &prompt),
         }
+    }
+
+    fn session_cwd_changed(&mut self, session: SessionId, cwd: String) -> Vec<Effect> {
+        if let Some(s) = self.sessions.get_mut(&session) {
+            s.cwd = Some(cwd);
+        }
+        Vec::new()
     }
 
     fn set_split_ratio(

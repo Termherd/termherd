@@ -31,7 +31,7 @@ mod window_geometry;
 use std::sync::Arc;
 
 use termherd_core::ports::{PathResolver, ProjectScanner, ScanError};
-use termherd_pty::{EventSink, PtyEvent, PtyManager};
+use termherd_pty::{EventSink, PrivateFiles, PtyEvent, PtyManager};
 use termherd_scan::FsScanner;
 use tracing::{info, warn};
 
@@ -95,7 +95,12 @@ fn main() -> iced::Result {
     let sink: EventSink = Arc::new(move |event| {
         let _ = tx.unbounded_send(event);
     });
-    let pty = Arc::new(PtyManager::new(sink, shell, settings.palette()));
+    let pty = Arc::new(PtyManager::new(
+        sink,
+        shell,
+        settings.palette(),
+        PrivateFiles::new(std::env::temp_dir()),
+    ));
 
     // Async transport substrate (composition root only): a tokio runtime to host
     // future transport tasks, and the bridge channel that carries their requests

@@ -3,7 +3,10 @@
 A Claude session **launched from TermHerd** is wired to an in-process MCP
 server on loopback, with a per-session token, injected into its `mcpServers` at
 spawn. Nothing to configure — if you started the session from the app, the
-tools are there.
+tools are there. The server refuses, with a 403, any request whose `Host` or
+`Origin` names something other than `127.0.0.1`, `localhost` or `[::1]` on
+its own port, so a web page cannot reach it by rebinding a domain to
+loopback.
 
 Its private files — the mcp config carrying that bearer token, the
 shell-integration directory, the settings overlay — are deleted when the
@@ -348,10 +351,12 @@ read_terminal(session, lines: 60)
 Alternatively, use `prompt_in_session` to run all three steps in **one** round trip.
 
 **A trailing newline submits.** Both tools send it as Enter, so it submits in
-a shell and in Claude Code alike. Earlier newlines are sent as they are: Claude
-Code and PowerShell take them as line breaks in their input, so a multi-line
-prompt is submitted once. A Unix shell runs each line; `cmd.exe` drops them,
-so send it one command per call.
+a shell and in Claude Code alike. Enter follows the text after a short pause,
+so Claude Code does not read a long text and its Enter as one paste; a
+confirmed `claude_command` is submitted the same way. Earlier newlines are
+sent as they are: Claude Code and PowerShell take them as line breaks in their
+input, so a multi-line prompt is submitted once. A Unix shell runs each line;
+`cmd.exe` drops them, so send it one command per call.
 
 **Do not poll `snapshot` in a loop.** It races the transition you are watching
 for — that race is exactly why the wait tool exists.

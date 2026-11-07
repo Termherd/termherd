@@ -86,7 +86,9 @@ both keys the same one for a matching window. Both are set live from the
 | `kanagawa-lotus`, `ferra` | — none published |
 | `moonfly`, `nightfly`, `oxocarbon` | ✓ |
 
-Status dots and `/color` marks are shaded per theme to stay legible.
+Status dots and `/color` marks are shaded per theme to stay legible, at 3:1
+or better. The active tab's dot is shaded against that tab's own fill, so it
+reads there too.
 
 ### `close`
 

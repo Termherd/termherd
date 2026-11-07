@@ -126,7 +126,7 @@ focused tab:
 | Entry | Runs | Shown on |
 | --- | --- | --- |
 | Rename tab | `rename-tab` | every tab |
-| Tab colour… | `pick-tab-color` | a tab a colour can be picked for now (below) |
+| Tab colour… | `pick-tab-color` | every tab; disabled, with why, when no colour can be picked now (below) |
 | Copy agent name | `copy-agent-name` | a tab whose focused pane has a named Claude in front |
 | New shell here | `new-shell-here` | every tab |
 | New Claude session here | `new-claude-session-here` | every tab |
@@ -142,6 +142,12 @@ split and the whole tab otherwise, asking first as the chord does.
 <kbd>↑</kbd> and <kbd>↓</kbd> move the selection, <kbd>Enter</kbd> runs it,
 <kbd>Escape</kbd> or a click outside the menu closes it without running
 anything.
+
+*Tab colour…* is always listed. When no colour can be picked for the focused
+pane at the moment the menu opens, it is greyed out with the reason beneath
+it — *Claude busy*, *draft in prompt*, *prompt not on screen* (the view is
+scrolled back), and the like — and choosing it runs nothing and leaves the
+menu open.
 
 *Copy agent name* is listed when the action would find a name at the moment
 the menu opens: a Claude runs in front of the focused pane and has written its
@@ -171,10 +177,11 @@ A Claude tab's colour is Claude's: TermHerd keeps no copy of it, so it never
 disagrees with Claude's own prompt bar, and a `/color` typed by hand changes
 it just the same. The list is not offered for a Claude that is busy, or
 waiting on an answer, or has something typed in its prompt — the action does
-nothing then, and the menu leaves *Tab colour…* out — and if that Claude gets
-busy while the list is open, the pick is refused and the list stays, saying
-why. Once the Claude in a tab has exited, the tab is back at the shell it ran
-in, and TermHerd colours it as a shell: `/color` is never typed into a shell.
+nothing then, and the menu greys *Tab colour…* out, saying why — and if that
+Claude gets busy while the list is open, the pick is refused and the list
+stays, saying why. Once the Claude in a tab has exited, the tab is back at the
+shell it ran in, and TermHerd colours it as a shell: `/color` is never typed
+into a shell.
 That needs the operating system to report what runs in front of the shell,
 which Windows does not, so there a Claude tab stays Claude's.
 
