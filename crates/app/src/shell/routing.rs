@@ -14,7 +14,7 @@ use super::input::{chord_of, key_mods, numpad_char, sends_meta, to_term_key};
 use super::{Focus, Message, Shell, search_id};
 
 /// How a confirmation overlay reads a key — the shared shape behind the quit,
-/// tab-close and archive prompts.
+/// tab-close, archive and paste prompts.
 enum ConfirmKey {
     Confirm,
     Cancel,
@@ -44,6 +44,8 @@ pub(super) enum KeyboardOwner {
     Archive,
     /// The confirmation naming a slash command about to be typed into Claude.
     ClaudeCommand,
+    /// The confirmation before a paste a terminal would run line by line.
+    Paste,
     /// The confirmation before a modified doc's edits are discarded.
     DocDiscard,
     /// The tab context menu, which answers the arrows and Enter itself rather
@@ -66,13 +68,14 @@ impl KeyboardOwner {
     /// `match` below: a new variant fails to compile there, in this file, where
     /// this array is the next thing the author reads.
     #[cfg(test)]
-    pub(super) const ALL: [Self; 11] = [
+    pub(super) const ALL: [Self; 12] = [
         Self::TabRename,
         Self::SessionRename,
         Self::Quit,
         Self::TabClose(0),
         Self::Archive,
         Self::ClaudeCommand,
+        Self::Paste,
         Self::DocDiscard,
         Self::TabMenu,
         Self::ColorPicker,
@@ -89,6 +92,7 @@ impl KeyboardOwner {
             Self::TabClose(_) => "tab-close-confirm",
             Self::Archive => "archive-confirm",
             Self::ClaudeCommand => "claude-command-confirm",
+            Self::Paste => "paste-confirm",
             Self::DocDiscard => "doc-discard-confirm",
             Self::TabMenu => "tab-menu",
             Self::ColorPicker => "tab-color-picker",
@@ -372,6 +376,9 @@ impl Shell {
         if self.claude_command.is_some() {
             return Some(KeyboardOwner::ClaudeCommand);
         }
+        if self.core.pending_paste().is_some() {
+            return Some(KeyboardOwner::Paste);
+        }
         if self.discarding_doc.is_some() {
             return Some(KeyboardOwner::DocDiscard);
         }
@@ -415,6 +422,7 @@ impl Shell {
                 let (verdict, task) = self.claude_command_key(event);
                 (Some(verdict), task)
             }
+            KeyboardOwner::Paste => (None, self.paste_confirm_key(event)),
             KeyboardOwner::DocDiscard => (None, self.doc_discard_confirm_key(event)),
             KeyboardOwner::TabMenu => self.tab_menu_key(event),
             KeyboardOwner::ColorPicker => self.color_picker_key(event),
@@ -501,6 +509,14 @@ impl Shell {
             return self.update(Message::CloseSettings);
         }
         Task::none()
+    }
+
+    fn paste_confirm_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        match classify_confirm(event) {
+            ConfirmKey::Confirm => self.update(Message::ConfirmPaste),
+            ConfirmKey::Cancel => self.update(Message::CancelPaste),
+            ConfirmKey::Swallow => Task::none(),
+        }
     }
 
     fn doc_discard_confirm_key(&mut self, event: &keyboard::Event) -> Task<Message> {

@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (a multi-line paste asks before it runs line by line)
+
+- A paste holding a line break into a terminal that did not turn bracketed
+  paste on — `sh`, `cmd.exe` — now waits for a prompt naming the tab and the
+  line count, instead of running each line as it arrives. **Paste** sends the
+  text unchanged, **Cancel** drops it. Over MCP the prompt is the
+  `paste-confirm` overlay. Single-line pastes, and pastes into Claude Code or
+  any program using bracketed paste, are unchanged (#291).
+
 ### Fixed (Meta and cursor keys send what xterm sends)
 
 - The arrows, Home and End send `ESC O A`-style sequences once a program
