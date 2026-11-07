@@ -374,6 +374,27 @@ fn next_job(
     }
 }
 
+/// What the terminal thread wakes up to.
+enum Next {
+    Cmd(TermCmd),
+    /// The deadline passed with no command.
+    Due,
+    /// Every command sender is gone.
+    Closed,
+}
+
+/// Block for the next command, or until `deadline` when there is one.
+fn next_cmd(rx: &mpsc::Receiver<TermCmd>, deadline: Option<Instant>) -> Next {
+    let Some(at) = deadline else {
+        return rx.recv().map_or(Next::Closed, Next::Cmd);
+    };
+    match rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
+        Ok(cmd) => Next::Cmd(cmd),
+        Err(mpsc::RecvTimeoutError::Timeout) => Next::Due,
+        Err(mpsc::RecvTimeoutError::Disconnected) => Next::Closed,
+    }
+}
+
 /// The terminal thread: owns the `alacritty_terminal` grid and applies every
 /// [`TermCmd`] (bytes → parse + status, resize, scroll), emitting a `Screen`
 /// at most every [`SCREEN_INTERVAL`]. It exits — and reports [`PtyEvent::Exited`] — when the
@@ -420,23 +441,25 @@ pub(crate) fn spawn_term(
                 let flush_at = last_sent
                     .filter(|_| unsent_change)
                     .map(|at| at + SCREEN_INTERVAL);
-                let cmd = match flush_at {
-                    Some(at) => {
-                        match ctrl_rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
-                            Ok(cmd) => cmd,
-                            Err(mpsc::RecvTimeoutError::Timeout) => {
-                                term_sink(screen(&term));
-                                last_sent = Some(Instant::now());
-                                unsent_change = false;
-                                continue;
-                            }
-                            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                let deadline = [flush_at, activity.due()].into_iter().flatten().min();
+                let next = next_cmd(&ctrl_rx, deadline);
+                // A queued command never lets the deadline fire, so a held idle
+                // that has stood is published before whatever comes next.
+                let (before, now) = (activity.status, Instant::now());
+                if activity.settle(now) {
+                    report_status(session, before, &activity, &term_sink);
+                }
+                let cmd = match next {
+                    Next::Cmd(cmd) => cmd,
+                    Next::Due => {
+                        if flush_at.is_some_and(|at| at <= now) {
+                            term_sink(screen(&term));
+                            last_sent = Some(now);
+                            unsent_change = false;
                         }
+                        continue;
                     }
-                    None => match ctrl_rx.recv() {
-                        Ok(cmd) => cmd,
-                        Err(_) => break,
-                    },
+                    Next::Closed => break,
                 };
                 match cmd {
                     TermCmd::Bytes(bytes) => {
@@ -446,7 +469,7 @@ pub(crate) fn spawn_term(
                         let signals = decode_chunk(&text);
                         let marks = decode_marks(&text);
                         let before = activity.status;
-                        activity.observe(&signals, &marks);
+                        activity.observe(&signals, &marks, Instant::now());
                         report_status(session, before, &activity, &term_sink);
                         // Forward each OSC 9 notification's text to the OS,
                         // independent of the status fold above — the in-app
@@ -679,12 +702,47 @@ mod tests {
     /// fold test can make: it is the terminal thread that decodes both dialects
     /// and decides what is worth emitting.
     fn statuses_reported(chunks: &[&str]) -> Vec<SessionStatus> {
+        let steps: Vec<_> = chunks.iter().map(|chunk| (*chunk, Then::Go)).collect();
+        statuses_reported_paced(&steps)
+    }
+
+    /// What a test does after sending a chunk.
+    #[derive(Clone, Copy)]
+    enum Then {
+        Go,
+        /// Wait until the thread has reported this many statuses in all.
+        Reported(usize),
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum Seen {
+        Status(SessionStatus),
+        Screen(String),
+    }
+
+    /// [`statuses_reported`], waiting after a chunk where a step says so.
+    fn statuses_reported_paced(steps: &[(&str, Then)]) -> Vec<SessionStatus> {
+        events_seen(steps)
+            .into_iter()
+            .filter_map(|seen| match seen {
+                Seen::Status(status) => Some(status),
+                Seen::Screen(_) => None,
+            })
+            .collect()
+    }
+
+    /// Drive a real terminal thread over `steps` and collect the statuses and
+    /// screens it publishes, in order.
+    fn events_seen(steps: &[(&str, Then)]) -> Vec<Seen> {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let collected = seen.clone();
         let sink: EventSink = Arc::new(move |event| {
-            if let PtyEvent::Status { status, .. } = event {
-                collected.lock().expect("sink lock").push(status);
-            }
+            let entry = match event {
+                PtyEvent::Status { status, .. } => Seen::Status(status),
+                PtyEvent::Output { screen, .. } => Seen::Screen(screen.text()),
+                _ => return,
+            };
+            collected.lock().expect("sink lock").push(entry);
         });
         let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(Arc::new(
             Mutex::new(Vec::new()),
@@ -701,9 +759,23 @@ mod tests {
                 Palette::named("solarized-light").expect("known scheme"),
             )),
         );
-        for chunk in chunks {
+        let reported = || {
+            let seen = seen.lock().expect("sink lock");
+            seen.iter()
+                .filter(|seen| matches!(seen, Seen::Status(_)))
+                .count()
+        };
+        for (chunk, then) in steps {
             ctrl.send(TermCmd::Bytes(chunk.as_bytes().to_vec()))
                 .expect("terminal thread alive");
+            if let Then::Reported(count) = then {
+                // Generous: a loaded CI runner may be slow to run the timer,
+                // and the assertion, not this wait, says what went wrong.
+                let give_up = Instant::now() + Duration::from_secs(10);
+                while reported() < *count && Instant::now() < give_up {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
         }
         drop(ctrl);
         term.join().expect("terminal thread ends");
@@ -742,12 +814,12 @@ mod tests {
     #[test]
     fn claude_titles_still_report_activity_through_the_terminal_thread() {
         // The other dialect, unchanged: a spinner title is work, `✳` is a
-        // prompt, and the OSC 9 ping outranks both.
+        // prompt once it stands, and the OSC 9 ping outranks both.
         assert_eq!(
-            statuses_reported(&[
-                "\u{1b}]0;\u{280B} Thinking…\u{07}",
-                "\u{1b}]0;\u{2733} claude\u{07}",
-                "\u{1b}]9;allow Bash?\u{07}",
+            statuses_reported_paced(&[
+                ("\u{1b}]0;\u{280B} Thinking…\u{07}", Then::Go),
+                ("\u{1b}]0;\u{2733} claude\u{07}", Then::Reported(2)),
+                ("\u{1b}]9;allow Bash?\u{07}", Then::Go),
             ]),
             vec![
                 SessionStatus::Busy,
@@ -763,17 +835,25 @@ mod tests {
         // termherd's environment: `✳` at its prompt, `◐`/`◑` alternating
         // while it works — tool calls included — then `✳` again, and the
         // waiting-for-input ping once it has sat idle for a minute. The next
-        // turn must clear that ping: only work does.
+        // turn must clear that ping: only work does. Each idle stands, as it
+        // did in the recording, so none is mistaken for a blip mid-turn.
+        let now = Then::Go;
         assert_eq!(
-            statuses_reported(&[
-                "\u{1b}]0;\u{2733} Claude Code\u{07}",
-                "\u{1b}]0;\u{25D0} Claude Code\u{07}",
-                "\u{1b}]0;\u{25D0} Sleep command test\u{07}",
-                "\u{1b}]0;\u{25D1} Sleep command test\u{07}",
-                "\u{1b}]0;\u{2733} Sleep command test\u{07}",
-                "\u{1b}]9;Claude is waiting for your input\u{07}",
-                "\u{1b}]0;\u{25D0} Sleep command test\u{07}",
-                "\u{1b}]0;\u{2733} Sleep command test\u{07}",
+            statuses_reported_paced(&[
+                ("\u{1b}]0;\u{2733} Claude Code\u{07}", now),
+                ("\u{1b}]0;\u{25D0} Claude Code\u{07}", now),
+                ("\u{1b}]0;\u{25D0} Sleep command test\u{07}", now),
+                ("\u{1b}]0;\u{25D1} Sleep command test\u{07}", now),
+                (
+                    "\u{1b}]0;\u{2733} Sleep command test\u{07}",
+                    Then::Reported(3)
+                ),
+                ("\u{1b}]9;Claude is waiting for your input\u{07}", now),
+                ("\u{1b}]0;\u{25D0} Sleep command test\u{07}", now),
+                (
+                    "\u{1b}]0;\u{2733} Sleep command test\u{07}",
+                    Then::Reported(6)
+                ),
             ]),
             vec![
                 SessionStatus::Idle,
@@ -783,6 +863,54 @@ mod tests {
                 SessionStatus::Busy,
                 SessionStatus::Idle,
             ]
+        );
+    }
+
+    #[test]
+    fn a_brief_idle_title_between_two_busy_ones_is_not_reported() {
+        // A background subagent's result restarting the agent: `✳` for
+        // about 20 ms between two busy glyphs.
+        assert_eq!(
+            statuses_reported(&[
+                "\u{1b}]0;\u{25D0} Claude Code\u{07}",
+                "\u{1b}]0;\u{2733} Claude Code\u{07}",
+                "\u{1b}]0;\u{25D1} Claude Code\u{07}",
+            ]),
+            vec![SessionStatus::Busy]
+        );
+    }
+
+    #[test]
+    fn an_idle_title_that_stands_past_the_hold_is_reported_with_no_further_output() {
+        // Nothing follows Claude's last title of a turn: the thread's own
+        // timer has to publish it.
+        assert_eq!(
+            statuses_reported_paced(&[
+                ("\u{1b}]0;\u{25D0} Claude Code\u{07}", Then::Go),
+                ("\u{1b}]0;\u{2733} Claude Code\u{07}", Then::Reported(2)),
+            ]),
+            vec![SessionStatus::Busy, SessionStatus::Idle]
+        );
+    }
+
+    #[test]
+    fn output_during_a_held_idle_still_reaches_the_screen() {
+        // The hold's timer shares the loop with the screen's: output written
+        // under a held idle must be drawn before the idle is published.
+        let seen = events_seen(&[
+            ("\u{1b}]0;\u{25D0} Claude Code\u{07}", Then::Go),
+            ("\u{1b}]0;\u{2733} Claude Code\u{07}", Then::Go),
+            ("hello", Then::Reported(2)),
+        ]);
+        let drawn = seen
+            .iter()
+            .position(|seen| matches!(seen, Seen::Screen(text) if text.contains("hello")));
+        let idle = seen
+            .iter()
+            .position(|seen| *seen == Seen::Status(SessionStatus::Idle));
+        assert!(
+            drawn.is_some() && drawn < idle,
+            "drawn at {drawn:?}, idle at {idle:?}"
         );
     }
 

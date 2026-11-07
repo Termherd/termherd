@@ -354,14 +354,15 @@ needs it, not before.
 only from a session termherd spawned, so the launcher itself cannot drive it)
 and the pointer at termherd's own chrome (#301 — the sidebar, tabs and gutters
 still have no mouse). Neither blocks the other.
-Four defects are open beside them: the bridge's hardening (#293; #284 is
-fixed), a status that can read `idle` while Claude still works (#427; a wait
-settling on the status from before its prompt is fixed), a `read_terminal`
-that can return the screen from before the status it waited for (#436), and a
-long `claude_command` that Claude reads as a paste (#439). Another
-defect, the copy chord overwriting a mouse-mode program's own clipboard write
-with termherd's last copy (#316), is fixed: the shell keeps no copy cache any
-more, and asks the terminal whether it holds a selection at all.
+Three defects are open beside them: the bridge's hardening (#293; #284 is
+fixed), a `read_terminal` that can return the screen from before the status it
+waited for (#436), and a long `claude_command` that Claude reads as a paste
+(#439). Two defects are fixed. A status reading `idle` while Claude still
+works (#427): a wait no longer settles on the status from before its prompt,
+and Claude's idle title must stand 150 ms (`pty::status::IDLE_HOLD`) before a
+busy session reads idle. And the copy chord overwriting a mouse-mode program's
+own clipboard write with termherd's last copy (#316): the shell keeps no copy
+cache any more, and asks the terminal whether it holds a selection at all.
 
 **`F-mcp-agent-loop` shipped in #196 (`prompt_in_session`).** It composes
 `run_in_session`, `wait_for_status`, and `read_terminal` into a single MCP round
