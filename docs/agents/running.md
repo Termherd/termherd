@@ -28,9 +28,11 @@ TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app   # second instance
 ```
 
 `temp_dir()` honours `$TMPDIR`, so both run. On Windows it reads `TMP` (then
-`TEMP`), so set that instead — to a directory that **exists**, as `mktemp -d`
-guarantees. Pointed at a missing one, a Windows build never shows its window,
-stops answering, and logs nothing about why (#441). Launch detached when you
+`TEMP`), so set that instead. A missing temp dir is created at startup, with a
+`temp dir was missing; created it` warning; one that cannot be created is
+named in a warning, and the lock and the sessions' private files then fail
+(#441: a Windows build pointed at a missing one used to hang with no log
+line, and on macOS the lock went off unannounced). Launch detached when you
 need to keep interacting with the original window (e.g. to compare quit
 behaviour).
 

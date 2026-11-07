@@ -16,6 +16,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   seconds instead of waiting for a pause, and a watcher error is now logged
   instead of dropped (#377).
 
+### Fixed (a missing temp dir)
+
+- termherd creates its temp dir (`TMPDIR`, or `TMP` / `TEMP` on Windows) when
+  it is missing, and logs a warning naming it. Without it, the
+  single-instance lock went off silently, so a second termherd could start,
+  and a Windows build was seen to hang before showing its window. A temp dir
+  that cannot be created is named in a warning instead of failing in
+  silence (#441).
+
 ### Security (captures are private)
 
 - Captures and screencasts are readable only by you: `~/.termherd/captures/`
