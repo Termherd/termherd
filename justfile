@@ -20,6 +20,7 @@ run-isolated:
 # CI job; run before pushing a new crate, cross-crate dependency, or toolchain bump.
 check-deps:
     ./scripts/check-crate-deps.sh
+    ./scripts/test-check-crate-deps.sh
 
 # Assert the intra-crate architecture rules (module boundaries + OS-cfg
 # containment), then print the report-only file-length signal. Mirrors the
