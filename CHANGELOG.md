@@ -7,6 +7,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (zoom in with Cmd/Ctrl + Shift + `+`)
+
+- <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> (<kbd>Ctrl</kbd> off macOS)
+  zooms in on QWERTY and AZERTY. It used to reach the terminal, and Claude
+  Code's prompt with it: a press names its key before Shift, so it arrived as
+  `mod+shift+=`, which nothing bound. Zoom-in now binds `mod+=`,
+  `mod+shift+=` and `mod+plus` (the keypad `+`). The never-matching
+  `mod+shift+plus` default is gone, and so is `alt+shift+plus` from
+  `split-vertical`, which keeps `alt+shift+=`. A `settings.json` override
+  spelling `shift+plus` for the main-row key should write `shift+=` (#370).
+
 ### Added (more keys in chords and in the terminal)
 
 - Chords can name `pageup`, `pagedown`, `insert`, `delete`, `backspace`,
