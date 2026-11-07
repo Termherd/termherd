@@ -7,6 +7,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (Meta and cursor keys send what xterm sends)
+
+- The arrows, Home and End send `ESC O A`-style sequences once a program
+  switches to application cursor keys, as vim and less expect; modified
+  arrows keep their `ESC [ 1 ; <mod>` form (#321).
+- Meta reaches more keys: <kbd>Meta</kbd>+<kbd>.</kbd> sends `ESC .`,
+  <kbd>Meta</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> `ESC B`,
+  <kbd>Ctrl</kbd>+<kbd>Meta</kbd>+<kbd>B</kbd> `ESC ^B` and
+  <kbd>Meta</kbd>+<kbd>Space</kbd> `ESC` and a space. They used to drop the
+  `ESC`, the Shift or the Meta. On macOS, Space follows the Option side like
+  a letter: the composing side keeps its plain space (#321).
+
 ### Fixed (a doc save lands on the doc it wrote)
 
 - A doc keeps its `• modified` mark when you type while its save is in

@@ -38,6 +38,20 @@ a US one.
 <kbd>⌥Enter</kbd> (a newline in Claude), <kbd>⌥⌫</kbd> and <kbd>⌥←</kbd> /
 <kbd>⌥→</kbd> work with either key. On Windows and Linux, Alt is always Meta.
 
+Meta sends `ESC` before what the key would send without it, for any ASCII
+character: <kbd>Meta</kbd>+<kbd>.</kbd> is `ESC .` (the shell's last
+argument), <kbd>Meta</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> is `ESC B`,
+<kbd>Ctrl</kbd>+<kbd>Meta</kbd>+<kbd>B</kbd> is `ESC ^B`, and
+<kbd>Meta</kbd>+<kbd>Space</kbd> is `ESC` and a space. A shifted symbol
+types what the layout gives it, without `ESC`.
+
+### Cursor keys
+
+The arrows, <kbd>Home</kbd> and <kbd>End</kbd> follow the mode the program
+asked for: `ESC O A` once it switched to application cursor keys (as vim and
+less do), `ESC [ A` otherwise. With a modifier held they always send the
+`ESC [ 1 ; <mod> A` form.
+
 ### Mouse gestures
 
 The two classic terminal conventions are available, both **off by default** —
