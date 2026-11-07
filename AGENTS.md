@@ -358,8 +358,9 @@ Three defects are open beside them: the bridge's hardening (#293; #284 is
 fixed), a `read_terminal` that can return the screen from before the status it
 waited for (#436), and a long `claude_command` that Claude reads as a paste
 (#439). Two defects are fixed. A status reading `idle` while Claude still
-works (#427): a wait no longer settles on the status from before its prompt,
-and Claude's idle title must stand 150 ms (`pty::status::IDLE_HOLD`) before a
+works (#427): `prompt_in_session` no longer settles on the status from before
+its prompt (#435; a bare `wait_for_status` still needs `busy` first), and
+Claude's idle title must stand 150 ms (`pty::status::IDLE_HOLD`) before a
 busy session reads idle. And the copy chord overwriting a mouse-mode program's
 own clipboard write with termherd's last copy (#316): the shell keeps no copy
 cache any more, and asks the terminal whether it holds a selection at all.
