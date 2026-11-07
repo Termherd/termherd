@@ -81,23 +81,34 @@ pub(super) fn event_of(chord: &KeyChord) -> Option<keyboard::Event> {
 const NON_DIGIT: keyboard::key::Physical =
     keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified);
 
-/// The named key a chord name spells, or `None` when it names a character. The
-/// inverse of [`key_name`]'s named arms, and deliberately no wider: a name this
-/// does not know is a key no binding can hold.
-fn named_key(name: &str) -> Option<keyboard::key::Named> {
+/// The named keys a chord can spell, with the name it spells each by. The one
+/// table both directions read, so a key nameable on a real press is nameable
+/// over MCP and the reverse. A named key missing here falls through to the
+/// terminal without consulting the keymap.
+const NAMED_KEYS: [(&str, keyboard::key::Named); 9] = {
     use keyboard::key::Named;
-    match name {
-        "tab" => Some(Named::Tab),
-        "enter" => Some(Named::Enter),
-        "escape" => Some(Named::Escape),
-        "up" => Some(Named::ArrowUp),
-        "down" => Some(Named::ArrowDown),
-        "left" => Some(Named::ArrowLeft),
-        "right" => Some(Named::ArrowRight),
-        "home" => Some(Named::Home),
-        "end" => Some(Named::End),
-        _ => None,
-    }
+    [
+        ("tab", Named::Tab),
+        ("enter", Named::Enter),
+        ("escape", Named::Escape),
+        // Arrow keys carry chord names so bindings like `mod+up` (scroll) and
+        // `mod+shift+left` (pane focus) resolve, instead of leaking the raw
+        // cursor sequence to the shell.
+        ("up", Named::ArrowUp),
+        ("down", Named::ArrowDown),
+        ("left", Named::ArrowLeft),
+        ("right", Named::ArrowRight),
+        // Home / End name the scroll-to-top / bottom chords off macOS.
+        ("home", Named::Home),
+        ("end", Named::End),
+    ]
+};
+
+/// The named key a chord name spells, or `None` when it names a character.
+fn named_key(name: &str) -> Option<keyboard::key::Named> {
+    NAMED_KEYS
+        .iter()
+        .find_map(|&(spelled, named)| (spelled == name).then_some(named))
 }
 
 /// A single-digit chord name as a number-row key: the character it types plus
@@ -174,29 +185,18 @@ fn physical_digit_name(physical: &keyboard::key::Physical) -> Option<String> {
     Some(digit.to_string())
 }
 
-/// The keymap name of an iced key: a lowercased character, or a handful of
-/// named keys that bindings use. `None` for keys no shortcut can target.
+/// The keymap name of an iced key: a lowercased character, or a named key from
+/// [`NAMED_KEYS`]. `None` for keys no shortcut can target.
 fn key_name(key: &keyboard::Key) -> Option<String> {
-    use keyboard::key::Named;
     match key {
         keyboard::Key::Character(c) => c
             .chars()
             .next()
             .map(|ch| ch.to_ascii_lowercase().to_string()),
-        keyboard::Key::Named(Named::Tab) => Some("tab".to_string()),
-        keyboard::Key::Named(Named::Enter) => Some("enter".to_string()),
-        keyboard::Key::Named(Named::Escape) => Some("escape".to_string()),
-        // Arrow keys carry chord names so bindings like `mod+up` (scroll) and
-        // `mod+shift+left` (pane focus) resolve — without this they fall through
-        // to the terminal, leaking the raw cursor sequence to the shell.
-        keyboard::Key::Named(Named::ArrowUp) => Some("up".to_string()),
-        keyboard::Key::Named(Named::ArrowDown) => Some("down".to_string()),
-        keyboard::Key::Named(Named::ArrowLeft) => Some("left".to_string()),
-        keyboard::Key::Named(Named::ArrowRight) => Some("right".to_string()),
-        // Home / End name the scroll-to-top / bottom chords off macOS.
-        keyboard::Key::Named(Named::Home) => Some("home".to_string()),
-        keyboard::Key::Named(Named::End) => Some("end".to_string()),
-        _ => None,
+        keyboard::Key::Named(named) => NAMED_KEYS
+            .iter()
+            .find_map(|&(spelled, held)| (held == *named).then(|| spelled.to_owned())),
+        keyboard::Key::Unidentified => None,
     }
 }
 
