@@ -7,6 +7,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (tab jumps leave Ctrl+digit to the shell on Windows and Linux)
+
+- On Windows and Linux, jumping to tab 1–9 is now `Alt+1` … `Alt+9`, as in
+  GNOME Terminal and Konsole, instead of `Ctrl+1` … `Ctrl+9`, which reach the
+  program in the pane again. macOS keeps `Cmd+1` … `Cmd+9`. To keep the old
+  chords, set `"activate-tab-1": "ctrl+1"` and so on in the `keys` section
+  of `settings.json`. A test now holds every Windows and Linux default off
+  the bare `Ctrl` chords a shell's line editor reads, short of two recorded
+  exceptions: `Ctrl+V` paste on Windows and `Ctrl+-` zoom-out (#323).
+
 ### Security (captures are private)
 
 - Captures and screencasts are readable only by you: `~/.termherd/captures/`

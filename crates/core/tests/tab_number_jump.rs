@@ -46,10 +46,7 @@ fn primary_three_jumps_to_the_third_tab() {
     let action = press_number(&mut app, &keymap, 3);
 
     assert_eq!(action, Some(Action::ActivateTab(2)));
-    assert_eq!(
-        app.workspace.active, 2,
-        "⌘3 / Ctrl+3 lands on the third tab"
-    );
+    assert_eq!(app.workspace.active, 2, "⌘3 / Alt+3 lands on the third tab");
 }
 
 #[test]

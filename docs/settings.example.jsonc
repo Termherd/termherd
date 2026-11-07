@@ -199,7 +199,7 @@
   //   send-to-desktop           (unbound) asks to type /desktop into the focused Claude
   //   next-tab                  Ctrl+Tab
   //   prev-tab                  Ctrl+Shift+Tab
-  //   activate-tab-1 … -9       mod+1 … mod+9 (physical number-row keys)
+  //   activate-tab-1 … -9       Cmd+1 … Cmd+9 (macOS) / Alt+1 … Alt+9 (number-row keys)
   //   close-focused             mod+W ; Ctrl+Shift+W off macOS
   //   rename-tab                mod+Shift+I (inline rename of the focused tab)
   //   open-tab-menu             mod+Shift+M (the focused tab's menu)
@@ -228,6 +228,6 @@
   "keys": {
     "copy": "ctrl+y",
     "paste": ["ctrl+shift+v", "shift+insert"],
-    "activate-tab-1": "alt+1"
+    "activate-tab-1": "ctrl+1"
   }
 }
