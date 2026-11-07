@@ -58,7 +58,7 @@ mod terminal;
 mod view;
 
 pub(crate) use bridge::{Requests as BridgeRequests, channel as bridge_channel};
-use docs::{DocDiscard, OpenDoc};
+use docs::{DocDiscard, DocVersion, OpenDoc};
 
 /// The live-bridge runtime wiring handed to the shell, grouped so the
 /// constructor stays within argument bounds. Carries the subscription source
@@ -303,6 +303,10 @@ struct Shell {
     open_doc: Option<OpenDoc>,
     /// A discard of the open doc's unsaved edits awaiting confirmation.
     discarding_doc: Option<DocDiscard>,
+    /// Edits made to any doc this run; each edit takes the next number. Kept
+    /// across docs, so a save of a closed buffer can never name an edit of a
+    /// later one at the same path.
+    doc_edits: u64,
     /// A close awaiting confirmation: the tab index to kill, or `None`.
     /// Killing a session is destructive, so the close button arms this and a
     /// confirmation bar must be accepted before the PTY is actually killed —
@@ -727,8 +731,12 @@ enum Message {
     DocEdit(text_editor::Action),
     /// Save the open doc to disk (Save button or the save chord).
     SaveDoc,
-    /// A save finished: the file's new mtime, or why it was refused.
-    DocSaved(Result<SystemTime, crate::docs::SaveError>),
+    /// A save finished: which buffer state it wrote, and the file's new mtime
+    /// or why it was refused.
+    DocSaved {
+        version: DocVersion,
+        result: Result<SystemTime, crate::docs::SaveError>,
+    },
     /// Close the doc viewer, returning to the terminal.
     CloseDoc,
     /// Discard the open doc's unsaved edits and finish the armed close or
@@ -918,6 +926,7 @@ impl Shell {
             rescan_pending: false,
             open_doc: None,
             discarding_doc: None,
+            doc_edits: 0,
             closing: None,
             close_confirm: CloseSettings::default(),
             gestures: ClipboardGestures::default(),
@@ -1505,7 +1514,7 @@ impl Shell {
             }
             Message::DocEdit(action) => self.edit_doc(action),
             Message::SaveDoc => self.save_open_doc(),
-            Message::DocSaved(result) => self.on_doc_saved(result),
+            Message::DocSaved { version, result } => self.on_doc_saved(version, result),
             Message::CloseDoc => self.close_doc(),
             Message::ConfirmDocDiscard => self.confirm_doc_discard(),
             Message::CancelDocDiscard => self.cancel_doc_discard(),
@@ -7222,12 +7231,118 @@ mod key_routing {
     fn a_doc_saved_since_its_last_edit_closes_without_asking() {
         let (mut shell, _pty) = shell_with_terminal();
         modified_doc(&mut shell, "CLAUDE.md");
-        let _ = shell.update(Message::DocSaved(Ok(SystemTime::UNIX_EPOCH)));
+        let saving = open_version(&shell);
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+        assert_eq!(
+            doc_save_state(&shell),
+            (false, Some(Ok(())), Some(SystemTime::UNIX_EPOCH)),
+            "clean, saved, re-based"
+        );
 
         let _ = shell.update(Message::CloseDoc);
 
         assert!(shell.open_doc.is_none());
         assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    /// The buffer state a save started now would write.
+    fn open_version(shell: &Shell) -> DocVersion {
+        shell.open_doc.as_ref().expect("doc open").version()
+    }
+
+    /// The open doc's modified mark, save feedback (`Ok` for saved, `Err` for
+    /// an error) and concurrency baseline.
+    fn doc_save_state(shell: &Shell) -> (bool, Option<Result<(), ()>>, Option<SystemTime>) {
+        let doc = shell.open_doc.as_ref().expect("doc open");
+        let feedback = doc.feedback.as_ref().map(|f| match f {
+            docs::DocFeedback::Saved => Ok(()),
+            docs::DocFeedback::Error(_) => Err(()),
+        });
+        (doc.dirty, feedback, doc.loaded_mtime)
+    }
+
+    /// Let the open doc's edits go through the discard prompt, as a user would.
+    fn discard_open_doc(shell: &mut Shell) {
+        let _ = shell.update(Message::CloseDoc);
+        let _ = shell.update(Message::ConfirmDocDiscard);
+        assert!(shell.open_doc.is_none());
+    }
+
+    #[test]
+    fn a_save_answer_for_another_doc_leaves_the_open_one_untouched() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "a.md");
+        let saving_a = open_version(&shell);
+        discard_open_doc(&mut shell);
+        modified_doc(&mut shell, "b.md");
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving_a,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+
+        assert_eq!(
+            doc_save_state(&shell),
+            (true, None, None),
+            "b.md keeps its modified mark and its own baseline"
+        );
+    }
+
+    #[test]
+    fn an_edit_made_while_saving_keeps_the_doc_modified() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let saving = open_version(&shell);
+        type_into_doc(&mut shell, 'y');
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+
+        assert_eq!(
+            doc_save_state(&shell),
+            (true, None, Some(SystemTime::UNIX_EPOCH)),
+            "the 'y' was never written, yet the file now holds the save"
+        );
+        let _ = shell.update(Message::CloseDoc);
+        assert!(shell.open_doc.is_some(), "closing still asks");
+    }
+
+    #[test]
+    fn a_save_of_a_closed_buffer_does_not_clean_its_reopened_successor() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let saving = open_version(&shell);
+        discard_open_doc(&mut shell);
+        // Reopened and edited exactly as often: a per-buffer edit count would
+        // read the same here and take the old save for this one.
+        modified_doc(&mut shell, "CLAUDE.md");
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+
+        assert!(doc_save_state(&shell).0, "the new edit was never written");
+    }
+
+    #[test]
+    fn a_refused_save_shows_its_error_even_after_more_edits() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let saving = open_version(&shell);
+        type_into_doc(&mut shell, 'y');
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Err(crate::docs::SaveError::OutOfScope),
+        });
+
+        assert_eq!(doc_save_state(&shell), (true, Some(Err(())), None));
     }
 
     #[test]

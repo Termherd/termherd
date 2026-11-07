@@ -7,6 +7,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (a doc save lands on the doc it wrote)
+
+- A doc keeps its `• modified` mark when you type while its save is in
+  flight, so closing it still asks before losing those keystrokes. A save
+  that answers after you moved to another doc no longer marks that doc
+  `saved` nor changes its on-disk baseline (#384).
+
 ### Fixed (the session scan stays inside `~/.claude/projects`)
 
 - The sidebar's scan no longer follows a symlink under `~/.claude/projects`,

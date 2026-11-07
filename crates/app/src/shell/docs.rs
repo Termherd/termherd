@@ -34,6 +34,17 @@ pub(super) struct OpenDoc {
     pub(super) dirty: bool,
     /// Transient feedback after a save attempt.
     pub(super) feedback: Option<DocFeedback>,
+    /// The shell-wide number of this buffer's latest edit; `0` until edited.
+    last_edit: u64,
+}
+
+/// Which buffer state a save wrote: the doc, and the last edit it held. A
+/// save's answer belongs to that state alone, not to whatever is open when it
+/// arrives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DocVersion {
+    path: PathBuf,
+    last_edit: u64,
 }
 
 /// Unsaved edits about to be thrown away, held until the user answers. Each
@@ -65,15 +76,32 @@ impl OpenDoc {
             writable,
             dirty: false,
             feedback: None,
+            last_edit: 0,
         }
     }
 
-    fn record_save(&mut self, result: Result<SystemTime, crate::docs::SaveError>) {
+    pub(super) fn version(&self) -> DocVersion {
+        DocVersion {
+            path: self.path.clone(),
+            last_edit: self.last_edit,
+        }
+    }
+
+    /// The file holds what was written whatever was typed since, so a success
+    /// always re-bases the concurrency guard; only a save of the current
+    /// buffer makes it clean.
+    fn record_save(
+        &mut self,
+        version: &DocVersion,
+        result: Result<SystemTime, crate::docs::SaveError>,
+    ) {
         match result {
             Ok(new_mtime) => {
                 self.loaded_mtime = Some(new_mtime);
-                self.dirty = false;
-                self.feedback = Some(DocFeedback::Saved);
+                if *version == self.version() {
+                    self.dirty = false;
+                    self.feedback = Some(DocFeedback::Saved);
+                }
             }
             Err(error) => {
                 self.feedback = Some(DocFeedback::Error(error.to_string()));
@@ -142,6 +170,8 @@ impl Shell {
             let edits = action.is_edit();
             doc.content.perform(action);
             if edits {
+                self.doc_edits += 1;
+                doc.last_edit = self.doc_edits;
                 doc.dirty = true;
                 doc.feedback = None;
             }
@@ -149,14 +179,21 @@ impl Shell {
         Task::none()
     }
 
-    /// Record how a save ended: a success re-bases the concurrency guard and
-    /// clears the modified mark, a refusal is shown and keeps the edits.
+    /// Record how a save ended on the doc it wrote. The doc open by then may
+    /// be another one, reached through the discard prompt while the save was
+    /// in flight; its baseline and modified mark are not this save's to touch.
     pub(super) fn on_doc_saved(
         &mut self,
+        version: DocVersion,
         result: Result<SystemTime, crate::docs::SaveError>,
     ) -> Task<Message> {
-        if let Some(doc) = &mut self.open_doc {
-            doc.record_save(result);
+        match self.open_doc.as_mut() {
+            Some(doc) if doc.path == version.path => doc.record_save(&version, result),
+            _ => tracing::info!(
+                path = %version.path.display(),
+                ok = result.is_ok(),
+                "doc save answered after its doc was closed"
+            ),
         }
         Task::none()
     }
@@ -214,13 +251,17 @@ impl Shell {
         if !doc.writable || !doc.dirty {
             return Task::none();
         }
+        let version = doc.version();
         let path = doc.path.clone();
         let contents = doc.content.text();
         let open_mtime = doc.loaded_mtime;
         let claude = self.claude_dir.clone();
         Task::perform(
             async move { crate::docs::save(&path, &contents, open_mtime, claude.as_ref()) },
-            Message::DocSaved,
+            move |result| Message::DocSaved {
+                version: version.clone(),
+                result,
+            },
         )
     }
 }
