@@ -666,11 +666,9 @@ impl TermherdMcp {
                        chord — `ran` (with the action's name), `inert` (the \
                        action exists but has no surface yet, so nothing \
                        happened; do not retry), `overlay` (an open prompt \
-                       consumed it; \"escape\" usually cancels and \"enter\" \
+                       consumed it; \"escape\" leaves any prompt and \"enter\" \
                        confirms — but on `quit-confirm` \"enter\" quits the app, \
-                       killing every session and this connection, and \
-                       `session-rename` answers to neither, so only a human can \
-                       clear that one), \
+                       killing every session and this connection), \
                        `typed` (bound to nothing, so it reached the focused \
                        terminal), `unbound` (nothing claimed it) — plus the \
                        resulting `focused_handle`. Use `run_action` instead \
@@ -990,7 +988,8 @@ impl ServerHandler for TermherdMcp {
              `read_terminal`. `prompt_in_session` does all three for a \
              prompt. Never poll `snapshot` to wait. `press_keys` and \
              `run_action` drive termherd's own interface, not a terminal; an \
-             open prompt takes their keys, and `escape` leaves any prompt. \
+             open prompt takes their keys, and `escape` leaves any prompt; \
+             `enter` on the quit prompt quits termherd and this connection. \
              Take a `screenshot` last: it weighs hundreds of times a \
              `snapshot`."
                 .into(),

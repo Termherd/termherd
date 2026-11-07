@@ -1934,8 +1934,8 @@ on 2026-11-07 moved the calling rules into the server's instructions, and
 left four things an agent outside this repo still cannot learn or do from the
 bridge alone:
 
-- **Guidance as MCP resources or prompts.** The diagnosis recipes live in a
-  project skill (`drive-termherd`) and in `docs/agents/mcp.md`, so a client
+- **Guidance as MCP resources or prompts.** The diagnosis recipes live only
+  in a project skill (`drive-termherd`), so a client
   launched from another repo never reads them. The stdio server already
   publishes `termherd://keys/schema`; a guide resource, or MCP prompts per
   recipe, would travel the same way.
@@ -1950,7 +1950,7 @@ bridge alone:
   answers at once on the status from before a prompt, which is why every
   caller is told to wait for `busy` first; `prompt_in_session` fixed it for
   its own loop only (#435). A wait for the next transition would make the
-  rule unnecessary. Related open defects: #427, #436.
+  rule unnecessary. Related open defect: #436.
 
 <a id="f-search-ux"></a>
 
