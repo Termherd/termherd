@@ -409,18 +409,7 @@ impl App {
         let Some(id) = self.sessions.allocate() else {
             return Vec::new();
         };
-        self.sessions.insert(LiveSession {
-            id,
-            cwd: spec.cwd.clone(),
-            launch_cwd: spec.cwd.clone(),
-            launch: spec.launch.clone(),
-            status: SessionStatus::Starting,
-            foreground: None,
-            session_file: None,
-            proven_session_id: None,
-            spawned_at: None,
-            foreground_reported: false,
-        });
+        let spawn = self.start_session(id, spec.cwd, spec.launch);
         match spec.placement {
             Placement::Foreground => self.workspace.open(id, spec.title),
             Placement::Background => {
@@ -428,14 +417,37 @@ impl App {
             }
         }
         self.retitle_tabs();
-        vec![Effect::Spawn(SpawnSpec {
+        vec![spawn]
+    }
+
+    /// Register `id` as a session starting `launch` in `cwd`, and the effect
+    /// that spawns its PTY. Placing it in the workspace is the caller's.
+    pub(super) fn start_session(
+        &mut self,
+        id: SessionId,
+        cwd: Option<String>,
+        launch: Launch,
+    ) -> Effect {
+        self.sessions.insert(LiveSession {
+            id,
+            cwd: cwd.clone(),
+            launch_cwd: cwd.clone(),
+            launch: launch.clone(),
+            status: SessionStatus::Starting,
+            foreground: None,
+            session_file: None,
+            proven_session_id: None,
+            spawned_at: None,
+            foreground_reported: false,
+        });
+        Effect::Spawn(SpawnSpec {
             session: id,
-            cwd: spec.cwd,
-            launch: spec.launch,
+            cwd,
+            launch,
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
             mcp: None,
-        })]
+        })
     }
 
     /// Split the focused pane (FR6): mint a session, inherit the focused pane's
@@ -454,26 +466,7 @@ impl App {
         if self.workspace.split(dir, id).is_none() {
             return Vec::new();
         }
-        self.sessions.insert(LiveSession {
-            id,
-            cwd: cwd.clone(),
-            launch_cwd: cwd.clone(),
-            launch: Launch::Shell,
-            status: SessionStatus::Starting,
-            foreground: None,
-            session_file: None,
-            proven_session_id: None,
-            spawned_at: None,
-            foreground_reported: false,
-        });
-        vec![Effect::Spawn(SpawnSpec {
-            session: id,
-            cwd,
-            launch: Launch::Shell,
-            cols: DEFAULT_COLS,
-            rows: DEFAULT_ROWS,
-            mcp: None,
-        })]
+        vec![self.start_session(id, cwd, Launch::Shell)]
     }
 
     /// Forget the session whose pane the workspace just closed and kill its
