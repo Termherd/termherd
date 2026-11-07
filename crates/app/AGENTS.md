@@ -63,5 +63,6 @@ code under `crates/app/`. The incidents behind them are in
 
 `src/macos.rs` is the workspace's only `unsafe` module: the Cmd+Q quit path,
 the Edit menu that gives Ctrl+Cmd+Space its *Emoji & Symbols* item, the Window
-menu that gives Cmd+M its *Minimize*, and the `insertText:` relay that turns
-Character Viewer text winit drops into an input-method commit.
+menu that gives Cmd+M its *Minimize*, the `insertText:` relay that turns
+Character Viewer text winit drops into an input-method commit, and the
+`GetURL` Apple Event relay that drops a `termherd://` link into the inbox.
