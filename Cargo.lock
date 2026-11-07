@@ -3977,6 +3977,7 @@ dependencies = [
  "termherd-claude",
  "termherd-core",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

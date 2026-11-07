@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
 use termherd_core::ports::ScanError;
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Keeps the fs watcher and its coalescing thread alive; dropping it stops
 /// both.
@@ -92,13 +92,17 @@ fn watch(
 }
 
 /// One watcher callback: `signal` when the event is one `relevant` admits.
+/// An error is logged rather than signalled: a watch that keeps failing
+/// would otherwise leave the sidebar stale with no trace of why.
 fn deliver(
     event: notify::Result<notify::Event>,
     relevant: impl Fn(&notify::Event) -> bool,
     signal: impl FnOnce(),
 ) {
-    if event.is_ok_and(|event| relevant(&event)) {
-        signal();
+    match event {
+        Ok(event) if relevant(&event) => signal(),
+        Ok(_) => {}
+        Err(error) => warn!(%error, paths = ?error.paths, "fs watch error"),
     }
 }
 
@@ -118,6 +122,62 @@ fn coalesce(rx: &Receiver<()>, debounce: Duration, mut on_change: impl FnMut()) 
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::{Arc, Mutex};
+
+    /// Everything logged at WARN or above while `run` executes.
+    fn warnings_during(run: impl FnOnce()) -> String {
+        #[derive(Clone, Default)]
+        struct Sink(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Sink {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let sink = Sink::default();
+        let writer = sink.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, run);
+        let bytes = sink.0.lock().unwrap().clone();
+        String::from_utf8(bytes).unwrap()
+    }
+
+    #[test]
+    fn a_watcher_error_is_logged_and_signals_nothing() {
+        let mut signalled = false;
+        let logged = warnings_during(|| {
+            deliver(
+                Err(notify::Error::generic("stream lost")),
+                |_| true,
+                || signalled = true,
+            );
+        });
+        assert!(!signalled, "an error is not a change");
+        assert!(
+            logged.contains("WARN"),
+            "not logged as a warning: {logged:?}"
+        );
+        assert!(
+            logged.contains("stream lost"),
+            "error text missing: {logged:?}"
+        );
+    }
+
+    #[test]
+    fn a_relevant_event_signals_and_an_irrelevant_one_does_not() {
+        let event = || Ok(notify::Event::new(notify::EventKind::Any));
+        let mut signals = 0;
+        deliver(event(), |_| true, || signals += 1);
+        deliver(event(), |_| false, || signals += 1);
+        assert_eq!(signals, 1);
+    }
 
     #[test]
     fn watch_fires_once_per_debounced_burst() {
