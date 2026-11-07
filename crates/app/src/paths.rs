@@ -72,6 +72,44 @@ impl ClaudeDir {
     }
 }
 
+/// The OS temp dir (`$TMPDIR`, `%TMP%`): the single-instance lock and the
+/// sessions' private files live under it. Resolved in `main()` alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TempDir(PathBuf);
+
+impl TempDir {
+    /// `std::env::temp_dir()`, read once.
+    #[must_use]
+    pub fn user() -> Self {
+        Self(std::env::temp_dir())
+    }
+
+    /// The directory itself.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+
+    /// Make sure the directory exists, creating it when it is missing.
+    pub fn ensure(&self) -> TempDirState {
+        if self.0.is_dir() {
+            return TempDirState::Present;
+        }
+        match std::fs::create_dir_all(&self.0) {
+            Ok(()) => TempDirState::Created,
+            Err(error) => TempDirState::Unusable(error),
+        }
+    }
+}
+
+/// What [`TempDir::ensure`] found.
+#[derive(Debug)]
+pub enum TempDirState {
+    Present,
+    Created,
+    Unusable(std::io::Error),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +120,40 @@ mod tests {
             ClaudeDir::user().map(|dir| dir.path().to_path_buf()),
             home_dir().map(|home| home.join(".claude"))
         );
+    }
+
+    #[test]
+    fn an_existing_temp_dir_is_left_as_it_is() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let state = TempDir(root.path().to_owned()).ensure();
+        assert!(matches!(state, TempDirState::Present), "{state:?}");
+    }
+
+    #[test]
+    fn a_missing_temp_dir_is_created_with_its_parents() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let missing = root.path().join("does-not-exist").join("tmp");
+        let state = TempDir(missing.clone()).ensure();
+        assert!(matches!(state, TempDirState::Created), "{state:?}");
+        assert!(missing.is_dir(), "{} was not created", missing.display());
+    }
+
+    #[test]
+    fn a_temp_dir_that_cannot_be_created_is_reported_unusable() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let file = root.path().join("a-file");
+        std::fs::write(&file, "").expect("plant a file");
+        let state = TempDir(file.join("tmp")).ensure();
+        assert!(matches!(state, TempDirState::Unusable(_)), "{state:?}");
+    }
+
+    #[test]
+    fn a_temp_dir_path_naming_a_file_is_reported_unusable() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let file = root.path().join("a-file");
+        std::fs::write(&file, "").expect("plant a file");
+        let state = TempDir(file).ensure();
+        assert!(matches!(state, TempDirState::Unusable(_)), "{state:?}");
     }
 
     /// The `N` of libtest's `test result: ok. N passed; …` line; 0 without one.
