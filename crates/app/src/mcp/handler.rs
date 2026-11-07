@@ -1316,24 +1316,30 @@ fn no_pixels(reason: Option<String>) -> CallToolResult {
 
 /// The writes that type `text`: the text, then Enter on its own when it ends
 /// in a line break.
+fn typed_writes(text: String) -> Vec<Vec<u8>> {
+    match split_submit(text) {
+        (bytes, false) => vec![bytes],
+        (bytes, true) if bytes.is_empty() => vec![SUBMIT.to_vec()],
+        (bytes, true) => vec![bytes, SUBMIT.to_vec()],
+    }
+}
+
+/// `text` without its final line break, and whether it had one: whether it
+/// asks to be submitted.
 ///
 /// A program reading raw keys (Claude Code, `PSReadLine`) takes `\n` as Ctrl+J,
 /// a new line in its input, so the final one is sent as Enter. Earlier line
 /// breaks stay, so a multi-line prompt is submitted once.
-fn typed_writes(text: String) -> Vec<Vec<u8>> {
+fn split_submit(text: String) -> (Vec<u8>, bool) {
     let mut bytes = text.into_bytes();
     let line_break = [&b"\r\n"[..], b"\n", b"\r"]
         .into_iter()
         .find(|ending| bytes.ends_with(ending));
     let Some(line_break) = line_break else {
-        return vec![bytes];
+        return (bytes, false);
     };
     bytes.truncate(bytes.len() - line_break.len());
-    if bytes.is_empty() {
-        vec![SUBMIT.to_vec()]
-    } else {
-        vec![bytes, SUBMIT.to_vec()]
-    }
+    (bytes, true)
 }
 
 /// Parse a stable handle string (as `list_sessions` / `snapshot` report it) to
