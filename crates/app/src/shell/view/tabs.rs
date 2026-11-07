@@ -14,8 +14,8 @@ use termherd_core::ClaudeColor;
 
 use super::modals::modal_card;
 use super::{
-    COLOR_MARK_WIDTH, CardFacts, active_chip_fill, card_frame, card_secondary_line, claude_color,
-    clip, color_swatch, detail_lines, kind_icon, session_card, status_dot,
+    Backdrop, COLOR_MARK_WIDTH, CardFacts, active_chip_fill, card_frame, card_secondary_line,
+    claude_color, clip, color_swatch, detail_lines, kind_icon, session_card, status_dot,
 };
 use crate::shell::{Message, Shell, tab_rename_id};
 use crate::strings;
@@ -64,7 +64,12 @@ impl Shell {
             // rename editor so editing a title never hides what the tab runs.
             let mut inner = row![].spacing(6).align_y(iced::Center);
             if let Some(status) = self.core.tab_status(index) {
-                inner = inner.push(status_dot(status));
+                let backdrop = if active {
+                    Backdrop::ActiveChip
+                } else {
+                    Backdrop::Chrome
+                };
+                inner = inner.push(status_dot(status, backdrop));
             }
             if let Some(kind) = self.core.tab_kind(index) {
                 inner = inner.push(kind_icon(kind));
@@ -356,4 +361,22 @@ fn tab_card(title: String, facts: &CardFacts, cwd: Option<String>) -> Element<'s
         card = card.push(card_secondary_line(cwd));
     }
     card_frame(card)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_active_chip_paints_the_fill_its_status_dot_is_shaded_for() {
+        // The dot reads on the chip only if both name the same fill.
+        let theme = iced::Theme::Dracula;
+        let fill = active_chip_fill(theme.extended_palette());
+
+        let active = tab_chip_style(&theme, true, false, None);
+        let idle = tab_chip_style(&theme, false, false, None);
+
+        assert_eq!(active.background, Some(iced::Background::Color(fill)));
+        assert_eq!(idle.background, None);
+    }
 }
