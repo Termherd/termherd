@@ -88,6 +88,13 @@ impl ScreenPacer {
         }
     }
 
+    /// Publish the change held back now, whatever the pacing.
+    fn publish_held(&mut self, now: Instant, publish: impl FnOnce()) {
+        if self.unsent {
+            self.publish(now, publish);
+        }
+    }
+
     fn publish(&mut self, now: Instant, publish: impl FnOnce()) {
         publish();
         self.last_sent = Some(now);
@@ -335,10 +342,20 @@ fn forward_mouse(session: SessionId, input: &SharedWriter, bytes: &[u8]) {
 /// Emit a [`PtyEvent::Status`] when `activity` has moved off `before`. Both
 /// sources — the OSC fold and the foreground poll — report through here, so a
 /// status change is logged and published in exactly one place.
-fn report_status(session: SessionId, before: SessionStatus, activity: &Activity, sink: &EventSink) {
+///
+/// `publish_screen` runs first, and only on a change: a reader that sees the
+/// status must find at least the screen of the bytes that produced it.
+fn report_status(
+    session: SessionId,
+    before: SessionStatus,
+    activity: &Activity,
+    sink: &EventSink,
+    publish_screen: impl FnOnce(),
+) {
     if activity.status == before {
         return;
     }
+    publish_screen();
     tracing::debug!(
         session = session.0.get(),
         from = ?before,
@@ -495,7 +512,9 @@ pub(crate) fn spawn_term(
                 // that has stood is published before whatever comes next.
                 let (before, now) = (activity.status, Instant::now());
                 if activity.settle(now) {
-                    report_status(session, before, &activity, &term_sink);
+                    report_status(session, before, &activity, &term_sink, || {
+                        pacer.publish_held(now, || term_sink(screen(&term)));
+                    });
                 }
                 let cmd = match next {
                     Next::Cmd(cmd) => cmd,
@@ -505,6 +524,8 @@ pub(crate) fn spawn_term(
                     }
                     Next::Closed => break,
                 };
+                // A chunk's status goes out once the chunk is drawn, below.
+                let mut status_from = None;
                 match cmd {
                     TermCmd::Bytes(bytes) => {
                         // OSC status comes from the raw bytes — alacritty
@@ -512,9 +533,8 @@ pub(crate) fn spawn_term(
                         let text = String::from_utf8_lossy(&bytes);
                         let signals = decode_chunk(&text);
                         let marks = decode_marks(&text);
-                        let before = activity.status;
+                        status_from = Some(activity.status);
                         activity.observe(&signals, &marks, Instant::now());
-                        report_status(session, before, &activity, &term_sink);
                         // Forward each OSC 9 notification's text to the OS,
                         // independent of the status fold above — the in-app
                         // `Attention` badge and the desktop alert are two
@@ -586,7 +606,9 @@ pub(crate) fn spawn_term(
                     TermCmd::Foreground { status, job: now } => {
                         let before = activity.status;
                         if activity.poll(status) {
-                            report_status(session, before, &activity, &term_sink);
+                            report_status(session, before, &activity, &term_sink, || {
+                                pacer.publish_held(Instant::now(), || term_sink(screen(&term)));
+                            });
                         }
                         if now != job {
                             job.clone_from(&now);
@@ -619,7 +641,13 @@ pub(crate) fn spawn_term(
                         break;
                     }
                 }
-                pacer.changed(Instant::now(), || term_sink(screen(&term)));
+                let now = Instant::now();
+                pacer.changed(now, || term_sink(screen(&term)));
+                if let Some(before) = status_from {
+                    report_status(session, before, &activity, &term_sink, || {
+                        pacer.publish_held(now, || term_sink(screen(&term)));
+                    });
+                }
             }
             // A final snapshot so any drained bytes reach the screen the tab
             // keeps showing on an unclean exit.
@@ -637,6 +665,43 @@ pub(crate) fn spawn_term(
 
 #[cfg(test)]
 mod tests {
+    mod pacer {
+        use super::super::*;
+
+        const GAP: Duration = Duration::from_millis(8);
+
+        #[test]
+        fn the_first_change_goes_out_and_the_next_waits_out_the_gap() {
+            let t0 = Instant::now();
+            let mut pacer = ScreenPacer::new(GAP);
+            let mut sent = 0;
+            pacer.changed(t0, || sent += 1);
+            assert_eq!((sent, pacer.due()), (1, None), "the first goes out at once");
+
+            pacer.changed(t0 + Duration::from_millis(1), || sent += 1);
+            assert_eq!(sent, 1, "the second is held");
+            assert_eq!(pacer.due(), Some(t0 + GAP), "until the gap since the first");
+
+            pacer.publish_due(t0 + GAP - Duration::from_millis(1), || sent += 1);
+            assert_eq!(sent, 1, "not before it is due");
+            pacer.publish_due(t0 + GAP, || sent += 1);
+            assert_eq!((sent, pacer.due()), (2, None));
+        }
+
+        #[test]
+        fn a_held_change_goes_out_on_demand_and_nothing_else_does() {
+            let t0 = Instant::now();
+            let mut pacer = ScreenPacer::new(GAP);
+            let mut sent = 0;
+            pacer.publish_held(t0, || sent += 1);
+            assert_eq!(sent, 0, "nothing held, nothing sent");
+            pacer.changed(t0, || sent += 1);
+            pacer.changed(t0, || sent += 1);
+            pacer.publish_held(t0, || sent += 1);
+            assert_eq!((sent, pacer.due()), (2, None));
+        }
+    }
+
     mod next_job {
         use super::super::*;
 
@@ -773,6 +838,15 @@ mod tests {
     /// Drive a real terminal thread over `steps` and collect the statuses and
     /// screens it publishes, in order.
     fn events_seen(steps: &[(&str, Then)]) -> Vec<Seen> {
+        let steps = steps
+            .iter()
+            .map(|(chunk, then)| (TermCmd::Bytes(chunk.as_bytes().to_vec()), *then))
+            .collect();
+        events_seen_paced(steps, SCREEN_INTERVAL)
+    }
+
+    /// [`events_seen`] over any commands, pacing screens by `screen_interval`.
+    fn events_seen_paced(steps: Vec<(TermCmd, Then)>, screen_interval: Duration) -> Vec<Seen> {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let collected = seen.clone();
         let sink: EventSink = Arc::new(move |event| {
@@ -797,7 +871,7 @@ mod tests {
             Arc::new(RwLock::new(
                 Palette::named("solarized-light").expect("known scheme"),
             )),
-            SCREEN_INTERVAL,
+            screen_interval,
         );
         let reported = || {
             let seen = seen.lock().expect("sink lock");
@@ -805,14 +879,13 @@ mod tests {
                 .filter(|seen| matches!(seen, Seen::Status(_)))
                 .count()
         };
-        for (chunk, then) in steps {
-            ctrl.send(TermCmd::Bytes(chunk.as_bytes().to_vec()))
-                .expect("terminal thread alive");
+        for (cmd, then) in steps {
+            ctrl.send(cmd).expect("terminal thread alive");
             if let Then::Reported(count) = then {
                 // Generous: a loaded CI runner may be slow to run the timer,
                 // and the assertion, not this wait, says what went wrong.
                 let give_up = Instant::now() + Duration::from_secs(10);
-                while reported() < *count && Instant::now() < give_up {
+                while reported() < count && Instant::now() < give_up {
                     std::thread::sleep(Duration::from_millis(5));
                 }
             }
@@ -952,6 +1025,70 @@ mod tests {
             drawn.is_some() && drawn < idle,
             "drawn at {drawn:?}, idle at {idle:?}"
         );
+    }
+
+    /// A screen interval no test outlasts: every screen after the first is
+    /// held, so only the ordering rule can let it out before a status.
+    const HELD: Duration = Duration::from_secs(60);
+
+    fn bytes(chunk: &str) -> TermCmd {
+        TermCmd::Bytes(chunk.as_bytes().to_vec())
+    }
+
+    /// Assert a screen showing `text` was published before `status`.
+    fn assert_drawn_before(seen: &[Seen], text: &str, status: SessionStatus) {
+        let drawn = seen
+            .iter()
+            .position(|seen| matches!(seen, Seen::Screen(screen) if screen.contains(text)));
+        let reported = seen.iter().position(|seen| *seen == Seen::Status(status));
+        assert!(
+            reported.is_some() && drawn < reported && drawn.is_some(),
+            "{text:?} drawn at {drawn:?}, {status:?} at {reported:?}: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn the_chunk_that_changes_the_status_is_drawn_before_the_status() {
+        let seen = events_seen_paced(
+            vec![
+                (bytes("first\r\n"), Then::Go),
+                (bytes("\u{1b}]133;A\u{07}prompt-shown"), Then::Reported(1)),
+            ],
+            HELD,
+        );
+        assert_drawn_before(&seen, "prompt-shown", SessionStatus::Idle);
+    }
+
+    #[test]
+    fn a_held_screen_is_drawn_before_a_status_from_the_foreground_poll() {
+        let seen = events_seen_paced(
+            vec![
+                (bytes("first\r\n"), Then::Go),
+                (bytes("second"), Then::Go),
+                (
+                    TermCmd::Foreground {
+                        status: Some(SessionStatus::Idle),
+                        job: None,
+                    },
+                    Then::Reported(1),
+                ),
+            ],
+            HELD,
+        );
+        assert_drawn_before(&seen, "second", SessionStatus::Idle);
+    }
+
+    #[test]
+    fn a_held_screen_is_drawn_before_a_settled_idle() {
+        let seen = events_seen_paced(
+            vec![
+                (bytes("\u{1b}]0;\u{25D0} Claude Code\u{07}"), Then::Go),
+                (bytes("\u{1b}]0;\u{2733} Claude Code\u{07}"), Then::Go),
+                (bytes("the answer"), Then::Reported(2)),
+            ],
+            HELD,
+        );
+        assert_drawn_before(&seen, "the answer", SessionStatus::Idle);
     }
 
     #[test]

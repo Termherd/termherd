@@ -174,10 +174,14 @@ needs it, not before.
 only from a session termherd spawned, so the launcher itself cannot drive it)
 and the pointer at termherd's own chrome (#301 — the sidebar, tabs and gutters
 still have no mouse). Neither blocks the other.
-Three defects are open beside them: the bridge's hardening (#293; #284 is
-fixed), a `read_terminal` that can return the screen from before the status it
-waited for (#436), and a long `claude_command` that Claude reads as a paste
-(#439). Two defects are fixed. A status reading `idle` while Claude still
+Two defects are open beside them: the bridge's hardening (#293; #284 is
+fixed), and a long `claude_command` that Claude reads as a paste (#439).
+Three defects are fixed. A `read_terminal` that returned the screen from
+before the status it waited for (#436): the terminal thread paces screens
+(one per 8 ms) but sent a status the moment it decoded it, so the screen of
+the same bytes could follow. `report_status` now publishes any held screen
+first, and a chunk's status goes out only after the chunk is drawn. A status
+reading `idle` while Claude still
 works (#427): `prompt_in_session` no longer settles on the status from before
 its prompt (#435; a bare `wait_for_status` still needs `busy` first), and
 Claude's idle title must stand 150 ms (`pty::status::IDLE_HOLD`) before a
