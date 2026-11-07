@@ -4661,6 +4661,33 @@ mod key_routing {
     }
 
     #[test]
+    fn a_capture_prunes_the_oldest_once_the_dir_is_full() {
+        let (shell, _pty) = shell_with_terminal();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oldest = dir.path().join("capture-19700101-000000-000.json");
+        for n in 0..crate::capture::KEPT_CAPTURES {
+            let name = format!("capture-19700101-000000-{n:03}.json");
+            std::fs::write(dir.path().join(name), "{}").expect("an old capture");
+        }
+        let foreign = dir.path().join("notes.md");
+        std::fs::write(&foreign, "mine").expect("a file of the user's");
+
+        let dump = shell
+            .core
+            .build_capture(&shell.snapshot_inputs_for(&SnapshotFilter::capture()));
+        let _ = shell.perform_capture(dir.path(), dump);
+
+        let dumps = std::fs::read_dir(dir.path())
+            .expect("captures dir")
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .count();
+        assert_eq!(dumps, crate::capture::KEPT_CAPTURES);
+        assert!(!oldest.exists(), "the oldest capture made room");
+        assert!(foreign.exists(), "a file termherd did not write stays");
+    }
+
+    #[test]
     fn a_capture_masks_the_secrets_on_screen_unless_told_not_to() {
         let screen = "$ echo ghp_1234567890abcdefghijABCDEFGHIJ123456";
 

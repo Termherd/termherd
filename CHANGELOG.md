@@ -18,6 +18,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dump: AWS keys, `sk-…` API keys, GitHub tokens, `Bearer` tokens and PEM
   private keys become `[redacted]`. On by default; `"capture": { "redact":
   false }` in `settings.json` turns it off (#288).
+- `~/.termherd/captures/` keeps only the newest 50 captures: older ones are
+  deleted after each capture or screencast. Only files TermHerd named are
+  ever touched (#288).
 
 ### Fixed (a doc save lands on the doc it wrote)
 

@@ -79,6 +79,12 @@ pasted token, an `env` listing, a `.env` file someone printed.
   Only these shapes are recognised. A password or a token in some other
   format is written as-is: there is no guess based on how random a string
   looks, because hashes, UUIDs and base64 output would be masked with it.
+- **Only the newest 50 captures are kept.** After each capture or
+  screencast, the oldest ones beyond 50 are deleted; a JSON dump and its
+  screenshot count as one. Only files named like TermHerd's own
+  (`capture-YYYYMMDD-HHMMSS-mmm.json`, `.png` or `.gif`) are ever deleted:
+  anything else you put in the directory, or a capture you rename, stays.
+  Copy a capture out of the directory to keep it.
 
 ## How it stays honest
 

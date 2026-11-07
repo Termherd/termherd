@@ -342,6 +342,7 @@ impl Shell {
             Ok(path) => tracing::info!(path = %path.display(), "capture dump written"),
             Err(error) => tracing::warn!(%error, "could not write capture dump"),
         }
+        crate::capture::enforce_retention(dir);
         let png_path =
             crate::capture::artefact_path(dir, &stamp, crate::capture::Artefact::Screenshot);
         // Screenshot the live window (rung 1), then encode + write the PNG.
