@@ -22,7 +22,7 @@ use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::widget::text_editor;
 use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost};
-use termherd_core::workspace::{SessionId, Tab};
+use termherd_core::workspace::SessionId;
 use termherd_core::{
     ClaudeLaunch, ConfigInput, Keymap, Launch, Overlay, PointerEvent, ScrollTarget, SelectOp,
     SessionRecord, SessionStatus,
@@ -304,11 +304,12 @@ struct Shell {
     open_doc: Option<OpenDoc>,
     /// A discard of the open doc's unsaved edits awaiting confirmation.
     discarding_doc: Option<DocDiscard>,
-    /// A close awaiting confirmation: the tab index to kill, or `None`.
+    /// A close awaiting confirmation: a session of the tab to kill, or `None`.
     /// Killing a session is destructive, so the close button arms this and a
     /// confirmation bar must be accepted before the PTY is actually killed —
-    /// unless [`Self::close_confirm`] waives the prompt for this close.
-    closing: Option<usize>,
+    /// unless [`Self::close_confirm`] waives the prompt for this close. A
+    /// session, not an index, because `core` moves tabs under a pending prompt.
+    closing: Option<SessionId>,
     /// Whether tab close and app quit prompt first (from `settings.json`).
     close_confirm: CloseSettings,
     /// Which mouse gestures reach the clipboard (from `settings.json`), handed
@@ -361,70 +362,19 @@ struct Shell {
     record: RecordState,
 }
 
-/// A tab drag in flight: the index the drag started on and the slot the
-/// pointer is hovering now. The reorder is committed once, on release.
+/// A tab drag in flight: a session of the tab the drag started on and one of
+/// the tab the pointer is hovering now. The reorder is committed once, on
+/// release, at the positions those tabs hold then.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TabDrag {
-    from: usize,
-    over: usize,
-}
-
-/// The tabs the shell's index-keyed state names, each with the session of its
-/// first pane, so the index can be found again once `core` reorders the strip:
-/// parking, unparking and opening before the parked group all shift tabs.
-struct TabAnchors {
-    closing: Option<(usize, SessionId)>,
-    drag: Option<(TabDrag, SessionId, SessionId)>,
-    split: Option<(usize, SessionId)>,
-}
-
-impl TabAnchors {
-    fn of(shell: &Shell) -> Self {
-        let workspace = &shell.core.workspace;
-        let session_at = |index: usize| workspace.tabs.get(index).map(Tab::first_session);
-        Self {
-            closing: shell
-                .closing
-                .and_then(|index| Some((index, session_at(index)?))),
-            drag: shell
-                .tab_drag
-                .and_then(|drag| Some((drag, session_at(drag.from)?, session_at(drag.over)?))),
-            split: shell
-                .split_drag
-                .as_ref()
-                .and_then(|drag| Some((drag.tab, session_at(drag.tab)?))),
-        }
-    }
-
-    /// Point the state the message left untouched back at its tabs. A tab no
-    /// longer found is left to the message, which already dealt with its close.
-    fn follow(self, shell: &mut Shell) {
-        let workspace = &shell.core.workspace;
-        if let Some((index, session)) = self.closing
-            && shell.closing == Some(index)
-            && let Some(now) = workspace.tab_of(session)
-        {
-            shell.closing = Some(now);
-        }
-        if let Some((drag, from, over)) = self.drag
-            && shell.tab_drag == Some(drag)
-            && let (Some(from), Some(over)) = (workspace.tab_of(from), workspace.tab_of(over))
-        {
-            shell.tab_drag = Some(TabDrag { from, over });
-        }
-        if let Some((index, session)) = self.split
-            && let Some(drag) = shell.split_drag.as_mut()
-            && drag.tab == index
-            && let Some(now) = workspace.tab_of(session)
-        {
-            drag.tab = now;
-        }
-    }
+    from: SessionId,
+    over: SessionId,
 }
 
 #[derive(Debug, Clone)]
 struct SplitDrag {
-    tab: usize,
+    /// A session of the tab whose divider is dragged.
+    tab: SessionId,
     path: Vec<termherd_core::workspace::Branch>,
     dir: termherd_core::workspace::SplitDir,
     ratio: f32,
@@ -985,24 +935,14 @@ impl Shell {
         )
     }
 
-    /// The iced `update`: every message goes through [`Self::dispatch`]. The
-    /// tab indices the shell holds then follow their tabs through any reorder
-    /// the message caused.
-    fn update(&mut self, message: Message) -> Task<Message> {
-        let anchors = TabAnchors::of(self);
-        let task = self.dispatch(message);
-        anchors.follow(self);
-        task
-    }
-
-    // A flat `match` over every `Message` variant — the app's central event
-    // dispatcher, whose arms delegate to the domain modules (launch,
+    // The iced `update`: a flat `match` over every `Message` variant — the
+    // app's central event dispatcher, whose arms delegate to the domain modules (launch,
     // session_ops, effects, geometry, routing, …). The length here is breadth
     // (one arm per message), not nested complexity, and splitting the dispatch
     // itself would only scatter it — the allow is by design, not a deferred
     // cleanup.
     #[allow(clippy::too_many_lines)]
-    fn dispatch(&mut self, message: Message) -> Task<Message> {
+    fn update(&mut self, message: Message) -> Task<Message> {
         self.drop_stale_lists();
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
         // is open discards it — the blur-cancels-edit convention. Only genuine
@@ -1169,9 +1109,10 @@ impl Shell {
             } => {
                 if tab == self.core.workspace.active
                     && let Some(extent) = self.split_extent(tab, &path).filter(|n| *n > 0.0)
+                    && let Some(anchor) = self.anchor_of(tab)
                 {
                     self.split_drag = Some(SplitDrag {
-                        tab,
+                        tab: anchor,
                         path,
                         dir,
                         ratio,
@@ -1186,19 +1127,26 @@ impl Shell {
                 let Some(drag) = self.split_drag.as_ref() else {
                     return Task::none();
                 };
+                let Some(tab) = self.core.workspace.tab_of(drag.tab) else {
+                    return Task::none();
+                };
                 let delta = match drag.dir {
                     termherd_core::workspace::SplitDir::Vertical => position.x - drag.start.x,
                     termherd_core::workspace::SplitDir::Horizontal => position.y - drag.start.y,
                 };
                 let effects = self.core.apply(termherd_core::Event::SetSplitRatio {
-                    tab: drag.tab,
+                    tab,
                     path: drag.path.clone(),
                     ratio: drag.ratio + delta / drag.extent,
                 });
                 self.perform(effects)
             }
-            Message::SplitDragEnd => match self.split_drag.take() {
-                Some(drag) => self.resize_tab(drag.tab),
+            Message::SplitDragEnd => match self
+                .split_drag
+                .take()
+                .and_then(|drag| self.core.workspace.tab_of(drag.tab))
+            {
+                Some(tab) => self.resize_tab(tab),
                 None => Task::none(),
             },
             Message::FocusSearch => {
@@ -1276,35 +1224,36 @@ impl Shell {
                 Task::none()
             }
             Message::TabDragStart(index) => {
-                if index < self.core.workspace.tabs.len() {
-                    self.tab_drag = Some(TabDrag {
-                        from: index,
-                        over: index,
-                    });
-                }
+                self.tab_drag = self
+                    .anchor_of(index)
+                    .map(|anchor| TabDrag::new(anchor, anchor));
                 Task::none()
             }
             Message::TabDragOver(index) => {
-                if let Some(drag) = self.tab_drag.as_mut()
-                    && index < self.core.workspace.tabs.len()
+                if let Some(over) = self.anchor_of(index)
+                    && let Some(drag) = self.tab_drag.as_mut()
                 {
-                    drag.over = index;
+                    drag.over = over;
                 }
                 // The pointer entering a chip is also the hover that opens its
                 // card: Claude may have written or renamed its file since.
                 self.refresh_tab_session_files(index);
                 Task::none()
             }
-            Message::TabDragEnd => match self.tab_drag.take() {
+            Message::TabDragEnd => match self
+                .tab_drag
+                .take()
+                .and_then(|drag| drag.slots(&self.core.workspace))
+            {
                 // A real drag (the pointer crossed onto another tab): reorder.
-                Some(TabDrag { from, over }) if from != over => {
+                Some((from, over)) if from != over => {
                     let effects = self
                         .core
                         .apply(termherd_core::Event::MoveTab { from, to: over });
                     self.perform(effects)
                 }
                 // No movement — the press/release was a plain click: activate.
-                Some(TabDrag { from, .. }) => self.activate_tab(from),
+                Some((from, _)) => self.activate_tab(from),
                 None => Task::none(),
             },
             Message::StartTabRename(index) => {
@@ -2871,7 +2820,7 @@ mod key_routing {
         // The user is typing a search with a close prompt up: neither is the
         // agent's to take away.
         shell.focus = Focus::Search;
-        shell.closing = Some(0);
+        shell.closing = shell.anchor_of(0);
         let outcome = open_in_background(&mut shell);
         assert_eq!(outcome.error, None);
         assert_eq!(outcome.focused, before, "focus is reported unchanged");
@@ -2885,7 +2834,7 @@ mod key_routing {
         assert_eq!(opened(&outcome), Some(worker.to_string()));
         assert_eq!(pty.spawn_count(), 2, "the worker's PTY was spawned");
         assert_eq!(shell.focus, Focus::Search, "keyboard owner untouched");
-        assert_eq!(shell.closing, Some(0), "the user's prompt survives");
+        assert_eq!(shell.closing_tab(), Some(0), "the user's prompt survives");
     }
 
     #[test]
@@ -2948,16 +2897,16 @@ mod key_routing {
         // Dropping it would send the user's Enter to the terminal instead.
         let (mut shell, _pty, first) = shell_with_two_tabs();
         let user_tab = shell.core.workspace.tabs[1].sessions()[0];
-        shell.closing = Some(1);
+        shell.closing = shell.anchor_of(1);
         close_in_background(&mut shell, first);
-        assert_eq!(shell.closing, Some(0));
+        assert_eq!(shell.closing_tab(), Some(0));
         assert_eq!(shell.core.workspace.tab_of(user_tab), Some(0));
     }
 
     #[test]
     fn a_background_close_of_the_prompted_tab_drops_its_prompt() {
         let (mut shell, _pty, first) = shell_with_two_tabs();
-        shell.closing = Some(0);
+        shell.closing = shell.anchor_of(0);
         close_in_background(&mut shell, first);
         assert_eq!(shell.closing, None, "the tab it named is gone");
     }
@@ -3014,11 +2963,12 @@ mod key_routing {
     #[test]
     fn a_background_close_shifts_a_tab_drag_with_the_strip() {
         let (mut shell, _pty, first) = shell_with_two_tabs();
-        shell.tab_drag = Some(TabDrag { from: 1, over: 1 });
+        let pressed = shell.anchor_of(1).expect("tab 1");
+        shell.tab_drag = Some(TabDrag::new(pressed, pressed));
         close_in_background(&mut shell, first);
         assert_eq!(
-            shell.tab_drag,
-            Some(TabDrag { from: 0, over: 0 }),
+            shell.tab_drag_slots(),
+            Some((0, 0)),
             "the release still lands on the tab that was pressed"
         );
     }
@@ -4069,7 +4019,7 @@ mod key_routing {
         });
         assert_eq!(split.error, None);
         let elsewhere = shell.core.workspace.focused_session().expect("focused");
-        shell.closing = Some(0);
+        shell.closing = shell.anchor_of(0);
 
         let _ = shell.update(Message::RequestPaste { session: pointed });
         assert_eq!(
@@ -4691,7 +4641,7 @@ mod key_routing {
         let (mut shell, pty) = busy_shell_with_terminal();
         // Clicking the tab's × arms the confirmation but kills nothing.
         let _ = shell.update(Message::RequestCloseTab(0));
-        assert_eq!(shell.closing, Some(0));
+        assert_eq!(shell.closing_tab(), Some(0));
         assert_eq!(pty.kill_count(), 0, "arming must not kill the session");
         // Accepting the confirmation kills it and clears the pending state.
         let _ = shell.update(Message::CloseTab(0));
@@ -4724,7 +4674,7 @@ mod key_routing {
         let (mut shell, _pty) = busy_shell_with_terminal();
         shell.close_confirm.tab = ConfirmClose::ConfirmWhenActive;
         let _ = shell.update(Message::RequestCloseTab(0));
-        assert_eq!(shell.closing, Some(0), "a running tab confirms");
+        assert_eq!(shell.closing_tab(), Some(0), "a running tab confirms");
         let _ = shell.update(Message::CancelClose);
         // …but once its session has exited, the close needs no prompt.
         let session = shell.core.workspace.focused_session().expect("focused");
@@ -4751,7 +4701,7 @@ mod key_routing {
             .workspace
             .tabs
             .iter()
-            .map(Tab::first_session)
+            .map(termherd_core::workspace::Tab::first_session)
             .collect()
     }
 
@@ -4792,19 +4742,23 @@ mod key_routing {
     #[test]
     fn an_armed_close_follows_its_tab_when_attention_reorders_the_strip() {
         let (mut shell, [_, _, last]) = shell_with_three_parked_tabs();
-        shell.closing = Some(2);
+        shell.closing = shell.anchor_of(2);
 
         attention(&mut shell, last);
 
         let moved_to = shell.core.workspace.tab_of(last);
         assert_eq!(moved_to, Some(0), "precondition: unparked to the front");
-        assert_eq!(shell.closing, moved_to, "the prompt still names its tab");
+        assert_eq!(
+            shell.closing_tab(),
+            moved_to,
+            "the prompt still names its tab"
+        );
     }
 
     #[test]
     fn attention_that_changes_the_active_tab_resets_the_prompts_and_the_keys() {
         let (mut shell, [_, middle, _]) = shell_with_three_parked_tabs();
-        shell.closing = Some(2);
+        shell.closing = shell.anchor_of(2);
         shell.focus = Focus::Search;
 
         attention(&mut shell, middle);
@@ -4846,7 +4800,7 @@ mod key_routing {
     fn a_split_drag_keeps_its_tab_when_attention_reorders_the_strip() {
         let (mut shell, [_, _, last]) = shell_with_three_parked_tabs();
         shell.split_drag = Some(SplitDrag {
-            tab: 2,
+            tab: shell.anchor_of(2).expect("tab 2"),
             path: Vec::new(),
             dir: termherd_core::workspace::SplitDir::Vertical,
             ratio: 0.5,
@@ -4857,7 +4811,8 @@ mod key_routing {
         attention(&mut shell, last);
 
         let drag = shell.split_drag.as_ref().expect("the drag survives");
-        assert_eq!(Some(drag.tab), shell.core.workspace.tab_of(last));
+        assert_eq!(shell.core.workspace.tab_of(drag.tab), Some(0));
+        assert_eq!(shell.core.workspace.tab_of(last), Some(0), "precondition");
     }
 
     #[test]
@@ -4876,9 +4831,13 @@ mod key_routing {
 
         attention(&mut shell, over);
 
-        let drag = shell.tab_drag.expect("the drag survives");
-        assert_eq!(Some(drag.from), shell.core.workspace.tab_of(carried));
-        assert_eq!(Some(drag.over), shell.core.workspace.tab_of(over));
+        let workspace = &shell.core.workspace;
+        assert_eq!(
+            shell.tab_drag_slots(),
+            workspace.tab_of(carried).zip(workspace.tab_of(over)),
+            "the drag survives on its tabs"
+        );
+        assert_ne!(workspace.tab_of(over), Some(2), "precondition: it moved");
     }
 
     #[test]
@@ -4921,7 +4880,7 @@ mod key_routing {
             "nothing armed → no modal"
         );
 
-        shell.closing = Some(0);
+        shell.closing = shell.anchor_of(0);
         assert!(
             matches!(shell.active_confirmation(), Some((_, Message::CancelClose))),
             "a tab close arms the close modal"
@@ -4938,7 +4897,7 @@ mod key_routing {
         );
 
         // Armed together, quit outranks the tab close (and the archive).
-        shell.closing = Some(0);
+        shell.closing = shell.anchor_of(0);
         shell.closing_window = Some(window::Id::unique());
         assert!(
             matches!(
@@ -5901,7 +5860,7 @@ mod key_routing {
                 });
             }
             KeyboardOwner::Quit => shell.closing_window = Some(window::Id::unique()),
-            KeyboardOwner::TabClose(index) => shell.closing = Some(index),
+            KeyboardOwner::TabClose(index) => shell.closing = shell.anchor_of(index),
             KeyboardOwner::Archive => shell.archiving = Some("sess".to_string()),
             KeyboardOwner::TabMenu => {
                 // Over the active tab: a right-click focuses its tab first, so a
@@ -6311,7 +6270,11 @@ mod key_routing {
             status: SessionStatus::Busy,
         });
         let _ = shell.update(Message::RequestCloseTab(0));
-        assert_eq!(shell.closing, Some(0), "a busy shell arms a confirmation");
+        assert_eq!(
+            shell.closing_tab(),
+            Some(0),
+            "a busy shell arms a confirmation"
+        );
         assert_eq!(pty.kill_count(), 0, "arming must not kill the session");
     }
 
@@ -6326,7 +6289,11 @@ mod key_routing {
         );
         let claude_tab = shell.core.workspace.active;
         let _ = shell.update(Message::RequestCloseTab(claude_tab));
-        assert_eq!(shell.closing, Some(claude_tab), "a Claude tab confirms");
+        assert_eq!(
+            shell.closing_tab(),
+            Some(claude_tab),
+            "a Claude tab confirms"
+        );
         assert_eq!(pty.kill_count(), 0, "arming must not kill the session");
     }
 
@@ -6340,10 +6307,18 @@ mod key_routing {
         let _ = shell.launch("/tmp/idle".to_string(), Launch::Shell);
         assert_eq!(shell.core.workspace.tabs.len(), 2);
         let _ = shell.update(Message::RequestCloseTab(0));
-        assert_eq!(shell.closing, Some(0), "the busy tab arms the confirmation");
+        assert_eq!(
+            shell.closing_tab(),
+            Some(0),
+            "the busy tab arms the confirmation"
+        );
 
         let _ = shell.update(Message::RequestCloseTab(1));
-        assert_eq!(shell.closing, Some(0), "the armed confirmation stays put");
+        assert_eq!(
+            shell.closing_tab(),
+            Some(0),
+            "the armed confirmation stays put"
+        );
         assert_eq!(shell.core.workspace.tabs.len(), 2, "no tab was closed");
         assert_eq!(
             pty.kill_count(),

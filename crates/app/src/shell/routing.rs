@@ -363,7 +363,7 @@ impl Shell {
         if self.quit_pending() {
             return Some(KeyboardOwner::Quit);
         }
-        if let Some(index) = self.closing {
+        if let Some(index) = self.closing_tab() {
             return Some(KeyboardOwner::TabClose(index));
         }
         if self.archiving.is_some() {

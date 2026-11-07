@@ -6,7 +6,7 @@
 use iced::{Task, window};
 
 use termherd_core::Effect;
-use termherd_core::workspace::{SessionId, Step, index_after_removal};
+use termherd_core::workspace::{SessionId, Step, Workspace};
 
 use super::{Focus, Message, Shell, TabDrag};
 
@@ -28,15 +28,13 @@ impl Shell {
         if self.closing.is_some() {
             return None;
         }
-        if index >= self.core.workspace.tabs.len() {
-            return None;
-        }
+        let anchor = self.anchor_of(index)?;
         if self
             .close_confirm
             .tab
             .confirms(self.core.tab_has_running_process(index))
         {
-            self.closing = Some(index);
+            self.closing = Some(anchor);
             // Arming the prompt *is* the action: it happened, and the caller is
             // told which prompt now owns the keyboard by its next press.
             Some(Task::none())
@@ -83,28 +81,33 @@ impl Shell {
     }
 
     /// The shell-side follow-up to a pane `core` just closed. Its cached screen
-    /// goes, as `close_tab` drops it. The UI state keyed by tab position — a
-    /// pending close prompt, a tab drag — shifts with the strip when the pane
-    /// took its tab with it, and is dropped only when it named that very tab.
-    /// A pending tab rename anchored on the pane moves to the first pane left
-    /// in the tab. Only a tab whose layout changed is resized: the active one
-    /// when the pane was in it, or the tab behind it whose split collapsed.
+    /// goes, as `close_tab` drops it. The UI state naming a tab — a pending
+    /// close prompt, a tab or split drag, a tab rename — names it by a session:
+    /// one anchored on the pane moves to the first pane left in its tab, and is
+    /// dropped when the tab went with it. Only a tab whose layout changed is
+    /// resized: the active one when the pane was in it, or the tab behind it
+    /// whose split collapsed.
     pub(super) fn after_pane_vanished(&mut self, pane: VanishingPane) -> Task<Message> {
         self.screens.remove(&pane.session);
         let survivor = pane.tab.filter(|_| !pane.lone);
-        if let Some(removed) = pane.tab.filter(|_| pane.lone) {
-            self.closing = self
-                .closing
-                .and_then(|index| index_after_removal(index, removed));
-            self.tab_drag = self.tab_drag.and_then(|drag| drag.after_removal(removed));
-        }
-        if let Some((anchor, buffer)) = self.tab_rename.take() {
-            self.tab_rename = if anchor == pane.session {
-                self.first_session_of(survivor).map(|heir| (heir, buffer))
+        let heir = survivor.and_then(|index| self.anchor_of(index));
+        let follow = |anchor: SessionId| {
+            if anchor == pane.session {
+                heir
             } else {
-                Some((anchor, buffer))
-            };
-        }
+                Some(anchor)
+            }
+        };
+        self.closing = self.closing.and_then(follow);
+        self.tab_drag = self.tab_drag.and_then(|drag| drag.follow(follow));
+        self.split_drag = self.split_drag.take().and_then(|mut drag| {
+            drag.tab = follow(drag.tab)?;
+            Some(drag)
+        });
+        self.tab_rename = self
+            .tab_rename
+            .take()
+            .and_then(|(anchor, buffer)| Some((follow(anchor)?, buffer)));
         if self
             .claude_command
             .as_ref()
@@ -135,9 +138,21 @@ impl Shell {
         Task::batch([kill, follow])
     }
 
-    /// The first pane of the tab at `index`, when there is one.
-    fn first_session_of(&self, index: Option<usize>) -> Option<SessionId> {
-        Some(self.core.workspace.tabs.get(index?)?.first_session())
+    /// The session the shell names the tab at `index` by: its first pane,
+    /// `None` when no tab is there. A position is only a copy of where `core`
+    /// keeps a tab, so state that outlives a message holds this instead.
+    pub(super) fn anchor_of(&self, index: usize) -> Option<SessionId> {
+        Some(self.core.workspace.tabs.get(index)?.first_session())
+    }
+
+    /// Where the tab a pending close prompt names sits now.
+    pub(super) fn closing_tab(&self) -> Option<usize> {
+        self.core.workspace.tab_of(self.closing?)
+    }
+
+    /// Where the dragged tab and the hovered one sit now, as `(from, over)`.
+    pub(super) fn tab_drag_slots(&self) -> Option<(usize, usize)> {
+        self.tab_drag?.slots(&self.core.workspace)
     }
 
     /// Switch to the tab at `index` and return focus to the terminal. Switching
@@ -316,12 +331,24 @@ pub(super) struct VanishingPane {
 }
 
 impl TabDrag {
-    /// The drag once the tab at `removed` is gone: it ends when it was the
-    /// dragged tab, and stops aiming at a slot that vanished under the pointer,
-    /// so a release there is a plain click rather than a move.
-    fn after_removal(self, removed: usize) -> Option<Self> {
-        let from = index_after_removal(self.from, removed)?;
-        let over = index_after_removal(self.over, removed).unwrap_or(from);
+    pub(super) fn new(from: SessionId, over: SessionId) -> Self {
+        Self { from, over }
+    }
+
+    /// The drag's `(from, over)` positions in `workspace`: `None` once the
+    /// dragged tab is gone, and a plain click (`over == from`) once the hovered
+    /// one is, so a release there moves nothing.
+    pub(super) fn slots(self, workspace: &Workspace) -> Option<(usize, usize)> {
+        let from = workspace.tab_of(self.from)?;
+        let over = workspace.tab_of(self.over).unwrap_or(from);
+        Some((from, over))
+    }
+
+    /// The drag once its anchors went through `follow`: it ends when the dragged
+    /// tab lost its anchor, and stops aiming at a tab that did.
+    fn follow(self, follow: impl Fn(SessionId) -> Option<SessionId>) -> Option<Self> {
+        let from = follow(self.from)?;
+        let over = follow(self.over).unwrap_or(from);
         Some(Self { from, over })
     }
 }
@@ -329,11 +356,36 @@ impl TabDrag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::num::NonZeroU64;
+
+    fn sid(n: u64) -> SessionId {
+        SessionId(NonZeroU64::new(n).expect("non-zero"))
+    }
+
+    fn strip(n: u64) -> Workspace {
+        let mut ws = Workspace::new();
+        for id in 1..=n {
+            ws.open(sid(id), "t");
+        }
+        ws
+    }
 
     #[test]
-    fn a_drag_over_a_vanished_slot_becomes_a_click() {
-        let drag = TabDrag { from: 0, over: 2 };
-        assert_eq!(drag.after_removal(2), Some(TabDrag { from: 0, over: 0 }));
-        assert_eq!(drag.after_removal(0), None, "the dragged tab is gone");
+    fn a_drag_over_a_vanished_tab_becomes_a_click() {
+        let drag = TabDrag::new(sid(1), sid(3));
+        let mut ws = strip(3);
+        assert_eq!(drag.slots(&ws), Some((0, 2)));
+        ws.close_tab(2);
+        assert_eq!(drag.slots(&ws), Some((0, 0)));
+        ws.close_tab(0);
+        assert_eq!(drag.slots(&ws), None, "the dragged tab is gone");
+    }
+
+    #[test]
+    fn a_drag_follows_its_tabs_through_a_reorder() {
+        let drag = TabDrag::new(sid(3), sid(1));
+        let mut ws = strip(3);
+        ws.close_tab(1);
+        assert_eq!(drag.slots(&ws), Some((1, 0)));
     }
 }

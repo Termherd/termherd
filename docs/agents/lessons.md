@@ -82,9 +82,11 @@ a `#[tokio::test]`, and wrong in anything handed to `Task::perform`.
 Parking (#353) let `core` reorder the strip on its own, after a drag or a
 parked session asking for attention, and the shell's `closing`, `tab_drag`
 and `split_drag` kept the old slot: an armed close confirmation would have
-closed the neighbour. `Shell::update` re-anchors them by session after each
-message (`TabAnchors`). New shell state names a tab by a session it hosts,
-as the tab rename already did.
+closed the neighbour. A first fix re-anchored them by session after each
+message (`TabAnchors`); #454 then made each hold a session of its tab, as the
+tab rename already did, and resolve the position with `Workspace::tab_of`
+when it reads it. A pane closing re-anchors all four through one `follow` in
+`after_pane_vanished`. New shell state names a tab the same way.
 
 ## An invariant expressed twice drifts
 
