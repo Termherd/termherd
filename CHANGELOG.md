@@ -7,6 +7,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (a read after a wait shows what the status reported)
+
+- Over MCP, a `read_terminal` after `wait_for_status`, and the text
+  `prompt_in_session` returns, show at least the output that produced the
+  status waited for. A read right after an `idle` could still show Claude's
+  spinner, one screen behind (#436).
+
 ### Fixed (a long Claude command is submitted)
 
 - A confirmed Claude command with a long argument, such as a `/rename` to a
