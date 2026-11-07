@@ -18,8 +18,8 @@ use crate::events::EventSink;
 use crate::grid::Palette;
 use crate::kill::finish_kill;
 use crate::launch::{
-    apply_integration, apply_terminal_env, discard_private_files, launch_command, write_mcp_config,
-    write_title_settings,
+    PrivateFiles, apply_integration, apply_terminal_env, discard_private_files, launch_command,
+    write_mcp_config, write_title_settings,
 };
 use crate::session::{
     Session, SharedMaster, SharedPalette, SharedWriter, TermCmd, spawn_reader, spawn_term,
@@ -49,6 +49,8 @@ pub struct PtyManager {
     /// The terminal colour scheme every session renders with, shared with
     /// each terminal thread so [`PtyManager::set_palette`] reaches them live.
     palette: SharedPalette,
+    /// Where each session's private files are written, and removed from.
+    private: PrivateFiles,
 }
 
 impl PtyManager {
@@ -62,6 +64,7 @@ impl PtyManager {
             sink,
             shell: RwLock::new(shell),
             palette: Arc::new(RwLock::new(palette)),
+            private: PrivateFiles::new(std::env::temp_dir()),
         }
     }
 
@@ -154,7 +157,7 @@ impl PtyHost for PtyManager {
             Some(shell) => shell.program.clone(),
             None => cmd.get_shell(),
         };
-        apply_integration(spec.session, &program, &mut cmd);
+        apply_integration(&self.private, spec.session, &program, &mut cmd);
 
         let child = pair
             .slave
@@ -184,11 +187,11 @@ impl PtyHost for PtyManager {
         let mcp_config_path = spec
             .mcp
             .as_ref()
-            .and_then(|config| write_mcp_config(spec.session, config));
+            .and_then(|config| write_mcp_config(&self.private, spec.session, config));
         // A Claude launch also carries the settings overlay that keeps its OSC
         // title — termherd's only status channel for it — switched on.
         let settings_path = matches!(spec.launch, termherd_core::Launch::Claude(_))
-            .then(|| write_title_settings(spec.session))
+            .then(|| write_title_settings(&self.private, spec.session))
             .flatten();
         if let Some(command) = launch_command(
             &spec.launch,
@@ -298,7 +301,7 @@ impl PtyHost for PtyManager {
         let result = s.killer.kill();
         // The session's private files — its integration snippet, its mcp config
         // with the bridge token — have no reason to outlive it.
-        discard_private_files(session);
+        discard_private_files(&self.private, session);
         // Dropping the session drops the master/writer, which unblocks the
         // reader; the waiter thread reaps the killed child (`wait`) and signals
         // the terminal thread, which emits `Exited` on its own.
