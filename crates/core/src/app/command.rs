@@ -98,11 +98,13 @@ impl App {
         if self.claude_command_check(session, prompt).is_err() {
             return Vec::new();
         }
-        command
-            .keystrokes()
-            .into_iter()
-            .map(|bytes| Effect::Write { session, bytes })
-            .collect()
+        vec![
+            Effect::Write {
+                session,
+                bytes: command.typed(),
+            },
+            Effect::Submit { session },
+        ]
     }
 }
 
@@ -155,25 +157,49 @@ mod tests {
     }
 
     #[test]
-    fn an_idle_claude_takes_the_command_as_two_writes() {
+    fn an_idle_claude_takes_the_line_then_a_submit_of_its_own() {
         let mut app = App::new();
         let session = launch_claude(&mut app);
         set_status(&mut app, session, SessionStatus::Idle);
 
         assert_eq!(check(&app, session), Ok(()));
-        let writes: Vec<_> = send(&mut app, session)
-            .into_iter()
-            .map(|effect| match effect {
-                Effect::Write { session: to, bytes } => (to, bytes),
-                other => panic!("expected a write, got {other:?}"),
-            })
-            .collect();
-        assert_eq!(
-            writes,
-            vec![
-                (session, b"\x15/color pink".to_vec()),
-                (session, b"\r".to_vec()),
-            ]
+        let effects = send(&mut app, session);
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [
+                    Effect::Write { session: typed_to, bytes },
+                    Effect::Submit { session: submitted_to },
+                ] if *typed_to == session
+                    && bytes == b"\x15/color pink"
+                    && *submitted_to == session
+            ),
+            "{effects:?}"
+        );
+    }
+
+    #[test]
+    fn a_rename_long_enough_to_read_as_a_paste_still_submits_apart() {
+        let mut app = App::new();
+        let session = launch_claude(&mut app);
+        set_status(&mut app, session, SessionStatus::Idle);
+        let name = "a session name long enough to be read as a paste by claude code";
+        let command = ClaudeCommand::rename(name).expect("a typeable name");
+        assert!(command.typed().len() >= 64, "the case the paste rule bites");
+
+        let effects = app.apply(Event::SendClaudeCommand {
+            session,
+            command,
+            prompt: PromptInput::Empty,
+        });
+        let expected = format!("\x15/rename {name}");
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [Effect::Write { bytes, .. }, Effect::Submit { session: to }]
+                    if *bytes == expected.as_bytes() && *to == session
+            ),
+            "{effects:?}"
         );
     }
 

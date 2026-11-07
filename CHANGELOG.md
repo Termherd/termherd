@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (a long Claude command is submitted)
+
+- A confirmed Claude command with a long argument, such as a `/rename` to a
+  long name from the tab menu or MCP `claude_command`, is submitted. Claude
+  Code used to read the line and its Enter as one paste, and waited for a
+  second Enter. Enter now follows the line after a pause, as
+  `run_in_session` and `prompt_in_session` already did (#439).
+
 ### Fixed (the session scan stays inside `~/.claude/projects`)
 
 - The sidebar's scan no longer follows a symlink under `~/.claude/projects`,

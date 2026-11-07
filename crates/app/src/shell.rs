@@ -739,6 +739,8 @@ enum Message {
         request: termherd_core::PathRequest,
         resolved: Option<termherd_core::ResolvedPath>,
     },
+    /// The pause before a submit's Enter has passed; press it now.
+    SubmitDue(termherd_core::SessionId),
     /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
     /// runs off the UI thread, so this only spawns it.
@@ -1505,6 +1507,7 @@ impl Shell {
                     .apply(termherd_core::Event::PathResolved { request, resolved });
                 self.perform(effects)
             }
+            Message::SubmitDue(session) => self.press_enter(session),
             Message::CaptureScreenshot {
                 screenshot,
                 png_path,
@@ -2355,6 +2358,55 @@ mod key_routing {
         });
         assert_eq!(outcome.error, None);
         assert_eq!(pty.writes(), vec![b"ls\n".to_vec()], "the bytes were typed");
+    }
+
+    #[test]
+    fn submit_action_presses_enter_only_once_its_pause_is_due() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Submit {
+            session: session.0.get(),
+        });
+        assert_eq!(outcome.error, None);
+        assert!(pty.writes().is_empty(), "no Enter inside the pause");
+
+        let _ = shell.update(Message::SubmitDue(session));
+        assert_eq!(pty.writes_seen(), vec![(session, b"\r".to_vec())]);
+    }
+
+    #[test]
+    fn submit_action_rejects_an_unknown_handle() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Submit { session: 999 });
+        assert!(outcome.error.is_some_and(|e| e.contains("999")));
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn a_submit_due_after_its_session_exited_writes_nothing() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.core.apply(termherd_core::Event::PtyExited {
+            session,
+            clean: true,
+        });
+        let _ = shell.update(Message::SubmitDue(session));
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn the_enter_gap_waits_out_the_whole_pause() {
+        let start = std::time::Instant::now();
+        block_on(effects::enter_gap());
+        assert!(start.elapsed() >= effects::ENTER_GAP);
+    }
+
+    /// Drive a future to completion on a throwaway runtime.
+    fn block_on(future: impl std::future::Future<Output = ()>) {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime")
+            .block_on(future);
     }
 
     #[test]
@@ -5455,7 +5507,7 @@ mod key_routing {
         let _ = press_all(&mut shell, &["enter"]);
         assert_eq!(
             pty.writes().len(),
-            2,
+            1,
             "once the draft is gone, enter types it"
         );
     }
@@ -5476,7 +5528,7 @@ mod key_routing {
             pending.enter_ignored_until = Some(Instant::now() - std::time::Duration::from_secs(1));
         }
         let _ = shell.update(Message::Key(enter));
-        assert_eq!(pty.writes().len(), 2, "after it, enter confirms");
+        assert_eq!(pty.writes().len(), 1, "after it, enter confirms");
     }
 
     #[test]
@@ -5558,13 +5610,17 @@ mod key_routing {
         );
         assert_eq!(
             pty.writes_seen(),
-            vec![
-                (session, b"\x15/rename api work".to_vec()),
-                (session, b"\r".to_vec()),
-            ],
-            "the draft is cleared and the line typed, then Enter on its own"
+            vec![(session, b"\x15/rename api work".to_vec())],
+            "the draft is cleared and the line typed, with no Enter in the burst"
         );
         assert!(shell.keyboard_owner().is_none(), "and the prompt lets go");
+
+        let _ = shell.update(Message::SubmitDue(session));
+        assert_eq!(
+            pty.writes_seen().last(),
+            Some(&(session, b"\r".to_vec())),
+            "Enter follows on its own once the pause is due"
+        );
     }
 
     #[test]
