@@ -90,7 +90,10 @@ impl App {
     /// answer cannot differ from the sidebar's.
     #[must_use]
     pub fn repo_paths(&self) -> Vec<&str> {
-        self.merged_rows().into_iter().map(|(path, _)| path).collect()
+        self.merged_rows()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
     }
 
     /// Whether a sidebar row survives once its sessions have been filtered:
@@ -746,6 +749,38 @@ mod tests {
             matches!(effects.as_slice(), [Effect::SaveMetadata(o)]
                 if !o.repos.contains_key("/fresh")),
             "back to defaults, so the entry is dropped rather than persisted as noise"
+        );
+    }
+
+    #[test]
+    fn repo_paths_unite_the_scan_with_declarations_once_each() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![
+            active("s1", "/scanned", 10),
+            active("s2", "/both", 20),
+        ]));
+        app.apply(Event::DeclareRepo("/declared-only".into()));
+        app.apply(Event::DeclareRepo("/both".into()));
+
+        let mut paths = app.repo_paths();
+        paths.sort_unstable();
+        assert_eq!(paths, vec!["/both", "/declared-only", "/scanned"]);
+    }
+
+    #[test]
+    fn repo_paths_ignore_the_search_box_and_the_archive_toggle() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![active("old", "/archived", 1)]));
+        app.apply(Event::ToggleArchive("old".into()));
+        app.apply(Event::DeclareRepo("/declared".into()));
+        app.apply(Event::SearchChanged("matches-nothing".into()));
+
+        let mut paths = app.repo_paths();
+        paths.sort_unstable();
+        assert_eq!(
+            paths,
+            vec!["/archived", "/declared"],
+            "membership, not visibility"
         );
     }
 

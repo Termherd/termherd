@@ -7,6 +7,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (Plans & memory lists an added repo's CLAUDE.md)
+
+- *Plans & memory* lists the `CLAUDE.md` of a repo added to the sidebar
+  before it has any session, as soon as it is added, and drops it when the
+  repo is forgotten. It used to wait for the repo's first session (#444).
+
 ### Added (more keys in chords and in the terminal)
 
 - Chords can name `pageup`, `pagedown`, `insert`, `delete`, `backspace`,

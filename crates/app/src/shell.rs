@@ -986,18 +986,22 @@ impl Shell {
     /// unplugged network mount, a removed directory) that stat can block for
     /// tens of seconds, so it must never run on the UI thread.
     fn refresh_docs(&self) -> Task<Message> {
-        let paths: Vec<String> = self
-            .core
-            .sidebar
-            .projects
-            .iter()
-            .map(|g| g.path.clone())
-            .collect();
+        let paths = self.doc_project_paths();
         let claude = self.claude_dir.clone();
         Task::perform(
             async move { crate::docs::discover(claude.as_ref(), &paths) },
             Message::DocsDiscovered,
         )
+    }
+
+    /// The repos whose `CLAUDE.md` the doc list offers: every repo the sidebar
+    /// shows, a declaration with no session yet included.
+    fn doc_project_paths(&self) -> Vec<String> {
+        self.core
+            .repo_paths()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
     }
 
     /// The iced `update`: every message goes through [`Self::dispatch`]. The
@@ -2775,6 +2779,32 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::DeclareRepo { path: repo });
         let answer = outcome.repo().expect("an answer");
         assert_eq!(answer.session_count, 1, "the search does not decount it");
+    }
+
+    #[test]
+    fn declaring_or_forgetting_a_repo_rediscovers_the_docs() {
+        // A declared repo with no session holds a `CLAUDE.md` the scan never
+        // reports, so waiting for the next scan would leave it unlisted.
+        let (mut shell, _pty) = shell_with_terminal();
+        let task = shell.declare_repo_key("/declared", repos::RepoGesture::Mcp);
+        assert!(task.units() > 0, "declaring refreshes the doc list");
+        let task = shell.forget_repo_key("/declared", repos::RepoGesture::Mcp);
+        assert!(task.units() > 0, "forgetting drops its CLAUDE.md again");
+    }
+
+    #[test]
+    fn a_declared_repo_without_sessions_offers_its_claude_md() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::write(repo.join("CLAUDE.md"), "# memory").unwrap();
+        let _ = shell.declare_repo_key(&repo.display().to_string(), repos::RepoGesture::Mcp);
+
+        let docs = crate::docs::discover(None, &shell.doc_project_paths());
+        assert_eq!(
+            docs.iter().map(|d| d.path.clone()).collect::<Vec<_>>(),
+            vec![repo.join("CLAUDE.md")]
+        );
     }
 
     #[test]
