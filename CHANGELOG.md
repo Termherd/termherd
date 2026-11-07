@@ -15,6 +15,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it, dragging it back, or a session in it asking for attention unparks it.
   The MCP `snapshot` reports `parked` per tab (#353).
 
+### Changed (the live bridge explains how its tools combine)
+
+- An agent connecting to the live MCP bridge now reads how to use it: address
+  sessions by handle, act then wait (`busy` before `idle`) then read, never
+  poll `snapshot`, and take a screenshot last. It used to say only that it
+  would "later" drive sessions, which it has done for months. `press_keys` no
+  longer claims that `escape` cannot leave a session rename.
+
 ### Added (termherd:// links in the terminal)
 
 - A `termherd://` URL in terminal output is a link: Cmd/Ctrl+hover underlines

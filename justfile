@@ -29,6 +29,11 @@ check-arch:
     ./scripts/check-os-cfg-containment.sh
     ./scripts/report-file-length.sh
 
+# Exercise the Claude Code hooks in scripts/hooks/ (AI signature, Markdown lint)
+# with real payloads. Not a CI gate; run after editing a hook.
+test-hooks:
+    ./scripts/hooks/test-hooks.sh
+
 # Report board/issue drift: an open issue absent from the board, one missing a
 # field its issue type owes, or an item whose Status and Horizon disagree about
 # having shipped. Run before a planning pass. Exits 0 clean / 1 drift found /
