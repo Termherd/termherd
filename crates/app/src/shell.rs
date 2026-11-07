@@ -44,6 +44,7 @@ mod geometry;
 mod ime;
 mod input;
 mod launch;
+mod links;
 mod live_settings;
 mod notify_click;
 mod orchestrate;
@@ -347,9 +348,6 @@ struct Shell {
     /// the slot the pointer is currently over. `None` when no drag is active.
     /// Transient pointer state only — the tab order itself lives in `core`.
     tab_drag: Option<TabDrag>,
-    /// Set by [`Self::settle_after_tab_switch`] within one message, so
-    /// [`Self::update`] settles a tab switch once, and only one no handler did.
-    tab_switch_settled: bool,
     split_drag: Option<SplitDrag>,
     cursor_position: Point,
     /// Set once the quit path has asked the iced runtime to terminate.
@@ -375,7 +373,6 @@ struct TabDrag {
 /// first pane, so the index can be found again once `core` reorders the strip:
 /// parking, unparking and opening before the parked group all shift tabs.
 struct TabAnchors {
-    shown: Option<SessionId>,
     closing: Option<(usize, SessionId)>,
     drag: Option<(TabDrag, SessionId, SessionId)>,
     split: Option<(usize, SessionId)>,
@@ -386,7 +383,6 @@ impl TabAnchors {
         let workspace = &shell.core.workspace;
         let session_at = |index: usize| workspace.tabs.get(index).map(Tab::first_session);
         Self {
-            shown: session_at(workspace.active),
             closing: shell
                 .closing
                 .and_then(|index| Some((index, session_at(index)?))),
@@ -423,18 +419,6 @@ impl TabAnchors {
         {
             drag.tab = now;
         }
-    }
-
-    /// Whether the message changed which tab is shown.
-    fn shown_changed(&self, shell: &Shell) -> bool {
-        let workspace = &shell.core.workspace;
-        let still_shown = |session| {
-            workspace
-                .tabs
-                .get(workspace.active)
-                .is_some_and(|tab| tab.hosts(session))
-        };
-        self.shown.is_some_and(|session| !still_shown(session))
     }
 }
 
@@ -693,6 +677,8 @@ enum Message {
     DismissLoadProblems,
     /// `settings.json` changed on disk: reload and apply it.
     SettingsFileChanged,
+    /// A `termherd://` link may be waiting in the inbox: open what it names.
+    LinkInboxChanged,
     /// Close the settings panel (its close button, the scrim, Escape).
     CloseSettings,
     /// Apply and persist a GUI chrome theme picked in the settings panel.
@@ -930,7 +916,6 @@ impl Shell {
             alt_sides: AltSides::default(),
             option_as_meta: OptionAsMeta::default(),
             tab_drag: None,
-            tab_switch_settled: false,
             split_drag: None,
             cursor_position: Point::new(0.0, 0.0),
             exiting: false,
@@ -1002,20 +987,12 @@ impl Shell {
 
     /// The iced `update`: every message goes through [`Self::dispatch`]. The
     /// tab indices the shell holds then follow their tabs through any reorder
-    /// the message caused, and a change of the shown tab no handler settled is
-    /// settled here: a drag that parks it, or attention that unparks another
-    /// while every tab is parked.
+    /// the message caused.
     fn update(&mut self, message: Message) -> Task<Message> {
         let anchors = TabAnchors::of(self);
-        self.tab_switch_settled = false;
         let task = self.dispatch(message);
-        let settle = if anchors.shown_changed(self) && !self.tab_switch_settled {
-            self.settle_after_tab_switch()
-        } else {
-            Task::none()
-        };
         anchors.follow(self);
-        Task::batch([task, settle])
+        task
     }
 
     // A flat `match` over every `Message` variant — the app's central event
@@ -1446,6 +1423,7 @@ impl Shell {
             }
             Message::ToggleSidebar => self.toggle_sidebar(),
             Message::SettingsFileChanged => self.reload_settings(),
+            Message::LinkInboxChanged => self.drain_link_inbox(),
             Message::DismissLoadProblems => {
                 self.load_problems.clear();
                 Task::none()
@@ -1747,6 +1725,9 @@ impl Shell {
                 file.clone(),
                 live_settings::settings_watch_stream,
             ));
+        }
+        if let Some(inbox) = self.data_dir.as_ref().map(crate::link_inbox::inbox_dir) {
+            subs.push(Subscription::run_with(inbox, links::inbox_watch_stream));
         }
         subs.push(Subscription::run_with(
             self.bridge_requests.clone(),
@@ -8984,6 +8965,130 @@ mod key_routing {
                 shell.live_color_picker().map(ColorPicker::selected),
                 Some(1),
                 "it opens on the colour the tab wears"
+            );
+        }
+    }
+
+    mod link_inbox {
+        use super::*;
+        use crate::link_inbox::{deposit, inbox_dir};
+        use crate::paths::DataDir;
+
+        /// A shell whose data dir is a fresh temp dir, so its inbox is its own.
+        fn shell_with_inbox() -> (Shell, Arc<RecordingPty>, tempfile::TempDir) {
+            let root = tempfile::tempdir().expect("tempdir");
+            let pty = Arc::new(RecordingPty::default());
+            let startup = Startup {
+                data_dir: Some(DataDir::at(root.path())),
+                ..test_startup()
+            };
+            (shell_over_with(pty.clone(), startup), pty, root)
+        }
+
+        fn drop_link(root: &tempfile::TempDir, url: &str) {
+            deposit(&inbox_dir(&DataDir::at(root.path())), url).expect("deposit");
+        }
+
+        #[test]
+        fn a_link_into_an_empty_workspace_opens_a_shell_with_the_keys_on_it() {
+            let (mut shell, pty, root) = shell_with_inbox();
+            shell.focus = Focus::Search;
+            drop_link(&root, "termherd://open?repo=/work/repo");
+
+            let _ = shell.update(Message::LinkInboxChanged);
+
+            assert_eq!(pty.spawn_count(), 1);
+            assert!(matches!(pty.launches()[..], [Launch::Shell]));
+            let focused = shell
+                .core
+                .workspace
+                .focused_session()
+                .expect("a tab opened");
+            assert_eq!(
+                shell
+                    .core
+                    .sessions
+                    .get(&focused)
+                    .and_then(|s| s.cwd.as_deref()),
+                Some("/work/repo")
+            );
+            assert_eq!(
+                shell.focus,
+                Focus::Terminal,
+                "the keys follow the tab shown"
+            );
+        }
+
+        #[test]
+        fn a_link_to_an_open_repo_brings_its_tab_forward() {
+            let (mut shell, pty, root) = shell_with_inbox();
+            let _ = shell.launch("/work/repo".to_owned(), Launch::Shell);
+            let repo = shell.core.workspace.focused_session().expect("focused");
+            let _ = shell.launch("/work/other".to_owned(), Launch::Shell);
+            shell.focus = Focus::Search;
+            drop_link(&root, "termherd://open?repo=/work/repo");
+
+            let _ = shell.update(Message::LinkInboxChanged);
+
+            assert_eq!(pty.spawn_count(), 2, "nothing new is spawned");
+            assert_eq!(shell.core.workspace.focused_session(), Some(repo));
+            assert_eq!(shell.focus, Focus::Terminal);
+        }
+
+        #[test]
+        fn a_link_spelling_the_repo_another_way_finds_its_tab() {
+            // A shell reports the path it resolved: `/tmp` reads back as
+            // `/private/tmp` on macOS, and `..` never survives.
+            let (mut shell, pty, root) = shell_with_inbox();
+            let repo = root.path().join("repo");
+            std::fs::create_dir(&repo).expect("mkdir");
+            let resolved = super::links::resolved(&repo.to_string_lossy());
+            let _ = shell.launch(resolved, Launch::Shell);
+            let tab = shell.core.workspace.focused_session().expect("focused");
+            let _ = shell.launch("/work/other".to_owned(), Launch::Shell);
+            let detour = repo.join("..").join("repo");
+            drop_link(
+                &root,
+                &format!("termherd://open?repo={}", detour.to_string_lossy()),
+            );
+
+            let _ = shell.update(Message::LinkInboxChanged);
+
+            assert_eq!(pty.spawn_count(), 2, "nothing new is spawned");
+            assert_eq!(shell.core.workspace.focused_session(), Some(tab));
+        }
+
+        #[test]
+        fn a_tab_opened_under_the_spelling_the_link_uses_is_found() {
+            // A tab opened from the sidebar keeps the path it was given until
+            // its shell reports one, and a Claude pane never does.
+            let (mut shell, pty, root) = shell_with_inbox();
+            let repo = root.path().join("repo");
+            std::fs::create_dir(&repo).expect("mkdir");
+            let detour = repo.join("..").join("repo").to_string_lossy().into_owned();
+            let _ = shell.launch(detour.clone(), Launch::Shell);
+            let tab = shell.core.workspace.focused_session().expect("focused");
+            let _ = shell.launch("/work/other".to_owned(), Launch::Shell);
+            drop_link(&root, &format!("termherd://open?repo={detour}"));
+
+            let _ = shell.update(Message::LinkInboxChanged);
+
+            assert_eq!(pty.spawn_count(), 2, "nothing new is spawned");
+            assert_eq!(shell.core.workspace.focused_session(), Some(tab));
+        }
+
+        #[test]
+        fn a_refused_link_opens_nothing_and_leaves_the_inbox_empty() {
+            let (mut shell, pty, root) = shell_with_inbox();
+            drop_link(&root, "termherd://open?repo=/r&run=rm");
+
+            let _ = shell.update(Message::LinkInboxChanged);
+
+            assert_eq!(pty.spawn_count(), 0);
+            assert!(pty.writes().is_empty(), "a link never types into a session");
+            assert!(
+                crate::link_inbox::drain(&inbox_dir(&DataDir::at(root.path()))).is_empty(),
+                "a refused link is not read again"
             );
         }
     }

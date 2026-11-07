@@ -15,6 +15,7 @@ use termherd_core::ports::ScanError;
 
 use crate::cache::{CachedCwd, CachedDigest, ScanCache, file_sig};
 use crate::derive::{cached_cwd, derive_cwd, jsonl_files};
+use crate::entry::{is_dir, read_transcript};
 use crate::repo::sidebar_key;
 
 /// Result of walking a projects root: the derived session records, plus the
@@ -38,7 +39,7 @@ pub(crate) fn scan_root(root: &Path, cache: &mut ScanCache) -> Result<ScanOutcom
     let mut next = ScanCache::default();
     for folder in folders.flatten() {
         let dir = folder.path();
-        if !dir.is_dir() {
+        if !is_dir(&dir) {
             continue;
         }
         match scan_folder(&dir, cache, &mut next) {
@@ -89,9 +90,7 @@ fn scan_folder(dir: &Path, old: &ScanCache, next: &mut ScanCache) -> Option<Vec<
         let sig = file_sig(&path);
         let digest = match (sig, old.digests.get(&path)) {
             (Some(sig), Some(hit)) if hit.sig == sig => hit.digest.clone(),
-            _ => fs::read_to_string(&path)
-                .ok()
-                .and_then(|c| digest_session(&c)),
+            _ => read_transcript(&path).and_then(|c| digest_session(&c)),
         };
         if let Some(sig) = sig {
             next.digests.insert(
@@ -240,6 +239,20 @@ mod tests {
         let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].project_path, "/from/subagent");
+    }
+
+    #[test]
+    fn only_jsonl_files_are_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("C--proj");
+        fs::create_dir(&folder).unwrap();
+        write_session(&folder, "abc.jsonl", "/real/proj", "kept");
+        write_session(&folder, "notes.txt", "/real/proj", "not a session");
+        fs::create_dir(folder.join("dir.jsonl")).unwrap();
+
+        let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
+        let ids: Vec<&str> = records.iter().map(|r| r.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["abc"]);
     }
 
     #[test]

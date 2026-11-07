@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(app.workspace.focused_session(), Some(_second));
 
         let effects = app.apply(Event::ActivateTab(0));
-        assert!(effects.is_empty());
+        assert!(matches!(effects.as_slice(), [Effect::TabShown]));
         assert_eq!(app.workspace.focused_session(), Some(first));
     }
 
@@ -311,7 +311,7 @@ mod tests {
         assert_eq!(app.workspace.active, 1);
 
         let effects = app.apply(Event::ActivateTab(4));
-        assert!(effects.is_empty());
+        assert!(matches!(effects.as_slice(), [Effect::TabShown]));
         assert_eq!(app.workspace.active, 1);
         assert_eq!(app.workspace.focused_session(), Some(second));
     }
@@ -323,7 +323,9 @@ mod tests {
         let second = launch(&mut app, "b");
 
         let effects = app.apply(Event::CloseTab(1));
-        assert!(matches!(effects.as_slice(), [Effect::Kill(id)] if *id == second));
+        assert!(
+            matches!(effects.as_slice(), [Effect::Kill(id), Effect::TabShown] if *id == second)
+        );
         assert_eq!(app.workspace.tabs.len(), 1);
         assert!(!app.sessions.contains_key(&second));
         // The surviving session stays live and focused.
@@ -437,7 +439,7 @@ mod tests {
             fresh_claude_id: "minted".into(),
         });
         let cwd_of = |effects: &[Effect]| match effects {
-            [Effect::Spawn(spec)] => spec.cwd.clone(),
+            [Effect::Spawn(spec)] | [Effect::Spawn(spec), Effect::TabShown] => spec.cwd.clone(),
             other => panic!("expected one Spawn, got {other:?}"),
         };
         // LIFO: the last close (/a) comes back first, then /b.
@@ -1006,14 +1008,20 @@ mod tests {
         let _second = launch(&mut app, "b");
 
         assert!(
-            app.apply(Event::ToggleParkTab(0)).is_empty(),
+            matches!(
+                app.apply(Event::ToggleParkTab(0)).as_slice(),
+                [Effect::TabShown]
+            ),
             "parking touches no PTY"
         );
         let parked_at = app.workspace.tab_of(first).expect("still open");
         assert_eq!(parked_at, 1, "a parked tab joins the strip's end");
         assert!(app.workspace.tabs[parked_at].is_parked());
 
-        assert!(app.apply(Event::ToggleParkTab(parked_at)).is_empty());
+        assert!(matches!(
+            app.apply(Event::ToggleParkTab(parked_at)).as_slice(),
+            [Effect::TabShown]
+        ));
         let back = app.workspace.tab_of(first).expect("still open");
         assert!(!app.workspace.tabs[back].is_parked());
     }
@@ -1022,7 +1030,10 @@ mod tests {
     fn toggling_park_on_a_missing_tab_changes_nothing() {
         let mut app = App::new();
         launch(&mut app, "a");
-        assert!(app.apply(Event::ToggleParkTab(5)).is_empty());
+        assert!(matches!(
+            app.apply(Event::ToggleParkTab(5)).as_slice(),
+            [Effect::TabShown]
+        ));
         assert!(!app.workspace.tabs[0].is_parked());
     }
 

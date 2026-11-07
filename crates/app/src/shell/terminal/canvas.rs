@@ -19,7 +19,7 @@ use crate::settings::ClipboardGestures;
 use crate::shell::Message;
 
 use super::cell_size;
-use super::selection::{cell_at, cell_nearest, cell_side, target_at, word_at, word_text};
+use super::selection::{cell_at, cell_nearest, cell_side, double_click_at, target_at, word_text};
 
 /// A canvas program that draws the visible terminal grid with per-cell colour
 /// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
@@ -351,7 +351,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
                         op: SelectOp::Update { line, col, side },
                     }));
                 }
-                // A double-click selects the whole word / filename under the
+                // A double-click selects the link, path or word under the
                 // pointer and copies it, like a terminal. iced's click
                 // tracker classifies the press from the previous one's time and
                 // distance. The word range drives a native selection so the
@@ -361,7 +361,7 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 state.last_click = Some(clicked);
                 let off = self.screen.display_offset;
                 if clicked.kind() == click::Kind::Double
-                    && let Some((anchor, head)) = word_at(self.screen, col, row)
+                    && let Some((anchor, head)) = double_click_at(self.screen, col, row)
                 {
                     state.held = None;
                     let op = SelectOp::Range {
@@ -1035,6 +1035,21 @@ mod tests {
             ),
             "with copy-on-select the word is copied as it is selected"
         );
+    }
+
+    #[test]
+    fn a_double_click_copies_a_path_as_a_link_click_would_open_it() {
+        use canvas::Program;
+        let line = "see src/main.rs. now";
+        let screen = screen_from(line);
+        let cursor = at_col(line.len(), 8);
+        let view = gesturing(&screen);
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &press(), test_bounds(), cursor);
+        match published(view.update(&mut state, &press(), test_bounds(), cursor)) {
+            Some(Message::SelectAndCopy { text, .. }) => assert_eq!(text, "src/main.rs"),
+            other => panic!("expected a copied selection, got {other:?}"),
+        }
     }
 
     #[test]
