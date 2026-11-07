@@ -22,8 +22,8 @@ use crate::launch::{
     write_title_settings,
 };
 use crate::session::{
-    Session, SharedMaster, SharedPalette, SharedWriter, TermCmd, spawn_reader, spawn_term,
-    spawn_waiter, spawn_watcher,
+    SCREEN_INTERVAL, Session, SharedMaster, SharedPalette, SharedWriter, TermCmd, spawn_reader,
+    spawn_term, spawn_waiter, spawn_watcher,
 };
 
 /// How to launch a session's shell process (FR10). Built from the user's
@@ -208,6 +208,7 @@ impl PtyHost for PtyManager {
             writer.clone(),
             self.sink.clone(),
             self.palette.clone(),
+            SCREEN_INTERVAL,
         );
         let reader = spawn_reader(spec.session, reader, ctrl.clone());
         // Detached from birth: it parks in `wait()` until the process ends,

@@ -43,7 +43,57 @@ const EOF_DRAIN_QUIET: std::time::Duration = std::time::Duration::from_millis(50
 
 /// Shortest gap between two emitted screens. Each copies the whole grid, and
 /// one per read chunk queues them faster than the GUI drains them.
-const SCREEN_INTERVAL: Duration = Duration::from_millis(8);
+pub(crate) const SCREEN_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Paces the screens the terminal thread publishes: the first change goes out
+/// at once, then at most one per interval, and the last always once the gap
+/// passes.
+struct ScreenPacer {
+    interval: Duration,
+    last_sent: Option<Instant>,
+    unsent: bool,
+}
+
+impl ScreenPacer {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last_sent: None,
+            unsent: false,
+        }
+    }
+
+    /// When the change held back goes out, if one is held.
+    fn due(&self) -> Option<Instant> {
+        self.last_sent
+            .filter(|_| self.unsent)
+            .map(|at| at + self.interval)
+    }
+
+    /// The grid changed: publish it now unless one went out too recently.
+    fn changed(&mut self, now: Instant, publish: impl FnOnce()) {
+        self.unsent = true;
+        if self
+            .last_sent
+            .is_none_or(|at| now.saturating_duration_since(at) >= self.interval)
+        {
+            self.publish(now, publish);
+        }
+    }
+
+    /// Publish the change held back, if its time has come.
+    fn publish_due(&mut self, now: Instant, publish: impl FnOnce()) {
+        if self.due().is_some_and(|at| at <= now) {
+            self.publish(now, publish);
+        }
+    }
+
+    fn publish(&mut self, now: Instant, publish: impl FnOnce()) {
+        publish();
+        self.last_sent = Some(now);
+        self.unsent = false;
+    }
+}
 
 /// The PTY's input side, shared between user writes (the manager) and terminal
 /// replies (the parser). A `Mutex` serialises the two so responses never
@@ -397,8 +447,9 @@ fn next_cmd(rx: &mpsc::Receiver<TermCmd>, deadline: Option<Instant>) -> Next {
 
 /// The terminal thread: owns the `alacritty_terminal` grid and applies every
 /// [`TermCmd`] (bytes → parse + status, resize, scroll), emitting a `Screen`
-/// at most every [`SCREEN_INTERVAL`]. It exits — and reports [`PtyEvent::Exited`] — when the
-/// reader signals EOF or every command sender is dropped.
+/// at most every `screen_interval` ([`SCREEN_INTERVAL`] outside tests). It
+/// exits — and reports [`PtyEvent::Exited`] — when the reader signals EOF or
+/// every command sender is dropped.
 pub(crate) fn spawn_term(
     session: SessionId,
     ctrl_rx: mpsc::Receiver<TermCmd>,
@@ -406,6 +457,7 @@ pub(crate) fn spawn_term(
     writer: SharedWriter,
     sink: EventSink,
     palette: SharedPalette,
+    screen_interval: Duration,
 ) -> JoinHandle<()> {
     let (cols, rows) = size;
     let term_sink = sink.clone();
@@ -431,17 +483,13 @@ pub(crate) fn spawn_term(
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
             let mut clean = false;
-            let mut unsent_change = false;
-            let mut last_sent: Option<Instant> = None;
+            let mut pacer = ScreenPacer::new(screen_interval);
             let screen = |term: &Term<PtyResponder>| PtyEvent::Output {
                 session,
                 screen: snapshot(term, &current(&palette)),
             };
             loop {
-                let flush_at = last_sent
-                    .filter(|_| unsent_change)
-                    .map(|at| at + SCREEN_INTERVAL);
-                let deadline = [flush_at, activity.due()].into_iter().flatten().min();
+                let deadline = [pacer.due(), activity.due()].into_iter().flatten().min();
                 let next = next_cmd(&ctrl_rx, deadline);
                 // A queued command never lets the deadline fire, so a held idle
                 // that has stood is published before whatever comes next.
@@ -452,11 +500,7 @@ pub(crate) fn spawn_term(
                 let cmd = match next {
                     Next::Cmd(cmd) => cmd,
                     Next::Due => {
-                        if flush_at.is_some_and(|at| at <= now) {
-                            term_sink(screen(&term));
-                            last_sent = Some(now);
-                            unsent_change = false;
-                        }
+                        pacer.publish_due(now, || term_sink(screen(&term)));
                         continue;
                     }
                     Next::Closed => break,
@@ -575,12 +619,7 @@ pub(crate) fn spawn_term(
                         break;
                     }
                 }
-                unsent_change = true;
-                if last_sent.is_none_or(|at| at.elapsed() >= SCREEN_INTERVAL) {
-                    term_sink(screen(&term));
-                    last_sent = Some(Instant::now());
-                    unsent_change = false;
-                }
+                pacer.changed(Instant::now(), || term_sink(screen(&term)));
             }
             // A final snapshot so any drained bytes reach the screen the tab
             // keeps showing on an unclean exit.
@@ -758,6 +797,7 @@ mod tests {
             Arc::new(RwLock::new(
                 Palette::named("solarized-light").expect("known scheme"),
             )),
+            SCREEN_INTERVAL,
         );
         let reported = || {
             let seen = seen.lock().expect("sink lock");
@@ -1032,6 +1072,7 @@ mod tests {
             writer,
             sink,
             Arc::new(RwLock::new(Palette::default())),
+            SCREEN_INTERVAL,
         );
         ctrl.send(TermCmd::Bytes(b"\x1b[?1000h\x1b[?1006h".to_vec()))
             .expect("terminal thread alive");
@@ -1071,6 +1112,7 @@ mod tests {
             writer,
             sink,
             Arc::new(RwLock::new(Palette::default())),
+            SCREEN_INTERVAL,
         );
         for n in 1..=CHUNKS {
             ctrl.send(TermCmd::Bytes(format!("line {n}\r\n").into_bytes()))
