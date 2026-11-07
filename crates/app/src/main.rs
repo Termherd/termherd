@@ -48,7 +48,20 @@ fn main() -> iced::Result {
                 .is_ok()
         });
 
+    // A temp dir that does not exist breaks the single-instance lock and every
+    // session's private files without a word: create it, or say so.
     let temp_dir = paths::TempDir::user();
+    match temp_dir.ensure() {
+        paths::TempDirState::Present => {}
+        paths::TempDirState::Created => {
+            warn!(path = %temp_dir.path().display(), "temp dir was missing; created it");
+        }
+        paths::TempDirState::Unusable(error) => warn!(
+            path = %temp_dir.path().display(), %error,
+            "temp dir is missing and cannot be created; the single-instance lock \
+             and sessions' private files will fail (check TMPDIR / TMP / TEMP)"
+        ),
+    }
 
     // Hold the single-instance guard for the whole GUI lifetime.
     let instance = instance::acquire_single_instance(temp_dir.path(), handed_over);
