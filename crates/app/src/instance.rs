@@ -3,7 +3,7 @@
 //! regression tests live together.
 
 use single_instance::SingleInstance;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// Base name of the single-instance lock. Its *form* is adjusted per OS by
 /// [`lock_name`], because `single-instance` gives this string a different
@@ -82,20 +82,39 @@ fn claim() -> Claim {
 /// Exits the process only when another instance already holds the lock. A
 /// failure to *create* the lock must not stop the app from launching: that was
 /// the "double-click does nothing, no error" bug on the `.app` bundle.
-pub fn acquire_single_instance() -> Option<SingleInstance> {
+///
+/// `handed_over` says this launch already gave its link to the inbox: the
+/// running instance acts on it, so exiting is this launch's success.
+pub fn acquire_single_instance(handed_over: bool) -> Option<SingleInstance> {
     match claim() {
         Claim::Held(instance) => Some(instance),
         Claim::Unavailable => None,
         Claim::TakenByAnother => {
-            warn!("another termherd instance is already running; exiting");
-            // Non-zero so a launcher can tell this from a clean shutdown.
-            std::process::exit(2);
+            if handed_over {
+                info!("link handed over to the running termherd instance");
+            } else {
+                warn!("another termherd instance is already running; exiting");
+            }
+            std::process::exit(exit_code_beside_another(handed_over));
         }
     }
 }
 
+/// How a launch that found another instance running exits: success when it
+/// handed its link over, else non-zero so a launcher can tell it from a
+/// clean shutdown.
+fn exit_code_beside_another(handed_over: bool) -> i32 {
+    if handed_over { 0 } else { 2 }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_launch_that_handed_its_link_over_exits_successfully() {
+        assert_eq!(super::exit_code_beside_another(true), 0);
+        assert_eq!(super::exit_code_beside_another(false), 2);
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn lock_name_is_absolute_on_macos() {

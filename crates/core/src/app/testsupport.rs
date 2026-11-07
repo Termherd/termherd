@@ -52,7 +52,7 @@ pub(crate) fn launch(app: &mut App, title: &str) -> SessionId {
         }))
         .as_slice()
     {
-        [Effect::Spawn(spec)] => spec.session,
+        [Effect::Spawn(spec)] | [Effect::Spawn(spec), Effect::TabShown] => spec.session,
         other => panic!("expected Spawn, got {other:?}"),
     }
 }
@@ -69,7 +69,7 @@ pub(crate) fn launch_claude(app: &mut App) -> SessionId {
         }))
         .as_slice()
     {
-        [Effect::Spawn(spec)] => spec.session,
+        [Effect::Spawn(spec)] | [Effect::Spawn(spec), Effect::TabShown] => spec.session,
         other => panic!("expected Spawn, got {other:?}"),
     }
 }

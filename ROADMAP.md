@@ -103,7 +103,6 @@ issues #18–#29.
 | [F-session-grid](#f-session-grid) | feature | workspace | ☐ | A layout preset over the pane model. |
 | [F-session-reveal](#f-session-reveal) | feature | sessions, workspace | ☐ | Reveal a session's directory and transcript in the OS file manager. |
 | [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
-| [F-url-scheme](#f-url-scheme) | feature | workspace, packaging | ☐ | Open a tab from an HTML link: a `termherd://` URL scheme. |
 | [F-worktree-launch](#f-worktree-launch) | feature | sessions, sidebar | ☐ | Start a Claude session in a fresh git worktree, grouped under its project. |
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
@@ -127,6 +126,7 @@ issues #18–#29.
 | [F-tab-park](#f-tab-park) | feature | workspace, keymap | ✅ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
 | [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ✅ | A Claude tab's title follows the session name Claude holds. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
+| [F-url-scheme](#f-url-scheme) | feature | workspace, packaging | ✅ | Open a tab from an HTML link: a `termherd://` URL scheme. |
 
 ## Backlog
 
@@ -1279,18 +1279,6 @@ its shell afterwards, since success is not observable. macOS and Windows x64
 only. Torture report:
 `.personal/feature-torture/reports/F-session-send-desktop.md`.
 
-<a id="f-url-scheme"></a>
-
-### F-url-scheme
-
-Open a tab from an HTML link: a `termherd://` URL scheme.
-
-Filed as #446. A page (docs, a dashboard, a report) links straight into the
-running instance. Three pieces: the scheme registered with each OS, a relay
-from a second launch to the running instance, and a target key that survives a
-restart (the MCP `handle` does not). The terminal already detects the scheme
-as a link. Discovery from outside overlaps [F-mcp-attach](#f-mcp-attach).
-
 <a id="f-worktree-launch"></a>
 
 ### F-worktree-launch
@@ -1836,9 +1824,9 @@ the tab menu, and `parked` on the snapshot. Attention unparks without taking
 the focus; a drag takes the zone it lands in.
 
 Deferred to a later tidy-first (#454): shell tab state stored by session rather
-than as an index re-anchored after each message, a `core` effect for a
-change of the shown tab, and one drop-zone rule shared by the strip view and
-`Workspace::move_tab`.
+than as an index re-anchored after each message, and one drop-zone rule shared
+by the strip view and `Workspace::move_tab`. The third slice is done (#446):
+`core` reports a change of the shown tab as `Effect::TabShown`.
 
 <a id="f-tab-title-sync"></a>
 
@@ -1894,6 +1882,28 @@ window background, not the chip's fill, and can sit below 3:1 (#382). Not
 ticketed: dropping the fixed light-theme darkening for a pure contrast search
 would shift the stock light themes' colours, a visual call nobody has made.
 Licences for the imported schemes: `THIRD_PARTY_NOTICES.md`.
+
+<a id="f-url-scheme"></a>
+
+### F-url-scheme
+
+Open a tab from an HTML link: a `termherd://` URL scheme.
+
+Shipped (#446): `termherd://open?repo=<absolute path>` shows the tab working
+in the repo, or opens a shell there. A link is untrusted input: it never
+writes to a terminal nor launches Claude, and `core::deeplink` refuses
+anything its grammar does not name. A repo path is the target key because it
+survives a restart, where the MCP `handle` does not.
+
+Every launch drops its link into `~/.termherd/inbox/`, which the running
+instance watches and drains: a second launch (Windows, Linux) hands it over
+and exits, a cold start reads it at startup, and on macOS the `GetURL` Apple
+Event lands in the same inbox. The installers declare the scheme through
+`cargo-packager`'s `deep-link-protocols`; the AppImage registers nothing.
+
+Open: `session/<resume_id>` as a second action, should a link need to name
+one conversation. Discovery from outside overlaps
+[F-mcp-attach](#f-mcp-attach).
 
 <a id="f-i18n"></a>
 
