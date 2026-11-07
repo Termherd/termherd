@@ -334,7 +334,10 @@ group keeps two merges from racing to publish.
 - **"Does the architecture still hold?"** → two fitness functions.
   `cargo-checks` runs `scripts/check-crate-deps.sh`: the hexagonal rule that
   adapters depend on `core`, never the reverse, checked against an allow-list of
-  internal edges (plus the toolchain lockstep check). `rustfmt & arch` guards
+  internal edges (plus the toolchain lockstep check);
+  `scripts/test-check-crate-deps.sh` then proves that check fails, rather than
+  reporting OK on 0 crates, when `jq` is missing or reads nothing.
+  `rustfmt & arch` guards
   the seams *inside* a crate: module boundaries
   (`scripts/check-module-boundaries.sh` — leaf modules stay leaves, renderers
   don't reach the executor, `core::app` submodules go through the parent
