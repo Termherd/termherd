@@ -64,6 +64,17 @@ pub fn to_json(dump: &WorkspaceSnapshot) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(&SnapshotDto::from(dump))
 }
 
+/// `dump` with the secrets its terminal text shows masked
+/// ([`termherd_core::redact`]). Only the terminals: the rest of the dump is
+/// termherd's own state, not what a program printed.
+#[must_use]
+pub fn redacted(mut dump: WorkspaceSnapshot) -> WorkspaceSnapshot {
+    for text in dump.terminals.values_mut() {
+        *text = termherd_core::redact::redact(text);
+    }
+    dump
+}
+
 /// Write the JSON dump to `dir/capture-<stamp>.json`, returning the path
 /// written. The companion PNG shares the stamp ([`png_path`]).
 pub fn write_dump(dir: &Path, stamp: &str, dump: &WorkspaceSnapshot) -> io::Result<PathBuf> {

@@ -225,6 +225,9 @@ struct Shell {
     /// Where captures and screencasts land: one dir, so the latest is the
     /// highest-named file in it.
     captures: Option<PathBuf>,
+    /// Whether a capture masks the secrets its terminal text shows
+    /// (`capture.redact`).
+    redact_captures: bool,
     fallback_cwd: String,
     claude_dir: Option<crate::paths::ClaudeDir>,
     scan_error: Option<String>,
@@ -936,6 +939,7 @@ impl Shell {
             fallback_cwd: startup.fallback_cwd,
             claude_dir: startup.claude_dir,
             captures,
+            redact_captures: true,
         };
         shell.adopt_settings(&startup.settings);
         shell
@@ -4628,6 +4632,43 @@ mod key_routing {
             lines: vec![line],
             ..Screen::blank(text.chars().count() as u16, 1)
         }
+    }
+
+    /// The text of the one JSON dump a capture of `screen` writes, with the
+    /// shell's capture redaction set to `redact`.
+    fn dumped_text(screen: &str, redact: bool) -> String {
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of(screen));
+        shell.redact_captures = redact;
+        let dump = shell
+            .core
+            .build_capture(&shell.snapshot_inputs_for(&SnapshotFilter::capture()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = shell.perform_capture(dir.path(), dump);
+        let written = std::fs::read_dir(dir.path())
+            .expect("captures dir exists")
+            .filter_map(Result::ok)
+            .find(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .expect("a dump was written");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(written.path()).expect("read"))
+                .expect("valid json");
+        json["terminals"][session.0.get().to_string()]
+            .as_str()
+            .expect("the focused terminal's text")
+            .to_owned()
+    }
+
+    #[test]
+    fn a_capture_masks_the_secrets_on_screen_unless_told_not_to() {
+        let screen = "$ echo ghp_1234567890abcdefghijABCDEFGHIJ123456";
+
+        let masked = dumped_text(screen, true);
+        assert!(masked.starts_with("$ echo [redacted]"), "{masked:?}");
+
+        let verbatim = dumped_text(screen, false);
+        assert!(verbatim.starts_with(screen), "{verbatim:?}");
     }
 
     #[test]

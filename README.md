@@ -147,6 +147,8 @@ you want and strip the comments (the real file is strict JSON). In short:
 - `sidebar` — sessions listed per project before the tail folds behind an
   expander (`0` shows all).
 - `record` — the GIF screencast budget (fps, duration cap, frame scale).
+- `capture` — `redact`: whether a state capture masks the secrets its
+  terminal text shows (default `true`).
 - `open` — the editor command a Ctrl/Cmd-clicked file path opens in, with
   `{path}` / `{line}` / `{col}` templates (default: the OS default handler,
   which cannot honour a line number).

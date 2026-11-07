@@ -14,6 +14,10 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   JSON, PNG and GIF in it is `0600`. A doc saved from the doc editor keeps
   its own mode instead of taking the default one through its temp copy, and
   a new one is created `0600` (#288).
+- A capture masks the secrets its terminal text shows before writing the
+  dump: AWS keys, `sk-…` API keys, GitHub tokens, `Bearer` tokens and PEM
+  private keys become `[redacted]`. On by default; `"capture": { "redact":
+  false }` in `settings.json` turns it off (#288).
 
 ### Fixed (a doc save lands on the doc it wrote)
 

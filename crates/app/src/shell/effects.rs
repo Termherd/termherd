@@ -332,6 +332,11 @@ impl Shell {
             tracing::warn!(%error, "could not create captures dir; capture skipped");
             return Task::none();
         }
+        let dump = if self.redact_captures {
+            crate::capture::redacted(dump)
+        } else {
+            dump
+        };
         let stamp = crate::capture::stamp(SystemTime::now());
         match crate::capture::write_dump(dir, &stamp, &dump) {
             Ok(path) => tracing::info!(path = %path.display(), "capture dump written"),

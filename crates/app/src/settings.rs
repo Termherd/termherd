@@ -47,6 +47,24 @@ pub struct Settings {
     pub open: OpenSettings,
     /// MCP control surface settings. Absent → defaults.
     pub mcp: McpSettings,
+    /// What a state capture writes. Absent → secrets are masked.
+    pub capture: CaptureSettings,
+}
+
+/// On-disk capture settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CaptureSettings {
+    /// Mask the secrets a capture's terminal text shows. On by default, and a
+    /// value that is not `true`/`false` keeps it on.
+    #[serde(deserialize_with = "flag_on")]
+    pub redact: bool,
+}
+
+impl Default for CaptureSettings {
+    fn default() -> Self {
+        Self { redact: true }
+    }
 }
 
 /// On-disk MCP control surface settings.
@@ -265,15 +283,30 @@ where
 /// malformed colour or open command gets. A `"yes"` or a `1` costs its own
 /// setting and nothing else.
 ///
-/// Both flags default to off, so one fallback value serves both.
+/// For a flag that defaults to off; [`flag_on`] is its mirror.
 fn flag<'de, D>(de: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    flag_or(de, false)
+}
+
+/// [`flag`] for a flag that defaults to on: a malformed value keeps it on.
+fn flag_on<'de, D>(de: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    flag_or(de, true)
+}
+
+fn flag_or<'de, D>(de: D, fallback: bool) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let value = serde_json::Value::deserialize(de)?;
     Ok(value.as_bool().unwrap_or_else(|| {
-        warn!(%value, "terminal flag is not true/false; leaving it off");
-        false
+        warn!(%value, fallback, "flag is not true/false; keeping its default");
+        fallback
     }))
 }
 
@@ -578,6 +611,12 @@ impl Settings {
     #[must_use]
     pub fn font_size(&self) -> f32 {
         self.terminal.font_size()
+    }
+
+    /// Whether a capture masks the secrets its terminal text shows.
+    #[must_use]
+    pub fn redacts_captures(&self) -> bool {
+        self.capture.redact
     }
 
     /// Which mouse gestures reach the clipboard.
@@ -1358,5 +1397,29 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{ "mcp": { "allow_claude_nesting": true } }"#)
             .expect("valid json");
         assert!(s.mcp.allow_claude_nesting);
+    }
+
+    #[test]
+    fn captures_are_redacted_unless_turned_off() {
+        assert!(Settings::default().redacts_captures());
+        let silent: Settings = serde_json::from_str(r#"{ "capture": {} }"#).expect("valid json");
+        assert!(
+            silent.redacts_captures(),
+            "an empty block keeps the default"
+        );
+        let off: Settings =
+            serde_json::from_str(r#"{ "capture": { "redact": false } }"#).expect("valid json");
+        assert!(!off.redacts_captures());
+    }
+
+    #[test]
+    fn a_non_boolean_redact_falls_back_to_redacting() {
+        // A typo must not be read as "off": the safe side is to mask.
+        for bad in [r#""no""#, "0", "null", "[]"] {
+            let json = format!(r#"{{ "theme": "light", "capture": {{ "redact": {bad} }} }}"#);
+            let s: Settings = serde_json::from_str(&json).expect("valid json");
+            assert!(s.redacts_captures(), "{bad}");
+            assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file applies");
+        }
     }
 }
