@@ -72,6 +72,22 @@ pub struct ForegroundJob {
 }
 
 impl LiveSession {
+    /// A session just launched in `cwd`: nothing reported about it yet.
+    fn starting(id: SessionId, cwd: Option<String>, launch: Launch) -> Self {
+        Self {
+            id,
+            launch_cwd: cwd.clone(),
+            cwd,
+            launch,
+            status: SessionStatus::Starting,
+            foreground: None,
+            session_file: None,
+            proven_session_id: None,
+            spawned_at: None,
+            foreground_reported: false,
+        }
+    }
+
     /// The Claude session id this pane's conversation lives under — the one
     /// accessor every reader of "this pane's transcript" goes through.
     ///
@@ -409,18 +425,11 @@ impl App {
         let Some(id) = self.sessions.allocate() else {
             return Vec::new();
         };
-        self.sessions.insert(LiveSession {
+        self.sessions.insert(LiveSession::starting(
             id,
-            cwd: spec.cwd.clone(),
-            launch_cwd: spec.cwd.clone(),
-            launch: spec.launch.clone(),
-            status: SessionStatus::Starting,
-            foreground: None,
-            session_file: None,
-            proven_session_id: None,
-            spawned_at: None,
-            foreground_reported: false,
-        });
+            spec.cwd.clone(),
+            spec.launch.clone(),
+        ));
         match spec.placement {
             Placement::Foreground => self.workspace.open(id, spec.title),
             Placement::Background => {
@@ -454,18 +463,8 @@ impl App {
         if self.workspace.split(dir, id).is_none() {
             return Vec::new();
         }
-        self.sessions.insert(LiveSession {
-            id,
-            cwd: cwd.clone(),
-            launch_cwd: cwd.clone(),
-            launch: Launch::Shell,
-            status: SessionStatus::Starting,
-            foreground: None,
-            session_file: None,
-            proven_session_id: None,
-            spawned_at: None,
-            foreground_reported: false,
-        });
+        self.sessions
+            .insert(LiveSession::starting(id, cwd.clone(), Launch::Shell));
         vec![Effect::Spawn(SpawnSpec {
             session: id,
             cwd,
