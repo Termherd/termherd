@@ -147,7 +147,7 @@ impl ClaudeCommand {
     }
 
     /// The line typed at Claude's prompt — what the confirmation shows, and,
-    /// byte for byte, what [`Self::keystrokes`] sends.
+    /// byte for byte, what [`Self::typed`] sends after clearing the draft.
     #[must_use]
     pub fn line(&self) -> String {
         match self {
@@ -157,13 +157,13 @@ impl ClaudeCommand {
         }
     }
 
-    /// The writes that type this command: the draft cleared and the line
-    /// typed, then Enter on its own.
+    /// The write that types this command: the draft cleared and the line
+    /// typed. Enter is not part of it; it goes as a submit of its own.
     #[must_use]
-    pub fn keystrokes(&self) -> [Vec<u8>; 2] {
+    pub fn typed(&self) -> Vec<u8> {
         let mut typed = CLEAR_DRAFT.to_vec();
         typed.extend_from_slice(self.line().as_bytes());
-        [typed, SUBMIT.to_vec()]
+        typed
     }
 }
 
@@ -271,11 +271,9 @@ mod tests {
     }
 
     #[test]
-    fn the_keystrokes_clear_the_draft_type_the_line_then_press_enter_apart() {
+    fn the_typed_write_clears_the_draft_and_types_the_line_without_enter() {
         let command = ClaudeCommand::Color(ClaudeColor::Red);
-        let [typed, enter] = command.keystrokes();
-        assert_eq!(typed, b"\x15/color red");
-        assert_eq!(enter, b"\r");
+        assert_eq!(command.typed(), b"\x15/color red");
     }
 
     proptest! {
@@ -292,9 +290,8 @@ mod tests {
             prop_assert!(
                 line.graphemes(true).count() <= "/rename ".len() + MAX_ARGUMENT_GRAPHEMES
             );
-            let [typed, enter] = command.keystrokes();
+            let typed = command.typed();
             prop_assert!(!typed.contains(&b'\r') && !typed.contains(&b'\n'));
-            prop_assert_eq!(enter, SUBMIT.to_vec());
         }
 
         #[test]

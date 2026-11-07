@@ -20,6 +20,10 @@ pub enum Effect {
     Spawn(SpawnSpec),
     /// Write bytes to a session's PTY stdin.
     Write { session: SessionId, bytes: Vec<u8> },
+    /// Press Enter in a session, in a write of its own after a pause. Claude
+    /// Code reads a burst of about 64 bytes or more as a paste, where an Enter
+    /// arriving with the text is a line break, not a submit.
+    Submit { session: SessionId },
     /// Resize a session's PTY to the given cell geometry.
     Resize {
         session: SessionId,

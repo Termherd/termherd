@@ -1063,6 +1063,11 @@ mod tests {
             matches!(write.as_slice(), [Effect::Write { session, bytes }]
             if *session == id && bytes == b"ls\n")
         );
+        let submit = app.apply(Event::TerminalSubmit { session: id });
+        assert!(
+            matches!(submit.as_slice(), [Effect::Submit { session }] if *session == id),
+            "{submit:?}"
+        );
 
         let resize = app.apply(Event::TerminalResized {
             session: id,
@@ -1086,6 +1091,10 @@ mod tests {
                 bytes: b"x".to_vec(),
             })
             .is_empty()
+        );
+        assert!(
+            app.apply(Event::TerminalSubmit { session: id }).is_empty(),
+            "an exited session is not pressed Enter in"
         );
     }
 

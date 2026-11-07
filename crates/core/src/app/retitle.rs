@@ -283,7 +283,9 @@ mod tests {
             prompt: PromptInput::Empty,
         });
         assert!(
-            effects.iter().all(|e| matches!(e, Effect::Write { .. })),
+            effects
+                .iter()
+                .all(|e| matches!(e, Effect::Write { .. } | Effect::Submit { .. })),
             "only the keystrokes: {effects:?}"
         );
         assert_eq!(title(&app), "local");

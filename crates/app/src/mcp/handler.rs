@@ -27,7 +27,6 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use termherd_core::Placement;
-use termherd_core::claude_command::SUBMIT;
 use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
@@ -75,10 +74,6 @@ const MAX_MAX_WIDTH: u32 = 4096;
 /// is a courtesy on top of an answer the caller has already earned, so it must
 /// barely extend the wait it follows.
 const READ_BACK_TIMEOUT: Duration = Duration::from_millis(250);
-
-/// Pause before typing Enter. Claude Code takes a long burst for a paste,
-/// where Enter is a line break, so Enter must reach it in a read of its own.
-const ENTER_GAP: Duration = Duration::from_millis(50);
 
 /// How long `prompt_in_session` waits for its prompt to start. Claude Code
 /// shows busy within a few hundred milliseconds; a command that finished
@@ -901,15 +896,17 @@ impl TermherdMcp {
         }))
     }
 
-    /// Type `text` into `session`, Enter last when it ends in a newline, and
-    /// return the focused handle.
+    /// Type `text` into `session`, submitting it when it ends in a newline, and
+    /// return the focused handle. The shell holds the submit's Enter back
+    /// until the text has been read apart from it.
     async fn type_text(&self, session: u64, text: String) -> Result<Option<String>, ErrorData> {
+        let (bytes, submit) = split_submit(text);
         let mut focused = None;
-        for (index, bytes) in typed_writes(text).into_iter().enumerate() {
-            if index > 0 {
-                tokio::time::sleep(ENTER_GAP).await;
-            }
+        if !bytes.is_empty() || !submit {
             focused = self.apply(Action::Run { session, bytes }).await?.focused;
+        }
+        if submit {
+            focused = self.apply(Action::Submit { session }).await?.focused;
         }
         Ok(focused)
     }
@@ -1312,16 +1309,6 @@ fn no_pixels(reason: Option<String>) -> CallToolResult {
         "{reason}. Use `snapshot` or `read_terminal` instead — they read the \
          workspace without the window."
     ))])
-}
-
-/// The writes that type `text`: the text, then Enter on its own when it ends
-/// in a line break.
-fn typed_writes(text: String) -> Vec<Vec<u8>> {
-    match split_submit(text) {
-        (bytes, false) => vec![bytes],
-        (bytes, true) if bytes.is_empty() => vec![SUBMIT.to_vec()],
-        (bytes, true) => vec![bytes, SUBMIT.to_vec()],
-    }
 }
 
 /// `text` without its final line break, and whether it had one: whether it
@@ -2443,41 +2430,64 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_in_session_types_enter_in_a_write_of_its_own() {
+    async fn run_in_session_presses_enter_as_a_submit_of_its_own() {
         let (handle, requests) = channel();
         let acted = || Some(Reply::Acted(ActionOutcome::applied(Some("3".into()))));
         let shell = spawn_test_shell_seq(requests, vec![acted(), acted()]);
+        let long = "a prompt long enough that Claude Code would read it as a paste burst";
         TermherdMcp::new(handle)
             .run_in_session(Parameters(RunArgs {
                 session: "3".into(),
-                text: "ls\n".into(),
+                text: format!("{long}\n"),
             }))
             .await
             .expect("the tool returns a result");
-        let run = |bytes: &[u8]| {
-            Request::Act(Action::Run {
-                session: 3,
-                bytes: bytes.to_vec(),
-            })
-        };
         assert_eq!(
             shell.await.expect("shell task"),
-            vec![run(b"ls"), run(b"\r")]
+            vec![
+                Request::Act(Action::Run {
+                    session: 3,
+                    bytes: long.as_bytes().to_vec(),
+                }),
+                Request::Act(Action::Submit { session: 3 }),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lone_line_break_is_only_a_submit() {
+        let (handle, requests) = channel();
+        let acted = || Some(Reply::Acted(ActionOutcome::applied(Some("3".into()))));
+        let shell = spawn_test_shell_seq(requests, vec![acted()]);
+        TermherdMcp::new(handle)
+            .run_in_session(Parameters(RunArgs {
+                session: "3".into(),
+                text: "\n".into(),
+            }))
+            .await
+            .expect("the tool returns a result");
+        assert_eq!(
+            shell.await.expect("shell task"),
+            vec![Request::Act(Action::Submit { session: 3 })]
         );
     }
 
     #[test]
-    fn a_final_line_break_is_typed_as_enter() {
-        let enter: &[u8] = b"\r";
-        for (text, writes) in [
-            ("ls\n", vec![&b"ls"[..], enter]),
-            ("ls\r\n", vec![b"ls", enter]),
-            ("ls\r", vec![b"ls", enter]),
-            ("\n", vec![enter]),
-            ("one\ntwo\n", vec![b"one\ntwo", enter]),
-            ("no submit", vec![b"no submit"]),
+    fn a_final_line_break_asks_for_a_submit() {
+        for (text, typed, submit) in [
+            ("ls\n", &b"ls"[..], true),
+            ("ls\r\n", b"ls", true),
+            ("ls\r", b"ls", true),
+            ("\n", b"", true),
+            ("one\ntwo\n", b"one\ntwo", true),
+            ("no submit", b"no submit", false),
+            ("", b"", false),
         ] {
-            assert_eq!(typed_writes(text.into()), writes, "{text:?}");
+            assert_eq!(
+                split_submit(text.into()),
+                (typed.to_vec(), submit),
+                "{text:?}"
+            );
         }
     }
 
