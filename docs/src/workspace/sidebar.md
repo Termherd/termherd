@@ -6,6 +6,12 @@ repositories you added by hand, which need no session to appear. It refreshes
 live as the filesystem changes, so a session started elsewhere shows up without
 a restart.
 
+The walk follows no symlink: a linked project folder, session subdirectory or
+`.jsonl` under `~/.claude/projects` is skipped. A transcript is read whole up
+to 256 MiB; past that, only its first and last 128 MiB are read, so the message
+count of such a session misses its middle. Titles and slugs are cut to 120
+characters, like the summary.
+
 Toggle it with <kbd>Cmd</kbd>+<kbd>B</kbd> (macOS) or
 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> (Windows, Linux).
 

@@ -418,15 +418,16 @@ here so an exception is never a surprise:
   (`fxhash`, unmaintained, transitive via display-info). Both are
   unmaintained-only, no known vulnerability.
 - **Function length** (`#[allow(clippy::too_many_lines)]` with a rationale):
-  `crates/app/src/shell.rs::update` and `crates/app/src/shell/view.rs::sidebar`
-  — a flat iced dispatcher and an inline layout tree, both refactor
+  `crates/app/src/shell.rs::update` and `crates/core/src/app.rs::dispatch` —
+  two flat dispatchers (one per `Message`, one per `Event`), refactor
   candidates rather than relaxations of the global threshold.
 - **`unsafe`**: the only sanctioned block is `crates/app/src/macos.rs` (AppKit
   FFI for Cmd+Q, the Edit menu giving Ctrl+Cmd+Space its *Emoji & Symbols*
-  item, and the `insertText:` relay that turns Character Viewer text winit
-  drops into an input-method commit), a `cfg`-gated module with a
-  `#![allow(unsafe_code)]` and a `// SAFETY:` note per block. See `AGENTS.md`
-  → Quality bar.
+  item, the Window menu giving Cmd+M its *Minimize*, the `insertText:` relay
+  that turns Character Viewer text winit drops into an input-method commit,
+  and the `GetURL` relay that hands a `termherd://` link to the inbox), a
+  `cfg`-gated module with a `#![allow(unsafe_code)]` and a `// SAFETY:` note
+  per block. See `AGENTS.md` → Quality bar.
 - **OS-cfg homes** (`scripts/check-os-cfg-containment.sh` allow-list): the files
   that may hold compile-time `#[cfg(target_os)]` / `#[cfg(unix)]` — `main.rs`
   (macos-module gate), `instance.rs` (per-OS lock naming), `window_geometry.rs`
