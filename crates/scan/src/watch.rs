@@ -3,6 +3,7 @@
 //! or its cache.
 
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use notify::{RecursiveMode, Watcher};
@@ -69,13 +70,13 @@ fn watch(
     mode: RecursiveMode,
     relevant: impl Fn(&notify::Event) -> bool + Send + 'static,
     debounce: Duration,
-    mut on_change: impl FnMut() + Send + 'static,
+    on_change: impl FnMut() + Send + 'static,
 ) -> Result<WatchHandle, ScanError> {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if event.is_ok_and(|event| relevant(&event)) {
+        deliver(event, &relevant, || {
             let _ = tx.send(());
-        }
+        });
     })
     .map_err(|e| ScanError::Unreadable(format!("watcher: {e}")))?;
     watcher
@@ -84,18 +85,33 @@ fn watch(
 
     std::thread::Builder::new()
         .name("termherd-fs-watch".into())
-        .spawn(move || {
-            // One blocking recv starts a burst; keep draining until the
-            // tree has been quiet for `debounce`, then fire once.
-            while rx.recv().is_ok() {
-                while rx.recv_timeout(debounce).is_ok() {}
-                on_change();
-            }
-            debug!("fs watch channel closed; coalescing thread exiting");
-        })
+        .spawn(move || coalesce(&rx, debounce, on_change))
         .map_err(|e| ScanError::Unreadable(format!("watch thread: {e}")))?;
 
     Ok(WatchHandle { _watcher: watcher })
+}
+
+/// One watcher callback: `signal` when the event is one `relevant` admits.
+fn deliver(
+    event: notify::Result<notify::Event>,
+    relevant: impl Fn(&notify::Event) -> bool,
+    signal: impl FnOnce(),
+) {
+    if event.is_ok_and(|event| relevant(&event)) {
+        signal();
+    }
+}
+
+/// Turn the stream of signals on `rx` into one `on_change` per burst, until
+/// every sender is gone.
+fn coalesce(rx: &Receiver<()>, debounce: Duration, mut on_change: impl FnMut()) {
+    // One blocking recv starts a burst; keep draining until the
+    // tree has been quiet for `debounce`, then fire once.
+    while rx.recv().is_ok() {
+        while rx.recv_timeout(debounce).is_ok() {}
+        on_change();
+    }
+    debug!("fs watch channel closed; coalescing thread exiting");
 }
 
 #[cfg(test)]
