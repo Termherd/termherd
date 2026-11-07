@@ -15,6 +15,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   TermHerd now writes its session file again, so its agent name, hover card
   and MCP identity are found (#356).
 
+### Fixed (the tab menu says why *Tab colour…* is unavailable)
+
+- On a Claude tab that cannot take `/color` right now — busy, a draft in its
+  prompt, or the view scrolled off the prompt — the tab menu lists
+  *Tab colour…* greyed out with the reason, instead of hiding it. Over MCP,
+  `enter` on it reports `refused` with the reason and keeps the menu open
+  (#373).
+
 ### Fixed (the active tab's status dot reads on its fill)
 
 - The status dot on the active tab is shaded against that tab's fill rather
