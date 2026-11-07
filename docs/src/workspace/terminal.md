@@ -67,6 +67,15 @@ asked for: `ESC O A` once it switched to application cursor keys (as vim and
 less do), `ESC [ A` otherwise. With a modifier held they always send the
 `ESC [ 1 ; <mod> A` form.
 
+### Accents and composed text
+
+Dead keys and input methods compose in the focused terminal: <kbd>^</kbd> then
+<kbd>e</kbd> types `ê` on a French layout, and CJK input methods work the same
+way. While a composition is pending, its text shows underlined over the
+cursor cell, at the terminal's font size but in the interface font. It goes
+away when the character is typed, and when you press <kbd>Escape</kbd>, leave
+the window or open a prompt.
+
 ### Mouse gestures
 
 The two classic terminal conventions are available, both **off by default** —

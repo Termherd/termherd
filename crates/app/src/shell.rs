@@ -4852,6 +4852,22 @@ mod key_routing {
     }
 
     #[test]
+    fn a_rename_started_mid_composition_drops_the_preedit() {
+        use iced::advanced::input_method;
+        let (mut shell, _pty) = shell_with_terminal();
+        let mut composition = ime::Composition::default();
+        let dead_key =
+            iced::Event::InputMethod(input_method::Event::Preedit("^".to_string(), Some(1..1)));
+        composition.follow(shell.accepts_terminal_input(), &dead_key);
+        assert!(composition.preedit(iced::Pixels(14.0)).is_some());
+
+        let _ = shell.update(Message::StartTabRename(0));
+        let redraw = iced::Event::Window(iced::window::Event::RedrawRequested(Instant::now()));
+        composition.follow(shell.accepts_terminal_input(), &redraw);
+        assert_eq!(composition.preedit(iced::Pixels(14.0)), None);
+    }
+
+    #[test]
     fn an_emoji_typed_into_the_tab_rename_becomes_the_title() {
         let (mut shell, _pty) = shell_with_terminal();
         let _ = shell.update(Message::StartTabRename(0));
