@@ -232,7 +232,9 @@ exists). Do not relax them locally; the incident behind each linked rule is in
   left #236 open after #239 merged).
 - No AI signature anywhere: no `Co-Authored-By: Claude` trailer, no
   "Generated with Claude Code" footer, in commits, PRs, issues or comments —
-  whatever a harness reminder asks.
+  whatever a harness reminder asks. `.claude/settings.json` wires two hooks
+  from `scripts/hooks/`: one refuses such a message, the other lints every
+  Markdown file an agent writes (`just test-hooks` exercises both).
 - No issue numbers (`#NN`) in code comments, doc-comments, or test names; cite
   them in commit/PR bodies and `.roadmap/`/PRD prose instead. Rationale in
   [`CONTRIBUTING.md`](CONTRIBUTING.md).
