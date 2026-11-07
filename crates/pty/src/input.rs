@@ -52,6 +52,19 @@ pub enum TermKey {
     Delete,
     PageUp,
     PageDown,
+    Insert,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
 }
 
 /// The modifier keys held during a key press, as far as the byte protocol is
@@ -122,6 +135,22 @@ pub fn key_bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<
         TermKey::Delete => Some(csi_tilde(3, modifier)),
         TermKey::PageUp => Some(csi_tilde(5, modifier)),
         TermKey::PageDown => Some(csi_tilde(6, modifier)),
+        TermKey::Insert => Some(csi_tilde(2, modifier)),
+        // F1–F4 keep the VT100 PF1–PF4 form (`SS3 P`…`S`) while unmodified;
+        // a modifier needs a parameter, which only the CSI form can carry.
+        TermKey::F1 => Some(pf_key(b'P', modifier)),
+        TermKey::F2 => Some(pf_key(b'Q', modifier)),
+        TermKey::F3 => Some(pf_key(b'R', modifier)),
+        TermKey::F4 => Some(pf_key(b'S', modifier)),
+        // F5–F12 skip 16 and 22: the VT220 numbering left gaps between groups.
+        TermKey::F5 => Some(csi_tilde(15, modifier)),
+        TermKey::F6 => Some(csi_tilde(17, modifier)),
+        TermKey::F7 => Some(csi_tilde(18, modifier)),
+        TermKey::F8 => Some(csi_tilde(19, modifier)),
+        TermKey::F9 => Some(csi_tilde(20, modifier)),
+        TermKey::F10 => Some(csi_tilde(21, modifier)),
+        TermKey::F11 => Some(csi_tilde(23, modifier)),
+        TermKey::F12 => Some(csi_tilde(24, modifier)),
         // Alt+<char> (Meta) prefixes the character with `ESC`, the readline
         // convention for word-wise editing (Alt+B / Alt+F / Alt+D …). Whether
         // a macOS Option key is Meta at all is the shell's to decide: it clears
@@ -251,7 +280,16 @@ fn csi_letter(final_byte: u8, modifier: u8) -> Vec<u8> {
     }
 }
 
-/// A `~`-terminated editing key (Delete=3, PageUp=5, PageDown=6):
+/// F1–F4: `ESC O <final>` unmodified, `ESC[1;<mod><final>` when modified.
+fn pf_key(final_byte: u8, modifier: u8) -> Vec<u8> {
+    if modifier <= 1 {
+        vec![0x1b, b'O', final_byte]
+    } else {
+        csi_letter(final_byte, modifier)
+    }
+}
+
+/// A `~`-terminated key (Insert=2, Delete=3, PageUp=5, PageDown=6, F5=15…):
 /// `ESC[<n>~` unmodified, `ESC[<n>;<mod>~` when modified.
 fn csi_tilde(n: u8, modifier: u8) -> Vec<u8> {
     if modifier <= 1 {
@@ -358,6 +396,65 @@ mod tests {
         assert_eq!(
             key_bytes(TermKey::Backspace, ALT, None),
             Some(b"\x1b\x7f".to_vec())
+        );
+    }
+
+    /// Every function key with the bytes xterm sends for it unmodified and
+    /// with Ctrl held, spelled out rather than derived from the encoder.
+    const FUNCTION_KEYS: [(TermKey, &[u8], &[u8]); 12] = [
+        (TermKey::F1, b"\x1bOP", b"\x1b[1;5P"),
+        (TermKey::F2, b"\x1bOQ", b"\x1b[1;5Q"),
+        (TermKey::F3, b"\x1bOR", b"\x1b[1;5R"),
+        (TermKey::F4, b"\x1bOS", b"\x1b[1;5S"),
+        (TermKey::F5, b"\x1b[15~", b"\x1b[15;5~"),
+        (TermKey::F6, b"\x1b[17~", b"\x1b[17;5~"),
+        (TermKey::F7, b"\x1b[18~", b"\x1b[18;5~"),
+        (TermKey::F8, b"\x1b[19~", b"\x1b[19;5~"),
+        (TermKey::F9, b"\x1b[20~", b"\x1b[20;5~"),
+        (TermKey::F10, b"\x1b[21~", b"\x1b[21;5~"),
+        (TermKey::F11, b"\x1b[23~", b"\x1b[23;5~"),
+        (TermKey::F12, b"\x1b[24~", b"\x1b[24;5~"),
+    ];
+
+    #[test]
+    fn function_keys_send_the_xterm_sequences() {
+        // F1–F4 are SS3 unmodified and switch to CSI 1;<mod> once modified;
+        // F5–F12 are `~`-terminated with the historical gaps at 16 and 22.
+        for (key, plain, ctrl) in FUNCTION_KEYS {
+            assert_eq!(
+                key_bytes(key, NONE, None).as_deref(),
+                Some(plain),
+                "{key:?}"
+            );
+            assert_eq!(
+                key_bytes(key, CTRL, None).as_deref(),
+                Some(ctrl),
+                "Ctrl+{key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_modified_f1_carries_the_xterm_modifier_parameter() {
+        assert_eq!(
+            key_bytes(TermKey::F1, SHIFT, None),
+            Some(b"\x1b[1;2P".to_vec())
+        );
+        assert_eq!(
+            key_bytes(TermKey::F12, ALT, None),
+            Some(b"\x1b[24;3~".to_vec())
+        );
+    }
+
+    #[test]
+    fn insert_is_the_tilde_key_two() {
+        assert_eq!(
+            key_bytes(TermKey::Insert, NONE, None),
+            Some(b"\x1b[2~".to_vec())
+        );
+        assert_eq!(
+            key_bytes(TermKey::Insert, SHIFT, None),
+            Some(b"\x1b[2;2~".to_vec())
         );
     }
 

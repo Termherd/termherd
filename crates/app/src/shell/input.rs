@@ -47,8 +47,8 @@ pub(super) fn chord_of(
 /// it would consume for a human, and `escape` / `enter` reach it — a chord
 /// resolved straight to its keymap action could never do that.
 ///
-/// `None` for a chord naming a key no event can carry (`"f2"`, `"space"`): those
-/// bind to nothing today, so no round trip is owed.
+/// `None` for a chord naming a key no event can carry (`"f13"`, `"capslock"`):
+/// no real press resolves such a binding either, so no round trip is owed.
 ///
 /// The number row is rebuilt by *physical* position, mirroring how `chord_of`
 /// reads it — otherwise `cmd+1` would come back as the character `1` and fail to
@@ -85,7 +85,7 @@ const NON_DIGIT: keyboard::key::Physical =
 /// table both directions read, so a key nameable on a real press is nameable
 /// over MCP and the reverse. A named key missing here falls through to the
 /// terminal without consulting the keymap.
-const NAMED_KEYS: [(&str, keyboard::key::Named); 9] = {
+const NAMED_KEYS: [(&str, keyboard::key::Named); 27] = {
     use keyboard::key::Named;
     [
         ("tab", Named::Tab),
@@ -101,6 +101,24 @@ const NAMED_KEYS: [(&str, keyboard::key::Named); 9] = {
         // Home / End name the scroll-to-top / bottom chords off macOS.
         ("home", Named::Home),
         ("end", Named::End),
+        ("pageup", Named::PageUp),
+        ("pagedown", Named::PageDown),
+        ("insert", Named::Insert),
+        ("delete", Named::Delete),
+        ("backspace", Named::Backspace),
+        ("space", Named::Space),
+        ("f1", Named::F1),
+        ("f2", Named::F2),
+        ("f3", Named::F3),
+        ("f4", Named::F4),
+        ("f5", Named::F5),
+        ("f6", Named::F6),
+        ("f7", Named::F7),
+        ("f8", Named::F8),
+        ("f9", Named::F9),
+        ("f10", Named::F10),
+        ("f11", Named::F11),
+        ("f12", Named::F12),
     ]
 };
 
@@ -238,6 +256,19 @@ pub(super) fn to_term_key(key: &keyboard::Key) -> Option<TermKey> {
         Key::Named(Named::Delete) => Some(TermKey::Delete),
         Key::Named(Named::PageUp) => Some(TermKey::PageUp),
         Key::Named(Named::PageDown) => Some(TermKey::PageDown),
+        Key::Named(Named::Insert) => Some(TermKey::Insert),
+        Key::Named(Named::F1) => Some(TermKey::F1),
+        Key::Named(Named::F2) => Some(TermKey::F2),
+        Key::Named(Named::F3) => Some(TermKey::F3),
+        Key::Named(Named::F4) => Some(TermKey::F4),
+        Key::Named(Named::F5) => Some(TermKey::F5),
+        Key::Named(Named::F6) => Some(TermKey::F6),
+        Key::Named(Named::F7) => Some(TermKey::F7),
+        Key::Named(Named::F8) => Some(TermKey::F8),
+        Key::Named(Named::F9) => Some(TermKey::F9),
+        Key::Named(Named::F10) => Some(TermKey::F10),
+        Key::Named(Named::F11) => Some(TermKey::F11),
+        Key::Named(Named::F12) => Some(TermKey::F12),
         _ => None,
     }
 }
@@ -386,8 +417,13 @@ mod tests {
             to_term_key(&Key::Named(Named::PageDown)),
             Some(TermKey::PageDown)
         );
+        assert_eq!(to_term_key(&Key::Named(Named::F2)), Some(TermKey::F2));
+        assert_eq!(
+            to_term_key(&Key::Named(Named::Insert)),
+            Some(TermKey::Insert)
+        );
         // Keys with no terminal sequence reach no PTY.
-        assert_eq!(to_term_key(&Key::Named(Named::F2)), None);
+        assert_eq!(to_term_key(&Key::Named(Named::CapsLock)), None);
         assert_eq!(to_term_key(&Key::Unidentified), None);
     }
 
@@ -487,9 +523,17 @@ mod tests {
             chord_of(&Key::Named(Named::ArrowUp), &NON_DIGIT, Modifiers::LOGO),
             Some(KeyChord::new("up", keymap::MOD_CMD))
         );
-        // Keys no shortcut targets carry no chord.
         assert_eq!(
             chord_of(&Key::Named(Named::F2), &NON_DIGIT, Modifiers::default()),
+            Some(KeyChord::new("f2", 0))
+        );
+        // Keys no shortcut targets carry no chord.
+        assert_eq!(
+            chord_of(
+                &Key::Named(Named::CapsLock),
+                &NON_DIGIT,
+                Modifiers::default()
+            ),
             None
         );
     }
@@ -618,11 +662,47 @@ mod tests {
     }
 
     #[test]
+    fn the_editing_and_function_keys_are_nameable() {
+        // Each of these has a terminal sequence, so a chord naming it must reach
+        // the keymap on a real press and be synthesisable over `press_keys`.
+        let names = [
+            "pageup",
+            "pagedown",
+            "delete",
+            "backspace",
+            "space",
+            "insert",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain((1..=12).map(|n| format!("f{n}")));
+        for name in names {
+            let chord = KeyChord::new(name.as_str(), 0);
+            assert_eq!(round_trip(&chord).as_ref(), Some(&chord), "`{name}`");
+        }
+    }
+
+    #[test]
+    fn every_named_key_round_trips_and_reaches_the_terminal() {
+        // Read from the table the code uses, so a row added later is covered.
+        // An unbound named chord falls through to the terminal, so a name with
+        // no `TermKey` would be a binding that types nothing when unbound.
+        for &(name, named) in &NAMED_KEYS {
+            let chord = KeyChord::new(name, keymap::MOD_SHIFT);
+            assert_eq!(round_trip(&chord).as_ref(), Some(&chord), "`{name}`");
+            assert!(
+                to_term_key(&Key::Named(named)).is_some(),
+                "`{name}` must reach the terminal when bound to nothing"
+            );
+        }
+    }
+
+    #[test]
     fn a_chord_no_key_event_can_carry_synthesises_nothing() {
         // `key_name` never produces these, so no real press could resolve such a
         // binding either. Reporting nothing is the faithful answer; inventing an
         // event would give the MCP surface a reach the keyboard lacks.
-        for name in ["f2", "space", "pageup"] {
+        for name in ["f13", "capslock", "printscreen"] {
             assert_eq!(
                 event_of(&KeyChord::new(name, keymap::MOD_CMD)),
                 None,
@@ -671,10 +751,12 @@ mod tests {
         /// modifier set survives the round trip.
         #[test]
         fn arbitrary_nameable_chords_round_trip(
-            name in proptest::sample::select(vec![
-                "a", "z", "0", "5", "9", "-", "=", "+",
-                "tab", "enter", "escape", "up", "down", "left", "right", "home", "end",
-            ]),
+            name in proptest::sample::select(
+                ["a", "z", "0", "5", "9", "-", "=", "+"]
+                    .into_iter()
+                    .chain(NAMED_KEYS.iter().map(|&(name, _)| name))
+                    .collect::<Vec<_>>()
+            ),
             mods in 0u8..16,
         ) {
             let chord = KeyChord::new(name, mods);

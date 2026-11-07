@@ -3369,10 +3369,29 @@ mod key_routing {
 
     #[test]
     fn a_chord_naming_an_unreachable_key_is_reported_unbound() {
-        // `f2` is a key no event carries, so no real press could resolve it
+        // `f13` is a key no event carries, so no real press could resolve it
         // either. It must report, not vanish.
         let (mut shell, _pty) = shell_with_terminal();
-        assert_eq!(press_chord(&mut shell, "f2"), PressStep::Unbound);
+        assert_eq!(press_chord(&mut shell, "f13"), PressStep::Unbound);
+    }
+
+    #[test]
+    fn an_unbound_named_key_reaches_the_terminal_through_termherds_encoder() {
+        // What `run_in_session` cannot show: the bytes termherd itself sends for
+        // a key, so an agent can audit the encoder on a live pane.
+        for (spec, bytes) in [
+            ("pageup", b"\x1b[5~".as_slice()),
+            ("shift+delete", b"\x1b[3;2~"),
+            ("insert", b"\x1b[2~"),
+            ("f1", b"\x1bOP"),
+            ("f10", b"\x1b[21~"),
+            ("space", b" "),
+            ("backspace", b"\x7f"),
+        ] {
+            let (mut shell, pty) = shell_with_terminal();
+            assert_eq!(press_chord(&mut shell, spec), PressStep::Typed, "{spec}");
+            assert_eq!(pty.writes(), vec![bytes.to_vec()], "{spec}");
+        }
     }
 
     #[test]

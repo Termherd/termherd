@@ -12,6 +12,12 @@ overlays — rather than a terminal. Typing *into* a session stays
 Both take a list applied in order and return one `steps` entry per item, plus
 the resulting `focused_handle`.
 
+`press_keys` names keys as the
+[chord syntax](../reference/keyboard.md#chord-syntax) does. A chord bound to
+nothing reaches the focused terminal through TermHerd's own key encoder, so
+`"pageup"` or `"shift+f5"` there shows the bytes TermHerd sends for that key.
+`run_in_session` writes the caller's bytes as they are and cannot show it.
+
 ## Why it is a real key event
 
 A chord is dispatched as a **synthesised key event** fed to the app's key

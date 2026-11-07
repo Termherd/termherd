@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (more keys in chords and in the terminal)
+
+- Chords can name `pageup`, `pagedown`, `insert`, `delete`, `backspace`,
+  `space` and `f1` to `f12`, in `settings.json` and over MCP `press_keys`.
+  The `shift+insert` paste example in the docs now works (#324).
+- F1 to F12 and Insert reach the terminal with their xterm sequences: htop's
+  F10, mc's function-key bar and vim mappings receive them. They used to
+  send nothing (#321).
+
 ### Added (parking a tab)
 
 - Park a tab with the tab menu's *Park tab* or the new `toggle-park-tab`
