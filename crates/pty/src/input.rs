@@ -122,6 +122,7 @@ pub fn key_bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<
             b"\x7f".to_vec()
         }),
         TermKey::Escape => Some(b"\x1b".to_vec()),
+        TermKey::Space if mods.ctrl => Some(vec![0]),
         TermKey::Space => Some(b" ".to_vec()),
         // Cursor / navigation keys take a `1;<mod>` parameter when modified —
         // e.g. Ctrl+Right (`ESC[1;5C`) for word jump, Shift+Up (`ESC[1;2A`).
@@ -443,6 +444,17 @@ mod tests {
         assert_eq!(
             key_bytes(TermKey::F12, ALT, None),
             Some(b"\x1b[24;3~".to_vec())
+        );
+    }
+
+    #[test]
+    fn ctrl_space_is_nul_whether_the_space_bar_arrives_named_or_as_a_character() {
+        // iced reports the space bar as a named key, so the `Char(' ')` rule
+        // alone left a real Ctrl+Space typing a plain space.
+        assert_eq!(key_bytes(TermKey::Space, CTRL, None), Some(vec![0]));
+        assert_eq!(
+            key_bytes(TermKey::Char(' '), CTRL, Some(" ")),
+            Some(vec![0])
         );
     }
 
