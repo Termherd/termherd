@@ -163,7 +163,12 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let file = tmp.path().join("settings.json");
         let sink = LiveSettings {
-            pty: Arc::new(PtyManager::new(Arc::new(|_| {}), None, Palette::default())),
+            pty: Arc::new(PtyManager::new(
+                Arc::new(|_| {}),
+                None,
+                Palette::default(),
+                termherd_pty::PrivateFiles::new(tmp.path()),
+            )),
             file: Some(file.clone()),
         };
 

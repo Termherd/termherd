@@ -14,6 +14,22 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   status waited for. A read right after an `idle` could still show Claude's
   spinner, one screen behind (#436).
 
+### Fixed (a long Claude command is submitted)
+
+- A confirmed Claude command with a long argument, such as a `/rename` to a
+  long name from the tab menu or MCP `claude_command`, is submitted. Claude
+  Code used to read the line and its Enter as one paste, and waited for a
+  second Enter. Enter now follows the line after a pause, as
+  `run_in_session` and `prompt_in_session` already did (#439).
+
+### Fixed (a TermHerd started from a Claude session)
+
+- A TermHerd started from inside a Claude Code session no longer passes that
+  session's identity (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
+  its messaging socket, …) to every pane. A Claude launched in such a
+  TermHerd now writes its session file again, so its agent name, hover card
+  and MCP identity are found (#356).
+
 ### Fixed (the tab menu says why *Tab colour…* is unavailable)
 
 - On a Claude tab that cannot take `/color` right now — busy, a draft in its
