@@ -4570,6 +4570,41 @@ mod key_routing {
     }
 
     #[test]
+    fn option_space_types_a_plain_space_on_the_composing_side() {
+        let (mut shell, pty) = shell_holding_alt(Location::Right);
+        let _ = shell.on_key(press(
+            Key::Named(Named::Space),
+            Modifiers::ALT,
+            Some("\u{a0}"),
+        ));
+        assert_eq!(pty.writes(), vec![b" ".to_vec()]);
+    }
+
+    #[test]
+    fn option_space_is_meta_on_the_meta_side() {
+        let (mut shell, pty) = shell_holding_alt(Location::Left);
+        let _ = shell.on_key(press(
+            Key::Named(Named::Space),
+            Modifiers::ALT,
+            Some("\u{a0}"),
+        ));
+        assert_eq!(pty.writes(), vec![b"\x1b ".to_vec()]);
+    }
+
+    #[test]
+    fn an_arrow_follows_the_cursor_mode_of_the_focused_screen() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let up = || press(Key::Named(Named::ArrowUp), Modifiers::default(), None);
+        let _ = shell.on_key(up());
+        let mut screen = screen_of("$ ");
+        screen.cursor_keys = termherd_pty::CursorKeys::Application;
+        shell.screens.insert(session, screen);
+        let _ = shell.on_key(up());
+        assert_eq!(pty.writes(), vec![b"\x1b[A".to_vec(), b"\x1bOA".to_vec()]);
+    }
+
+    #[test]
     fn a_bound_shortcut_is_intercepted_before_the_pty() {
         let (mut shell, pty) = shell_with_terminal();
         // Ctrl+Tab is bound to NextTab on every platform; it must run the
