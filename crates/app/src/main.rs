@@ -48,8 +48,10 @@ fn main() -> iced::Result {
                 .is_ok()
         });
 
+    let temp_dir = paths::TempDir::user();
+
     // Hold the single-instance guard for the whole GUI lifetime.
-    let instance = instance::acquire_single_instance(handed_over);
+    let instance = instance::acquire_single_instance(temp_dir.path(), handed_over);
 
     // macOS hands a link to the running app as an Apple Event instead.
     #[cfg(target_os = "macos")]
@@ -98,7 +100,7 @@ fn main() -> iced::Result {
         sink,
         shell,
         settings.palette(),
-        PrivateFiles::new(std::env::temp_dir()),
+        PrivateFiles::new(temp_dir.path().to_owned()),
     ));
 
     // Async transport substrate (composition root only): a tokio runtime to host

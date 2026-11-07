@@ -72,6 +72,25 @@ impl ClaudeDir {
     }
 }
 
+/// The OS temp dir (`$TMPDIR`, `%TMP%`): the single-instance lock and the
+/// sessions' private files live under it. Resolved in `main()` alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TempDir(PathBuf);
+
+impl TempDir {
+    /// `std::env::temp_dir()`, read once.
+    #[must_use]
+    pub fn user() -> Self {
+        Self(std::env::temp_dir())
+    }
+
+    /// The directory itself.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
