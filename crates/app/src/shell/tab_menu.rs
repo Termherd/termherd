@@ -163,7 +163,7 @@ pub(super) fn step(selected: usize, len: usize, down: bool) -> usize {
 /// entry it named. It is anchored on the pane it opened over: once that pane
 /// no longer holds focus — closed, exited, or focus moved by an MCP caller —
 /// the menu is gone, rather than offering its entries to whatever is focused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TabMenu {
     anchor: SessionId,
     offers: Offers,
@@ -171,11 +171,11 @@ pub(super) struct TabMenu {
 }
 
 impl TabMenu {
-    pub(super) fn selected(self) -> usize {
+    pub(super) fn selected(&self) -> usize {
         self.selected
     }
 
-    pub(super) fn entries(self) -> impl Iterator<Item = &'static Entry> {
+    pub(super) fn entries(&self) -> impl Iterator<Item = &'static Entry> {
         entries(self.offers)
     }
 }
@@ -184,8 +184,9 @@ impl Shell {
     /// The open menu, if its anchor still holds focus. Every reader goes
     /// through here, so a menu whose pane went away answers nothing even
     /// before [`Self::drop_stale_lists`] clears it.
-    pub(super) fn live_tab_menu(&self) -> Option<TabMenu> {
+    pub(super) fn live_tab_menu(&self) -> Option<&TabMenu> {
         self.tab_menu
+            .as_ref()
             .filter(|menu| self.core.workspace.focused_session() == Some(menu.anchor))
     }
 
@@ -205,7 +206,11 @@ impl Shell {
     /// closed. Its id is never reused, so the anchor check alone would hide the
     /// list for good; dropping it here leaves nothing behind to reason about.
     pub(super) fn forget_lists_on(&mut self, session: SessionId) {
-        if self.tab_menu.is_some_and(|menu| menu.anchor == session) {
+        if self
+            .tab_menu
+            .as_ref()
+            .is_some_and(|menu| menu.anchor == session)
+        {
             self.tab_menu = None;
         }
         if self
@@ -223,7 +228,7 @@ impl Shell {
         let anchor = self.core.workspace.focused_session()?;
         let offers = Offers {
             agent_named: self.focused_agent_name().is_some(),
-            color_pickable: self.color_pickable(anchor),
+            color_pickable: self.color_refusal(anchor).is_none(),
             unparked: self
                 .core
                 .workspace
@@ -267,14 +272,16 @@ impl Shell {
             self.tab_menu = None;
             return (None, Task::none());
         }
-        let Some(menu) = self.live_tab_menu() else {
+        let Some((selected, len)) = self
+            .live_tab_menu()
+            .map(|menu| (menu.selected, menu.entries().count()))
+        else {
             return (None, Task::none());
         };
-        let len = menu.entries().count();
         match key {
-            ListKey::Up => self.select_tab_menu_entry(step(menu.selected, len, false)),
-            ListKey::Down => self.select_tab_menu_entry(step(menu.selected, len, true)),
-            ListKey::Run => return self.run_tab_menu_entry(menu.selected),
+            ListKey::Up => self.select_tab_menu_entry(step(selected, len, false)),
+            ListKey::Down => self.select_tab_menu_entry(step(selected, len, true)),
+            ListKey::Run => return self.run_tab_menu_entry(selected),
             ListKey::Leave | ListKey::Other => {}
         }
         (None, Task::none())
