@@ -37,6 +37,9 @@ Rules of thumb:
   behaviour change reviewable as a small, intentional diff.
 - If a tidy ends up changing observable behaviour, it wasn't a tidy. Revert
   and split.
+- New tests, and the scaffolding that lets a red test compile (a new enum
+  variant, a no-op message), are behaviour work: the tidy commit lands before
+  them, with the suite green.
 
 Acceptable commit shapes:
 
@@ -382,78 +385,27 @@ The scope names where the change lands: a crate (`core`, `claude`, `pty`,
 a doc area (`agents`, `standards`, `roadmap`, `ci`).
 
 Breaking changes include `BREAKING CHANGE:` in the footer or `!` after the
-type. Commit messages carry **no "Claude" signature** (per the global user
-instruction).
+type. No AI signature, in commits or anywhere else — see the conventions in
+[`AGENTS.md`](AGENTS.md).
 
 ---
 
 ## Toolchain & Layout
 
-### Workspace layout
+### Workspace layout, toolchain and CI
 
-Hexagonal workspace — adapters depend on `core`, never the reverse:
+The crate map and the dependency rule are in [`AGENTS.md`](AGENTS.md)
+(*Architecture*), the local commands under its *Commands*, and every CI gate
+in [`docs/CI.md`](docs/CI.md). Two rules live only here:
 
-```text
-crates/
-├── core/    # domain: App state machine, Workspace, ports, keymap (no I/O)
-├── claude/  # pure CLI-format codec: path · derive · digest · osc · jsonl
-├── scan/    # filesystem discovery adapter (implements ProjectScanner)
-├── pty/     # terminal adapter, actor-per-session (implements PtyHost)
-├── mcp/     # stdio MCP server + the settings-option catalogue
-└── app/     # iced GUI shell; constructs adapters in main() and injects them
-```
-
-When adding code, ask *which crate does this belong in?* If the answer is
-"`core` should call this adapter directly," the answer is wrong — add a port
-trait in `core::ports` and have the adapter implement it.
-
-### Toolchain policy
-
-- `rust-toolchain.toml` pins **exactly `1.95.0`, edition 2024** (Q10). Unlike
-  projects that track `stable`, termherd pins an exact minor version — do **not**
-  bump it without updating the pin and re-checking CI in the same commit.
-- `Cargo.toml [workspace.package]` declares `rust-version = "1.95"`. Keep it in
-  lockstep with the toolchain pin; bumping one without the other is a bug.
-
-### Clippy & lints
-
-Lints are declared once at the workspace root and tightened per crate:
-
-- `[workspace.lints.rust]`: `unsafe_code = "deny"` everywhere.
-- `[workspace.lints.clippy]`: `unwrap_used`, `expect_used`, `panic`, `todo`,
-  `unimplemented` = `warn` by default.
-- `core` and `claude` tighten `unwrap_used`/`expect_used`/`panic` to **`deny`**
-  in their own `Cargo.toml` (Q5): production code in those crates must return
-  typed errors.
-- `clippy.toml` opts tests out (`allow-unwrap-in-tests` and friends).
-- CI runs `cargo clippy --workspace --all-targets -- -D warnings`: **every
-  warning is blocking.** Mirror it locally before pushing.
-
-### CI gates you can mirror locally
-
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo nextest run --workspace          # `cargo test --workspace` locally
-cargo deny check                       # if cargo-deny installed
-cargo machete                          # unused deps; if cargo-machete installed
-just check-deps                        # hexagonal crate dependency rule
-just check-arch                        # module boundaries + OS-cfg containment
-markdownlint-cli2                      # 80-col prose; see .markdownlint-cli2.jsonc
-just roadmap                           # ROADMAP.md still matches .roadmap/
-just docs                              # the user manual builds (mdbook)
-```
-
-This block is a *local loop*, not the gate list: `just check-arch` runs with
-`cargo fmt` in `rustfmt & arch`, while `deny`, `machete`, and `just check-deps`
-run together in `cargo-checks`. Two blocking gates have no local mirror at all
-— `portable`, because it is a *Windows* run, and `actionlint`. CodeQL runs too,
-but it is a post-merge baseline and not in `ci-success`, so it blocks nothing.
-
-For the **full picture** — every gate, what it
-protects, when it runs (PR / merge / schedule / release), how to mirror it, and
-the sanctioned exceptions — see the CI reference & runbook at
-[`docs/CI.md`](docs/CI.md).
+- `Cargo.toml [workspace.package]` declares `rust-version = "1.95"`. Keep it
+  in lockstep with the `rust-toolchain.toml` pin; bumping one without the
+  other is a bug.
+- Lints are declared once at the workspace root and tightened per crate:
+  `unsafe_code = "deny"` everywhere; `unwrap_used`, `expect_used`, `panic`,
+  `todo`, `unimplemented` warn by default, and `core` and `claude` raise the
+  first three to `deny` (Q5). `clippy.toml` opts tests out, and CI runs clippy
+  with `-D warnings`, so every warning is blocking.
 
 Markdown prose wraps at **80 columns** (tables and code blocks are exempt). This
 file obeys that rule; keep it that way when you edit.
