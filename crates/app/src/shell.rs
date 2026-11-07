@@ -929,14 +929,19 @@ impl Shell {
         )
     }
 
-    // The iced `update` is a flat `match` over every `Message` variant — the
-    // app's central event dispatcher, whose arms delegate to the domain modules
-    // (launch, session_ops, effects, geometry, routing, …). The length here is
-    // breadth (one arm per message), not nested complexity, and splitting the
-    // dispatch itself would only scatter it — the allow is by design, not a
-    // deferred cleanup.
-    #[allow(clippy::too_many_lines)]
+    /// The iced `update`: every message goes through [`Self::dispatch`].
     fn update(&mut self, message: Message) -> Task<Message> {
+        self.dispatch(message)
+    }
+
+    // A flat `match` over every `Message` variant — the app's central event
+    // dispatcher, whose arms delegate to the domain modules (launch,
+    // session_ops, effects, geometry, routing, …). The length here is breadth
+    // (one arm per message), not nested complexity, and splitting the dispatch
+    // itself would only scatter it — the allow is by design, not a deferred
+    // cleanup.
+    #[allow(clippy::too_many_lines)]
+    fn dispatch(&mut self, message: Message) -> Task<Message> {
         self.drop_stale_lists();
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
         // is open discards it — the blur-cancels-edit convention. Only genuine
