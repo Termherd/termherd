@@ -225,6 +225,9 @@ struct Shell {
     /// Where captures and screencasts land: one dir, so the latest is the
     /// highest-named file in it.
     captures: Option<PathBuf>,
+    /// Whether a capture masks the secrets its terminal text shows
+    /// (`capture.redact`).
+    redact_captures: bool,
     fallback_cwd: String,
     claude_dir: Option<crate::paths::ClaudeDir>,
     scan_error: Option<String>,
@@ -940,6 +943,7 @@ impl Shell {
             fallback_cwd: startup.fallback_cwd,
             claude_dir: startup.claude_dir,
             captures,
+            redact_captures: true,
         };
         shell.adopt_settings(&startup.settings);
         shell
@@ -4768,6 +4772,70 @@ mod key_routing {
         }
     }
 
+    /// The text of the one JSON dump a capture of `screen` writes, with the
+    /// shell's capture redaction set to `redact`.
+    fn dumped_text(screen: &str, redact: bool) -> String {
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of(screen));
+        shell.redact_captures = redact;
+        let dump = shell
+            .core
+            .build_capture(&shell.snapshot_inputs_for(&SnapshotFilter::capture()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = shell.perform_capture(dir.path(), dump);
+        let written = std::fs::read_dir(dir.path())
+            .expect("captures dir exists")
+            .filter_map(Result::ok)
+            .find(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .expect("a dump was written");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(written.path()).expect("read"))
+                .expect("valid json");
+        json["terminals"][session.0.get().to_string()]
+            .as_str()
+            .expect("the focused terminal's text")
+            .to_owned()
+    }
+
+    #[test]
+    fn a_capture_prunes_the_oldest_once_the_dir_is_full() {
+        let (shell, _pty) = shell_with_terminal();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oldest = dir.path().join("capture-19700101-000000-000.json");
+        for n in 0..crate::capture::KEPT_CAPTURES {
+            let name = format!("capture-19700101-000000-{n:03}.json");
+            std::fs::write(dir.path().join(name), "{}").expect("an old capture");
+        }
+        let foreign = dir.path().join("notes.md");
+        std::fs::write(&foreign, "mine").expect("a file of the user's");
+
+        let dump = shell
+            .core
+            .build_capture(&shell.snapshot_inputs_for(&SnapshotFilter::capture()));
+        let _ = shell.perform_capture(dir.path(), dump);
+
+        let dumps = std::fs::read_dir(dir.path())
+            .expect("captures dir")
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .count();
+        assert_eq!(dumps, crate::capture::KEPT_CAPTURES);
+        assert!(!oldest.exists(), "the oldest capture made room");
+        assert!(foreign.exists(), "a file termherd did not write stays");
+    }
+
+    #[test]
+    fn a_capture_masks_the_secrets_on_screen_unless_told_not_to() {
+        let screen = "$ echo ghp_1234567890abcdefghijABCDEFGHIJ123456";
+
+        let masked = dumped_text(screen, true);
+        assert!(masked.starts_with("$ echo [redacted]"), "{masked:?}");
+
+        let verbatim = dumped_text(screen, false);
+        assert!(verbatim.starts_with(screen), "{verbatim:?}");
+    }
+
     #[test]
     fn capture_writes_a_json_dump_of_the_whole_workspace() {
         // a capture writes capture-<ts>.json holding the whole workspace —
@@ -8081,6 +8149,23 @@ mod key_routing {
     }
 
     #[test]
+    fn turning_capture_redaction_off_on_disk_reaches_the_capture() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        assert!(shell.redact_captures, "on by default");
+        std::fs::write(
+            crate::settings::path(&dir),
+            r#"{ "capture": { "redact": false } }"#,
+        )
+        .expect("write");
+
+        let _ = shell.update(Message::SettingsFileChanged);
+
+        assert!(!shell.redact_captures);
+    }
+
+    #[test]
     fn a_capture_writes_its_dump_under_the_data_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut shell = shell_persisting_under(&crate::paths::DataDir::at(tmp.path()));
@@ -8093,6 +8178,10 @@ mod key_routing {
             .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
             .collect();
         assert_eq!(dumps.len(), 1, "one JSON dump: {dumps:?}");
+        assert!(
+            termherd_private_fs::is_private(&tmp.path().join("captures")).expect("stat"),
+            "the captures dir is reachable by others"
+        );
     }
 
     #[test]

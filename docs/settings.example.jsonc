@@ -166,6 +166,15 @@
     "scale": 0.5
   },
 
+  // ── State capture (Ctrl/Cmd+Shift+S) ─────────────────────────────────────
+  // Mask the secrets a capture's terminal text shows (access keys, API
+  // tokens, Bearer headers, private keys) before it is written to
+  // ~/.termherd/captures/. A value that is not true/false keeps it on.
+  // Default: true.
+  "capture": {
+    "redact": true
+  },
+
   // ── MCP live bridge ──────────────────────────────────────────────────────
   // Whether `prompt_in_session` may prompt another *Claude* session (an agent
   // driving an agent). Shell sessions are never gated. A single call can also

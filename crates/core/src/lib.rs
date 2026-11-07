@@ -15,6 +15,7 @@ pub mod open;
 pub mod paths;
 pub mod ports;
 pub mod record;
+pub mod redact;
 pub mod snapshot;
 pub mod title;
 pub mod workspace;

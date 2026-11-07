@@ -12,7 +12,7 @@
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
@@ -114,6 +114,9 @@ fn run(rx: &mpsc::Receiver<RecordMsg>, path: &PathBuf, config: RecordConfig) {
                         Ok(()) => info!(path = %path.display(), "screencast written"),
                         Err(error) => warn!(%error, "could not finalise screencast"),
                     }
+                    if let Some(dir) = path.parent() {
+                        crate::capture::enforce_retention(dir);
+                    }
                 }
                 return;
             }
@@ -135,8 +138,8 @@ struct Session {
 }
 
 impl Session {
-    fn open(path: &PathBuf, tw: u32, th: u32) -> std::io::Result<Self> {
-        let writer = BufWriter::new(File::create(path)?);
+    fn open(path: &Path, tw: u32, th: u32) -> std::io::Result<Self> {
+        let writer = BufWriter::new(termherd_private_fs::create_file(path)?);
         let mut encoder =
             gif::Encoder::new(writer, tw as u16, th as u16, &[]).map_err(std::io::Error::other)?;
         encoder
@@ -283,6 +286,42 @@ fn gap_to_delay_cs(gap: Duration) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_finished_screencast_prunes_the_oldest_capture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oldest = dir.path().join("capture-19700101-000000-000.gif");
+        for n in 0..crate::capture::KEPT_CAPTURES {
+            let name = format!("capture-19700101-000000-{n:03}.gif");
+            std::fs::write(dir.path().join(name), "").expect("an old screencast");
+        }
+        let path = dir.path().join("capture-20010909-014640-000.gif");
+        let (tx, rx) = mpsc::channel();
+        tx.send(RecordMsg::Frame {
+            rgba: vec![0; 2 * 4],
+            width: 2,
+            height: 1,
+            gap: Duration::from_millis(100),
+        })
+        .expect("send frame");
+        tx.send(RecordMsg::Finish).expect("send finish");
+
+        run(&rx, &path, RecordConfig::default());
+
+        assert!(path.exists(), "the new screencast is kept");
+        assert!(!oldest.exists(), "the oldest made room");
+    }
+
+    #[test]
+    fn a_screencast_is_owner_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("capture-20010909-014640-000.gif");
+        Session::open(&path, 2, 1)
+            .expect("open")
+            .finish()
+            .expect("finish");
+        assert!(termherd_private_fs::is_private(&path).expect("stat"));
+    }
 
     #[test]
     fn config_default_budget_and_derived_values() {

@@ -6,7 +6,7 @@
 //! Artefacts land in `~/.termherd/captures/` as `capture-<ts>.json` and
 //! `capture-<ts>.png`, where `<ts>` is a UTC `YYYYMMDD-HHMMSS-mmm` stamp. An AI
 //! assistant reads the latest by picking the highest-stamped pair — the names
-//! sort chronologically.
+//! sort chronologically. The dir keeps the newest [`KEPT_CAPTURES`] stamps.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -64,19 +64,122 @@ pub fn to_json(dump: &WorkspaceSnapshot) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(&SnapshotDto::from(dump))
 }
 
-/// Write the JSON dump to `dir/capture-<stamp>.json`, returning the path
-/// written. The companion PNG shares the stamp ([`png_path`]).
-pub fn write_dump(dir: &Path, stamp: &str, dump: &WorkspaceSnapshot) -> io::Result<PathBuf> {
-    let path = dir.join(format!("capture-{stamp}.json"));
-    let json = to_json(dump).map_err(io::Error::other)?;
-    std::fs::write(&path, json)?;
-    Ok(path)
+/// `dump` with the secrets its terminal text shows masked
+/// ([`termherd_core::redact`]). Only the terminals: the rest of the dump is
+/// termherd's own state, not what a program printed.
+#[must_use]
+pub fn redacted(mut dump: WorkspaceSnapshot) -> WorkspaceSnapshot {
+    for text in dump.terminals.values_mut() {
+        *text = termherd_core::redact::redact(text);
+    }
+    dump
 }
 
-/// The PNG path for a stamp — the rung-1 companion of [`write_dump`]'s JSON.
+/// The kinds of file a capture or a recording writes into the capture dir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Artefact {
+    /// The rung-0 JSON state dump.
+    Dump,
+    /// The rung-1 PNG screenshot, the dump's companion.
+    Screenshot,
+    /// A GIF screencast.
+    Screencast,
+}
+
+impl Artefact {
+    /// Every kind, for whoever must recognise any of them.
+    pub const ALL: [Self; 3] = [Self::Dump, Self::Screenshot, Self::Screencast];
+
+    /// The file extension, without its dot.
+    #[must_use]
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Dump => "json",
+            Self::Screenshot => "png",
+            Self::Screencast => "gif",
+        }
+    }
+}
+
+/// `dir/capture-<stamp>.<ext>`: where the `kind` artefact of a stamp lives.
 #[must_use]
-pub fn png_path(dir: &Path, stamp: &str) -> PathBuf {
-    dir.join(format!("capture-{stamp}.png"))
+pub fn artefact_path(dir: &Path, stamp: &str, kind: Artefact) -> PathBuf {
+    dir.join(format!("capture-{stamp}.{}", kind.extension()))
+}
+
+/// How many captures the capture dir keeps. A capture is every artefact
+/// sharing one stamp — a dump with its screenshot, or a screencast — so the dir
+/// holds at most this many stamps. Fifty covers a long debugging session while
+/// keeping what lingers on disk bounded.
+pub const KEPT_CAPTURES: usize = 50;
+
+/// The stamp of a file named as [`artefact_path`] names one; `None` for any
+/// other name, which the capture dir's pruning must never touch.
+fn stamp_of(name: &str) -> Option<&str> {
+    let (stem, extension) = name.rsplit_once('.')?;
+    let stamp = stem.strip_prefix("capture-")?;
+    let known = Artefact::ALL
+        .iter()
+        .any(|kind| kind.extension() == extension);
+    (known && is_stamp(stamp)).then_some(stamp)
+}
+
+/// Whether `text` is shaped like a [`stamp`]: `YYYYMMDD-HHMMSS-mmm`.
+fn is_stamp(text: &str) -> bool {
+    let mut fields = text.split('-');
+    [8, 6, 3].iter().all(|&width| {
+        fields
+            .next()
+            .is_some_and(|field| field.len() == width && field.bytes().all(|b| b.is_ascii_digit()))
+    }) && fields.next().is_none()
+}
+
+/// Delete from `dir` every capture but the newest `keep`, and only files
+/// termherd named. Returns how many files were removed.
+pub fn prune(dir: &Path, keep: usize) -> io::Result<usize> {
+    let mut captures: Vec<(String, PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        if let Some(stamp) = name.to_str().and_then(stamp_of) {
+            captures.push((stamp.to_owned(), entry.path()));
+        }
+    }
+    let mut stamps: Vec<&str> = captures.iter().map(|(stamp, _)| stamp.as_str()).collect();
+    stamps.sort_unstable();
+    stamps.dedup();
+    let doomed = &stamps[..stamps.len().saturating_sub(keep)];
+    let mut removed = 0;
+    for (stamp, path) in &captures {
+        if doomed.binary_search(&stamp.as_str()).is_ok() {
+            std::fs::remove_file(path)?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// Trim `dir` back to [`KEPT_CAPTURES`] after a write. Logged, never fatal: a
+/// capture already written must not be reported as failed because an old one
+/// could not be removed.
+pub fn enforce_retention(dir: &Path) {
+    match prune(dir, KEPT_CAPTURES) {
+        Ok(0) => {}
+        Ok(removed) => tracing::info!(removed, "old captures pruned"),
+        Err(error) => tracing::warn!(%error, "could not prune old captures"),
+    }
+}
+
+/// Write the JSON dump to `dir/capture-<stamp>.json`, returning the path
+/// written. The companion PNG shares the stamp.
+pub fn write_dump(dir: &Path, stamp: &str, dump: &WorkspaceSnapshot) -> io::Result<PathBuf> {
+    let path = artefact_path(dir, stamp, Artefact::Dump);
+    let json = to_json(dump).map_err(io::Error::other)?;
+    termherd_private_fs::write_file(&path, json)?;
+    Ok(path)
 }
 
 /// Write an iced [`Screenshot`]'s RGBA pixels to a PNG at `path`, full size —
@@ -89,7 +192,7 @@ pub fn write_png(path: &Path, screenshot: &Screenshot) -> io::Result<()> {
         screenshot.size.width,
         screenshot.size.height,
     )?;
-    std::fs::write(path, bytes)
+    termherd_private_fs::write_file(path, bytes)
 }
 
 #[cfg(test)]
@@ -213,6 +316,29 @@ mod tests {
     }
 
     #[test]
+    fn the_dump_and_the_screenshot_are_owner_only() {
+        // The dump holds a whole terminal's text, the PNG a picture of it:
+        // neither may be readable by another user of the machine.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dump = write_dump(dir.path(), "20010909-014640-000", &dump()).expect("write");
+        let png = artefact_path(dir.path(), "20010909-014640-000", Artefact::Screenshot);
+        let screenshot = Screenshot::new(
+            crate::image::testing::numbered_frame(2, 1),
+            iced::Size::new(2, 1),
+            1.0,
+        );
+        write_png(&png, &screenshot).expect("write png");
+
+        for path in [dump, png] {
+            assert!(
+                termherd_private_fs::is_private(&path).expect("stat"),
+                "{} is readable by others",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
     fn write_png_round_trips_dimensions() {
         let screenshot = Screenshot::new(
             crate::image::testing::numbered_frame(2, 1),
@@ -226,5 +352,97 @@ mod tests {
         let decoder = png::Decoder::new(std::fs::File::open(&path).expect("open"));
         let reader = decoder.read_info().expect("read info");
         assert_eq!((reader.info().width, reader.info().height), (2, 1));
+    }
+
+    // --- retention ---------------------------------------------------------
+
+    #[test]
+    fn only_the_names_termherd_writes_carry_a_stamp() {
+        for kind in Artefact::ALL {
+            let path = artefact_path(Path::new("/c"), "20010909-014640-000", kind);
+            let name = path.file_name().and_then(|n| n.to_str()).expect("a name");
+            assert_eq!(stamp_of(name), Some("20010909-014640-000"), "{name}");
+        }
+        for foreign in [
+            "notes.md",
+            "capture-20010909-014640-000.txt",
+            "capture-20010909-014640-000.json.bak",
+            "capture-20010909-014640-000",
+            "Capture-20010909-014640-000.json",
+            "capture-2001090-014640-000.json",
+            "capture-20010909-014640-0000.json",
+            "capture-2001090a-014640-000.json",
+            "capture-20010909_014640-000.json",
+            "my-capture-20010909-014640-000.json",
+            "capture-20010909-014640-000-copy.json",
+            "capture-２0010909-014640-000.json",
+        ] {
+            assert_eq!(stamp_of(foreign), None, "{foreign}");
+        }
+    }
+
+    /// A stamp `n` seconds after a fixed instant, so stamps sort by `n`.
+    fn nth_stamp(n: u64) -> String {
+        stamp(UNIX_EPOCH + Duration::from_secs(1_000_000_000 + n))
+    }
+
+    fn touch(dir: &Path, stamp: &str, kind: Artefact) -> PathBuf {
+        let path = artefact_path(dir, stamp, kind);
+        std::fs::write(&path, "").expect("write");
+        path
+    }
+
+    #[test]
+    fn pruning_keeps_the_newest_captures_counting_a_dump_and_its_screenshot_as_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oldest = [
+            touch(dir.path(), &nth_stamp(0), Artefact::Dump),
+            touch(dir.path(), &nth_stamp(0), Artefact::Screenshot),
+        ];
+        let kept = [
+            touch(dir.path(), &nth_stamp(1), Artefact::Screencast),
+            touch(dir.path(), &nth_stamp(2), Artefact::Dump),
+            touch(dir.path(), &nth_stamp(2), Artefact::Screenshot),
+        ];
+
+        let removed = prune(dir.path(), 2).expect("prune");
+
+        assert_eq!(removed, 2);
+        for path in oldest {
+            assert!(!path.exists(), "{} survived", path.display());
+        }
+        for path in kept {
+            assert!(path.exists(), "{} was removed", path.display());
+        }
+    }
+
+    #[test]
+    fn pruning_never_touches_what_termherd_did_not_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let notes = dir.path().join("notes.md");
+        std::fs::write(&notes, "mine").expect("write");
+        let renamed = dir.path().join("capture-19700101-000000-000.json.bak");
+        std::fs::write(&renamed, "mine").expect("write");
+        let lookalike_dir = artefact_path(dir.path(), &nth_stamp(0), Artefact::Dump);
+        std::fs::create_dir(&lookalike_dir).expect("mkdir");
+        let newest = touch(dir.path(), &nth_stamp(5), Artefact::Dump);
+
+        let removed = prune(dir.path(), 1).expect("prune");
+
+        assert_eq!(removed, 0);
+        for path in [notes, renamed, lookalike_dir, newest] {
+            assert!(path.exists(), "{} was removed", path.display());
+        }
+    }
+
+    #[test]
+    fn pruning_a_dir_under_its_cap_removes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let paths: Vec<_> = (0..3)
+            .map(|n| touch(dir.path(), &nth_stamp(n), Artefact::Dump))
+            .collect();
+
+        assert_eq!(prune(dir.path(), 3).expect("prune"), 0);
+        assert!(paths.iter().all(|path| path.exists()));
     }
 }

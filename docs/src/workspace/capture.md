@@ -20,7 +20,8 @@ resolved config, the sidebar, every tab with its panes (each pane's stable
 handle, kind, cwd, status, and the `pid`, `peer_name` and `session_id` of
 the Claude running in it, all three `null` when none is, and the `color`
 it wears — its Claude's `/color`, or the colour picked for a shell's tab),
-and the focused terminal's visible text.
+and the focused terminal's visible text, its secrets masked
+([below](#what-a-capture-keeps-private)).
 
 It is **the same model** the MCP [`snapshot`](../mcp/live-bridge.md) tool
 reports, taken under a fixed full filter — one model, two readers, so a field
@@ -48,6 +49,42 @@ fps, 30 s, 0.5× scale**, all configurable under `record` in
 
 Motion is what a still cannot carry: a gesture that half-works, a flicker, a
 focus that lands on the wrong pane.
+
+## What a capture keeps private
+
+A capture holds a whole terminal's text, and a terminal shows secrets: a
+pasted token, an `env` listing, a `.env` file someone printed.
+
+- **Only you can read it.** The directory is `0700` and every file in it
+  `0600`, on macOS and Linux; a directory an older build left open is
+  tightened at the next capture. On Windows the files inherit your profile's
+  permissions.
+- **Secrets are masked in the dump.** Before the JSON is written, the
+  terminal text has each of these replaced by `[redacted]`:
+
+  | Shape | Example | Kept |
+  | --- | --- | --- |
+  | AWS access key id | `AKIA…`, `ASIA…` | — |
+  | AWS secret assignment | `AWS_SECRET_ACCESS_KEY=…`, any `AWS_` name holding `KEY`, `SECRET` or `TOKEN` | the name |
+  | API key | `sk-…` (OpenAI, Anthropic) | — |
+  | GitHub token | `ghp_…`, `gho_…`, `ghu_…`, `ghs_…`, `ghr_…`, `github_pat_…` | — |
+  | HTTP bearer token | `Authorization: Bearer …` | `Bearer` |
+  | PEM private key | `-----BEGIN … PRIVATE KEY-----` block | the `BEGIN` and `END` lines |
+
+  Turn it off with `"capture": { "redact": false }` in
+  [`settings.json`](../reference/settings.md); an MCP client cannot change
+  it. The screenshot and the screencast are pictures and are **not**
+  masked: a secret on screen is in them.
+
+  Only these shapes are recognised. A password or a token in some other
+  format is written as-is: there is no guess based on how random a string
+  looks, because hashes, UUIDs and base64 output would be masked with it.
+- **Only the newest 50 captures are kept.** After each capture or
+  screencast, the oldest ones beyond 50 are deleted; a JSON dump and its
+  screenshot count as one. Only files named like TermHerd's own
+  (`capture-YYYYMMDD-HHMMSS-mmm.json`, `.png` or `.gif`) are ever deleted:
+  anything else you put in the directory, or a capture you rename, stays.
+  Copy a capture out of the directory to keep it.
 
 ## How it stays honest
 

@@ -3909,6 +3909,7 @@ dependencies = [
  "termherd-claude",
  "termherd-core",
  "termherd-mcp",
+ "termherd-private-fs",
  "termherd-pty",
  "termherd-scan",
  "thiserror 2.0.18",
@@ -3946,6 +3947,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "termherd-private-fs"
+version = "0.0.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "termherd-pty"
 version = "0.0.0"
 dependencies = [
@@ -3955,6 +3963,7 @@ dependencies = [
  "tempfile",
  "termherd-claude",
  "termherd-core",
+ "termherd-private-fs",
  "tracing",
 ]
 

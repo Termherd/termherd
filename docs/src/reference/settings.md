@@ -39,7 +39,7 @@ What a live change reaches:
 | Setting | Applies to |
 | --- | --- |
 | `theme`, `terminal.colors` | the chrome and **every open terminal**, at once |
-| `keys`, `close`, `sidebar`, `open`, `mcp`, `terminal.copy_on_select`, `terminal.paste_on_right_click`, `terminal.option_as_meta` | the next keypress, click or call |
+| `keys`, `close`, `sidebar`, `open`, `mcp`, `capture`, `terminal.copy_on_select`, `terminal.paste_on_right_click`, `terminal.option_as_meta` | the next keypress, click or call |
 | `terminal.font_size` | every terminal, at once (your zoom steps are kept on top) |
 | `shell` | the **next session** you open — a running one keeps its program |
 | `record` | the **next recording** — one in progress keeps its budget |
@@ -157,6 +157,17 @@ Values clamp: fps 1–60, `max_seconds` 1–600, `scale` 0.1–1.0.
 "record": { "fps": 8, "max_seconds": 30, "scale": 0.5 }
 ```
 
+### `capture`
+
+Whether a [state capture](../workspace/capture.md) masks the secrets its
+terminal text shows — access keys, API tokens, `Bearer` headers, private
+keys. On by default; a value that is not `true` or `false` keeps it on.
+Turn it off only to debug a capture that masked too much.
+
+```json
+"capture": { "redact": true }
+```
+
 ### `mcp`
 
 Whether the live bridge's `prompt_in_session` may prompt another **Claude**
@@ -224,7 +235,7 @@ The eight ids it covers today: `theme`, `shell.program`, `shell.args`,
 `terminal.colors.palette`. Two of them — `shell.program` and `shell.args` —
 are **read-only** over MCP: they name what TermHerd executes at the next
 launch, so an agent may read them but never set them. The `close`, `sidebar`,
-`record`, `open`, `mcp`, `keys`, `terminal.font_size`,
+`record`, `capture`, `open`, `mcp`, `keys`, `terminal.font_size`,
 `terminal.copy_on_select`, `terminal.paste_on_right_click` and
 `terminal.option_as_meta` blocks are file-only for now; `keys` is published
 as a read-only resource.
@@ -248,6 +259,7 @@ written**, like any other edit to the file.
   },
   "sidebar": { "session_limit": 0 },
   "record": { "fps": 10, "max_seconds": 20, "scale": 0.5 },
+  "capture": { "redact": true },
   "open": { "command": "code -g {path}:{line}:{col}" },
   "mcp": { "allow_claude_nesting": false },
   "keys": {
