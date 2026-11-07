@@ -17,15 +17,21 @@ pub const MOD_SHIFT: u8 = 4;
 /// Modifier bit for the Cmd / Super / logo key.
 pub const MOD_CMD: u8 = 8;
 
-/// Tabs reachable from the number row: ⌘1…⌘9 / Ctrl+1…Ctrl+9. The
+/// Tabs reachable from the number row: ⌘1…⌘9 / Alt+1…Alt+9. The
 /// digit is 1-based for the user; the tab index it carries is 0-based.
 pub const NUMBER_ROW_TABS: usize = 9;
 
-/// The platform's primary command modifier — ⌘ on macOS, Ctrl elsewhere. This
-/// is the modifier the number-row tab jumps bind to by default.
+/// The platform's primary command modifier — ⌘ on macOS, Ctrl elsewhere.
 #[must_use]
 pub const fn primary_mod() -> u8 {
     Platform::current().primary_mod()
+}
+
+/// The modifier the number-row tab jumps bind to by default on the platform
+/// this build runs on.
+#[must_use]
+pub const fn tab_jump_mod() -> u8 {
+    Platform::current().tab_jump_mod()
 }
 
 /// A key plus its modifiers — the left-hand side of a binding. `key` is a
@@ -167,9 +173,9 @@ pub enum Action {
     ZoomOut,
     /// Restore the terminal font to its configured base size.
     ZoomReset,
-    /// Jump straight to the tab at this zero-based index. Bound to
-    /// the platform's primary modifier and the number row — ⌘1…⌘9 on macOS,
-    /// Ctrl+1…Ctrl+9 elsewhere — where the user-facing digit is 1-based.
+    /// Jump straight to the tab at this zero-based index. Bound to the
+    /// number row — ⌘1…⌘9 on macOS, Alt+1…Alt+9 elsewhere — where the
+    /// user-facing digit is 1-based.
     ActivateTab(usize),
 }
 
@@ -179,9 +185,10 @@ pub enum Action {
 /// means no built-in binding yet.
 ///
 /// `off_mac` replaces `chords` on Windows and Linux; `windows` replaces both on
-/// Windows. Off macOS a default must not take a bare Ctrl+letter, which is a
-/// terminal control key: those actions take Ctrl+Shift+letter, which a legacy
-/// program reads as the same byte.
+/// Windows. Off macOS a default must not take a bare Ctrl chord a shell's line
+/// editor reads, short of a recorded `LINE_EDITOR_EXCEPTIONS` entry: those
+/// actions take Ctrl+Shift+letter, which a legacy program reads as the same
+/// byte.
 struct ActionDef {
     action: Action,
     name: &'static str,
@@ -305,9 +312,32 @@ const ACTIONS: &[ActionDef] = &[
         "zoom-in",
         &["mod+=", "mod+shift+=", "mod+plus"],
     ),
+    // Off macOS zoom keeps bare Ctrl, as GNOME Terminal, Konsole and Windows
+    // Terminal do; see `LINE_EDITOR_EXCEPTIONS` for Ctrl+-.
     ActionDef::new(Action::ZoomOut, "zoom-out", &["mod+-"]),
     ActionDef::new(Action::ZoomReset, "zoom-reset", &["mod+0"]),
 ];
+
+/// The off-macOS defaults that take a bare Ctrl chord a shell's line editor
+/// reads, each kept on purpose, with the reason. Every other such chord is
+/// left to the program in the pane, and a test holds both halves.
+#[cfg(test)]
+const LINE_EDITOR_EXCEPTIONS: &[(Platform, &str, &str)] = &[
+    (
+        Platform::Windows,
+        "ctrl+v",
+        "paste: Windows Terminal pastes on it, and Claude Code on Windows \
+         pastes an image on Alt+V instead",
+    ),
+    (Platform::Windows, "ctrl+-", ZOOM_OUT_EXCEPTION),
+    (Platform::Linux, "ctrl+-", ZOOM_OUT_EXCEPTION),
+];
+
+#[cfg(test)]
+const ZOOM_OUT_EXCEPTION: &str = "zoom-out: GNOME Terminal, Konsole and Windows Terminal zoom on \
+     bare Ctrl; the PTY encoder sends Ctrl+- as a plain `-`, so no control \
+     byte is lost; and Ctrl+Shift+- would leave AZERTY (PC), with `-` on the \
+     6 key, no way to zoom out";
 
 impl Action {
     /// The action for a config key name (kebab-case), or `None` if unknown.
@@ -446,6 +476,16 @@ impl Platform {
         }
     }
 
+    /// Off macOS, GNOME Terminal's and Konsole's Alt: bare Ctrl+2…8 are the
+    /// control bytes xterm folds onto the C0 family. The cost is readline's
+    /// Meta-digit argument, which no longer reaches the shell from the row.
+    const fn tab_jump_mod(self) -> u8 {
+        match self {
+            Self::MacOs => MOD_CMD,
+            Self::Windows | Self::Linux => MOD_ALT,
+        }
+    }
+
     /// The primary modifier as chord syntax spells it: `cmd` or `ctrl`.
     const fn primary_name(self) -> &'static str {
         match self {
@@ -472,11 +512,11 @@ pub fn default_bindings(platform: Platform) -> Vec<(KeyChord, Action)> {
                 .map(move |chord| (chord, def.action))
         })
         .collect();
-    // Jump straight to the Nth tab: ⌘1…⌘9 / Ctrl+1…Ctrl+9. The digit is
+    // Jump straight to the Nth tab: ⌘1…⌘9 / Alt+1…Alt+9. The digit is
     // 1-based for the user; the action carries the 0-based index.
     pairs.extend((1..=NUMBER_ROW_TABS).map(|n| {
         (
-            KeyChord::new(n.to_string(), platform.primary_mod()),
+            KeyChord::new(n.to_string(), platform.tab_jump_mod()),
             Action::ActivateTab(n - 1),
         )
     }));
@@ -932,15 +972,103 @@ mod tests {
     }
 
     #[test]
+    fn tab_jumps_take_cmd_on_macos_and_alt_elsewhere() {
+        for (platform, tab_mod) in [
+            (Platform::MacOs, MOD_CMD),
+            (Platform::Windows, MOD_ALT),
+            (Platform::Linux, MOD_ALT),
+        ] {
+            let map = Keymap::defaults_for(platform);
+            for n in 1..=NUMBER_ROW_TABS {
+                let digit = n.to_string();
+                assert_eq!(
+                    map.lookup(&KeyChord::new(digit.clone(), tab_mod)),
+                    Some(Action::ActivateTab(n - 1)),
+                    "tab {n} on {platform:?}"
+                );
+                if tab_mod != MOD_CMD {
+                    assert_eq!(
+                        map.lookup(&KeyChord::new(digit, MOD_CTRL)),
+                        None,
+                        "bare Ctrl+{n} stays the program's on {platform:?}"
+                    );
+                }
+            }
+            // Zero stays zoom-reset on the primary modifier, not a tab jump.
+            assert_eq!(
+                map.lookup(&KeyChord::new("0", platform.primary_mod())),
+                Some(Action::ZoomReset),
+                "zoom-reset on {platform:?}"
+            );
+        }
+    }
+
+    /// Keys whose bare-Ctrl chord a shell's line editor reads. Source: GNU
+    /// Readline's default emacs keymap (`emacs_keymap.c`), whose control
+    /// bindings zsh's `bindkey -e` mirrors: C-@, C-a…C-z, C-[, C-\, C-], C-_.
+    /// Then the keys xterm folds onto those bytes — Space and 2 (C-@), 3 (C-[),
+    /// 4 (C-\), 5 (C-]), 6 (C-^), 7 and `/` (C-_), 8 (DEL) — and `-`, which
+    /// shares its key with `_` on US layouts. Last, the arrows: Debian's
+    /// `/etc/inputrc` binds Ctrl+Left/Right to word motion, and full-screen
+    /// programs read the modified arrows.
+    const LINE_EDITOR_CTRL_KEYS: &[&str] = &[
+        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r",
+        "s", "t", "u", "v", "w", "x", "y", "z", "@", "[", "\\", "]", "^", "_", "space", "2", "3",
+        "4", "5", "6", "7", "8", "/", "-", "left", "right", "up", "down",
+    ];
+
+    /// The recorded reason `chord` may stay bound on `platform`, if any.
+    fn line_editor_exception(platform: Platform, chord: &KeyChord) -> Option<&'static str> {
+        LINE_EDITOR_EXCEPTIONS
+            .iter()
+            .find(|(on, spec, _)| *on == platform && KeyChord::parse(spec).as_ref() == Ok(chord))
+            .map(|(_, _, reason)| *reason)
+    }
+
+    #[test]
+    fn off_mac_defaults_leave_the_line_editors_ctrl_keys_to_the_program() {
+        // Over every built-in binding, not the action table alone: the
+        // number row is added outside it.
+        for platform in [Platform::Windows, Platform::Linux] {
+            for (chord, action) in default_bindings(platform) {
+                let line_editor_key =
+                    chord.mods == MOD_CTRL && LINE_EDITOR_CTRL_KEYS.contains(&chord.key.as_str());
+                assert!(
+                    !line_editor_key || line_editor_exception(platform, &chord).is_some(),
+                    "{action:?} takes bare {chord:?} from the shell on {platform:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_line_editor_exception_is_still_a_default_on_a_line_editor_key() {
+        // A stale exception would silently license the next binding there.
+        for (platform, spec, reason) in LINE_EDITOR_EXCEPTIONS {
+            let chord = KeyChord::parse(spec).expect("exception specs parse");
+            assert!(
+                chord.mods == MOD_CTRL && LINE_EDITOR_CTRL_KEYS.contains(&chord.key.as_str()),
+                "{spec} on {platform:?} needs no exception"
+            );
+            assert!(
+                default_bindings(*platform)
+                    .iter()
+                    .any(|(bound, _)| *bound == chord),
+                "{spec} on {platform:?} is no longer a default ({reason})"
+            );
+        }
+    }
+
+    #[test]
     fn defaults_bind_the_number_row_to_tab_jumps() {
         let map = Keymap::defaults();
         // 1-based digit, 0-based tab index.
         assert_eq!(
-            map.lookup(&KeyChord::new("1", primary_mod())),
+            map.lookup(&KeyChord::new("1", tab_jump_mod())),
             Some(Action::ActivateTab(0))
         );
         assert_eq!(
-            map.lookup(&KeyChord::new("9", primary_mod())),
+            map.lookup(&KeyChord::new("9", tab_jump_mod())),
             Some(Action::ActivateTab(8))
         );
         // The row stops at nine — zero belongs to zoom-reset, not a
@@ -968,7 +1096,7 @@ mod tests {
         fn every_number_row_digit_binds_to_its_zero_based_tab(n in 1usize..=9) {
             let map = Keymap::defaults();
             proptest::prop_assert_eq!(
-                map.lookup(&KeyChord::new(n.to_string(), primary_mod())),
+                map.lookup(&KeyChord::new(n.to_string(), tab_jump_mod())),
                 Some(Action::ActivateTab(n - 1))
             );
         }

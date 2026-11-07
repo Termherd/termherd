@@ -23,7 +23,7 @@ terminal, or many, split vertically and horizontally.
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |
 | Next / previous tab | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | same |
-| Jump to tab 1–9 | <kbd>Cmd</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> |
+| Jump to tab 1–9 | <kbd>Cmd</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> |
 | New shell here | <kbd>Cmd</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 | New Claude session here | <kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> |
 | Reopen the tab you closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
@@ -33,7 +33,7 @@ terminal, or many, split vertically and horizontally.
 
 **Jump-to-tab is matched by physical key position**, not by the character the
 key produces. On AZERTY and QWERTZ, where the number row produces `&`, `é`, …
-without Shift, <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>1</kbd> still lands on tab 1.
+without Shift, <kbd>Cmd</kbd>/<kbd>Alt</kbd>+<kbd>1</kbd> still lands on tab 1.
 
 Each tab carries its own **activity dot** (see
 [Status and attention](./status.md)), a **kind mark** — `✳` for a Claude
