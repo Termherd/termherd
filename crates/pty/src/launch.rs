@@ -315,9 +315,168 @@ pub(crate) fn apply_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("TERM_PROGRAM_VERSION", TERM_PROGRAM_VERSION);
 }
 
+/// The variables a Claude Code session exports to every process it starts, each
+/// naming *that* session: its id, its pid, its messaging socket and token, the
+/// mark that a process runs inside it. A termherd started from such a process
+/// would otherwise hand them to every PTY, and a Claude started there takes
+/// itself for part of the parent session — it then wrote no
+/// `~/.claude/sessions/<pid>.json`, which is how termherd names a session.
+///
+/// A list, not a `CLAUDE` prefix: the same namespace holds what a user
+/// configures on purpose (`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, …),
+/// which must keep reaching the sessions termherd starts.
+pub(crate) const INHERITED_SESSION_VARS: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+    "AI_AGENT",
+];
+
+/// Remove every [`INHERITED_SESSION_VARS`] entry from what `cmd` will spawn
+/// with, leaving the rest of the environment as inherited.
+///
+/// Removed by name rather than by filtering what the builder lists: its
+/// listing skips a value that is not UTF-8, and a removal by name also matches
+/// Windows' case-insensitive keys.
+pub(crate) fn strip_inherited_session_env(cmd: &mut CommandBuilder) {
+    for name in INHERITED_SESSION_VARS {
+        cmd.env_remove(name);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every variable `cmd` will spawn with, as name/value pairs.
+    fn spawn_env(cmd: &CommandBuilder) -> Vec<(String, String)> {
+        cmd.iter_full_env_as_str()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect()
+    }
+
+    /// Seen exported by a Claude Code 2.1.319 Bash tool. Spelled out here
+    /// rather than read from [`INHERITED_SESSION_VARS`], so an entry dropped
+    /// from the list fails a test instead of quietly shrinking it.
+    const SEEN_FROM_A_CLAUDE_SESSION: &[&str] = &[
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
+        "AI_AGENT",
+    ];
+
+    /// What a user sets on purpose, in the same namespace.
+    const USER_CONFIGURATION: &[&str] = &[
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_TMPDIR",
+        "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
+        "CLAUDE_CODE_EFFORT_LEVEL",
+        "ANTHROPIC_API_KEY",
+        "PATH",
+        "HOME",
+    ];
+
+    fn is_inherited_session_var(name: &str) -> bool {
+        INHERITED_SESSION_VARS.contains(&name)
+    }
+
+    #[test]
+    fn every_variable_naming_the_parent_session_is_inherited_session_state() {
+        for name in SEEN_FROM_A_CLAUDE_SESSION {
+            assert!(is_inherited_session_var(name), "{name} must be stripped");
+        }
+    }
+
+    #[test]
+    fn user_configuration_is_not_session_state() {
+        for name in USER_CONFIGURATION {
+            assert!(!is_inherited_session_var(name), "{name} must be kept");
+        }
+    }
+
+    #[test]
+    fn a_variable_merely_sharing_a_session_name_prefix_is_kept() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env("CLAUDECODE_EXTRA", "kept");
+        cmd.env("CLAUDE_PID_FILE", "kept");
+        strip_inherited_session_env(&mut cmd);
+        assert_eq!(cmd.get_env("CLAUDECODE_EXTRA"), Some("kept".as_ref()));
+        assert_eq!(cmd.get_env("CLAUDE_PID_FILE"), Some("kept".as_ref()));
+    }
+
+    #[test]
+    fn stripping_removes_the_parent_session_and_keeps_the_user_configuration() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        for name in SEEN_FROM_A_CLAUDE_SESSION.iter().chain(USER_CONFIGURATION) {
+            cmd.env(name, "seeded");
+        }
+        strip_inherited_session_env(&mut cmd);
+        let env = spawn_env(&cmd);
+        for name in SEEN_FROM_A_CLAUDE_SESSION {
+            assert!(
+                env.iter().all(|(key, _)| key != name),
+                "{name} reached the spawn"
+            );
+        }
+        for name in USER_CONFIGURATION {
+            assert!(
+                env.contains(&((*name).to_owned(), "seeded".to_owned())),
+                "{name} was lost"
+            );
+        }
+    }
+
+    mod stripping {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        proptest! {
+            /// Whatever else the environment holds, stripping takes away the
+            /// session variables and nothing more.
+            #[test]
+            fn removes_exactly_the_session_variables(
+                others in proptest::collection::btree_map(
+                    "[A-Z][A-Z0-9_]{0,15}", "[ -~]{0,12}", 0..8,
+                ),
+                seeded in proptest::sample::subsequence(SEEN_FROM_A_CLAUDE_SESSION, 0..=11),
+            ) {
+                let mut cmd = CommandBuilder::new("/bin/sh");
+                for (name, value) in &others {
+                    cmd.env(name, value);
+                }
+                for name in &seeded {
+                    cmd.env(name, "seeded");
+                }
+                let before = spawn_env(&cmd);
+                strip_inherited_session_env(&mut cmd);
+
+                let expected: Vec<_> = before
+                    .into_iter()
+                    .filter(|(name, _)| !is_inherited_session_var(name))
+                    .collect();
+                prop_assert_eq!(spawn_env(&cmd), expected);
+                for name in &seeded {
+                    prop_assert!(cmd.get_env(name).is_none(), "{} survived", name);
+                }
+            }
+        }
+    }
 
     /// The three flags a fully-wired Claude launch carries, as paths.
     fn mcp() -> &'static Path {

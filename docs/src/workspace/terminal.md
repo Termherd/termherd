@@ -190,3 +190,15 @@ directory it was launched in forever. That live `cwd` is what
 opens a new shell in, what path resolution tries first, and what `snapshot`
 reports over
 [MCP](../mcp/index.md).
+
+## The environment a pane starts with
+
+A pane inherits TermHerd's environment, with two kinds of change: the
+terminal identity Claude's status stream needs (see
+[Status](status.md)), and nothing of a Claude Code session TermHerd itself
+was started from. Started from a Claude Code shell, TermHerd would otherwise
+pass that session's `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
+messaging socket and the like to every pane, and a Claude launched there took
+itself for part of the parent session and could not be named. Variables you
+set yourself, such as `CLAUDE_CONFIG_DIR` or an API key, still reach every
+pane.

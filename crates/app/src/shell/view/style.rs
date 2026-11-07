@@ -31,15 +31,24 @@ pub(super) fn kind_icon<'a>(kind: SessionKind) -> Text<'a> {
 /// the sidebar's per-session dots so both stay in sync. The colour is the only
 /// place the UI shows a status; the word form an agent reads lives in
 /// [`crate::snapshot_dto`], not on the screen.
-pub(super) fn status_dot<'a>(status: SessionStatus) -> Text<'a> {
+pub(super) fn status_dot<'a>(status: SessionStatus, backdrop: Backdrop) -> Text<'a> {
     text("●")
         .size(9)
         .style(move |theme: &iced::Theme| text::Style {
-            color: Some(status_color(status, theme.extended_palette())),
+            color: Some(status_color(status, theme.extended_palette(), backdrop)),
         })
 }
 
-fn status_color(status: SessionStatus, palette: &Extended) -> Color {
+/// What a mark is drawn on, which decides the shade that reads there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Backdrop {
+    /// The window's own surfaces, the [`mark_surfaces`].
+    Chrome,
+    /// The active tab chip's fill, [`active_chip_fill`].
+    ActiveChip,
+}
+
+fn status_color(status: SessionStatus, palette: &Extended, backdrop: Backdrop) -> Color {
     let hue = match status {
         SessionStatus::Starting => Color::from_rgb(0.55, 0.55, 0.6),
         SessionStatus::Busy => Color::from_rgb(0.95, 0.7, 0.2),
@@ -47,7 +56,24 @@ fn status_color(status: SessionStatus, palette: &Extended) -> Color {
         SessionStatus::Attention => Color::from_rgb(0.95, 0.35, 0.35),
         SessionStatus::Exited => Color::from_rgb(0.5, 0.5, 0.5),
     };
-    on_surface(hue, palette)
+    match backdrop {
+        Backdrop::Chrome => on_surface(hue, palette),
+        Backdrop::ActiveChip => on_fill(hue, active_chip_fill(palette)),
+    }
+}
+
+/// `hue` shaded to read on `fill`, pushed toward whichever of white and black
+/// contrasts more with it. One of the two always clears [`MARK_FLOOR`] — the
+/// better of them is at least 4.58:1 on any colour — so the push never runs
+/// out. A fill has no theme-wide tuning to keep, unlike [`on_surface`].
+fn on_fill(hue: Color, fill: Color) -> Color {
+    let fill_luminance = luminance(fill);
+    let away = if contrast_ratio(1.0, fill_luminance) >= contrast_ratio(0.0, fill_luminance) {
+        Color::WHITE
+    } else {
+        Color::BLACK
+    };
+    shade_until_it_reads(hue, away, &[fill])
 }
 
 /// The hues are tuned for a dark surface. The fixed light-theme darkening
@@ -60,7 +86,13 @@ fn on_surface(hue: Color, palette: &Extended) -> Color {
     } else {
         (mix(hue, Color::BLACK, LIGHT_SURFACE_DARKEN), Color::BLACK)
     };
-    let surfaces = mark_surfaces(palette).map(luminance);
+    shade_until_it_reads(start, away, &mark_surfaces(palette))
+}
+
+/// The first shade on the way from `start` to `away` that clears
+/// [`MARK_FLOOR`] on every one of `surfaces`, else `away` itself.
+fn shade_until_it_reads(start: Color, away: Color, surfaces: &[Color]) -> Color {
+    let surfaces: Vec<f32> = surfaces.iter().copied().map(luminance).collect();
     (0..=SHADE_STEPS)
         .map(|step| mix(start, away, f32::from(step) / f32::from(SHADE_STEPS)))
         .find(|shade| {
@@ -72,8 +104,13 @@ fn on_surface(hue: Color, palette: &Extended) -> Color {
         .unwrap_or(away)
 }
 
-/// The backgrounds a mark must read on. Not the active tab chip's fill: its
-/// status dot is unshaded against it.
+/// The active tab chip's fill.
+pub(super) fn active_chip_fill(palette: &Extended) -> Color {
+    palette.primary.base.color
+}
+
+/// The window surfaces a mark must read on. The active tab chip's fill is a
+/// backdrop of its own ([`Backdrop::ActiveChip`]): no one shade suits both.
 fn mark_surfaces(palette: &Extended) -> [Color; 2] {
     [palette.background.base.color, palette.background.weak.color]
 }
@@ -242,6 +279,9 @@ mod tests {
     use super::*;
     use crate::settings::ThemeChoice;
 
+    /// Busy, the hue both cases in the report were measured with.
+    const BUSY: SessionStatus = SessionStatus::Busy;
+
     const ALL: [SessionStatus; 5] = [
         SessionStatus::Starting,
         SessionStatus::Busy,
@@ -272,11 +312,53 @@ mod tests {
             let palette = theme.extended_palette();
             for surface in mark_surfaces(palette) {
                 for status in ALL {
-                    let ratio = contrast(status_color(status, palette), surface);
+                    let ratio = contrast(status_color(status, palette, Backdrop::Chrome), surface);
                     assert!(ratio >= MARK_FLOOR, "{status:?} on {theme}: {ratio:.2}");
                 }
             }
         }
+    }
+
+    #[test]
+    fn every_status_dot_reads_on_every_themes_active_chip() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            let fill = active_chip_fill(palette);
+            for status in ALL {
+                let dot = status_color(status, palette, Backdrop::ActiveChip);
+                let ratio = contrast(dot, fill);
+                assert!(
+                    ratio >= MARK_FLOOR,
+                    "{status:?} on {theme}'s chip: {ratio:.2}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_reported_chips_now_read() {
+        // The two rows the report measured: about 2.5:1 and 1.3:1 before.
+        for theme in [iced::Theme::Dark, iced::Theme::Dracula] {
+            let palette = theme.extended_palette();
+            let fill = active_chip_fill(palette);
+            let chrome = status_color(BUSY, palette, Backdrop::Chrome);
+            assert!(
+                contrast(chrome, fill) < MARK_FLOOR,
+                "the chrome shade must fail on {theme}'s chip, or this proves nothing"
+            );
+            let dot = status_color(BUSY, palette, Backdrop::ActiveChip);
+            assert!(contrast(dot, fill) >= MARK_FLOOR, "{theme}");
+        }
+    }
+
+    #[test]
+    fn a_chip_dot_is_pushed_toward_the_extreme_that_contrasts_with_the_fill() {
+        // Dark's chip is a deep blue, Dracula's a pale violet.
+        let dark = iced::Theme::Dark.extended_palette();
+        let dracula = iced::Theme::Dracula.extended_palette();
+        let hue = luminance(Color::from_rgb(0.95, 0.7, 0.2));
+        assert!(luminance(status_color(BUSY, dark, Backdrop::ActiveChip)) > hue);
+        assert!(luminance(status_color(BUSY, dracula, Backdrop::ActiveChip)) < hue);
     }
 
     #[test]
@@ -369,8 +451,8 @@ mod tests {
             iced::Theme::Light.extended_palette(),
         );
         for status in ALL {
-            let on_dark = status_color(status, dark);
-            let on_light = status_color(status, light);
+            let on_dark = status_color(status, dark, Backdrop::Chrome);
+            let on_light = status_color(status, light, Backdrop::Chrome);
             assert!(
                 luminance(on_light) < luminance(on_dark),
                 "{status:?} darkens"
