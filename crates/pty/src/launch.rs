@@ -79,8 +79,8 @@ pub(crate) fn launch_command(
 /// `--settings` arrived in Claude Code **1.0.61**: an older CLI rejects the
 /// flag and the launch fails outright, rather than merely losing its status.
 /// The floor the README states is higher still, for `--session-id`.
-pub(crate) fn write_title_settings(session: SessionId) -> Option<PathBuf> {
-    let path = settings_path(session);
+pub(crate) fn write_title_settings(private: &PrivateFiles, session: SessionId) -> Option<PathBuf> {
+    let path = private.settings(session);
     let json = r#"{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":"0"}}"#;
     match write_private(&path, json) {
         Ok(()) => Some(path),
@@ -108,8 +108,13 @@ pub(crate) fn write_title_settings(session: SessionId) -> Option<PathBuf> {
 /// the command untouched: that session then falls back on the foreground process
 /// group ([`crate::status::foreground_status`]). A degradation, not a failure,
 /// so it is logged rather than propagated.
-pub(crate) fn apply_integration(session: SessionId, program: &str, cmd: &mut CommandBuilder) {
-    let dir = shell_dir(session);
+pub(crate) fn apply_integration(
+    private: &PrivateFiles,
+    session: SessionId,
+    program: &str,
+    cmd: &mut CommandBuilder,
+) {
+    let dir = private.shell_dir(session);
     let Some(integration) = integration_for(program, &dir, |key| std::env::var_os(key)) else {
         return;
     };
@@ -147,15 +152,6 @@ pub(crate) fn apply_integration(session: SessionId, program: &str, cmd: &mut Com
     }
 }
 
-/// The private per-session directory a shell-integration recipe is written
-/// into. Named once, because three readers need the same answer: the launch
-/// that writes it, the teardown that removes it, and — through
-/// [`SHELL_DIR_PREFIX`] — the nested launch that must not mistake it for the
-/// user's own home.
-fn shell_dir(session: SessionId) -> PathBuf {
-    std::env::temp_dir().join(format!("{SHELL_DIR_PREFIX}{}", session.0.get()))
-}
-
 /// Create the private directory and write every startup file into it.
 fn write_startup_files(dir: &Path, files: &[(PathBuf, String)]) -> std::io::Result<()> {
     if files.is_empty() {
@@ -182,18 +178,47 @@ fn write_startup_files(dir: &Path, files: &[(PathBuf, String)]) -> std::io::Resu
 /// config holds a **bearer token** for termherd's live bridge, which has no
 /// business outliving the session it authorised. Best-effort by construction:
 /// a file already gone is the desired state, and a teardown is no place to fail.
-pub(crate) fn discard_private_files(session: SessionId) {
-    let _ = std::fs::remove_dir_all(shell_dir(session));
-    let _ = std::fs::remove_file(mcp_config_path(session));
-    let _ = std::fs::remove_file(settings_path(session));
+pub(crate) fn discard_private_files(private: &PrivateFiles, session: SessionId) {
+    let _ = std::fs::remove_dir_all(private.shell_dir(session));
+    let _ = std::fs::remove_file(private.mcp_config(session));
+    let _ = std::fs::remove_file(private.settings(session));
 }
 
-fn mcp_config_path(session: SessionId) -> PathBuf {
-    std::env::temp_dir().join(format!("termherd-mcp-{}.json", session.0.get()))
-}
+/// Where every session's private files live: its shell-integration directory,
+/// its mcp config, its settings overlay, each named by the session id.
+///
+/// Session ids restart at 1 in every process, so two processes sharing a root
+/// name the same files, and each deletes the other's on teardown. The root is
+/// therefore chosen once, by whoever builds the [`crate::PtyManager`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateFiles(PathBuf);
 
-fn settings_path(session: SessionId) -> PathBuf {
-    std::env::temp_dir().join(format!("termherd-settings-{}.json", session.0.get()))
+impl PrivateFiles {
+    /// Private files rooted at `root`, an existing directory.
+    #[must_use]
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self(root.into())
+    }
+
+    /// The private per-session directory a shell-integration recipe is
+    /// written into. Named once, because three readers need the same answer:
+    /// the launch that writes it, the teardown that removes it, and — through
+    /// [`SHELL_DIR_PREFIX`] — the nested launch that must not mistake it for
+    /// the user's own home.
+    fn shell_dir(&self, session: SessionId) -> PathBuf {
+        self.0
+            .join(format!("{SHELL_DIR_PREFIX}{}", session.0.get()))
+    }
+
+    fn mcp_config(&self, session: SessionId) -> PathBuf {
+        self.0
+            .join(format!("termherd-mcp-{}.json", session.0.get()))
+    }
+
+    fn settings(&self, session: SessionId) -> PathBuf {
+        self.0
+            .join(format!("termherd-settings-{}.json", session.0.get()))
+    }
 }
 
 /// Create `path` as a directory only this user can reach (`0o700` on Unix), and
@@ -223,8 +248,12 @@ fn private_dir(path: &Path) -> std::io::Result<()> {
 /// the bearer token. Both fields are known-safe for a bare JSON string (a
 /// loopback url and a hex token), so no escaping is needed. `None` (logged, not
 /// fatal) if the write fails: the session then launches without the live bridge.
-pub(crate) fn write_mcp_config(session: SessionId, config: &McpConfig) -> Option<PathBuf> {
-    let path = mcp_config_path(session);
+pub(crate) fn write_mcp_config(
+    private: &PrivateFiles,
+    session: SessionId,
+    config: &McpConfig,
+) -> Option<PathBuf> {
+    let path = private.mcp_config(session);
     let json = format!(
         r#"{{"mcpServers":{{"termherd":{{"type":"http","url":"{}","headers":{{"Authorization":"Bearer {}"}}}}}}}}"#,
         config.url, config.token
@@ -490,11 +519,12 @@ mod tests {
     fn performing_a_recipe_writes_its_files_and_points_the_command_at_them() {
         // The recipe being right is worth nothing if it is never performed:
         // this is the seam between the tested contract and the spawned command.
-        let session = SessionId(std::num::NonZeroU64::new(97).expect("nonzero"));
+        let (_tmp, private) = scratch();
+        let session = session(97);
         let mut cmd = CommandBuilder::new("/bin/zsh");
-        apply_integration(session, "/bin/zsh", &mut cmd);
+        apply_integration(&private, session, "/bin/zsh", &mut cmd);
 
-        let dir = shell_dir(session);
+        let dir = private.shell_dir(session);
         assert_eq!(
             set_on(&cmd, "ZDOTDIR"),
             Some(dir.display().to_string()),
@@ -505,7 +535,6 @@ mod tests {
             rc.contains("133;A"),
             "the written rc carries the hooks, got {rc}"
         );
-        discard_private_files(session);
     }
 
     #[test]
@@ -513,13 +542,14 @@ mod tests {
         // Session ids restart at 1 with each run, so the second run's session 1
         // meets the first run's directory. Refusing it there would cost that
         // session its marks for good — a bug that only shows up after a crash.
-        let session = SessionId(std::num::NonZeroU64::new(96).expect("nonzero"));
-        let stale = shell_dir(session);
+        let (_tmp, private) = scratch();
+        let session = session(96);
+        let stale = private.shell_dir(session);
         std::fs::create_dir_all(&stale).expect("leave a stale directory");
         std::fs::write(stale.join(".zshrc"), "stale\n").expect("with stale contents");
 
         let mut cmd = CommandBuilder::new("/bin/zsh");
-        apply_integration(session, "/bin/zsh", &mut cmd);
+        apply_integration(&private, session, "/bin/zsh", &mut cmd);
         assert_eq!(
             set_on(&cmd, "ZDOTDIR"),
             Some(stale.display().to_string()),
@@ -527,21 +557,21 @@ mod tests {
         );
         let rc = std::fs::read_to_string(stale.join(".zshrc")).expect("rewritten");
         assert!(rc.contains("133;A"), "and rewritten, got {rc}");
-        discard_private_files(session);
     }
 
     #[test]
     fn tearing_a_session_down_takes_its_private_files_with_it() {
         // The mcp config holds the live bridge's bearer token; leaving it in a
         // temp directory after the session is gone leaves the token there too.
-        let session = SessionId(std::num::NonZeroU64::new(95).expect("nonzero"));
+        let (_tmp, private) = scratch();
+        let session = session(95);
         let mut cmd = CommandBuilder::new("/bin/zsh");
-        apply_integration(session, "/bin/zsh", &mut cmd);
-        let overlay = write_title_settings(session).expect("overlay written");
-        let dir = shell_dir(session);
+        apply_integration(&private, session, "/bin/zsh", &mut cmd);
+        let overlay = write_title_settings(&private, session).expect("overlay written");
+        let dir = private.shell_dir(session);
         assert!(dir.exists() && overlay.exists(), "both exist while it runs");
 
-        discard_private_files(session);
+        discard_private_files(&private, session);
         assert!(!dir.exists(), "the integration directory is gone");
         assert!(!overlay.exists(), "the settings overlay is gone");
     }
@@ -569,20 +599,28 @@ mod tests {
         SessionId(std::num::NonZeroU64::new(id).expect("nonzero"))
     }
 
+    /// A root for private files that no other process shares.
+    fn scratch() -> (tempfile::TempDir, PrivateFiles) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let private = PrivateFiles::new(tmp.path());
+        (tmp, private)
+    }
+
     #[test]
     fn a_file_left_by_a_crashed_run_is_replaced_not_refused() {
         // Session ids restart at 1 each run.
+        let (_tmp, private) = scratch();
         let session = session(84);
-        let path = settings_path(session);
+        let path = private.settings(session);
         std::fs::write(&path, "stale").expect("leave a stale overlay");
 
-        let written = write_title_settings(session).expect("our own leftover is replaced");
+        let written =
+            write_title_settings(&private, session).expect("our own leftover is replaced");
         let contents = std::fs::read_to_string(&written).expect("readable overlay");
         assert!(
             contents.contains("CLAUDE_CODE_DISABLE_TERMINAL_TITLE"),
             "got {contents}"
         );
-        discard_private_files(session);
     }
 
     /// What another user could plant first at a predictable name in `/tmp`.
@@ -601,19 +639,20 @@ mod tests {
 
         #[test]
         fn a_file_planted_world_readable_does_not_receive_the_token_as_is() {
+            let (_tmp, private) = scratch();
             let session = session(81);
-            let path = mcp_config_path(session);
+            let path = private.mcp_config(session);
             std::fs::write(&path, "").expect("plant the file");
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
                 .expect("open it to everyone");
 
-            let written = write_mcp_config(session, &mcp_config()).expect("the config is written");
+            let written =
+                write_mcp_config(&private, session, &mcp_config()).expect("the config is written");
             let mode = std::fs::metadata(&written)
                 .expect("metadata")
                 .permissions()
                 .mode();
             assert_eq!(mode & 0o777, 0o600, "got {mode:o}");
-            discard_private_files(session);
         }
 
         #[test]
@@ -649,23 +688,28 @@ mod tests {
 
         #[test]
         fn a_symlink_planted_at_either_path_is_never_written_through() {
-            type Writer = fn(SessionId) -> Option<PathBuf>;
-            type Named = fn(SessionId) -> PathBuf;
+            type Writer = fn(&PrivateFiles, SessionId) -> Option<PathBuf>;
+            type Named = fn(&PrivateFiles, SessionId) -> PathBuf;
             let writers: [(&str, u64, Named, Writer); 2] = [
-                ("mcp config", 82, mcp_config_path, |s| {
-                    write_mcp_config(s, &mcp_config())
+                ("mcp config", 82, PrivateFiles::mcp_config, |p, s| {
+                    write_mcp_config(p, s, &mcp_config())
                 }),
-                ("settings overlay", 83, settings_path, write_title_settings),
+                (
+                    "settings overlay",
+                    83,
+                    PrivateFiles::settings,
+                    write_title_settings,
+                ),
             ];
             for (name, id, path_of, write) in writers {
+                let (_tmp, private) = scratch();
                 let session = session(id);
-                discard_private_files(session);
                 let victim = std::env::temp_dir().join(format!("termherd-victim-{id}"));
                 std::fs::write(&victim, "victim").expect("the victim's file");
-                let path = path_of(session);
+                let path = path_of(&private, session);
                 std::os::unix::fs::symlink(&victim, &path).expect("plant the symlink");
 
-                let _ = write(session);
+                let _ = write(&private, session);
                 assert_eq!(
                     std::fs::read_to_string(&victim).expect("victim readable"),
                     "victim",
@@ -676,7 +720,6 @@ mod tests {
                     !kind.is_ok_and(|kind| kind.is_symlink()),
                     "the {name} path is still the planted symlink"
                 );
-                discard_private_files(session);
                 let _ = std::fs::remove_file(&victim);
             }
         }
@@ -690,19 +733,16 @@ mod tests {
         // shell is bash, which is most Linux ones. Even without the panic, the
         // argument would demote the login shell to an ordinary one and change
         // which startup files run. Declining costs the marks, not the session.
-        let session = SessionId(std::num::NonZeroU64::new(93).expect("nonzero"));
-        // Cleared first: this is the one test that asserts an *absence* under
-        // the shared temp directory, so a directory left by an earlier failed
-        // — or mutated — run would fail it for reasons that are not its own.
-        discard_private_files(session);
+        let (_tmp, private) = scratch();
+        let session = session(93);
         let mut cmd = CommandBuilder::new_default_prog();
-        apply_integration(session, "/bin/bash", &mut cmd);
+        apply_integration(&private, session, "/bin/bash", &mut cmd);
         assert!(
             cmd.is_default_prog(),
             "the default login shell must be left exactly as it was"
         );
         assert!(
-            !shell_dir(session).exists(),
+            !private.shell_dir(session).exists(),
             "and nothing is written for a recipe that will not be applied"
         );
     }
@@ -712,15 +752,14 @@ mod tests {
         // The same recipe is fine on a shell the user named: that builder
         // already carries its own argv, so there is no login-shell argv0 to
         // lose and no panic to trip.
-        let session = SessionId(std::num::NonZeroU64::new(92).expect("nonzero"));
+        let (_tmp, private) = scratch();
         let mut cmd = CommandBuilder::new("/bin/bash");
-        apply_integration(session, "/bin/bash", &mut cmd);
+        apply_integration(&private, session(92), "/bin/bash", &mut cmd);
         assert!(
             cmd.get_argv().iter().any(|arg| arg == "--rcfile"),
             "got {:?}",
             cmd.get_argv()
         );
-        discard_private_files(session);
     }
 
     #[test]
@@ -740,10 +779,11 @@ mod tests {
             eprintln!("skipped: the inherited ZDOTDIR is the user's own, not one termherd wrote");
             return;
         }
-        let session = SessionId(std::num::NonZeroU64::new(91).expect("nonzero"));
-        let integration =
-            integration_for("/bin/zsh", &shell_dir(session), |key| std::env::var_os(key))
-                .expect("zsh has a recipe");
+        let (_tmp, private) = scratch();
+        let integration = integration_for("/bin/zsh", &private.shell_dir(session(91)), |key| {
+            std::env::var_os(key)
+        })
+        .expect("zsh has a recipe");
         let inherited = inherited.display().to_string();
         for (path, contents) in integration.files {
             assert!(
@@ -756,9 +796,9 @@ mod tests {
 
     #[test]
     fn performing_an_unknown_shells_recipe_leaves_the_command_alone() {
-        let session = SessionId(std::num::NonZeroU64::new(98).expect("nonzero"));
+        let (_tmp, private) = scratch();
         let mut cmd = CommandBuilder::new("/usr/bin/nu");
-        apply_integration(session, "/usr/bin/nu", &mut cmd);
+        apply_integration(&private, session(98), "/usr/bin/nu", &mut cmd);
         assert_eq!(set_on(&cmd, "ZDOTDIR"), None);
         assert!(cmd.get_argv().len() <= 1, "no arguments were appended");
     }
@@ -833,8 +873,8 @@ mod tests {
     fn the_settings_overlay_re_enables_the_terminal_title() {
         // The one claim the file exists for: whatever the user's own settings
         // say, a termherd-launched session reports its status.
-        let path = write_title_settings(SessionId(std::num::NonZeroU64::new(41).expect("nonzero")))
-            .expect("the overlay is written");
+        let (_tmp, private) = scratch();
+        let path = write_title_settings(&private, session(41)).expect("the overlay is written");
         let written = std::fs::read_to_string(&path).expect("readable overlay");
         assert!(
             written.contains(r#""CLAUDE_CODE_DISABLE_TERMINAL_TITLE":"0""#),
@@ -844,7 +884,6 @@ mod tests {
             written.starts_with(r#"{"env":"#),
             "it must land in the env block Claude reads, got {written}"
         );
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
