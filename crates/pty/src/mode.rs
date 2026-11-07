@@ -23,9 +23,34 @@ pub(crate) fn mouse_reporting(mode: TermMode) -> Option<MouseReporting> {
     }
 }
 
+/// How the application asked for cursor keys to be encoded: DECCKM (DECSET 1)
+/// switches the unmodified arrows and Home/End from CSI to SS3.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CursorKeys {
+    #[default]
+    Normal,
+    Application,
+}
+
+/// The cursor-key encoding the application negotiated.
+#[must_use]
+pub(crate) fn cursor_keys(mode: TermMode) -> CursorKeys {
+    if mode.contains(TermMode::APP_CURSOR) {
+        CursorKeys::Application
+    } else {
+        CursorKeys::Normal
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decckm_reads_as_application_cursor_keys() {
+        assert_eq!(cursor_keys(TermMode::empty()), CursorKeys::Normal);
+        assert_eq!(cursor_keys(TermMode::APP_CURSOR), CursorKeys::Application);
+    }
 
     #[test]
     fn the_mode_bits_read_as_the_reporting_ladder() {

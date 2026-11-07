@@ -12,7 +12,7 @@ use alacritty_terminal::term::cell::{Flags, Hyperlink};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 use termherd_core::{MouseReporting, PointerEvent, SelectOp, SelectSide, pointer_select};
 
-use crate::mode::mouse_reporting;
+use crate::mode::{CursorKeys, cursor_keys, mouse_reporting};
 
 /// A snapshot of the visible terminal grid handed to the GUI for rendering.
 /// Colours are resolved to RGB here so the shell needs no terminal knowledge.
@@ -35,6 +35,11 @@ pub struct Screen {
     /// the shell wraps a paste in `ESC[200~`…`ESC[201~` and a multi-line paste
     /// lands as one block instead of submitting line by line (FR4).
     pub bracketed_paste: bool,
+    /// The cursor-key encoding the application asked for (DECCKM, DECSET 1),
+    /// which the shell passes to [`crate::key_bytes`]. Read from the last
+    /// snapshot, so a key pressed in the frame the mode flips may use the old
+    /// encoding.
+    pub cursor_keys: CursorKeys,
     /// The mouse reporting the application has switched on, if any — when set
     /// the mouse is the child's, so a pointer event over the grid is forwarded
     /// rather than driving the terminal's own selection.
@@ -186,6 +191,7 @@ impl Screen {
             scrolled: false,
             display_offset: 0,
             bracketed_paste: false,
+            cursor_keys: CursorKeys::Normal,
             mouse_reporting: None,
             selection: Vec::new(),
             has_selection: false,
@@ -459,6 +465,7 @@ pub(crate) fn snapshot<T: EventListener>(term: &Term<T>, palette: &Palette) -> S
         scrolled: content.display_offset > 0,
         display_offset: content.display_offset,
         bracketed_paste: term.mode().contains(TermMode::BRACKETED_PASTE),
+        cursor_keys: cursor_keys(*term.mode()),
         mouse_reporting: mouse_reporting(*term.mode()),
         selection: selected_spans(term, first_line, cols, rows),
         has_selection: term
@@ -577,6 +584,23 @@ mod tests {
         assert!(snapshot(&term, &palette).bracketed_paste);
         parser.advance(&mut term, b"\x1b[?2004l");
         assert!(!snapshot(&term, &palette).bracketed_paste);
+    }
+
+    #[test]
+    fn snapshot_tracks_application_cursor_keys() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 5), VoidListener);
+        let mut parser: Processor = Processor::new();
+        let palette = Palette::default();
+        assert_eq!(snapshot(&term, &palette).cursor_keys, CursorKeys::Normal);
+        // DECSET 1 switches to SS3 cursor keys; DECRST 1 switches back.
+        parser.advance(&mut term, b"\x1b[?1h");
+        assert_eq!(
+            snapshot(&term, &palette).cursor_keys,
+            CursorKeys::Application
+        );
+        parser.advance(&mut term, b"\x1b[?1l");
+        assert_eq!(snapshot(&term, &palette).cursor_keys, CursorKeys::Normal);
     }
 
     /// The bug behind reopening the "selection follows scroll" work: in the

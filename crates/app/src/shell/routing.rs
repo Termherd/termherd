@@ -586,7 +586,12 @@ impl Shell {
             return (KeyVerdict::Ignored, Task::none());
         };
         let mods = self.pty_mods(term_key, modifiers);
-        let Some(bytes) = termherd_pty::key_bytes(term_key, mods, text.as_deref()) else {
+        let cursor = self
+            .screens
+            .get(&session)
+            .map(|screen| screen.cursor_keys)
+            .unwrap_or_default();
+        let Some(bytes) = termherd_pty::key_bytes(term_key, mods, text.as_deref(), cursor) else {
             return (KeyVerdict::Ignored, Task::none());
         };
         let effects = self
@@ -596,10 +601,10 @@ impl Shell {
     }
 
     /// The modifiers the PTY codec encodes `term_key` with. Only a character
-    /// composes, so ⌥Enter, ⌥⌫ and ⌥←/→ stay Meta on either side.
+    /// or Space composes, so ⌥Enter, ⌥⌫ and ⌥←/→ stay Meta on either side.
     fn pty_mods(&self, term_key: TermKey, modifiers: keyboard::Modifiers) -> KeyMods {
         let mut mods = key_mods(modifiers);
-        if matches!(term_key, TermKey::Char(_)) {
+        if matches!(term_key, TermKey::Char(_) | TermKey::Space) {
             mods.alt &= sends_meta(self.option_as_meta, self.alt_sides);
         }
         mods
