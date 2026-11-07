@@ -46,6 +46,7 @@ impl Shell {
             Action::Rename { tab, title } => self.act_rename(tab, title),
             Action::Close { pane, background } => self.act_close(pane, background),
             Action::Run { session, bytes } => self.act_run(session, bytes),
+            Action::Submit { session } => self.act_submit(session),
             Action::Pointer { session, pointer } => self.act_pointer(session, pointer),
             Action::DeclareRepo { path } => self.act_declare_repo(&path),
             Action::ForgetRepo { path } => self.act_forget_repo(&path),
@@ -266,6 +267,14 @@ impl Shell {
             return (unknown_handle(session), Task::none());
         };
         let effects = self.core.apply(Event::TerminalInput { session: id, bytes });
+        (self.applied(), self.perform(effects))
+    }
+
+    fn act_submit(&mut self, session: u64) -> (ActionOutcome, Task<Message>) {
+        let Some(id) = self.resolve(session) else {
+            return (unknown_handle(session), Task::none());
+        };
+        let effects = self.core.apply(Event::TerminalSubmit { session: id });
         (self.applied(), self.perform(effects))
     }
 
