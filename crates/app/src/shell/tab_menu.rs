@@ -8,10 +8,10 @@
 
 use iced::Task;
 use iced::keyboard::{self, Key, key::Named};
-use termherd_core::Action;
 use termherd_core::workspace::SessionId;
+use termherd_core::{Action, CommandRefusal};
 
-use super::routing::{KeyVerdict, is_escape};
+use super::routing::{KeyVerdict, KeyboardOwner, is_escape};
 use super::{Message, Shell};
 use crate::strings;
 
@@ -23,34 +23,52 @@ enum Offered {
     /// `copy-agent-name` action reads it — so never on Windows, and on a shell
     /// tab whenever a Claude runs in front of it.
     WithAgentName,
-    /// Only where a colour can be picked for the focused pane, as the
-    /// `pick-tab-color` action decides it — so not on a busy Claude.
+    /// On every tab, but runnable only where a colour can be picked for the
+    /// focused pane, as the `pick-tab-color` action decides it. Elsewhere it
+    /// is listed disabled with `core`'s refusal, so "unavailable now" never
+    /// reads as "missing".
     WhenColorPickable,
     /// Only on an unparked tab, which the action would park.
     WhenUnparked,
 }
 
 /// What the focused pane allows, read once when the menu opens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Offers {
     pub(super) agent_named: bool,
-    pub(super) color_pickable: bool,
+    /// Why no colour can be picked for the pane; `None` when one can.
+    pub(super) color_refusal: Option<CommandRefusal>,
     pub(super) unparked: bool,
 }
 
 impl Offers {
-    fn allow(self, offered: Offered) -> bool {
-        match offered {
-            Offered::OnEveryTab => true,
-            Offered::WithAgentName => self.agent_named,
-            Offered::WhenColorPickable => self.color_pickable,
-            Offered::WhenUnparked => self.unparked,
+    /// How `entry` is listed, or `None` when it is not.
+    fn line(&self, entry: &'static Entry) -> Option<Line<'_>> {
+        let enabled = Line {
+            entry,
+            refusal: None,
+        };
+        match entry.offered {
+            Offered::OnEveryTab => Some(enabled),
+            Offered::WithAgentName => self.agent_named.then_some(enabled),
+            Offered::WhenColorPickable => Some(Line {
+                entry,
+                refusal: self.color_refusal.as_ref(),
+            }),
+            Offered::WhenUnparked => self.unparked.then_some(enabled),
         }
     }
 }
 
+/// A listed entry, and why it cannot run now when it cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct Line<'m> {
+    pub(super) entry: &'static Entry,
+    pub(super) refusal: Option<&'m CommandRefusal>,
+}
+
 /// One menu line: the keymap action it runs and the label it shows.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct Entry {
     pub(super) action: Action,
     pub(super) label: &'static str,
@@ -107,11 +125,9 @@ pub(super) const ENTRIES: &[Entry] = &[
     },
 ];
 
-/// The entries a pane allowing `offers` is offered.
-pub(super) fn entries(offers: Offers) -> impl Iterator<Item = &'static Entry> {
-    ENTRIES
-        .iter()
-        .filter(move |entry| offers.allow(entry.offered))
+/// The lines a pane allowing `offers` is offered.
+pub(super) fn lines(offers: &Offers) -> impl Iterator<Item = Line<'_>> {
+    ENTRIES.iter().filter_map(|entry| offers.line(entry))
 }
 
 /// What a key does to a list drawn over the window: the tab menu and the
@@ -175,8 +191,8 @@ impl TabMenu {
         self.selected
     }
 
-    pub(super) fn entries(&self) -> impl Iterator<Item = &'static Entry> {
-        entries(self.offers)
+    pub(super) fn lines(&self) -> impl Iterator<Item = Line<'_>> {
+        lines(&self.offers)
     }
 }
 
@@ -228,7 +244,7 @@ impl Shell {
         let anchor = self.core.workspace.focused_session()?;
         let offers = Offers {
             agent_named: self.focused_agent_name().is_some(),
-            color_pickable: self.color_refusal(anchor).is_none(),
+            color_refusal: self.color_refusal(anchor),
             unparked: self
                 .core
                 .workspace
@@ -274,7 +290,7 @@ impl Shell {
         }
         let Some((selected, len)) = self
             .live_tab_menu()
-            .map(|menu| (menu.selected, menu.entries().count()))
+            .map(|menu| (menu.selected, menu.lines().count()))
         else {
             return (None, Task::none());
         };
@@ -298,15 +314,24 @@ impl Shell {
     /// chord uses, answering with its verdict (`None` when there is no such
     /// entry). Closing first matters: an entry that opens an overlay of its
     /// own, such as the rename field, must find the keyboard free.
+    ///
+    /// A disabled entry runs nothing and leaves the menu open, answering with
+    /// its refusal, so a caller learns why rather than seeing the menu vanish.
     pub(super) fn run_tab_menu_entry(
         &mut self,
         position: usize,
     ) -> (Option<KeyVerdict>, Task<Message>) {
-        let entry = self
+        let line = self
             .live_tab_menu()
-            .and_then(|menu| menu.entries().nth(position));
+            .and_then(|menu| menu.lines().nth(position))
+            .map(|line| (line.entry, line.refusal.cloned()));
+        if let Some((_, Some(refusal))) = line {
+            tracing::info!(%refusal, "tab menu entry disabled");
+            let verdict = KeyVerdict::Refused(KeyboardOwner::TabMenu.label(), refusal.to_string());
+            return (Some(verdict), Task::none());
+        }
         self.tab_menu = None;
-        let Some(entry) = entry else {
+        let Some((entry, None)) = line else {
             return (None, Task::none());
         };
         let (verdict, task) = self.dispatch_action(entry.action);
