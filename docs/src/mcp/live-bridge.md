@@ -3,7 +3,10 @@
 A Claude session **launched from TermHerd** is wired to an in-process MCP
 server on loopback, with a per-session token, injected into its `mcpServers` at
 spawn. Nothing to configure — if you started the session from the app, the
-tools are there.
+tools are there. The server refuses, with a 403, any request whose `Host` or
+`Origin` names something other than `127.0.0.1`, `localhost` or `[::1]` on
+its own port, so a web page cannot reach it by rebinding a domain to
+loopback.
 
 Its private files — the mcp config carrying that bearer token, the
 shell-integration directory, the settings overlay — are deleted when the

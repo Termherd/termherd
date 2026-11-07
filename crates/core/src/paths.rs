@@ -72,12 +72,13 @@ fn url_mask(line: &str, len: usize) -> Vec<bool> {
     masked
 }
 
-/// Whether `c` can sit inside a path run. Deliberately the vocabulary a
-/// double-click already treats as one word, so `~/src/main.rs:42` selects and
+/// Whether `c` can sit inside a path run. Public because a double-click's word
+/// is built from the same vocabulary, so `~/src/main.rs:42` selects and
 /// detects as the same unit. Whitespace and prose delimiters (`,`, quotes,
 /// brackets) are boundaries; `:` is in, because a `:line` suffix has to survive
 /// the scan to be peeled off after it.
-fn is_path_char(c: char) -> bool {
+#[must_use]
+pub fn is_path_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '.' | '_' | '-' | '/' | '\\' | '~' | ':' | '@' | '+')
 }
 
