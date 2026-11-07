@@ -607,6 +607,10 @@ enum Message {
         session: SessionId,
         content: Option<String>,
     },
+    /// Write the paste held for confirmation (FR4).
+    ConfirmPaste,
+    /// Drop the paste held for confirmation without writing it.
+    CancelPaste,
     /// Ask to close the tab at this index — arms the confirmation bar.
     RequestCloseTab(usize),
     /// Confirm the pending close, killing the tab's session(s) (FR5).
@@ -1284,6 +1288,14 @@ impl Shell {
                 Task::batch([focus, read])
             }
             Message::PasteInto { session, content } => self.paste_into(session, content),
+            Message::ConfirmPaste => {
+                let effects = self.core.apply(termherd_core::Event::ConfirmPaste);
+                self.perform(effects)
+            }
+            Message::CancelPaste => {
+                let effects = self.core.apply(termherd_core::Event::CancelPaste);
+                self.perform(effects)
+            }
             Message::RequestCloseTab(index) => self.request_close(index).unwrap_or_else(Task::none),
             Message::CloseTab(index) => self.close_tab(index),
             Message::CancelClose => {
@@ -1638,23 +1650,25 @@ impl Shell {
         self.perform(effects)
     }
 
-    /// Write clipboard `content` into `session` as terminal input, bracketed
-    /// when that session asked for it. The one paste seam: the keyboard chord
-    /// arrives here with the focused session, a right-click with the one under
-    /// the pointer, so neither can grow its own idea of how a paste is framed.
-    /// Empty (or absent) content writes nothing — a paste of nothing must not
-    /// send the bracket markers on their own.
+    /// Paste clipboard `content` into `session`, bracketed when that session
+    /// asked for it. The one paste seam: the keyboard chord arrives here with
+    /// the focused session, a right-click with the one under the pointer, so
+    /// neither can grow its own idea of how a paste is framed, nor a way past
+    /// the confirmation `core` holds a line-by-line paste behind. Empty (or
+    /// absent) content writes nothing — a paste of nothing must not send the
+    /// bracket markers on their own.
     fn paste_into(&mut self, session: SessionId, content: Option<String>) -> Task<Message> {
-        let Some(text) = content.filter(|t| !t.is_empty()) else {
+        let Some(text) = content else {
             return Task::none();
         };
         let bracketed = self
             .screens
             .get(&session)
             .is_some_and(|screen| screen.bracketed_paste);
-        let effects = self.core.apply(termherd_core::Event::TerminalInput {
+        let effects = self.core.apply(termherd_core::Event::Paste {
             session,
-            bytes: termherd_pty::paste_bytes(&text, bracketed),
+            text,
+            bracketed,
         });
         self.perform(effects)
     }
@@ -4218,6 +4232,95 @@ mod key_routing {
         assert!(pty.writes().is_empty());
     }
 
+    /// A shell split in two, focus on the new pane: the pane returned is the
+    /// one a right-click points at while it is not focused.
+    fn shell_with_an_unfocused_pane() -> (Shell, Arc<RecordingPty>, SessionId) {
+        let (mut shell, pty) = shell_with_terminal();
+        let pointed = shell.core.workspace.focused_session().expect("focused");
+        let (split, _task) = shell.perform_action(BridgeAction::Split {
+            pane: None,
+            dir: SplitDir::Vertical,
+        });
+        assert_eq!(split.error, None);
+        assert_ne!(shell.core.workspace.focused_session(), Some(pointed));
+        (shell, pty, pointed)
+    }
+
+    #[test]
+    fn a_multi_line_paste_into_an_unbracketed_pane_waits_for_enter() {
+        let (mut shell, pty, pointed) = shell_with_an_unfocused_pane();
+        let text = "echo safe\r\n rm -rf ~\n";
+        let _ = shell.update(Message::PasteInto {
+            session: pointed,
+            content: Some(text.to_string()),
+        });
+        assert!(pty.writes().is_empty(), "nothing runs before the answer");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Paste));
+        assert!(matches!(
+            shell.active_confirmation(),
+            Some((_, Message::CancelPaste))
+        ));
+
+        let _ = press_chord(&mut shell, "x");
+        assert!(pty.writes().is_empty(), "the prompt keeps the keyboard");
+
+        let _ = press_chord(&mut shell, "enter");
+        assert_eq!(
+            pty.writes_seen(),
+            vec![(pointed, termherd_pty::paste_bytes(text, false))],
+            "enter writes exactly what the paste would have, where it pointed"
+        );
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    #[test]
+    fn escape_drops_a_held_paste_without_writing_it() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Paste));
+        let _ = press_chord(&mut shell, "escape");
+        assert_eq!(shell.keyboard_owner(), None);
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn the_paste_buttons_answer_the_prompt() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        let _ = shell.update(Message::CancelPaste);
+        assert!(pty.writes().is_empty());
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        let _ = shell.update(Message::ConfirmPaste);
+        assert_eq!(
+            pty.writes_seen(),
+            vec![(session, termherd_pty::paste_bytes("a\nb", false))]
+        );
+    }
+
+    #[test]
+    fn a_multi_line_paste_into_a_bracketed_pane_is_written_at_once() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let mut screen = screen_of("$ ");
+        screen.bracketed_paste = true;
+        shell.screens.insert(session, screen);
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        assert_eq!(shell.keyboard_owner(), None);
+        assert_eq!(pty.writes(), vec![termherd_pty::paste_bytes("a\nb", true)]);
+    }
+
+    #[test]
+    fn the_paste_prompt_names_its_pane_and_lines() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.update(Message::Paste(Some("one\ntwo\nthree".to_string())));
+        let title = shell.core.workspace.tabs[0].display_title().to_owned();
+        assert_eq!(
+            shell.paste_prompt().as_deref(),
+            Some(crate::strings::paste_prompt(3, &title).as_str())
+        );
+    }
+
     #[test]
     fn the_claude_button_launches_a_fresh_claude_session() {
         let (mut shell, pty) = shell_with_terminal();
@@ -4567,6 +4670,41 @@ mod key_routing {
         let (mut shell, pty) = shell_holding_alt(Location::Right);
         let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::ALT, None));
         assert_eq!(pty.writes(), vec![b"\x1b\r".to_vec()]);
+    }
+
+    #[test]
+    fn option_space_types_a_plain_space_on_the_composing_side() {
+        let (mut shell, pty) = shell_holding_alt(Location::Right);
+        let _ = shell.on_key(press(
+            Key::Named(Named::Space),
+            Modifiers::ALT,
+            Some("\u{a0}"),
+        ));
+        assert_eq!(pty.writes(), vec![b" ".to_vec()]);
+    }
+
+    #[test]
+    fn option_space_is_meta_on_the_meta_side() {
+        let (mut shell, pty) = shell_holding_alt(Location::Left);
+        let _ = shell.on_key(press(
+            Key::Named(Named::Space),
+            Modifiers::ALT,
+            Some("\u{a0}"),
+        ));
+        assert_eq!(pty.writes(), vec![b"\x1b ".to_vec()]);
+    }
+
+    #[test]
+    fn an_arrow_follows_the_cursor_mode_of_the_focused_screen() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let up = || press(Key::Named(Named::ArrowUp), Modifiers::default(), None);
+        let _ = shell.on_key(up());
+        let mut screen = screen_of("$ ");
+        screen.cursor_keys = termherd_pty::CursorKeys::Application;
+        shell.screens.insert(session, screen);
+        let _ = shell.on_key(up());
+        assert_eq!(pty.writes(), vec![b"\x1b[A".to_vec(), b"\x1bOA".to_vec()]);
     }
 
     #[test]
@@ -6014,6 +6152,9 @@ mod key_routing {
             KeyboardOwner::Quit => shell.closing_window = Some(window::Id::unique()),
             KeyboardOwner::TabClose(index) => shell.closing = Some(index),
             KeyboardOwner::Archive => shell.archiving = Some("sess".to_string()),
+            KeyboardOwner::Paste => {
+                let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+            }
             KeyboardOwner::TabMenu => {
                 // Over the active tab: a right-click focuses its tab first, so a
                 // menu on another one would move focus before the sweep looks.

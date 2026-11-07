@@ -26,6 +26,7 @@ mod hover;
 mod metadata;
 mod notify;
 mod open;
+mod paste;
 mod pointer;
 mod record;
 mod repo_link;
@@ -47,6 +48,7 @@ pub use hover::{
     HoverTarget, PathPurpose, PathRequest, PathRoots, ProbeKind, ResolvedPath, TargetProbe,
     TermHover,
 };
+pub use paste::{PendingPaste, line_count, paste_needs_confirmation};
 pub use pointer::{
     MouseReporting, PointerButton, PointerEvent, PointerKind, PointerRoute, grid_line,
     pointer_select,
@@ -97,6 +99,9 @@ pub struct App {
     /// arrives after the pointer has moved on is dropped rather than
     /// underlining a span the pointer has left.
     pending_path: Option<PathRequest>,
+    /// The paste held back for the user's confirmation. Private — read through
+    /// [`Self::pending_paste`], which drops one whose session is gone.
+    pending_paste: Option<PendingPaste>,
     /// Whether the OS says the window has focus, from
     /// [`Event::WindowFocusChanged`]. Starts `false` (unknown) so a session
     /// notification is forwarded to the OS until a real focus signal proves
@@ -203,6 +208,16 @@ impl App {
             Event::LaunchSession(spec) => self.launch(spec),
             Event::TerminalInput { session, bytes } => {
                 self.if_live(session, Effect::Write { session, bytes })
+            }
+            Event::Paste {
+                session,
+                text,
+                bracketed,
+            } => self.paste(session, text, bracketed),
+            Event::ConfirmPaste => self.confirm_paste(),
+            Event::CancelPaste => {
+                self.pending_paste = None;
+                Vec::new()
             }
             Event::TerminalSubmit { session } => self.if_live(session, Effect::Submit { session }),
             Event::TerminalResized {

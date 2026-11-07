@@ -85,6 +85,13 @@ impl Shell {
                 spawned
             }
             Effect::Write { session, bytes } => self.pty.write(session, &bytes),
+            Effect::Paste {
+                session,
+                text,
+                bracketed,
+            } => self
+                .pty
+                .write(session, &termherd_pty::paste_bytes(&text, bracketed)),
             Effect::Submit { session } => {
                 return Task::perform(enter_gap(), move |()| Message::SubmitDue(session));
             }

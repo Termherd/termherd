@@ -22,10 +22,10 @@ pub mod workspace;
 pub use app::{
     App, ClaudeLaunch, ColorKeeper, CommandRefusal, DEFAULT_FONT_SIZE, Effect, Event,
     ForegroundJob, HoverTarget, Launch, LaunchSpec, LiveSession, McpConfig, MouseReporting,
-    PathPurpose, PathRequest, PathRoots, Placement, PointerButton, PointerEvent, PointerKind,
-    PointerRoute, ProbeKind, ResolvedPath, ScrollTarget, SelectOp, SelectSide, SessionStatus,
-    SidebarFold, SpawnSpec, TargetProbe, TermHover, Zoom, claude_identity, grid_line,
-    pointer_select,
+    PathPurpose, PathRequest, PathRoots, PendingPaste, Placement, PointerButton, PointerEvent,
+    PointerKind, PointerRoute, ProbeKind, ResolvedPath, ScrollTarget, SelectOp, SelectSide,
+    SessionStatus, SidebarFold, SpawnSpec, TargetProbe, TermHover, Zoom, claude_identity,
+    grid_line, line_count, paste_needs_confirmation, pointer_select,
 };
 pub use browser::{ProjectGroup, SessionRecord};
 pub use claude_command::{
