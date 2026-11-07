@@ -96,20 +96,21 @@ pub(crate) async fn serve(
         url: format!("http://{addr}{MCP_PATH}"),
     };
     let service = Arc::new(build_service(bridge, settings_file));
-    tokio::spawn(accept_loop(listener, service, tokens));
+    tokio::spawn(accept_loop(listener, service, Gate { tokens }));
     Ok(endpoint)
 }
 
 /// The rmcp request→response handler, rebuilt per session by the factory (a
-/// fresh [`TermherdMcp`] cloning the bridge). Stateless JSON responses: the
-/// tools are read-only and self-contained, so no SSE session bookkeeping.
+/// fresh [`TermherdMcp`] cloning the bridge). Stateless JSON responses: each
+/// tool call is self-contained, so no SSE session bookkeeping.
 fn build_service(
     bridge: BridgeHandle,
     settings_file: Option<PathBuf>,
 ) -> StreamableHttpService<TermherdMcp, LocalSessionManager> {
     // `StreamableHttpServerConfig` is `#[non_exhaustive]`; set fields on a
-    // default. Stateless request/response with a plain JSON body — the tools are
-    // read-only and self-contained, so no SSE session bookkeeping is needed.
+    // default. Stateless request/response with a plain JSON body: each call is
+    // self-contained, so no SSE session bookkeeping is needed. Many tools
+    // mutate the workspace, which is why every request is gated first.
     let mut config = StreamableHttpServerConfig::default();
     config.stateful_mode = false;
     config.json_response = true;
@@ -120,12 +121,18 @@ fn build_service(
     )
 }
 
+/// What every request must satisfy before rmcp sees it.
+#[derive(Clone)]
+struct Gate {
+    tokens: Tokens,
+}
+
 /// Accept loopback connections forever, serving each on its own task. One shared
-/// rmcp service backs every connection; the per-request token gate wraps it.
+/// rmcp service backs every connection; the per-request gate wraps it.
 async fn accept_loop(
     listener: TcpListener,
     service: Arc<StreamableHttpService<TermherdMcp, LocalSessionManager>>,
-    tokens: Tokens,
+    gate: Gate,
 ) {
     loop {
         let stream = match listener.accept().await {
@@ -137,10 +144,9 @@ async fn accept_loop(
         };
         let io = TokioIo::new(stream);
         let service = Arc::clone(&service);
-        let tokens = tokens.clone();
+        let gate = gate.clone();
         tokio::spawn(async move {
-            let handler =
-                service_fn(move |req| dispatch(req, Arc::clone(&service), tokens.clone()));
+            let handler = service_fn(move |req| dispatch(req, Arc::clone(&service), gate.clone()));
             if let Err(error) = http1::Builder::new().serve_connection(io, handler).await {
                 debug!(%error, "mcp server: connection closed with error");
             }
@@ -154,9 +160,9 @@ async fn accept_loop(
 async fn dispatch(
     req: Request<Incoming>,
     service: Arc<StreamableHttpService<TermherdMcp, LocalSessionManager>>,
-    tokens: Tokens,
+    gate: Gate,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, Infallible> {
-    if !authorized(req.headers(), &tokens) {
+    if !authorized(req.headers(), &gate.tokens) {
         return Ok(unauthorized());
     }
     Ok(service.handle(req).await)
@@ -257,13 +263,9 @@ mod tests {
         let endpoint = serve(bridge, Tokens::default(), None)
             .await
             .expect("bind the loopback server");
-        let authority = endpoint
-            .url
-            .strip_prefix("http://")
-            .and_then(|rest| rest.split('/').next())
-            .expect("an http authority in the endpoint url");
+        let authority = authority(&endpoint);
 
-        let mut stream = tokio::net::TcpStream::connect(authority)
+        let mut stream = tokio::net::TcpStream::connect(&authority)
             .await
             .expect("connect to the loopback server");
         let request = format!(
