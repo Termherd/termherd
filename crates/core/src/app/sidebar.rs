@@ -84,6 +84,15 @@ impl App {
         rows
     }
 
+    /// Every repo path the sidebar knows, scanned or declared, before the
+    /// search box or the archive toggle narrows anything: membership, not
+    /// visibility. Whoever asks "which repos are there" asks here, so the
+    /// answer cannot differ from the sidebar's.
+    #[must_use]
+    pub fn repo_paths(&self) -> Vec<&str> {
+        self.merged_rows().into_iter().map(|(path, _)| path).collect()
+    }
+
     /// Whether a sidebar row survives once its sessions have been filtered:
     /// something to show, or a declaration that justifies an empty row
     /// (`F-repo-add`).
