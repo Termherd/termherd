@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (the session scan stays inside `~/.claude/projects`)
+
+- The sidebar's scan no longer follows a symlink under `~/.claude/projects`,
+  so a link there can no longer surface another file's content in the sidebar
+  and search. A transcript over 256 MiB is read as its first and last 128 MiB
+  instead of whole, and titles, slugs, version, model and effort are cut to
+  120 characters (#290).
+
 ### Added (more keys in chords and in the terminal)
 
 - Chords can name `pageup`, `pagedown`, `insert`, `delete`, `backspace`,

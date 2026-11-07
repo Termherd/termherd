@@ -242,6 +242,20 @@ mod tests {
     }
 
     #[test]
+    fn only_jsonl_files_are_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("C--proj");
+        fs::create_dir(&folder).unwrap();
+        write_session(&folder, "abc.jsonl", "/real/proj", "kept");
+        write_session(&folder, "notes.txt", "/real/proj", "not a session");
+        fs::create_dir(folder.join("dir.jsonl")).unwrap();
+
+        let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
+        let ids: Vec<&str> = records.iter().map(|r| r.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["abc"]);
+    }
+
+    #[test]
     fn underivable_folders_are_dropped_like_upstream() {
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("C--mystery");
