@@ -252,6 +252,7 @@ impl App {
             Event::ForegroundJobChanged { session, job } => {
                 self.foreground_job_changed(session, job)
             }
+            Event::AltScreenChanged { session, on } => self.alt_screen_changed(session, on),
             Event::SessionFileRead { session, file } => self.session_file_read(session, file),
             Event::SessionSpawned { session, at } => self.session_spawned(session, at),
             Event::ActivateTab(index) => {

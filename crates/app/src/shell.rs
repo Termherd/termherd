@@ -528,6 +528,11 @@ enum Message {
         session: SessionId,
         job: Option<termherd_core::ForegroundJob>,
     },
+    /// A session's program entered or left the alternate screen.
+    PtyAltScreen {
+        session: SessionId,
+        on: bool,
+    },
     /// A session fired an OSC 9 notification; forward it to the OS.
     PtyNotify {
         session: SessionId,
@@ -1138,6 +1143,12 @@ impl Shell {
                     .core
                     .apply(termherd_core::Event::ForegroundJobChanged { session, job });
                 self.refresh_session_file(session);
+                self.perform(effects)
+            }
+            Message::PtyAltScreen { session, on } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::AltScreenChanged { session, on });
                 self.perform(effects)
             }
             Message::PtyNotify { session, body } => {
@@ -5054,6 +5065,23 @@ mod key_routing {
             shell.core.workspace.tabs.is_empty(),
             "the tab is gone after the unprompted close"
         );
+    }
+
+    #[test]
+    fn a_shell_on_the_alternate_screen_confirms_its_close_until_it_leaves() {
+        // No foreground reading ever arrives, as on ConPTY: the alternate
+        // screen is then what says a program (an editor, a pager) is in front.
+        let (mut shell, _pty) = shell_with_terminal();
+        shell.close_confirm.tab = ConfirmClose::ConfirmWhenActive;
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let flip = |on| streams::pty_message(PtyEvent::AltScreen { session, on });
+        let _ = shell.update(flip(true));
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert_eq!(shell.closing, Some(0), "a full-screen program confirms");
+        let _ = shell.update(Message::CancelClose);
+        let _ = shell.update(flip(false));
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert!(shell.closing.is_none(), "back at the prompt it does not");
     }
 
     /// The first session id hosted by each tab, in tab order — a stable handle

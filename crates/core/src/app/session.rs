@@ -59,6 +59,13 @@ pub struct LiveSession {
     /// ConPTY never reports one — so only after it does can an empty one mean
     /// the program in front has exited.
     pub foreground_reported: bool,
+    /// Whether the adapter has read this pane's foreground process group at
+    /// all — set by its first reading, job or none. Never on ConPTY, which
+    /// has no such group, so there [`Self::foreground`] is unknown, not empty.
+    pub foreground_known: bool,
+    /// Whether the program in this terminal is on the alternate screen
+    /// ([`Event::AltScreenChanged`]).
+    pub alt_screen: bool,
 }
 
 /// The job in front of a session's shell, as the PTY adapter reads it.
@@ -85,6 +92,8 @@ impl LiveSession {
             proven_session_id: None,
             spawned_at: None,
             foreground_reported: false,
+            foreground_known: false,
+            alt_screen: false,
         }
     }
 
@@ -151,19 +160,34 @@ impl LiveSession {
     /// loss is worth confirming before a close. A Claude session *is* that
     /// process — the `claude` CLI runs in the shell's foreground until it
     /// exits, so any non-exited Claude counts, an idle prompt included. A plain
-    /// shell only counts while it is actively working (`Busy`) or flagged for
-    /// the user (`Attention`); parked at its prompt (`Idle`/`Starting`) there is
-    /// nothing to lose, so it can be closed silently.
+    /// shell counts while it reports work (`Busy`) or wants the user
+    /// (`Attention`), and while a program runs in front of it — which its
+    /// status cannot be trusted to say, since a program that is not Claude
+    /// and emits no prompt marks leaves it reading idle. Parked at its prompt
+    /// there is nothing to lose, so it can be closed silently.
     #[must_use]
     pub fn has_running_process(&self) -> bool {
         match self.status {
             SessionStatus::Exited => false,
-            _ => match self.launch {
+            status => match self.launch {
                 Launch::Claude(_) => true,
                 Launch::Shell => {
-                    matches!(self.status, SessionStatus::Busy | SessionStatus::Attention)
+                    matches!(status, SessionStatus::Busy | SessionStatus::Attention)
+                        || self.runs_program_in_front()
                 }
             },
+        }
+    }
+
+    /// Whether a program other than the shell has the terminal. The PTY's
+    /// foreground process group answers that wherever it can be read; where
+    /// it cannot (ConPTY), a program on the alternate screen is the sign of
+    /// one — which catches an editor or a pager, not a long `make`.
+    fn runs_program_in_front(&self) -> bool {
+        if self.foreground_known {
+            self.foreground.is_some()
+        } else {
+            self.alt_screen
         }
     }
 }
@@ -511,11 +535,21 @@ impl App {
         job: Option<ForegroundJob>,
     ) -> Vec<Effect> {
         if let Some(live) = self.sessions.get_mut(&session) {
+            live.foreground_known = true;
             live.foreground_reported |= job.is_some();
             live.foreground = job;
             live.remember_proven_id();
         }
         self.retitle_tabs();
+        Vec::new()
+    }
+
+    /// Record whether `session`'s terminal is on the alternate screen.
+    /// Unknown sessions are ignored.
+    pub(super) fn alt_screen_changed(&mut self, session: SessionId, on: bool) -> Vec<Effect> {
+        if let Some(live) = self.sessions.get_mut(&session) {
+            live.alt_screen = on;
+        }
         Vec::new()
     }
 
@@ -1307,6 +1341,145 @@ mod tests {
                 "a live Claude ({status:?}) is a running process"
             );
         }
+    }
+
+    /// What the adapter has said about the job in front of a pane's shell.
+    #[derive(Debug, Clone, Copy)]
+    enum InFront {
+        /// A job other than the shell owns the PTY's foreground.
+        Job,
+        /// The shell itself is in front: it was read, and no job was there.
+        Shell,
+        /// Never read: the platform has no foreground process group (ConPTY).
+        Unknown,
+    }
+
+    /// Which kind of pane a row of the table launches.
+    #[derive(Debug, Clone, Copy)]
+    enum Pane {
+        Shell,
+        Claude,
+    }
+
+    /// Whether a live `pane` in `status`, with `in_front` and the alternate
+    /// screen (`alt`) reported for it, holds a process a close must confirm.
+    fn running(pane: Pane, status: SessionStatus, in_front: InFront, alt: bool) -> bool {
+        let mut app = App::new();
+        let session = match pane {
+            Pane::Shell => launch(&mut app, "pane"),
+            Pane::Claude => launch_claude(&mut app),
+        };
+        app.apply(Event::StatusChanged { session, status });
+        let job = ForegroundJob {
+            pid: 4399,
+            started: None,
+        };
+        match in_front {
+            InFront::Job => {
+                app.apply(Event::ForegroundJobChanged {
+                    session,
+                    job: Some(job),
+                });
+            }
+            InFront::Shell => {
+                app.apply(Event::ForegroundJobChanged { session, job: None });
+            }
+            InFront::Unknown => {}
+        }
+        app.apply(Event::AltScreenChanged { session, on: alt });
+        let tab = app.tab_has_running_process(0);
+        assert_eq!(
+            tab,
+            app.any_running_process(),
+            "a close and a quit read one predicate"
+        );
+        tab
+    }
+
+    #[test]
+    fn whether_a_live_session_has_a_running_process_by_every_fact_reported() {
+        use InFront::{Job, Shell, Unknown};
+        use Pane::Claude;
+        use SessionStatus::{Attention, Busy, Idle, Starting};
+        // (launch, status, job in front, alt screen) → running.
+        let table = [
+            // A plain shell parked at its prompt, by every source.
+            (Pane::Shell, Idle, Shell, false, false),
+            (Pane::Shell, Starting, Shell, false, false),
+            (Pane::Shell, Idle, Unknown, false, false),
+            // A job in front of the shell runs, whatever the status says: a
+            // `make` or `vim` the marks or Claude's titles left reading idle.
+            (Pane::Shell, Idle, Job, false, true),
+            (Pane::Shell, Starting, Job, false, true),
+            (Pane::Shell, Idle, Job, true, true),
+            // Where the foreground cannot be read, the alternate screen stands
+            // in: a full-screen program is in front.
+            (Pane::Shell, Idle, Unknown, true, true),
+            (Pane::Shell, Starting, Unknown, true, true),
+            // Where it can, the read wins: the shell back in front is idle even
+            // under an alternate screen a crashed program left switched on.
+            (Pane::Shell, Idle, Shell, true, false),
+            // The terminal's own account of work still counts on its own.
+            (Pane::Shell, Busy, Shell, false, true),
+            (Pane::Shell, Attention, Unknown, false, true),
+            // A Claude pane is its running process, whatever else is said.
+            (Claude, Idle, Shell, false, true),
+            (Claude, Idle, Unknown, false, true),
+            (Claude, Busy, Job, true, true),
+            (Claude, Starting, Unknown, true, true),
+        ];
+        for (pane, status, in_front, alt, expected) in table {
+            assert_eq!(
+                running(pane, status, in_front, alt),
+                expected,
+                "{pane:?} {status:?}, in front: {in_front:?}, alt screen: {alt}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_exited_session_has_no_running_process_whatever_was_in_front() {
+        let mut app = App::new();
+        let session = launch(&mut app, "pane");
+        app.apply(Event::ForegroundJobChanged {
+            session,
+            job: Some(ForegroundJob {
+                pid: 4399,
+                started: None,
+            }),
+        });
+        app.apply(Event::AltScreenChanged { session, on: true });
+        app.apply(Event::PtyExited {
+            session,
+            clean: false,
+        });
+        assert!(!app.tab_has_running_process(0));
+    }
+
+    #[test]
+    fn leaving_the_alternate_screen_ends_the_running_program() {
+        let mut app = App::new();
+        let session = launch(&mut app, "pane");
+        app.apply(Event::AltScreenChanged { session, on: true });
+        assert!(app.tab_has_running_process(0));
+        app.apply(Event::AltScreenChanged { session, on: false });
+        assert!(!app.tab_has_running_process(0));
+    }
+
+    #[test]
+    fn a_job_leaving_the_front_ends_the_running_program() {
+        let mut app = App::new();
+        let session = launch(&mut app, "pane");
+        app.apply(Event::ForegroundJobChanged {
+            session,
+            job: Some(ForegroundJob {
+                pid: 4399,
+                started: None,
+            }),
+        });
+        assert!(app.tab_has_running_process(0));
+        app.apply(Event::ForegroundJobChanged { session, job: None });
+        assert!(!app.tab_has_running_process(0));
     }
 
     #[test]

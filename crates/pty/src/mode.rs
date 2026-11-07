@@ -42,9 +42,22 @@ pub(crate) fn cursor_keys(mode: TermMode) -> CursorKeys {
     }
 }
 
+/// Whether the application is drawing on the alternate screen (DECSET 1049),
+/// as a full-screen program (an editor, a pager) does.
+#[must_use]
+pub(crate) fn alt_screen(mode: TermMode) -> bool {
+    mode.contains(TermMode::ALT_SCREEN)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_alternate_screen_bit_reads_as_the_alternate_screen() {
+        assert!(!alt_screen(TermMode::empty()));
+        assert!(alt_screen(TermMode::ALT_SCREEN));
+    }
 
     #[test]
     fn decckm_reads_as_application_cursor_keys() {

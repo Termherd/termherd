@@ -109,12 +109,20 @@ pub enum Event {
         cwd: String,
     },
     /// The process in front of the session's shell changed: `Some(pid)` while a
-    /// job runs there (for a Claude pane, Claude itself), `None` once the
-    /// shell is back in front or the platform cannot say. The pid is what
+    /// job runs there (for a Claude pane, Claude itself), `None` while the
+    /// shell is in front. Never sent where the platform cannot say (ConPTY). The pid is what
     /// names Claude's own session file, the only record of its peer name.
     ForegroundJobChanged {
         session: SessionId,
         job: Option<ForegroundJob>,
+    },
+    /// The program in `session`'s terminal entered (`on`) or left the
+    /// alternate screen — what a full-screen program (an editor, a pager, a
+    /// monitor) draws on. Where the foreground job cannot be read, it is the
+    /// sign that one is running.
+    AltScreenChanged {
+        session: SessionId,
+        on: bool,
     },
     /// The shell read Claude's session file for the job in front of
     /// `session`: the file, or `None` when there was none to read.

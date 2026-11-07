@@ -27,7 +27,7 @@ use termherd_core::{
 use crate::events::{EventSink, PtyEvent};
 use crate::grid::{Palette, apply_pointer, apply_select, indexed_rgb, snapshot};
 use crate::input::{mouse_bytes, wheel_bytes};
-use crate::mode::mouse_reporting;
+use crate::mode::{self, mouse_reporting};
 use crate::prompt::decode_marks;
 use crate::status::{
     Activity, foreground_job, foreground_leader, foreground_status, process_start,
@@ -496,7 +496,10 @@ pub(crate) fn spawn_term(
             let mut activity = Activity::starting();
             let mut title: Option<String> = None;
             let mut cwd: Option<String> = None;
-            let mut job: Option<ForegroundJob> = None;
+            // `None` until the first reading the platform could make, so that
+            // one goes out even with the shell in front.
+            let mut in_front: Option<Option<ForegroundJob>> = None;
+            let mut alt_screen = Some(false);
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
             let mut clean = false;
@@ -561,6 +564,10 @@ pub(crate) fn spawn_term(
                             term_sink(PtyEvent::Title { session, title });
                         }
                         parser.advance(&mut term, &bytes);
+                        let on = Some(mode::alt_screen(*term.mode()));
+                        if let Some(on) = news(&mut alt_screen, on) {
+                            term_sink(PtyEvent::AltScreen { session, on });
+                        }
                     }
                     TermCmd::Resize(c, r) => {
                         term.resize(TermSize::new(c as usize, r as usize));
@@ -610,9 +617,9 @@ pub(crate) fn spawn_term(
                                 pacer.publish_held(Instant::now(), || term_sink(screen(&term)));
                             });
                         }
-                        if now != job {
-                            job.clone_from(&now);
-                            term_sink(PtyEvent::ForegroundJob { session, job: now });
+                        let read = status.map(|_| now);
+                        if let Some(job) = news(&mut in_front, read) {
+                            term_sink(PtyEvent::ForegroundJob { session, job });
                         }
                         // A poll changes no pixels; falling through to the
                         // snapshot below would redraw every session four times
@@ -822,6 +829,9 @@ mod tests {
     enum Seen {
         Status(SessionStatus),
         Screen(String),
+        AltScreen(bool),
+        /// The pid of the job reported in front, `None` for the shell.
+        InFront(Option<u32>),
     }
 
     /// [`statuses_reported`], waiting after a chunk where a step says so.
@@ -830,7 +840,7 @@ mod tests {
             .into_iter()
             .filter_map(|seen| match seen {
                 Seen::Status(status) => Some(status),
-                Seen::Screen(_) => None,
+                _ => None,
             })
             .collect()
     }
@@ -853,6 +863,8 @@ mod tests {
             let entry = match event {
                 PtyEvent::Status { status, .. } => Seen::Status(status),
                 PtyEvent::Output { screen, .. } => Seen::Screen(screen.text()),
+                PtyEvent::AltScreen { on, .. } => Seen::AltScreen(on),
+                PtyEvent::ForegroundJob { job, .. } => Seen::InFront(job.map(|job| job.pid)),
                 _ => return,
             };
             collected.lock().expect("sink lock").push(entry);
@@ -1076,6 +1088,60 @@ mod tests {
             HELD,
         );
         assert_drawn_before(&seen, "second", SessionStatus::Idle);
+    }
+
+    /// The out-of-band reports among `seen`: alternate-screen flips and jobs
+    /// in front, in order.
+    fn reports(seen: Vec<Seen>) -> Vec<Seen> {
+        seen.into_iter()
+            .filter(|seen| matches!(seen, Seen::AltScreen(_) | Seen::InFront(_)))
+            .collect()
+    }
+
+    #[test]
+    fn entering_and_leaving_the_alternate_screen_is_reported_on_change_only() {
+        let seen = events_seen(&[
+            ("\u{1b}[?1049h", Then::Go),
+            ("drawn by the full-screen program", Then::Go),
+            ("\u{1b}[?1049l", Then::Go),
+            ("back at the prompt", Then::Go),
+            ("\u{1b}[?1049h", Then::Go),
+        ]);
+        assert_eq!(
+            reports(seen),
+            [true, false, true].map(Seen::AltScreen).to_vec()
+        );
+    }
+
+    fn reading(status: Option<SessionStatus>, pid: Option<u32>) -> (TermCmd, Then) {
+        let job = pid.map(|pid| ForegroundJob { pid, started: None });
+        (TermCmd::Foreground { status, job }, Then::Go)
+    }
+
+    #[test]
+    fn the_first_foreground_reading_is_reported_even_with_the_shell_in_front() {
+        // It is what tells "the shell is in front" from "the platform cannot
+        // say", which a close confirmation has to tell apart.
+        let seen = events_seen_paced(
+            vec![
+                reading(Some(SessionStatus::Idle), None),
+                reading(Some(SessionStatus::Idle), None),
+                reading(Some(SessionStatus::Busy), Some(4399)),
+                reading(Some(SessionStatus::Busy), Some(4399)),
+                reading(Some(SessionStatus::Idle), None),
+            ],
+            SCREEN_INTERVAL,
+        );
+        assert_eq!(
+            reports(seen),
+            [None, Some(4399), None].map(Seen::InFront).to_vec()
+        );
+    }
+
+    #[test]
+    fn a_reading_the_platform_could_not_make_reports_nothing_in_front() {
+        let seen = events_seen_paced(vec![reading(None, None)], SCREEN_INTERVAL);
+        assert_eq!(reports(seen), []);
     }
 
     #[test]
