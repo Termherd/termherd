@@ -123,11 +123,27 @@ pub(super) fn target_at(screen: &Screen, col: u16, row: u16) -> Option<TargetPro
     })
 }
 
+/// What a double-click on grid cell `(col, row)` selects, as an inclusive cell
+/// range `(anchor, head)`: the span a link-modifier click there would open, so
+/// both gestures agree on where a path or URL ends, else the plain word.
+///
+/// Both read one grid row: a path the terminal soft-wrapped onto the next row
+/// selects only its part on the clicked row, as it underlines.
+pub(super) fn double_click_at(
+    screen: &Screen,
+    col: u16,
+    row: u16,
+) -> Option<((u16, u16), (u16, u16))> {
+    match target_at(screen, col, row) {
+        Some(probe) => Some(((probe.start, row), (probe.end.saturating_sub(1), row))),
+        None => word_at(screen, col, row),
+    }
+}
+
 /// The word / filename under grid cell `(col, row)` as an inclusive cell range
 /// `(anchor, head)`, or `None` when the cell is not part of a word (e.g. blank).
-/// A word is the maximal run of [`is_path_char`] cells around `col` — this is
-/// what a double-click selects.
-pub(super) fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16), (u16, u16))> {
+/// A word is the maximal run of [`is_path_char`] cells around `col`.
+fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16), (u16, u16))> {
     let line = screen.lines.get(row as usize)?;
     let here = col as usize;
     if !line.get(here).is_some_and(|cell| is_path_char(cell.c)) {
@@ -365,5 +381,80 @@ mod tests {
         assert_eq!(word_at(&screen, 3, 0), None);
         // A column past the line has no word.
         assert_eq!(word_at(&screen, 99, 0), None);
+    }
+
+    /// The text a double-click on `col` of a one-row `line` selects.
+    fn double_clicked(screen: &Screen, col: u16) -> Option<String> {
+        double_click_at(screen, col, 0).map(|(anchor, head)| word_text(screen, anchor, head))
+    }
+
+    #[test]
+    fn double_click_leaves_the_full_stop_closing_a_sentence() {
+        let screen = screen_from("see src/main.rs. now");
+        assert_eq!(double_click_at(&screen, 8, 0), Some(((4, 0), (14, 0))));
+    }
+
+    #[test]
+    fn double_click_keeps_a_position_but_not_the_colon_after_it() {
+        // A compiler location: `:12` is part of what a link click opens, the
+        // `:` that follows is the compiler's punctuation.
+        let screen = screen_from("src/a.rs:12: error");
+        assert_eq!(double_clicked(&screen, 2).as_deref(), Some("src/a.rs:12"));
+    }
+
+    #[test]
+    fn double_click_selects_a_windows_path_with_its_drive() {
+        let screen = screen_from(r"saved to C:\Users\basti\scratchpad. done");
+        assert_eq!(double_click_at(&screen, 20, 0), Some(((9, 0), (33, 0))));
+        assert_eq!(
+            double_clicked(&screen, 9).as_deref(),
+            Some(r"C:\Users\basti\scratchpad"),
+            "from the drive letter itself too"
+        );
+    }
+
+    #[test]
+    fn double_click_selects_a_url_whole() {
+        // `?`, `=` and `&` end a word but not a URL; the trailing `,` is prose.
+        let screen = screen_from("see https://ex.io/a?q=1&r=2, ok");
+        assert_eq!(
+            double_clicked(&screen, 6).as_deref(),
+            Some("https://ex.io/a?q=1&r=2")
+        );
+        assert_eq!(
+            double_clicked(&screen, 25).as_deref(),
+            Some("https://ex.io/a?q=1&r=2"),
+            "from a cell past where a word would have ended"
+        );
+    }
+
+    #[test]
+    fn double_click_selects_a_hyperlink_label_whole() {
+        // `#` is no word character, so the word under column 5 is only `76`.
+        let screen = with_hyperlink(screen_from("see #76 now"), 4, 7, "https://ex.io/issues/76");
+        assert_eq!(double_click_at(&screen, 5, 0), Some(((4, 0), (6, 0))));
+    }
+
+    #[test]
+    fn double_click_on_a_plain_word_selects_the_word() {
+        let screen = screen_from("hello world");
+        assert_eq!(double_click_at(&screen, 1, 0), Some(((0, 0), (4, 0))));
+        assert_eq!(double_click_at(&screen, 5, 0), None, "a blank is no word");
+    }
+
+    proptest::proptest! {
+        /// Whatever a double-click selects holds the clicked cell and stays on
+        /// its row.
+        #[test]
+        fn a_double_click_selection_holds_the_clicked_cell(
+            line in r"[a-z:/\\. ]{1,30}",
+            col in 0u16..30,
+        ) {
+            let screen = screen_from(&line);
+            if let Some(((c0, r0), (c1, r1))) = double_click_at(&screen, col, 0) {
+                proptest::prop_assert_eq!((r0, r1), (0, 0));
+                proptest::prop_assert!(c0 <= col && col <= c1, "{c0}..={c1} misses {col}");
+            }
+        }
     }
 }
