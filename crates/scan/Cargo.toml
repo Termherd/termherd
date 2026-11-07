@@ -18,6 +18,9 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# Captures what the watch logs, so the error path is asserted, not assumed.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+proptest = "1"
 
 [lints]
 workspace = true

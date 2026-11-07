@@ -74,7 +74,7 @@ pub(crate) struct LiveBridge {
 }
 use input::{AltSides, event_modifiers};
 use record::RecordState;
-use streams::{PtyOutput, pty_stream, watch_stream};
+use streams::{PtyOutput, RESCAN_INTERVAL, pty_stream, rescan_tick_stream, watch_stream};
 
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
@@ -479,6 +479,8 @@ enum Message {
     ScanCompleted(Result<Vec<SessionRecord>, String>),
     /// The fs watcher saw the projects tree change (FR2).
     ProjectsChanged,
+    /// The periodic fallback rescan is due, whatever the watcher saw.
+    RescanTick,
     /// A background plan/memory docs rediscovery finished (F-plans-memory).
     DocsDiscovered(Vec<DocEntry>),
     /// Unfold (or refold) a project's truncated session tail.
@@ -977,6 +979,17 @@ impl Shell {
         )
     }
 
+    /// The periodic fallback rescan. Skipped while a scan is in flight, and
+    /// never queued behind it as a watch change is: that scan already brings
+    /// what this tick would.
+    fn rescan_tick(&mut self) -> Task<Message> {
+        if self.scan_in_flight {
+            Task::none()
+        } else {
+            self.rescan()
+        }
+    }
+
     /// A scan settled (success or failure): clear the in-flight flag and, if
     /// changes arrived while it ran, start the single follow-up scan they
     /// coalesced into.
@@ -1088,6 +1101,7 @@ impl Shell {
                 tracing::debug!("projects tree changed; rescanning");
                 self.rescan()
             }
+            Message::RescanTick => self.rescan_tick(),
             Message::SearchChanged(query) => {
                 let effects = self.core.apply(termherd_core::Event::SearchChanged(query));
                 self.perform(effects)
@@ -1756,6 +1770,7 @@ impl Shell {
         ];
         if let Some(root) = &self.watch_root {
             subs.push(Subscription::run_with(root.clone(), watch_stream));
+            subs.push(Subscription::run_with(RESCAN_INTERVAL, rescan_tick_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
         // Always live, not only during a drag: iced broadcasts a batch's events
@@ -3277,6 +3292,50 @@ mod key_routing {
             "the reported focus is the pane that was asked for"
         );
         assert_eq!(focused(&shell), Some(first.to_string()));
+    }
+
+    #[test]
+    fn a_rescan_tick_starts_a_scan_when_none_is_in_flight() {
+        let mut shell = shell_over(Arc::new(RecordingPty::default()));
+        let _ = shell.update(Message::RescanTick);
+        assert!(shell.scan_in_flight);
+    }
+
+    #[test]
+    fn a_rescan_tick_during_a_scan_neither_overlaps_it_nor_queues_a_follow_up() {
+        let mut shell = shell_over(Arc::new(RecordingPty::default()));
+        let _ = shell.rescan();
+        let _ = shell.update(Message::RescanTick);
+        assert!(shell.scan_in_flight);
+        assert!(!shell.rescan_pending, "the tick queued a follow-up");
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(!shell.scan_in_flight, "a follow-up scan started");
+    }
+
+    #[test]
+    fn a_projects_change_during_a_scan_queues_exactly_one_follow_up() {
+        let mut shell = shell_over(Arc::new(RecordingPty::default()));
+        let _ = shell.rescan();
+        let _ = shell.update(Message::ProjectsChanged);
+        let _ = shell.update(Message::ProjectsChanged);
+        assert!(shell.rescan_pending);
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(shell.scan_in_flight, "the follow-up scan started");
+        assert!(!shell.rescan_pending);
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(!shell.scan_in_flight, "a second follow-up started");
+    }
+
+    #[test]
+    fn the_rescan_tick_stream_keeps_ticking() {
+        let mut stream = Box::pin(streams::rescan_tick_stream(
+            &std::time::Duration::from_millis(10),
+        ));
+        for _ in 0..3 {
+            let message =
+                iced::futures::executor::block_on(iced::futures::StreamExt::next(&mut stream));
+            assert!(matches!(message, Some(Message::RescanTick)), "{message:?}");
+        }
     }
 
     #[test]

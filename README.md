@@ -182,7 +182,7 @@ All shortcuts are configurable via the `keys` section of the config file
 | Copy selection     | `Ctrl+Shift+C`             | `Cmd+C`       |
 | Paste              | `Ctrl+Shift+V`; also `Ctrl+V` on Windows | `Cmd+V` |
 | Next / prev tab    | `Ctrl+Tab` / `Ctrl+Shift+Tab` | (same)     |
-| Jump to tab 1–9    | `Ctrl+1` … `Ctrl+9`        | `Cmd+1` … `Cmd+9` |
+| Jump to tab 1–9    | `Alt+1` … `Alt+9`          | `Cmd+1` … `Cmd+9` |
 | Scroll top/bottom  | `Ctrl+Shift+Home` / `End`  | `Cmd+Up` / `Cmd+Down` |
 | New shell here     | `Ctrl+Shift+T`             | `Cmd+T`       |
 | New Claude here    | `Ctrl+Alt+T`               | `Cmd+Alt+T`   |

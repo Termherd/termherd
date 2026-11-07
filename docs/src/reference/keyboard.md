@@ -10,16 +10,21 @@ Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 **not** valid chord syntax. Write concrete modifiers in your own bindings.
 
 **On Windows and Linux, defaults leave the terminal's control keys alone.**
-A bare <kbd>Ctrl</kbd>+letter is one — <kbd>Ctrl</kbd>+<kbd>D</kbd> is
-end-of-file, <kbd>Ctrl</kbd>+<kbd>W</kbd> deletes a word — and a chord
-TermHerd binds never reaches the program in the pane. So where `mod` would land
-on one, the action takes <kbd>Ctrl</kbd>+<kbd>Shift</kbd> instead, as Windows
-Terminal does; the rows below name that chord *off macOS*. A program reading
-the legacy keyboard encoding sees <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+letter as the
-same byte as the unshifted chord, so nothing is taken from it. The splits
-follow Windows Terminal too: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> side
-by side, <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> stacked. The one
-exception is paste on Windows, below.
+A bare <kbd>Ctrl</kbd> chord a shell's line editor reads is one —
+<kbd>Ctrl</kbd>+<kbd>D</kbd> is end-of-file, <kbd>Ctrl</kbd>+<kbd>W</kbd>
+deletes a word, and xterm sends <kbd>Ctrl</kbd>+<kbd>2</kbd> … <kbd>8</kbd> as
+control bytes — and a chord TermHerd binds never reaches the program in the
+pane. So where `mod` would land on one, the action takes
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd> instead, as GNOME Terminal, Konsole and kitty
+do; the rows below name that chord *off macOS*. A program reading the legacy
+keyboard encoding sees <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+letter as the same byte
+as the unshifted chord, so nothing is taken from it. The splits follow Windows
+Terminal: <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> side by side,
+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> stacked. The tab jumps take
+<kbd>Alt</kbd>+<kbd>1</kbd> … <kbd>9</kbd>, as in GNOME Terminal and Konsole.
+
+Two exceptions are kept on purpose: plain <kbd>Ctrl</kbd>+<kbd>V</kbd> pastes
+on Windows, and zoom-out stays on <kbd>Ctrl</kbd>+<kbd>-</kbd> — both below.
 
 ## The full action vocabulary
 
@@ -29,7 +34,7 @@ exception is paste on Windows, below.
 | --- | --- | --- |
 | `next-tab` | `ctrl+tab` | next tab (Ctrl on every platform) |
 | `prev-tab` | `ctrl+shift+tab` | previous tab |
-| `activate-tab-1` … `-9` | `mod+1` … `mod+9` | jump to tab N |
+| `activate-tab-1` … `-9` | `cmd+1` … `cmd+9`; `alt+1` … `alt+9` off macOS | jump to tab N |
 | `new-shell-here` | `mod+t`; `ctrl+shift+t` off macOS | new shell in the focused session's directory |
 | `new-claude-session-here` | `mod+alt+t` | new Claude session in that directory |
 | `reopen-closed-tab` | `mod+shift+t`; `ctrl+alt+shift+t` off macOS | reopen the tab you just closed |
@@ -76,7 +81,9 @@ reaches no action is logged with the key and modifiers it arrived as.
 
 `activate-tab-N` is matched by **physical key position**, so it lands on the
 same keys on AZERTY and QWERTZ, where the number row produces `&`, `é`, …
-without Shift.
+without Shift. Off macOS it takes <kbd>Alt</kbd>, which costs the shell its
+<kbd>Alt</kbd>+digit numeric argument from the number row; bind
+`"activate-tab-1": "ctrl+1"` and so on to get the old chords back.
 
 ### Splits and focus
 
@@ -136,6 +143,13 @@ first: <kbd>Enter</kbd> types it, <kbd>Escape</kbd> drops it. It does nothing
 unless that Claude is idle with nothing typed in its prompt. Bind it yourself;
 it has no default.
 
+Off macOS zoom keeps bare <kbd>Ctrl</kbd>, as GNOME Terminal, Konsole and
+Windows Terminal do. <kbd>Ctrl</kbd>+<kbd>-</kbd> shares its key with `_`
+(undo in a shell's line editor) on US layouts, but TermHerd sends that chord
+to a program as a plain `-`, so binding it takes no control byte away. Moving
+it to <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> would leave AZERTY, where
+`-` is on the <kbd>6</kbd> key, without a zoom-out chord.
+
 Zoom-in binds three chords. On QWERTY and AZERTY `+` is
 <kbd>Shift</kbd>+<kbd>=</kbd>, and a chord is matched on the key before Shift
 applies (see above), so <kbd>Cmd</kbd>+<kbd>+</kbd> arrives as `mod+shift+=`
@@ -192,7 +206,7 @@ without Shift, such as the keypad <kbd>+</kbd>: on QWERTY and AZERTY,
 "keys": {
   "copy": "ctrl+y",
   "paste": ["ctrl+shift+v", "shift+insert"],
-  "activate-tab-1": "alt+1"
+  "activate-tab-1": "ctrl+1"
 }
 ```
 
