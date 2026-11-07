@@ -11,7 +11,9 @@
 
 use crate::color::ClaudeColor;
 
-/// What the browser and the FTS index need from one session JSONL.
+/// What the browser and the FTS index need from one session JSONL. Every
+/// string is bounded, whatever the transcript holds: the slug, titles,
+/// version, model and effort at 120 UTF-16 units like the summary.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionDigest {
     /// First real user prompt, truncated to 120 UTF-16 units.
@@ -82,6 +84,10 @@ const TEXT_SLICE_UNITS: usize = 500;
 /// `text_content` stops growing once it reaches this many UTF-16 units.
 /// Upstream checks *before* appending, so the final size may exceed it.
 const TEXT_CONTENT_MAX_UNITS: usize = 8000;
+/// Max UTF-16 length of each short string the digest copies from a
+/// transcript as a label: the slug, the titles, the version, model and effort.
+/// The summary's bound, since a title stands in for the summary in the sidebar.
+const LABEL_MAX_UNITS: usize = SUMMARY_MAX_UNITS;
 /// How many trailing message snippets [`SessionDigest::tail`] keeps.
 const TAIL_MESSAGES: usize = 3;
 /// Max UTF-16 length of one [`SessionDigest::tail`] snippet.
@@ -107,7 +113,7 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         if slug.is_none()
             && let Some(s) = non_empty_str(&entry, "slug")
         {
-            slug = Some(s.to_owned());
+            slug = Some(label(s).to_owned());
         }
 
         let entry_type = entry.get("type").and_then(serde_json::Value::as_str);
@@ -116,12 +122,12 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         if entry_type == Some("custom-title")
             && let Some(t) = non_empty_str(&entry, "customTitle")
         {
-            custom_title = Some(t.to_owned());
+            custom_title = Some(label(t).to_owned());
         }
         if entry_type == Some("ai-title")
             && let Some(t) = non_empty_str(&entry, "aiTitle")
         {
-            ai_title = Some(t.to_owned());
+            ai_title = Some(label(t).to_owned());
         }
         if entry_type == Some("agent-color") {
             agent_color = agent_color_of(&entry);
@@ -145,7 +151,9 @@ pub fn digest_session(content: &str) -> Option<SessionDigest> {
         if summary.is_empty() && is_user && !text.is_empty() && !is_local_command(text) {
             // Scheduled runs get a stable name instead of the prompt text.
             summary = match scheduled_task_name(text) {
-                Some(name) => format!("Scheduled: {name}"),
+                Some(name) => {
+                    utf16_prefix(&format!("Scheduled: {name}"), SUMMARY_MAX_UNITS).to_owned()
+                }
                 None => utf16_prefix(text, SUMMARY_MAX_UNITS).to_owned(),
             };
         }
@@ -223,10 +231,11 @@ impl RunFacts {
     }
 }
 
-/// Replace `slot` with `seen` when an entry recorded one. The value rarely
-/// changes from one line to the next, so it is copied only when it does.
+/// Replace `slot` with `seen`, cut to a label, when an entry recorded one.
+/// The value rarely changes from one line to the next, so it is copied only
+/// when it does.
 fn keep_latest(slot: &mut Option<String>, seen: Option<&str>) {
-    if let Some(seen) = seen
+    if let Some(seen) = seen.map(label)
         && slot.as_deref() != Some(seen)
     {
         *slot = Some(seen.to_owned());
@@ -303,6 +312,11 @@ fn scheduled_task_name(text: &str) -> Option<&str> {
         search = rest;
     }
     None
+}
+
+/// `s` cut to [`LABEL_MAX_UNITS`].
+fn label(s: &str) -> &str {
+    utf16_prefix(s, LABEL_MAX_UNITS)
 }
 
 /// Longest prefix of `s` that fits in `max_units` UTF-16 code units without
@@ -439,6 +453,52 @@ mod tests {
         assert_eq!(d.slug.as_deref(), Some("first-slug"));
         assert_eq!(d.custom_title.as_deref(), Some("new"));
         assert_eq!(d.ai_title.as_deref(), Some("ai"));
+    }
+
+    #[test]
+    fn titles_and_slug_are_truncated_like_the_summary() {
+        let long = "t".repeat(300);
+        let jsonl = [
+            serde_json::json!({ "slug": long }).to_string(),
+            user_line("prompt"),
+            serde_json::json!({ "type": "custom-title", "customTitle": long }).to_string(),
+            serde_json::json!({ "type": "ai-title", "aiTitle": long }).to_string(),
+        ]
+        .join("\n");
+        let d = digest_session(&jsonl).unwrap();
+        let cut = "t".repeat(LABEL_MAX_UNITS);
+        assert_eq!(d.slug.as_deref(), Some(cut.as_str()));
+        assert_eq!(d.custom_title.as_deref(), Some(cut.as_str()));
+        assert_eq!(d.ai_title.as_deref(), Some(cut.as_str()));
+    }
+
+    #[test]
+    fn version_model_and_effort_are_truncated() {
+        let long = "v".repeat(300);
+        let jsonl = [
+            user_line("prompt"),
+            assistant_line(
+                serde_json::json!({ "model": long }),
+                serde_json::json!({ "version": long, "effort": long }),
+            ),
+        ]
+        .join("\n");
+        let d = digest_session(&jsonl).unwrap();
+        let cut = "v".repeat(LABEL_MAX_UNITS);
+        assert_eq!(d.version.as_deref(), Some(cut.as_str()));
+        assert_eq!(d.model.as_deref(), Some(cut.as_str()));
+        assert_eq!(d.effort.as_deref(), Some(cut.as_str()));
+    }
+
+    #[test]
+    fn a_long_scheduled_task_name_is_truncated_with_its_prefix() {
+        let name = "n".repeat(300);
+        let prompt = format!("<scheduled-task name=\"{name}\">run</scheduled-task>");
+        let d = digest_session(&user_line(&prompt)).unwrap();
+        assert_eq!(
+            d.summary,
+            format!("Scheduled: {}", "n".repeat(SUMMARY_MAX_UNITS - 11))
+        );
     }
 
     #[test]
@@ -598,6 +658,30 @@ mod tests {
         ]
     }
 
+    /// Text long enough to cross every cap, astral characters included so a
+    /// cap counted in bytes or chars instead of UTF-16 units shows.
+    fn long_text() -> impl Strategy<Value = String> {
+        "[a-z \n\u{1D11E}]{0,400}"
+    }
+
+    /// One transcript line of any kind the digest reads a string from.
+    fn any_entry() -> impl Strategy<Value = String> {
+        prop_oneof![
+            long_text().prop_map(|t| user_line(&t)),
+            long_text().prop_map(|t| user_line(&format!("<scheduled-task name=\"{t}\">"))),
+            long_text().prop_map(|t| serde_json::json!({ "slug": t }).to_string()),
+            long_text().prop_map(|t| {
+                serde_json::json!({ "type": "custom-title", "customTitle": t }).to_string()
+            }),
+            long_text()
+                .prop_map(|t| serde_json::json!({ "type": "ai-title", "aiTitle": t }).to_string()),
+            long_text().prop_map(|t| assistant_line(
+                serde_json::json!({ "model": t, "content": t }),
+                serde_json::json!({ "version": t, "effort": t }),
+            )),
+        ]
+    }
+
     proptest! {
         #[test]
         fn the_colour_is_whatever_the_last_entry_says(
@@ -610,6 +694,28 @@ mod tests {
                 .and_then(ClaudeColor::from_name)
                 .filter(|color| *color != ClaudeColor::Default);
             prop_assert_eq!(color_after(&lines), expected);
+        }
+
+        #[test]
+        fn no_field_exceeds_its_cap(
+            lines in proptest::collection::vec(any_entry(), 1..12),
+        ) {
+            let Some(d) = digest_session(&lines.join("\n")) else {
+                return Ok(());
+            };
+            let units = |s: &str| s.encode_utf16().count();
+            prop_assert!(units(&d.summary) <= SUMMARY_MAX_UNITS);
+            prop_assert!(units(&d.text_content) <= TEXT_CONTENT_MAX_UNITS + TEXT_SLICE_UNITS + 1);
+            prop_assert!(d.tail.len() <= TAIL_MESSAGES);
+            for snippet in &d.tail {
+                prop_assert!(units(snippet) <= TAIL_SNIPPET_UNITS);
+            }
+            for label in [&d.slug, &d.custom_title, &d.ai_title, &d.version, &d.model, &d.effort]
+                .into_iter()
+                .flatten()
+            {
+                prop_assert!(units(label) <= LABEL_MAX_UNITS, "{} units", units(label));
+            }
         }
 
         #[test]

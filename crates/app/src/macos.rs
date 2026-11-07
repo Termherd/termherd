@@ -34,19 +34,34 @@
 //! The relay leans on winit internals audited against 0.30.13 only; see
 //! `tests/winit_audit.rs`.
 //!
+//! **`termherd://` links.** macOS hands a link to the app as a `GetURL` Apple
+//! Event, never on the command line, and to the running app rather than to a
+//! second process. winit handles no such event, and installs its own
+//! application delegate inside iced, out of reach. [`relay_links`] therefore
+//! answers the event through `NSAppleEventManager`, registered as the app
+//! finishes launching, so a link that launched the app is caught too. It drops
+//! the link into the same inbox every other launch writes to.
+//!
 //! It is the lone exception to the workspace-wide `unsafe_code = "deny"` —
 //! every `unsafe` below is an ObjC message send or runtime call on the main
 //! thread, the standard `objc2` idiom.
 #![allow(unsafe_code)]
 
 use std::ffi::{c_char, c_void};
+use std::path::PathBuf;
 
 use objc2::ffi;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Imp, Method, Sel};
-use objc2::{msg_send, sel};
-use objc2_app_kit::{NSApplication, NSEventModifierFlags, NSMenu, NSMenuItem};
-use objc2_foundation::{MainThreadMarker, NSNotFound, NSRange, NSString, NSUInteger, ns_string};
+use objc2::{ClassType, DeclaredClass, declare_class, msg_send, msg_send_id, mutability, sel};
+use objc2_app_kit::{
+    NSApplication, NSApplicationWillFinishLaunchingNotification, NSEventModifierFlags, NSMenu,
+    NSMenuItem,
+};
+use objc2_foundation::{
+    MainThreadMarker, NSAppleEventDescriptor, NSAppleEventManager, NSNotFound, NSNotification,
+    NSNotificationCenter, NSObject, NSRange, NSString, NSUInteger, ns_string,
+};
 
 /// Apply every repair above. Call once, on the main thread, after the window
 /// opened: winit installs its default menu and the window's view only then.
@@ -441,6 +456,89 @@ unsafe extern "C" fn insert_text(
             let _: () = msg_send![this, setMarkedText: &*empty, selectedRange: NSRange::new(0, 0), replacementRange: no_range];
         }
     }
+}
+
+/// `kInternetEventClass` and `kAEGetURL`, both the four-char code `GURL`.
+const GET_URL: u32 = u32::from_be_bytes(*b"GURL");
+/// `keyDirectObject`, the four-char code `----`: where the URL travels.
+const DIRECT_OBJECT: u32 = u32::from_be_bytes(*b"----");
+
+declare_class!(
+    /// Answers the `GetURL` Apple Event by dropping the link into the inbox
+    /// it holds.
+    pub struct LinkRelay;
+
+    unsafe impl ClassType for LinkRelay {
+        type Super = NSObject;
+        type Mutability = mutability::MainThreadOnly;
+        const NAME: &'static str = "TermherdLinkRelay";
+    }
+
+    impl DeclaredClass for LinkRelay {
+        type Ivars = PathBuf;
+    }
+
+    unsafe impl LinkRelay {
+        #[method(applicationWillFinishLaunching:)]
+        fn will_finish_launching(&self, _notification: &NSNotification) {
+            // SAFETY: the shared manager is a process singleton; the selector
+            // names a method this class declares with the matching signature,
+            // and the codes are plain `FourCharCode`s. The manager does not
+            // retain the handler: `relay_links`'s caller keeps it alive.
+            unsafe {
+                let manager = NSAppleEventManager::sharedAppleEventManager();
+                let _: () = msg_send![
+                    &manager,
+                    setEventHandler: self,
+                    andSelector: sel!(handleGetURLEvent:withReplyEvent:),
+                    forEventClass: GET_URL,
+                    andEventID: GET_URL
+                ];
+            }
+        }
+
+        #[method(handleGetURLEvent:withReplyEvent:)]
+        fn handle_get_url(&self, event: &NSAppleEventDescriptor, _reply: &NSAppleEventDescriptor) {
+            // SAFETY: `paramDescriptorForKeyword:` returns a descriptor or nil,
+            // and `stringValue` returns a string or nil; both are read-only.
+            let url = unsafe {
+                let direct: Option<Retained<NSAppleEventDescriptor>> =
+                    msg_send_id![event, paramDescriptorForKeyword: DIRECT_OBJECT];
+                direct.and_then(|descriptor| descriptor.stringValue())
+            };
+            let Some(url) = url.map(|url| url.to_string()) else {
+                tracing::warn!("a GetURL event carried no URL");
+                return;
+            };
+            if !termherd_core::deeplink::is_link(&url) {
+                tracing::warn!(?url, "a GetURL event for another scheme; ignored");
+                return;
+            }
+            if let Err(error) = crate::link_inbox::deposit(self.ivars(), &url) {
+                tracing::warn!(%error, "termherd link not handed over");
+            }
+        }
+    }
+);
+
+/// Start answering `termherd://` links, dropping each one into `inbox`. Call
+/// from `main`, before iced starts the app, so the event that launched it is
+/// caught; keep the relay alive for the process lifetime.
+pub fn relay_links(mtm: MainThreadMarker, inbox: PathBuf) -> Retained<LinkRelay> {
+    let relay = mtm.alloc().set_ivars(inbox);
+    // SAFETY: `NSObject`'s `init` on a freshly allocated instance.
+    let relay: Retained<LinkRelay> = unsafe { msg_send_id![super(relay), init] };
+    // SAFETY: the selector is declared above and takes one notification; the
+    // centre does not retain observers, and the caller keeps `relay` alive.
+    unsafe {
+        NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+            &relay,
+            sel!(applicationWillFinishLaunching:),
+            Some(NSApplicationWillFinishLaunchingNotification),
+            None,
+        );
+    }
+    relay
 }
 
 #[cfg(test)]

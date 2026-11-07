@@ -417,6 +417,21 @@ impl Workspace {
         Some(end_of_unparked)
     }
 
+    /// The first session of the tab shown, so the shown tab can be recognised
+    /// again once the strip reorders. `None` with no tab open.
+    #[must_use]
+    pub fn shown_session(&self) -> Option<SessionId> {
+        self.tabs.get(self.active).map(Tab::first_session)
+    }
+
+    /// Whether the tab shown hosts `session`.
+    #[must_use]
+    pub fn shows(&self, session: SessionId) -> bool {
+        self.tabs
+            .get(self.active)
+            .is_some_and(|tab| tab.hosts(session))
+    }
+
     /// Make the tab at `index` active (FR5), unparking it first when it is
     /// parked. Returns `None` if the index is out of range, leaving the active
     /// tab unchanged.
