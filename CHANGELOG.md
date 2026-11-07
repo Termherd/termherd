@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (the sidebar no longer goes stale)
+
+- Session colours, titles and new sessions reach the sidebar even when the
+  filesystem watch stays silent, as macOS FSEvents can: the sidebar rescans
+  on its own every ten seconds, skipped while a scan is already running. A
+  session writing its transcript non-stop refreshes it at least every two
+  seconds instead of waiting for a pause, and a watcher error is now logged
+  instead of dropped (#377).
+
 ### Security (captures are private)
 
 - Captures and screencasts are readable only by you: `~/.termherd/captures/`

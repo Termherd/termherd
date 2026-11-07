@@ -63,8 +63,10 @@ Claude runs. In a split tab, the card describes the first pane.
 
 **A Claude tab wears the colour its `/color` set.** Run `/color green` in a
 Claude session and its tab is outlined in green, and its sidebar row gets a
-green bar, within about half a second — the time the sidebar takes to notice
-the transcript changed. `/color default` takes the colour away again. The
+green bar, usually within half a second — the time the sidebar takes to
+notice the transcript changed — and at most about ten seconds later if the
+filesystem watch misses the change. `/color default` takes the colour away
+again. The
 colour is Claude's, read from the session's transcript: there is no setting
 for it, and on a Claude tab no way to override it from TermHerd (a shell tab's
 pick, below, does win over a Claude started by hand in that shell). In a split
@@ -170,7 +172,7 @@ pane:
 
 | Focused pane | A pick | Shows |
 | --- | --- | --- |
-| Claude, still running | types `/color <name>` (`/color default` for *None*), behind the prompt below | once Claude records it, about half a second later |
+| Claude, still running | types `/color <name>` (`/color default` for *None*), behind the prompt below | once Claude records it, usually half a second later (ten seconds at most) |
 | Shell — or a Claude tab whose Claude has exited | is kept on the tab by TermHerd | at once |
 
 A Claude tab's colour is Claude's: TermHerd keeps no copy of it, so it never
