@@ -826,4 +826,270 @@ mod tests {
             Some(KeyChord::new(";", keymap::MOD_CMD | keymap::MOD_SHIFT))
         );
     }
+
+    // ---- Which default chords a real press can produce ------------------
+    //
+    // A layout is its typing keys as iced reports them: the physical code and
+    // the character the key types without Shift, which `key` carries whether
+    // Shift is held or not. Dead keys are left out: they report no character.
+
+    type Layout = &'static [(Code, &'static str)];
+
+    const QWERTY_US: Layout = &[
+        (Code::Backquote, "`"),
+        (Code::Digit1, "1"),
+        (Code::Digit2, "2"),
+        (Code::Digit3, "3"),
+        (Code::Digit4, "4"),
+        (Code::Digit5, "5"),
+        (Code::Digit6, "6"),
+        (Code::Digit7, "7"),
+        (Code::Digit8, "8"),
+        (Code::Digit9, "9"),
+        (Code::Digit0, "0"),
+        (Code::Minus, "-"),
+        (Code::Equal, "="),
+        (Code::KeyQ, "q"),
+        (Code::KeyW, "w"),
+        (Code::KeyE, "e"),
+        (Code::KeyR, "r"),
+        (Code::KeyT, "t"),
+        (Code::KeyY, "y"),
+        (Code::KeyU, "u"),
+        (Code::KeyI, "i"),
+        (Code::KeyO, "o"),
+        (Code::KeyP, "p"),
+        (Code::BracketLeft, "["),
+        (Code::BracketRight, "]"),
+        (Code::Backslash, "\\"),
+        (Code::KeyA, "a"),
+        (Code::KeyS, "s"),
+        (Code::KeyD, "d"),
+        (Code::KeyF, "f"),
+        (Code::KeyG, "g"),
+        (Code::KeyH, "h"),
+        (Code::KeyJ, "j"),
+        (Code::KeyK, "k"),
+        (Code::KeyL, "l"),
+        (Code::Semicolon, ";"),
+        (Code::Quote, "'"),
+        (Code::KeyZ, "z"),
+        (Code::KeyX, "x"),
+        (Code::KeyC, "c"),
+        (Code::KeyV, "v"),
+        (Code::KeyB, "b"),
+        (Code::KeyN, "n"),
+        (Code::KeyM, "m"),
+        (Code::Comma, ","),
+        (Code::Period, "."),
+        (Code::Slash, "/"),
+    ];
+
+    /// French AZERTY as Windows and Linux ship it: `-` on the 6 key, `=` right
+    /// of `)`.
+    const AZERTY_PC: Layout = &[
+        (Code::Backquote, "²"),
+        (Code::Digit1, "&"),
+        (Code::Digit2, "é"),
+        (Code::Digit3, "\""),
+        (Code::Digit4, "'"),
+        (Code::Digit5, "("),
+        (Code::Digit6, "-"),
+        (Code::Digit7, "è"),
+        (Code::Digit8, "_"),
+        (Code::Digit9, "ç"),
+        (Code::Digit0, "à"),
+        (Code::Minus, ")"),
+        (Code::Equal, "="),
+        (Code::KeyQ, "a"),
+        (Code::KeyW, "z"),
+        (Code::KeyE, "e"),
+        (Code::KeyR, "r"),
+        (Code::KeyT, "t"),
+        (Code::KeyY, "y"),
+        (Code::KeyU, "u"),
+        (Code::KeyI, "i"),
+        (Code::KeyO, "o"),
+        (Code::KeyP, "p"),
+        (Code::BracketRight, "$"),
+        (Code::Backslash, "*"),
+        (Code::KeyA, "q"),
+        (Code::KeyS, "s"),
+        (Code::KeyD, "d"),
+        (Code::KeyF, "f"),
+        (Code::KeyG, "g"),
+        (Code::KeyH, "h"),
+        (Code::KeyJ, "j"),
+        (Code::KeyK, "k"),
+        (Code::KeyL, "l"),
+        (Code::Semicolon, "m"),
+        (Code::Quote, "ù"),
+        (Code::IntlBackslash, "<"),
+        (Code::KeyZ, "w"),
+        (Code::KeyX, "x"),
+        (Code::KeyC, "c"),
+        (Code::KeyV, "v"),
+        (Code::KeyB, "b"),
+        (Code::KeyN, "n"),
+        (Code::KeyM, ","),
+        (Code::Comma, ";"),
+        (Code::Period, ":"),
+        (Code::Slash, "!"),
+    ];
+
+    /// French AZERTY as macOS ships it: `-` right of `)`, `=` right of `:`.
+    const AZERTY_MAC: Layout = &[
+        (Code::Digit1, "&"),
+        (Code::Digit2, "é"),
+        (Code::Digit3, "\""),
+        (Code::Digit4, "'"),
+        (Code::Digit5, "("),
+        (Code::Digit6, "§"),
+        (Code::Digit7, "è"),
+        (Code::Digit8, "!"),
+        (Code::Digit9, "ç"),
+        (Code::Digit0, "à"),
+        (Code::Minus, ")"),
+        (Code::Equal, "-"),
+        (Code::KeyQ, "a"),
+        (Code::KeyW, "z"),
+        (Code::KeyE, "e"),
+        (Code::KeyR, "r"),
+        (Code::KeyT, "t"),
+        (Code::KeyY, "y"),
+        (Code::KeyU, "u"),
+        (Code::KeyI, "i"),
+        (Code::KeyO, "o"),
+        (Code::KeyP, "p"),
+        (Code::BracketRight, "$"),
+        (Code::KeyA, "q"),
+        (Code::KeyS, "s"),
+        (Code::KeyD, "d"),
+        (Code::KeyF, "f"),
+        (Code::KeyG, "g"),
+        (Code::KeyH, "h"),
+        (Code::KeyJ, "j"),
+        (Code::KeyK, "k"),
+        (Code::KeyL, "l"),
+        (Code::Semicolon, "m"),
+        (Code::Quote, "ù"),
+        (Code::KeyZ, "w"),
+        (Code::KeyX, "x"),
+        (Code::KeyC, "c"),
+        (Code::KeyV, "v"),
+        (Code::KeyB, "b"),
+        (Code::KeyN, "n"),
+        (Code::KeyM, ","),
+        (Code::Comma, ";"),
+        (Code::Period, ":"),
+        (Code::Slash, "="),
+    ];
+
+    const LAYOUTS: [(&str, Layout); 3] = [
+        ("QWERTY", QWERTY_US),
+        ("AZERTY (PC)", AZERTY_PC),
+        ("AZERTY (Mac)", AZERTY_MAC),
+    ];
+
+    /// The keypad operators, the same on every layout.
+    const KEYPAD: Layout = &[
+        (Code::NumpadAdd, "+"),
+        (Code::NumpadSubtract, "-"),
+        (Code::NumpadMultiply, "*"),
+        (Code::NumpadDivide, "/"),
+    ];
+
+    /// Whether some press on `layout` reads back as `chord`. A keypad
+    /// operator counts only without Shift: a default holding Shift spells a
+    /// typing key, and one reachable only by holding Shift over the keypad is
+    /// that key's shifted face misnamed.
+    fn reachable_on(layout: Layout, chord: &KeyChord) -> bool {
+        let modifiers = modifiers_of(chord.mods);
+        let press = |&(code, typed): &(Code, &str)| {
+            chord_of(
+                &Key::Character(typed.into()),
+                &Physical::Code(code),
+                modifiers,
+            )
+        };
+        let keypad = if chord.mods & keymap::MOD_SHIFT == 0 {
+            KEYPAD
+        } else {
+            &[]
+        };
+        layout
+            .iter()
+            .chain(keypad)
+            .map(press)
+            .chain(
+                NAMED_KEYS
+                    .iter()
+                    .map(|row| chord_of(&Key::Named(row.key), &NON_DIGIT, modifiers)),
+            )
+            .any(|read| read.as_ref() == Some(chord))
+    }
+
+    #[test]
+    fn every_default_chord_is_produced_by_a_real_press() {
+        // A chord no press produces is a binding that never fires, and the
+        // keystroke it was meant for falls through to the terminal.
+        for platform in Platform::ALL {
+            for (chord, action) in default_bindings(platform) {
+                assert!(
+                    LAYOUTS
+                        .iter()
+                        .any(|(_, layout)| reachable_on(layout, &chord)),
+                    "default {chord:?} for {action:?} on {platform:?} is produced by no press"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_default_action_is_reachable_on_qwerty_and_azerty() {
+        for platform in Platform::ALL {
+            let bindings = default_bindings(platform);
+            for (_, action) in &bindings {
+                for (name, layout) in LAYOUTS {
+                    assert!(
+                        bindings
+                            .iter()
+                            .any(|(chord, bound)| bound == action && reachable_on(layout, chord)),
+                        "{action:?} on {platform:?} has no default a {name} press produces"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zoom_in_is_reachable_from_the_plus_key_with_or_without_shift() {
+        use termherd_core::Action;
+        // The `+` face of this key needs Shift on all three layouts, so the
+        // press reports `=` either way.
+        for (layout, physical) in [
+            ("QWERTY", Code::Equal),
+            ("AZERTY (PC)", Code::Equal),
+            ("AZERTY (Mac)", Code::Slash),
+        ] {
+            for (platform, primary) in [
+                (Platform::MacOs, Modifiers::LOGO),
+                (Platform::Linux, Modifiers::CTRL),
+                (Platform::Windows, Modifiers::CTRL),
+            ] {
+                for modifiers in [primary, primary | Modifiers::SHIFT] {
+                    assert_eq!(
+                        default_action_of(platform, "=", physical, modifiers),
+                        Some(Action::ZoomIn),
+                        "{layout} {modifiers:?} on {platform:?}"
+                    );
+                }
+                assert_eq!(
+                    default_action_of(platform, "+", Code::NumpadAdd, primary),
+                    Some(Action::ZoomIn),
+                    "keypad + on {platform:?}"
+                );
+            }
+        }
+    }
 }

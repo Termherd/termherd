@@ -246,8 +246,7 @@ const ACTIONS: &[ActionDef] = &[
         &["mod+shift+d"],
     )
     .off_mac(&["alt+shift+-", "alt+shift+d"]),
-    ActionDef::new(Action::SplitVertical, "split-vertical", &["mod+d"])
-        .off_mac(&["alt+shift+=", "alt+shift+plus"]),
+    ActionDef::new(Action::SplitVertical, "split-vertical", &["mod+d"]).off_mac(&["alt+shift+="]),
     ActionDef::new(Action::FocusNext, "focus-next", &[]),
     ActionDef::new(Action::FocusPrev, "focus-prev", &[]),
     ActionDef::new(Action::FocusLeft, "focus-left", &["mod+shift+left"]),
@@ -298,13 +297,13 @@ const ACTIONS: &[ActionDef] = &[
     .off_mac(&["ctrl+alt+shift+t"]),
     ActionDef::new(Action::Capture, "capture", &["mod+shift+s"]),
     ActionDef::new(Action::ToggleRecord, "toggle-record", &["mod+shift+r"]),
-    // Zoom: `=` is the unshifted face of the `+` key on QWERTY and the
-    // unshifted key on AZERTY; the shifted `plus` spellings cover layouts
-    // where the produced character is `+` (with or without Shift reported).
+    // On QWERTY and AZERTY `+` is the shifted face of the `=` key, and a press
+    // names its key without Shift, so ⌘+ arrives as `mod+shift+=`. `mod+plus`
+    // is the keypad `+`, or a layout's unshifted `+` key (QWERTZ).
     ActionDef::new(
         Action::ZoomIn,
         "zoom-in",
-        &["mod+=", "mod+plus", "mod+shift+plus"],
+        &["mod+=", "mod+shift+=", "mod+plus"],
     ),
     ActionDef::new(Action::ZoomOut, "zoom-out", &["mod+-"]),
     ActionDef::new(Action::ZoomReset, "zoom-reset", &["mod+0"]),
@@ -581,13 +580,11 @@ mod tests {
         );
         for platform in [Platform::Windows, Platform::Linux] {
             let map = Keymap::defaults_for(platform);
-            for key in ["=", "+"] {
-                assert_eq!(
-                    map.lookup(&KeyChord::new(key, MOD_ALT | MOD_SHIFT)),
-                    Some(Action::SplitVertical),
-                    "alt+shift+{key} on {platform:?}"
-                );
-            }
+            assert_eq!(
+                map.lookup(&KeyChord::new("=", MOD_ALT | MOD_SHIFT)),
+                Some(Action::SplitVertical),
+                "alt+shift+= on {platform:?}"
+            );
             for key in ["-", "d"] {
                 assert_eq!(
                     map.lookup(&KeyChord::new(key, MOD_ALT | MOD_SHIFT)),
