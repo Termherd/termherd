@@ -7,6 +7,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (the active tab's status dot reads on its fill)
+
+- The status dot on the active tab is shaded against that tab's fill rather
+  than the window background, so it keeps 3:1 contrast on every theme. On
+  stock Dark a busy dot sat near 2.5:1 on the blue chip, on Dracula near
+  1.3:1 (#382).
+
 ### Security (the live bridge checks Host and Origin itself)
 
 - The MCP live bridge refuses, with a 403, a request whose `Host` or `Origin`

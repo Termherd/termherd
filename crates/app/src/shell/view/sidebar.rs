@@ -17,7 +17,8 @@ use termherd_core::browser::{ProjectGroup, project_label, relative_age};
 use termherd_core::{SessionKind, SessionRecord, SessionStatus, SidebarFold};
 
 use super::{
-    CardFacts, clip, color_bar, kind_glyph, session_card, sidebar_secondary_text, status_dot,
+    Backdrop, CardFacts, clip, color_bar, kind_glyph, session_card, sidebar_secondary_text,
+    status_dot,
 };
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
 use crate::strings;
@@ -236,7 +237,7 @@ impl Shell {
                     .padding(0);
                 let mut label_row = row![].spacing(6).align_y(iced::Center);
                 if let Some(status) = live.get(id) {
-                    label_row = label_row.push(status_dot(*status));
+                    label_row = label_row.push(status_dot(*status, Backdrop::Chrome));
                 }
                 let title = self.core.session_title(s);
                 // The project label tells cross-project favourites apart.
@@ -425,7 +426,7 @@ impl Shell {
         // A coloured dot marks a session already open in TermHerd and
         // carries its live activity (FR8).
         if let Some(status) = live.get(id) {
-            content = content.push(status_dot(*status));
+            content = content.push(status_dot(*status, Backdrop::Chrome));
         }
         let title = self.core.session_title(s);
         let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);
