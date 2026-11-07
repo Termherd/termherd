@@ -69,7 +69,7 @@ pub fn to_json(dump: &WorkspaceSnapshot) -> Result<String, serde_json::Error> {
 pub fn write_dump(dir: &Path, stamp: &str, dump: &WorkspaceSnapshot) -> io::Result<PathBuf> {
     let path = dir.join(format!("capture-{stamp}.json"));
     let json = to_json(dump).map_err(io::Error::other)?;
-    std::fs::write(&path, json)?;
+    termherd_private_fs::write_file(&path, json)?;
     Ok(path)
 }
 
@@ -89,7 +89,7 @@ pub fn write_png(path: &Path, screenshot: &Screenshot) -> io::Result<()> {
         screenshot.size.width,
         screenshot.size.height,
     )?;
-    std::fs::write(path, bytes)
+    termherd_private_fs::write_file(path, bytes)
 }
 
 #[cfg(test)]
@@ -210,6 +210,29 @@ mod tests {
         );
         let read = std::fs::read_to_string(&path).expect("read back");
         assert!(read.contains("\"repo\""), "dump should hold the tab title");
+    }
+
+    #[test]
+    fn the_dump_and_the_screenshot_are_owner_only() {
+        // The dump holds a whole terminal's text, the PNG a picture of it:
+        // neither may be readable by another user of the machine.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dump = write_dump(dir.path(), "20010909-014640-000", &dump()).expect("write");
+        let png = png_path(dir.path(), "20010909-014640-000");
+        let screenshot = Screenshot::new(
+            crate::image::testing::numbered_frame(2, 1),
+            iced::Size::new(2, 1),
+            1.0,
+        );
+        write_png(&png, &screenshot).expect("write png");
+
+        for path in [dump, png] {
+            assert!(
+                termherd_private_fs::is_private(&path).expect("stat"),
+                "{} is readable by others",
+                path.display()
+            );
+        }
     }
 
     #[test]

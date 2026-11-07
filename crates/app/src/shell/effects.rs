@@ -328,7 +328,7 @@ impl Shell {
         dir: &std::path::Path,
         dump: WorkspaceSnapshot,
     ) -> Task<Message> {
-        if let Err(error) = std::fs::create_dir_all(dir) {
+        if let Err(error) = termherd_private_fs::ensure_dir(dir) {
             tracing::warn!(%error, "could not create captures dir; capture skipped");
             return Task::none();
         }

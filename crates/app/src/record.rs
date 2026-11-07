@@ -12,7 +12,7 @@
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
@@ -135,8 +135,8 @@ struct Session {
 }
 
 impl Session {
-    fn open(path: &PathBuf, tw: u32, th: u32) -> std::io::Result<Self> {
-        let writer = BufWriter::new(File::create(path)?);
+    fn open(path: &Path, tw: u32, th: u32) -> std::io::Result<Self> {
+        let writer = BufWriter::new(termherd_private_fs::create_file(path)?);
         let mut encoder =
             gif::Encoder::new(writer, tw as u16, th as u16, &[]).map_err(std::io::Error::other)?;
         encoder
@@ -283,6 +283,17 @@ fn gap_to_delay_cs(gap: Duration) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_screencast_is_owner_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("capture-20010909-014640-000.gif");
+        Session::open(&path, 2, 1)
+            .expect("open")
+            .finish()
+            .expect("finish");
+        assert!(termherd_private_fs::is_private(&path).expect("stat"));
+    }
 
     #[test]
     fn config_default_budget_and_derived_values() {

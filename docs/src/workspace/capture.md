@@ -49,6 +49,16 @@ fps, 30 s, 0.5× scale**, all configurable under `record` in
 Motion is what a still cannot carry: a gesture that half-works, a flicker, a
 focus that lands on the wrong pane.
 
+## What a capture keeps private
+
+A capture holds a whole terminal's text, and a terminal shows secrets: a
+pasted token, an `env` listing, a `.env` file someone printed.
+
+- **Only you can read it.** The directory is `0700` and every file in it
+  `0600`, on macOS and Linux; a directory an older build left open is
+  tightened at the next capture. On Windows the files inherit your profile's
+  permissions.
+
 ## How it stays honest
 
 Capture is pure in the domain core — an `Event::Capture` in, an

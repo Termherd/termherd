@@ -3909,6 +3909,7 @@ dependencies = [
  "termherd-claude",
  "termherd-core",
  "termherd-mcp",
+ "termherd-private-fs",
  "termherd-pty",
  "termherd-scan",
  "thiserror 2.0.18",

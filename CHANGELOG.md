@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Security (captures are private)
+
+- Captures and screencasts are readable only by you: `~/.termherd/captures/`
+  is `0700` (an existing one is tightened on the next capture) and every
+  JSON, PNG and GIF in it is `0600`. A doc saved from the doc editor keeps
+  its own mode instead of taking the default one through its temp copy, and
+  a new one is created `0600` (#288).
+
 ### Fixed (a doc save lands on the doc it wrote)
 
 - A doc keeps its `• modified` mark when you type while its save is in

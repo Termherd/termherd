@@ -7936,6 +7936,10 @@ mod key_routing {
             .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
             .collect();
         assert_eq!(dumps.len(), 1, "one JSON dump: {dumps:?}");
+        assert!(
+            termherd_private_fs::is_private(&tmp.path().join("captures")).expect("stat"),
+            "the captures dir is reachable by others"
+        );
     }
 
     #[test]
