@@ -7,7 +7,7 @@
 use alacritty_terminal::term::TermMode;
 use termherd_core::{PointerButton, PointerEvent, PointerKind};
 
-use crate::mode::mouse_reporting;
+use crate::mode::{CursorKeys, cursor_keys, mouse_reporting};
 
 /// The bytes a paste sends to the PTY (FR4). Newlines are normalised to the
 /// carriage return the terminal expects for Enter; when the application has
@@ -85,18 +85,9 @@ pub fn key_bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<
     // Ctrl+<char> control bytes (Ctrl-A → 0x01, Ctrl-Space → NUL, …).
     if mods.ctrl
         && let TermKey::Char(ch) = key
+        && let Some(byte) = control_byte(ch)
     {
-        let lower = ch.to_ascii_lowercase();
-        if lower.is_ascii_alphabetic() {
-            return Some(vec![(lower as u8 - b'a') + 1]);
-        }
-        match ch {
-            ' ' => return Some(vec![0]),
-            '[' => return Some(vec![27]),
-            '\\' => return Some(vec![28]),
-            ']' => return Some(vec![29]),
-            _ => {}
-        }
+        return Some(vec![byte]);
     }
 
     let modifier = modifier_param(mods);
@@ -126,12 +117,12 @@ pub fn key_bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<
         TermKey::Space => Some(b" ".to_vec()),
         // Cursor / navigation keys take a `1;<mod>` parameter when modified —
         // e.g. Ctrl+Right (`ESC[1;5C`) for word jump, Shift+Up (`ESC[1;2A`).
-        TermKey::Up => Some(csi_letter(b'A', modifier)),
-        TermKey::Down => Some(csi_letter(b'B', modifier)),
-        TermKey::Right => Some(csi_letter(b'C', modifier)),
-        TermKey::Left => Some(csi_letter(b'D', modifier)),
-        TermKey::Home => Some(csi_letter(b'H', modifier)),
-        TermKey::End => Some(csi_letter(b'F', modifier)),
+        TermKey::Up => Some(cursor_key(b'A', modifier, CursorKeys::Normal)),
+        TermKey::Down => Some(cursor_key(b'B', modifier, CursorKeys::Normal)),
+        TermKey::Right => Some(cursor_key(b'C', modifier, CursorKeys::Normal)),
+        TermKey::Left => Some(cursor_key(b'D', modifier, CursorKeys::Normal)),
+        TermKey::Home => Some(cursor_key(b'H', modifier, CursorKeys::Normal)),
+        TermKey::End => Some(cursor_key(b'F', modifier, CursorKeys::Normal)),
         // `~`-terminated editing keys gain the same `;<mod>` parameter.
         TermKey::Delete => Some(csi_tilde(3, modifier)),
         TermKey::PageUp => Some(csi_tilde(5, modifier)),
@@ -195,15 +186,10 @@ pub fn wheel_bytes(mode: TermMode, col: u16, row: u16, lines: i32) -> Option<Vec
     }
 
     // Alternate-scroll (1007) in the alt screen, no mouse mode: one cursor key
-    // per line, in SS3 form when DECCKM (app-cursor) is on, else CSI.
+    // per line, encoded as the arrow key would be.
     if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
         let final_byte = if up { b'A' } else { b'B' };
-        // CSI form reuses the cursor-key encoder; DECCKM swaps it for SS3.
-        let seq = if mode.contains(TermMode::APP_CURSOR) {
-            vec![0x1b, b'O', final_byte]
-        } else {
-            csi_letter(final_byte, 1)
-        };
+        let seq = cursor_key(final_byte, 1, cursor_keys(mode));
         let mut out = Vec::with_capacity(seq.len() * count);
         for _ in 0..count {
             out.extend_from_slice(&seq);
@@ -269,6 +255,33 @@ fn x10(v: u16) -> u8 {
 /// `CSI 1;<mod>` cursor sequences.
 fn modifier_param(m: KeyMods) -> u8 {
     1 + (m.shift as u8) + (m.alt as u8) * 2 + (m.ctrl as u8) * 4
+}
+
+/// The C0 control byte Ctrl turns `ch` into (Ctrl-A → 0x01, Ctrl-Space → NUL,
+/// the bracket family → 0x1b–0x1d), or `None` for a character Ctrl leaves be.
+fn control_byte(ch: char) -> Option<u8> {
+    let lower = ch.to_ascii_lowercase();
+    if lower.is_ascii_alphabetic() {
+        return Some((lower as u8 - b'a') + 1);
+    }
+    match ch {
+        ' ' => Some(0),
+        '[' => Some(27),
+        '\\' => Some(28),
+        ']' => Some(29),
+        _ => None,
+    }
+}
+
+/// An arrow or Home/End key: SS3 (`ESC O <final>`) when the application set
+/// DECCKM and no modifier is held, else the CSI form, which alone can carry a
+/// modifier parameter.
+fn cursor_key(final_byte: u8, modifier: u8, cursor: CursorKeys) -> Vec<u8> {
+    if cursor == CursorKeys::Application && modifier <= 1 {
+        vec![0x1b, b'O', final_byte]
+    } else {
+        csi_letter(final_byte, modifier)
+    }
 }
 
 /// A letter-terminated cursor sequence (`A`=Up, `C`=Right, `H`=Home …):
