@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (the tab menu says why *Tab colour…* is unavailable)
+
+- On a Claude tab that cannot take `/color` right now — busy, a draft in its
+  prompt, or the view scrolled off the prompt — the tab menu lists
+  *Tab colour…* greyed out with the reason, instead of hiding it. Over MCP,
+  `enter` on it reports `refused` with the reason and keeps the menu open
+  (#373).
+
 ### Fixed (zoom in with Cmd/Ctrl + Shift + `+`)
 
 - <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> (<kbd>Ctrl</kbd> off macOS)
