@@ -146,10 +146,17 @@ impl Shell {
     /// nothing.
     pub(super) fn activate_tab(&mut self, index: usize) -> Task<Message> {
         let effects = self.core.apply(termherd_core::Event::ActivateTab(index));
+        Task::batch([self.perform(effects), self.settle_after_tab_switch()])
+    }
+
+    /// What follows any change of the shown tab: the keys go back to the
+    /// terminal, a pending confirmation is dropped, and the panes are sized
+    /// to the tab now shown.
+    pub(super) fn settle_after_tab_switch(&mut self) -> Task<Message> {
         self.focus = Focus::Terminal;
         self.closing = None;
         self.archiving = None;
-        Task::batch([self.perform(effects), self.resize_panes()])
+        self.resize_panes()
     }
 
     /// Switch the active tab one `step`, wrapping around (FR9 `NextTab` /
@@ -161,10 +168,10 @@ impl Shell {
         let index = self.core.workspace.active;
         self.core.workspace.tabs.get(index)?;
         let effects = self.core.apply(termherd_core::Event::ToggleParkTab(index));
-        self.focus = Focus::Terminal;
-        self.closing = None;
-        self.archiving = None;
-        Some(Task::batch([self.perform(effects), self.resize_panes()]))
+        Some(Task::batch([
+            self.perform(effects),
+            self.settle_after_tab_switch(),
+        ]))
     }
 
     pub(super) fn cycle_tab(&mut self, step: Step) -> Option<Task<Message>> {

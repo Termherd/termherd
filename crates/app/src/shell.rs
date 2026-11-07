@@ -22,7 +22,7 @@ use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::widget::text_editor;
 use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost};
-use termherd_core::workspace::SessionId;
+use termherd_core::workspace::{SessionId, Tab};
 use termherd_core::{
     ClaudeLaunch, ConfigInput, Keymap, Launch, Overlay, PointerEvent, ScrollTarget, SelectOp,
     SessionRecord, SessionStatus,
@@ -366,6 +366,47 @@ struct Shell {
 struct TabDrag {
     from: usize,
     over: usize,
+}
+
+/// The tabs the shell's index-keyed state names, each with the session of its
+/// first pane, so the index can be found again once `core` reorders the strip:
+/// parking, unparking and opening before the parked group all shift tabs.
+struct TabAnchors {
+    closing: Option<(usize, SessionId)>,
+    drag: Option<(TabDrag, SessionId, SessionId)>,
+}
+
+impl TabAnchors {
+    fn of(shell: &Shell) -> Self {
+        let tabs = &shell.core.workspace.tabs;
+        let session_at = |index: usize| tabs.get(index).map(Tab::first_session);
+        Self {
+            closing: shell
+                .closing
+                .and_then(|index| Some((index, session_at(index)?))),
+            drag: shell
+                .tab_drag
+                .and_then(|drag| Some((drag, session_at(drag.from)?, session_at(drag.over)?))),
+        }
+    }
+
+    /// Point the state the message left untouched back at its tabs. A tab no
+    /// longer found is left to the message, which already dealt with its close.
+    fn follow(self, shell: &mut Shell) {
+        let workspace = &shell.core.workspace;
+        if let Some((index, session)) = self.closing
+            && shell.closing == Some(index)
+            && let Some(now) = workspace.tab_of(session)
+        {
+            shell.closing = Some(now);
+        }
+        if let Some((drag, from, over)) = self.drag
+            && shell.tab_drag == Some(drag)
+            && let (Some(from), Some(over)) = (workspace.tab_of(from), workspace.tab_of(over))
+        {
+            shell.tab_drag = Some(TabDrag { from, over });
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -929,9 +970,14 @@ impl Shell {
         )
     }
 
-    /// The iced `update`: every message goes through [`Self::dispatch`].
+    /// The iced `update`: every message goes through [`Self::dispatch`], and
+    /// the tab indices the shell holds follow their tabs through any reorder
+    /// the message caused.
     fn update(&mut self, message: Message) -> Task<Message> {
-        self.dispatch(message)
+        let anchors = TabAnchors::of(self);
+        let task = self.dispatch(message);
+        anchors.follow(self);
+        task
     }
 
     // A flat `match` over every `Message` variant — the app's central event
@@ -1031,11 +1077,19 @@ impl Shell {
                 Task::none()
             }
             Message::PtyStatus { session, status } => {
+                let shown = self.core.workspace.focused_session();
                 let effects = self
                     .core
                     .apply(termherd_core::Event::StatusChanged { session, status });
                 self.settle_waiters(session);
-                self.perform(effects)
+                // Attention unparks its tab; with every tab parked, that tab
+                // becomes the active one.
+                let settle = if self.core.workspace.focused_session() != shown {
+                    self.settle_after_tab_switch()
+                } else {
+                    Task::none()
+                };
+                Task::batch([self.perform(effects), settle])
             }
             Message::PtyTitle { session, title } => {
                 let effects = self
@@ -4653,6 +4707,91 @@ mod key_routing {
         let _ = shell.launch("/tmp/c".to_string(), Launch::Shell);
         assert_eq!(shell.core.workspace.tabs.len(), 3);
         shell
+    }
+
+    /// Three tabs, every one parked, in launch order, with the last one active
+    /// — the one state in which the active tab is parked.
+    fn shell_with_three_parked_tabs() -> (Shell, [SessionId; 3]) {
+        let mut shell = shell_with_three_tabs();
+        let ids = [0, 1, 2].map(|index| shell.core.workspace.tabs[index].first_session());
+        for index in [2, 1, 0] {
+            let _ = shell.core.apply(termherd_core::Event::ToggleParkTab(index));
+        }
+        shell.core.workspace.active = 2;
+        let order: Vec<SessionId> = shell
+            .core
+            .workspace
+            .tabs
+            .iter()
+            .map(termherd_core::workspace::Tab::first_session)
+            .collect();
+        assert_eq!(order, ids, "precondition: launch order");
+        assert_eq!(
+            shell.core.workspace.first_parked(),
+            0,
+            "precondition: all parked"
+        );
+        (shell, ids)
+    }
+
+    fn attention(shell: &mut Shell, session: SessionId) {
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: termherd_core::SessionStatus::Attention,
+        });
+    }
+
+    #[test]
+    fn an_armed_close_follows_its_tab_when_attention_reorders_the_strip() {
+        let (mut shell, [_, _, last]) = shell_with_three_parked_tabs();
+        shell.closing = Some(2);
+
+        attention(&mut shell, last);
+
+        let moved_to = shell.core.workspace.tab_of(last);
+        assert_eq!(moved_to, Some(0), "precondition: unparked to the front");
+        assert_eq!(shell.closing, moved_to, "the prompt still names its tab");
+    }
+
+    #[test]
+    fn attention_that_changes_the_active_tab_resets_the_prompts_and_the_keys() {
+        let (mut shell, [_, middle, _]) = shell_with_three_parked_tabs();
+        shell.closing = Some(2);
+        shell.focus = Focus::Search;
+
+        attention(&mut shell, middle);
+
+        assert_eq!(
+            shell.core.workspace.focused_session(),
+            Some(middle),
+            "precondition: the only unparked tab is now active"
+        );
+        assert_eq!(
+            shell.closing, None,
+            "the prompt named a tab no longer shown"
+        );
+        assert_eq!(shell.focus, Focus::Terminal);
+    }
+
+    #[test]
+    fn a_tab_drag_keeps_its_tabs_when_attention_reorders_the_strip() {
+        let mut shell = shell_with_three_tabs();
+        let _ = shell.launch("/tmp/d".to_string(), Launch::Shell);
+        // [a | b c d]: three parked tabs behind the first.
+        for _ in 0..3 {
+            let _ = shell.core.apply(termherd_core::Event::ToggleParkTab(1));
+        }
+        assert_eq!(shell.core.workspace.first_parked(), 1, "precondition");
+        let carried = shell.core.workspace.tabs[3].first_session();
+        let over = shell.core.workspace.tabs[2].first_session();
+        let _ = shell.update(Message::TabDragStart(3));
+        let _ = shell.update(Message::TabDragOver(2));
+
+        attention(&mut shell, over);
+
+        let drag = shell.tab_drag.expect("the drag survives");
+        assert_eq!(Some(drag.from), shell.core.workspace.tab_of(carried));
+        assert_eq!(Some(drag.over), shell.core.workspace.tab_of(over));
     }
 
     #[test]
