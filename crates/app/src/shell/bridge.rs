@@ -272,6 +272,10 @@ pub enum Action {
     /// to synchronise follows with [`Request::WaitForStatus`].
     /// → `Event::TerminalInput`.
     Run { session: u64, bytes: Vec<u8> },
+    /// Press Enter in a session, apart from the text a [`Self::Run`] typed:
+    /// the shell writes it after a pause, so a long text is not read as a
+    /// paste that swallows it. → `Event::TerminalSubmit`.
+    Submit { session: u64 },
     /// Place a pointer event at a cell of a session's terminal — the pointer
     /// half of what [`Self::Run`] does for text. Bounded by the session's last
     /// rendered geometry; out of range rejects before anything applies.

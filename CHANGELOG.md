@@ -14,6 +14,35 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that answers after you moved to another doc no longer marks that doc
   `saved` nor changes its on-disk baseline (#384).
 
+### Fixed (Plans & memory lists an added repo's CLAUDE.md)
+
+- *Plans & memory* lists the `CLAUDE.md` of a repo added to the sidebar
+  before it has any session, as soon as it is added, and drops it when the
+  repo is forgotten. It used to wait for the repo's first session (#444).
+
+### Fixed (a read after a wait shows what the status reported)
+
+- Over MCP, a `read_terminal` after `wait_for_status`, and the text
+  `prompt_in_session` returns, show at least the output that produced the
+  status waited for. A read right after an `idle` could still show Claude's
+  spinner, one screen behind (#436).
+
+### Fixed (a long Claude command is submitted)
+
+- A confirmed Claude command with a long argument, such as a `/rename` to a
+  long name from the tab menu or MCP `claude_command`, is submitted. Claude
+  Code used to read the line and its Enter as one paste, and waited for a
+  second Enter. Enter now follows the line after a pause, as
+  `run_in_session` and `prompt_in_session` already did (#439).
+
+### Fixed (a TermHerd started from a Claude session)
+
+- A TermHerd started from inside a Claude Code session no longer passes that
+  session's identity (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
+  its messaging socket, …) to every pane. A Claude launched in such a
+  TermHerd now writes its session file again, so its agent name, hover card
+  and MCP identity are found (#356).
+
 ### Fixed (the tab menu says why *Tab colour…* is unavailable)
 
 - On a Claude tab that cannot take `/color` right now — busy, a draft in its

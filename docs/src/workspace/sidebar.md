@@ -152,9 +152,10 @@ limit to `0` to always show every session —
 ## Plans & memory
 
 The bottom section lists Claude's plan files (`~/.claude/plans/*.md`) and the
-memory files: the global `~/.claude/CLAUDE.md` and each project's `CLAUDE.md`.
-Clicking one loads it off-thread and opens it in the main pane, replacing the
-terminal view until you close it.
+memory files: the global `~/.claude/CLAUDE.md` and the `CLAUDE.md` of each
+repo in the sidebar, an added repo with no session yet included. Clicking one
+loads it off-thread and opens it in the main pane, replacing the terminal view
+until you close it.
 
 The doc pane can **edit** — `💾 save`, with a `• modified` marker while there
 are unsaved changes and `saved` after a write. Two ways out, and they behave

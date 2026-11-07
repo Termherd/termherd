@@ -747,6 +747,8 @@ enum Message {
         request: termherd_core::PathRequest,
         resolved: Option<termherd_core::ResolvedPath>,
     },
+    /// The pause before a submit's Enter has passed; press it now.
+    SubmitDue(termherd_core::SessionId),
     /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
     /// runs off the UI thread, so this only spawns it.
@@ -980,18 +982,22 @@ impl Shell {
     /// unplugged network mount, a removed directory) that stat can block for
     /// tens of seconds, so it must never run on the UI thread.
     fn refresh_docs(&self) -> Task<Message> {
-        let paths: Vec<String> = self
-            .core
-            .sidebar
-            .projects
-            .iter()
-            .map(|g| g.path.clone())
-            .collect();
+        let paths = self.doc_project_paths();
         let claude = self.claude_dir.clone();
         Task::perform(
             async move { crate::docs::discover(claude.as_ref(), &paths) },
             Message::DocsDiscovered,
         )
+    }
+
+    /// The repos whose `CLAUDE.md` the doc list offers: every repo the sidebar
+    /// shows, a declaration with no session yet included.
+    fn doc_project_paths(&self) -> Vec<String> {
+        self.core
+            .repo_paths()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
     }
 
     /// The iced `update`: every message goes through [`Self::dispatch`]. The
@@ -1514,6 +1520,7 @@ impl Shell {
                     .apply(termherd_core::Event::PathResolved { request, resolved });
                 self.perform(effects)
             }
+            Message::SubmitDue(session) => self.press_enter(session),
             Message::CaptureScreenshot {
                 screenshot,
                 png_path,
@@ -2367,6 +2374,55 @@ mod key_routing {
     }
 
     #[test]
+    fn submit_action_presses_enter_only_once_its_pause_is_due() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Submit {
+            session: session.0.get(),
+        });
+        assert_eq!(outcome.error, None);
+        assert!(pty.writes().is_empty(), "no Enter inside the pause");
+
+        let _ = shell.update(Message::SubmitDue(session));
+        assert_eq!(pty.writes_seen(), vec![(session, b"\r".to_vec())]);
+    }
+
+    #[test]
+    fn submit_action_rejects_an_unknown_handle() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Submit { session: 999 });
+        assert!(outcome.error.is_some_and(|e| e.contains("999")));
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn a_submit_due_after_its_session_exited_writes_nothing() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.core.apply(termherd_core::Event::PtyExited {
+            session,
+            clean: true,
+        });
+        let _ = shell.update(Message::SubmitDue(session));
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn the_enter_gap_waits_out_the_whole_pause() {
+        let start = std::time::Instant::now();
+        block_on(effects::enter_gap());
+        assert!(start.elapsed() >= effects::ENTER_GAP);
+    }
+
+    /// Drive a future to completion on a throwaway runtime.
+    fn block_on(future: impl std::future::Future<Output = ()>) {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime")
+            .block_on(future);
+    }
+
+    #[test]
     fn run_action_rejects_an_unknown_handle_without_writing() {
         let (mut shell, pty) = shell_with_terminal();
         let (outcome, _task) = shell.perform_action(BridgeAction::Run {
@@ -2765,6 +2821,32 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::DeclareRepo { path: repo });
         let answer = outcome.repo().expect("an answer");
         assert_eq!(answer.session_count, 1, "the search does not decount it");
+    }
+
+    #[test]
+    fn declaring_or_forgetting_a_repo_rediscovers_the_docs() {
+        // A declared repo with no session holds a `CLAUDE.md` the scan never
+        // reports, so waiting for the next scan would leave it unlisted.
+        let (mut shell, _pty) = shell_with_terminal();
+        let task = shell.declare_repo_key("/declared", repos::RepoGesture::Mcp);
+        assert!(task.units() > 0, "declaring refreshes the doc list");
+        let task = shell.forget_repo_key("/declared", repos::RepoGesture::Mcp);
+        assert!(task.units() > 0, "forgetting drops its CLAUDE.md again");
+    }
+
+    #[test]
+    fn a_declared_repo_without_sessions_offers_its_claude_md() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::write(repo.join("CLAUDE.md"), "# memory").unwrap();
+        let _ = shell.declare_repo_key(&repo.display().to_string(), repos::RepoGesture::Mcp);
+
+        let docs = crate::docs::discover(None, &shell.doc_project_paths());
+        assert_eq!(
+            docs.iter().map(|d| d.path.clone()).collect::<Vec<_>>(),
+            vec![repo.join("CLAUDE.md")]
+        );
     }
 
     #[test]
@@ -5464,7 +5546,7 @@ mod key_routing {
         let _ = press_all(&mut shell, &["enter"]);
         assert_eq!(
             pty.writes().len(),
-            2,
+            1,
             "once the draft is gone, enter types it"
         );
     }
@@ -5485,7 +5567,7 @@ mod key_routing {
             pending.enter_ignored_until = Some(Instant::now() - std::time::Duration::from_secs(1));
         }
         let _ = shell.update(Message::Key(enter));
-        assert_eq!(pty.writes().len(), 2, "after it, enter confirms");
+        assert_eq!(pty.writes().len(), 1, "after it, enter confirms");
     }
 
     #[test]
@@ -5567,13 +5649,17 @@ mod key_routing {
         );
         assert_eq!(
             pty.writes_seen(),
-            vec![
-                (session, b"\x15/rename api work".to_vec()),
-                (session, b"\r".to_vec()),
-            ],
-            "the draft is cleared and the line typed, then Enter on its own"
+            vec![(session, b"\x15/rename api work".to_vec())],
+            "the draft is cleared and the line typed, with no Enter in the burst"
         );
         assert!(shell.keyboard_owner().is_none(), "and the prompt lets go");
+
+        let _ = shell.update(Message::SubmitDue(session));
+        assert_eq!(
+            pty.writes_seen().last(),
+            Some(&(session, b"\r".to_vec())),
+            "Enter follows on its own once the pause is due"
+        );
     }
 
     #[test]
@@ -6797,6 +6883,7 @@ mod key_routing {
         use std::time::{Duration, Instant};
 
         let _serialised = one_real_pty_at_a_time();
+        let private = tempfile::tempdir().expect("tempdir");
 
         let (tx, rx) = mpsc::channel::<PtyEvent>();
         let sink: termherd_pty::EventSink = Arc::new(move |ev| {
@@ -6806,6 +6893,7 @@ mod key_routing {
             sink,
             None,
             termherd_pty::Palette::default(),
+            termherd_pty::PrivateFiles::new(private.path()),
         ));
         let mut shell = shell_over(pty.clone());
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
@@ -6867,6 +6955,7 @@ mod key_routing {
             return;
         }
         let _serialised = one_real_pty_at_a_time();
+        let private = tempfile::tempdir().expect("tempdir");
 
         let (tx, rx) = mpsc::channel::<PtyEvent>();
         let sink: termherd_pty::EventSink = Arc::new(move |ev| {
@@ -6879,6 +6968,7 @@ mod key_routing {
                 args: Vec::new(),
             }),
             termherd_pty::Palette::default(),
+            termherd_pty::PrivateFiles::new(private.path()),
         ));
         let mut shell = shell_over(pty.clone());
         // Named for this process: two concurrent runs must not race over one

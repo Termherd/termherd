@@ -111,8 +111,21 @@ mod tests {
     #[test]
     fn no_test_writes_the_data_dir_of_the_home_it_runs_in() {
         let home = tempfile::tempdir().expect("tempdir");
-        // Session ids restart at 1 per process: a shared temp dir would collide.
+        // Session ids restart at 1 per process, so the files a running app
+        // keeps in its temp dir are named as the suite's sessions would name
+        // theirs: planted, they must come through untouched.
         let tmp = tempfile::tempdir().expect("tempdir");
+        let mut live = Vec::new();
+        for id in 1..=4 {
+            let shell = tmp.path().join(format!("termherd-shell-{id}"));
+            std::fs::create_dir(&shell).expect("the app's shell dir");
+            live.push(shell.join(".zshrc"));
+            live.push(tmp.path().join(format!("termherd-mcp-{id}.json")));
+            live.push(tmp.path().join(format!("termherd-settings-{id}.json")));
+        }
+        for path in &live {
+            std::fs::write(path, "live").expect("the app's file");
+        }
         let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
                 "--skip",
@@ -142,6 +155,14 @@ mod tests {
                 .iter()
                 .any(|name| name == ".termherd" || name == ".claude"),
             "tests wrote the user's home: {written:?}"
+        );
+        let touched: Vec<_> = live
+            .iter()
+            .filter(|path| std::fs::read_to_string(path).ok().as_deref() != Some("live"))
+            .collect();
+        assert!(
+            touched.is_empty(),
+            "tests touched a running app's session files: {touched:?}"
         );
         assert!(
             output.status.success() && passed_count(&stdout) > 0,
