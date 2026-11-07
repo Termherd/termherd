@@ -28,6 +28,7 @@ mod notify;
 mod open;
 mod pointer;
 mod record;
+mod repo_link;
 mod retitle;
 mod session;
 mod settings;
@@ -169,7 +170,10 @@ impl App {
     /// on every tab gesture, which settles the view even on the tab it shows.
     pub fn apply(&mut self, event: Event) -> Vec<Effect> {
         let shown = self.workspace.shown_session();
-        let gesture = matches!(event, Event::ActivateTab(_) | Event::ToggleParkTab(_));
+        let gesture = matches!(
+            event,
+            Event::ActivateTab(_) | Event::ToggleParkTab(_) | Event::OpenRepo { .. }
+        );
         let mut effects = self.dispatch(event);
         if gesture || shown.is_some_and(|session| !self.workspace.shows(session)) {
             effects.push(Effect::TabShown);
@@ -178,7 +182,9 @@ impl App {
     }
 
     /// A flat dispatcher: each arm is a one-line delegate to a domain helper,
-    /// or an inline field update that yields no effect.
+    /// or an inline field update that yields no effect. Its length grows with
+    /// the event catalogue, not with any one arm's logic.
+    #[allow(clippy::too_many_lines)]
     fn dispatch(&mut self, event: Event) -> Vec<Effect> {
         match event {
             Event::ScanCompleted(records) => {
@@ -269,6 +275,7 @@ impl App {
                 self.workspace.focus_pane_of(session);
                 Vec::new()
             }
+            Event::OpenRepo { path, resolved } => self.open_repo(&path, resolved.as_deref()),
             Event::RevealPane(session) => {
                 self.workspace.reveal_pane_of(session);
                 Vec::new()

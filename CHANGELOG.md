@@ -18,8 +18,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added (termherd:// links in the terminal)
 
 - A `termherd://` URL in terminal output is a link: Cmd/Ctrl+hover underlines
-  it, Cmd/Ctrl+click hands it to the OS. termherd does not handle the scheme
-  yet (#446).
+  it, Cmd/Ctrl+click hands it to the OS.
+
+### Added (opening a tab from a termherd:// link)
+
+- `termherd://open?repo=<absolute path>` shows the tab working in that repo,
+  or opens a shell there. A link never types into a session nor starts
+  Claude, and anything else is refused. The macOS `.app`, the `.deb` and the
+  Windows installer register the scheme; a link reaching a second launch is
+  handed to the running instance (#446). A release from before this one, still
+  running, never reads the hand-over: quit it first.
 
 ### Changed (a second instance on Windows and Linux)
 

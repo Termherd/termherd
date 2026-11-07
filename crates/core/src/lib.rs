@@ -6,6 +6,7 @@
 pub mod app;
 pub mod browser;
 pub mod claude_command;
+pub mod deeplink;
 pub mod docscope;
 pub mod keymap;
 pub mod links;
