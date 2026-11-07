@@ -342,7 +342,8 @@ impl Shell {
             Ok(path) => tracing::info!(path = %path.display(), "capture dump written"),
             Err(error) => tracing::warn!(%error, "could not write capture dump"),
         }
-        let png_path = crate::capture::png_path(dir, &stamp);
+        let png_path =
+            crate::capture::artefact_path(dir, &stamp, crate::capture::Artefact::Screenshot);
         // Screenshot the live window (rung 1), then encode + write the PNG.
         // `Task::<Option>::and_then` only fires for `Some`, so a window-less run
         // simply skips the PNG and the JSON dump still stands.

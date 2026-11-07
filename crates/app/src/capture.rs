@@ -75,19 +75,42 @@ pub fn redacted(mut dump: WorkspaceSnapshot) -> WorkspaceSnapshot {
     dump
 }
 
+/// The kinds of file a capture or a recording writes into the capture dir.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Artefact {
+    /// The rung-0 JSON state dump.
+    Dump,
+    /// The rung-1 PNG screenshot, the dump's companion.
+    Screenshot,
+    /// A GIF screencast.
+    Screencast,
+}
+
+impl Artefact {
+    /// The file extension, without its dot.
+    #[must_use]
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::Dump => "json",
+            Self::Screenshot => "png",
+            Self::Screencast => "gif",
+        }
+    }
+}
+
+/// `dir/capture-<stamp>.<ext>`: where the `kind` artefact of a stamp lives.
+#[must_use]
+pub fn artefact_path(dir: &Path, stamp: &str, kind: Artefact) -> PathBuf {
+    dir.join(format!("capture-{stamp}.{}", kind.extension()))
+}
+
 /// Write the JSON dump to `dir/capture-<stamp>.json`, returning the path
-/// written. The companion PNG shares the stamp ([`png_path`]).
+/// written. The companion PNG shares the stamp.
 pub fn write_dump(dir: &Path, stamp: &str, dump: &WorkspaceSnapshot) -> io::Result<PathBuf> {
-    let path = dir.join(format!("capture-{stamp}.json"));
+    let path = artefact_path(dir, stamp, Artefact::Dump);
     let json = to_json(dump).map_err(io::Error::other)?;
     termherd_private_fs::write_file(&path, json)?;
     Ok(path)
-}
-
-/// The PNG path for a stamp — the rung-1 companion of [`write_dump`]'s JSON.
-#[must_use]
-pub fn png_path(dir: &Path, stamp: &str) -> PathBuf {
-    dir.join(format!("capture-{stamp}.png"))
 }
 
 /// Write an iced [`Screenshot`]'s RGBA pixels to a PNG at `path`, full size —
@@ -229,7 +252,7 @@ mod tests {
         // neither may be readable by another user of the machine.
         let dir = tempfile::tempdir().expect("tempdir");
         let dump = write_dump(dir.path(), "20010909-014640-000", &dump()).expect("write");
-        let png = png_path(dir.path(), "20010909-014640-000");
+        let png = artefact_path(dir.path(), "20010909-014640-000", Artefact::Screenshot);
         let screenshot = Screenshot::new(
             crate::image::testing::numbered_frame(2, 1),
             iced::Size::new(2, 1),

@@ -135,7 +135,7 @@ impl RecordState {
             return;
         }
         let stamp = crate::capture::stamp(SystemTime::now());
-        let path = dir.join(format!("capture-{stamp}.gif"));
+        let path = crate::capture::artefact_path(dir, &stamp, crate::capture::Artefact::Screencast);
         self.recorder = Some(Recorder::start(path, self.config));
         tracing::info!(
             fps = self.config.fps,
