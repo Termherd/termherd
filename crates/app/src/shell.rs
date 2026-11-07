@@ -3379,14 +3379,29 @@ mod key_routing {
     fn an_unbound_named_key_reaches_the_terminal_through_termherds_encoder() {
         // What `run_in_session` cannot show: the bytes termherd itself sends for
         // a key, so an agent can audit the encoder on a live pane.
+        //
+        // Every key is spelled with its bytes, because the round trip alone
+        // cannot see two rows of the name table swapped: `f11` naming F12 and
+        // `f12` naming F11 read back consistently, yet bind the wrong key.
         for (spec, bytes) in [
             ("pageup", b"\x1b[5~".as_slice()),
+            ("pagedown", b"\x1b[6~"),
             ("shift+delete", b"\x1b[3;2~"),
             ("insert", b"\x1b[2~"),
-            ("f1", b"\x1bOP"),
-            ("f10", b"\x1b[21~"),
             ("space", b" "),
             ("backspace", b"\x7f"),
+            ("f1", b"\x1bOP"),
+            ("f2", b"\x1bOQ"),
+            ("f3", b"\x1bOR"),
+            ("f4", b"\x1bOS"),
+            ("f5", b"\x1b[15~"),
+            ("f6", b"\x1b[17~"),
+            ("f7", b"\x1b[18~"),
+            ("f8", b"\x1b[19~"),
+            ("f9", b"\x1b[20~"),
+            ("f10", b"\x1b[21~"),
+            ("f11", b"\x1b[23~"),
+            ("f12", b"\x1b[24~"),
         ] {
             let (mut shell, pty) = shell_with_terminal();
             assert_eq!(press_chord(&mut shell, spec), PressStep::Typed, "{spec}");
