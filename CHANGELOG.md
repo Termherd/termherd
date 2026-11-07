@@ -22,6 +22,34 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deleted after each capture or screencast. Only files TermHerd named are
   ever touched (#288).
 
+### Fixed (a dead key shows its pending character)
+
+- A dead key (`^`, `¨`, `` ` ``, `~` on a French layout) shows its pending
+  character underlined at the cursor until the next key completes it, as
+  other macOS terminals do. It clears on the commit, on Escape, and when the
+  window or the terminal loses focus (#322).
+
+### Fixed (a multi-line paste asks before it runs line by line)
+
+- A paste holding a line break into a terminal that did not turn bracketed
+  paste on — `sh`, `cmd.exe` — now waits for a prompt naming the tab and the
+  line count, instead of running each line as it arrives. **Paste** sends the
+  text unchanged, **Cancel** drops it. Over MCP the prompt is the
+  `paste-confirm` overlay. Single-line pastes, and pastes into Claude Code or
+  any program using bracketed paste, are unchanged (#291).
+
+### Fixed (Meta and cursor keys send what xterm sends)
+
+- The arrows, Home and End send `ESC O A`-style sequences once a program
+  switches to application cursor keys, as vim and less expect; modified
+  arrows keep their `ESC [ 1 ; <mod>` form (#321).
+- Meta reaches more keys: <kbd>Meta</kbd>+<kbd>.</kbd> sends `ESC .`,
+  <kbd>Meta</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> `ESC B`,
+  <kbd>Ctrl</kbd>+<kbd>Meta</kbd>+<kbd>B</kbd> `ESC ^B` and
+  <kbd>Meta</kbd>+<kbd>Space</kbd> `ESC` and a space. They used to drop the
+  `ESC`, the Shift or the Meta. On macOS, Space follows the Option side like
+  a letter: the composing side keeps its plain space (#321).
+
 ### Fixed (a doc save lands on the doc it wrote)
 
 - A doc keeps its `• modified` mark when you type while its save is in

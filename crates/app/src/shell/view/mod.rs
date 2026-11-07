@@ -238,6 +238,7 @@ impl Shell {
                             let (cw, ch) = cell_size(self.core.font_size());
                             Size::new(cw, ch)
                         },
+                        self.core.font_size(),
                         Message::ImeCommit,
                     );
                     mouse_area(composed)

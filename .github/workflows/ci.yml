@@ -63,6 +63,7 @@ jobs:
               - 'rust-toolchain.toml'
               - 'deny.toml'
               - 'scripts/check-crate-deps.sh'
+              - 'scripts/test-check-crate-deps.sh'
               - '.github/workflows/ci.yml'
               - '.github/workflows/codeql.yml'
             markdown:
@@ -187,6 +188,7 @@ jobs:
           cargo deny check
           cargo machete
           ./scripts/check-crate-deps.sh
+          ./scripts/test-check-crate-deps.sh
 
   actionlint:
     name: actionlint

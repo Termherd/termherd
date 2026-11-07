@@ -180,6 +180,23 @@ pub const CLOSE: &str = "Close";
 pub const ARCHIVE: &str = "Archive";
 pub const QUIT: &str = "Quit";
 pub const SEND: &str = "Send";
+pub const PASTE: &str = "Paste";
+
+/// Confirmation before a paste into a terminal that did not ask for bracketed
+/// paste, where every line break in the text runs as Enter.
+#[must_use]
+pub fn paste_prompt(lines: usize, title: &str) -> String {
+    let noun = if lines == 1 { "line" } else { "lines" };
+    let target = if title.is_empty() {
+        "this terminal".to_owned()
+    } else {
+        format!("“{title}”")
+    };
+    format!(
+        "Paste {lines} {noun} into {target}? It did not ask for bracketed paste, \
+         so each line runs as it arrives."
+    )
+}
 
 /// The same prompt after a confirmation typed nothing: the line, and why.
 #[must_use]
@@ -258,6 +275,19 @@ pub const SETTINGS_CLAUDE_NOTE: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_paste_prompt_names_the_lines_and_the_tab() {
+        let tail = "It did not ask for bracketed paste, so each line runs as it arrives.";
+        assert_eq!(
+            paste_prompt(1, "zsh"),
+            format!("Paste 1 line into “zsh”? {tail}")
+        );
+        assert_eq!(
+            paste_prompt(3, ""),
+            format!("Paste 3 lines into this terminal? {tail}")
+        );
+    }
 
     #[test]
     fn a_disabled_menu_entry_names_its_refusal_in_a_few_words() {

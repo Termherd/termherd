@@ -13,11 +13,20 @@ declare -A allowed=(
     [termherd-app]="termherd-core termherd-claude termherd-scan termherd-pty termherd-mcp termherd-private-fs"
 )
 
+# Both jq calls feed process substitutions, where a failure does not trip
+# `set -e`: without this check a missing jq reads as a workspace of 0 crates.
+command -v jq >/dev/null || { echo "::error::jq is required (scripts/check-crate-deps.sh)." >&2; exit 1; }
+
 metadata="$(cargo metadata --no-deps --format-version 1)"
 cr=$'\r'
 
 mapfile -t crates < <(jq -r '.packages[].name' <<<"$metadata" | sort)
 crates=("${crates[@]%"$cr"}")
+# The workspace always has crates: an empty list means the probe broke.
+if [[ ${#crates[@]} -eq 0 || -z "${crates[0]}" ]]; then
+    echo "::error::no crate read from cargo metadata; the dependency check cannot run." >&2
+    exit 1
+fi
 violations=0
 for crate in "${crates[@]}"; do
     if [[ -z "${allowed[$crate]+set}" ]]; then

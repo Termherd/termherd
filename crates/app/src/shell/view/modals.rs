@@ -32,6 +32,10 @@ impl Shell {
                     .map(|card| (card, Message::CancelClaudeCommand))
             })
             .or_else(|| {
+                self.paste_confirmation()
+                    .map(|card| (card, Message::CancelPaste))
+            })
+            .or_else(|| {
                 self.doc_discard_confirmation()
                     .map(|card| (card, Message::CancelDocDiscard))
             })
@@ -135,6 +139,30 @@ impl Shell {
             button::primary,
             Message::ConfirmClaudeCommand,
             Message::CancelClaudeCommand,
+        ))
+    }
+
+    /// The question before a paste the target terminal would run line by line:
+    /// how many lines, and the tab they land in — which need not be the one
+    /// focused, since a right-click pastes where it points. `None` when no
+    /// paste is held.
+    pub(in crate::shell) fn paste_prompt(&self) -> Option<String> {
+        let pending = self.core.pending_paste()?;
+        let workspace = &self.core.workspace;
+        let title = workspace
+            .tab_of(pending.session)
+            .and_then(|index| workspace.tabs.get(index))
+            .map_or("", |tab| tab.display_title());
+        Some(strings::paste_prompt(pending.lines(), &clip(title, 24)))
+    }
+
+    fn paste_confirmation(&self) -> Option<Element<'_, Message>> {
+        Some(Self::confirmation_bar(
+            self.paste_prompt()?,
+            strings::PASTE,
+            button::danger,
+            Message::ConfirmPaste,
+            Message::CancelPaste,
         ))
     }
 
