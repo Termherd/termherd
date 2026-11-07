@@ -16,7 +16,7 @@ them.
 ## Commands
 
 ```bash
-cargo run -p termherd-app          # run the binary (M0: tracing + single-instance stub)
+cargo run -p termherd-app          # run the app
 cargo test --workspace             # all tests
 cargo test -p termherd-core        # tests for one crate
 cargo test -p termherd-core workspace::tests::split_wraps_leaf  # one test by path
@@ -200,10 +200,11 @@ idle Claude — the one write path for edits Claude owns),
 `press_keys` + `run_action` (the app's own keyboard), `add_repo` +
 `forget_repo` (membership — what the sidebar *contains*, as against what the
 window draws), `prompt_in_session` (the loop below, composed), and
-`list_options` + `set_option` (settings — the stdio server's two tools over
-its own pure catalogue in `crates/mcp`, writing `settings.json`, which the
-shell's settings watch then applies live; the one pair that touches a file
-rather than `core`, so it needs no bridge round trip). The loop
+`list_options` + `set_option` (settings — served by both the live bridge and
+the stdio server, over the one pure catalogue in `crates/mcp`, writing
+`settings.json`, which the shell's settings watch then applies live; the one
+pair that touches a file rather than `core`, so it needs no bridge round
+trip). The loop
 they exist to serve is **act → wait → observe**: `run_in_session` returns
 immediately, so synchronise with `wait_for_status` and then `read_terminal`.
 Wait for `busy` before `idle`: just after typing, Claude still shows the
@@ -414,11 +415,12 @@ session on `starting`, is fixed — see the wait rung above.)
 Both rename overlays now route `enter` to their existing commit messages,
 alongside the widget's `on_submit` path for human input (#246).
 
-**Looks like a contradiction, is not.** `docs/ARCHITECTURE.md` §15 lists an
-`mcp` crate as *deferred (Unsure)*. That is a **different feature** —
-`F-mcp-ide-bridge`, termherd as an MCP *client* of Claude's IDE bridge — and it
-really is unbuilt. The surface described here runs the other way round
-(termherd is the server) and lives in `app`, not in a crate of its own.
+**Two things named `mcp`.** `crates/mcp` is built: the stdio server
+`termherd-mcp` and the pure option catalogue both servers share. The live
+bridge runs the other way round from it and lives in `app` (`app::mcp`).
+`docs/ARCHITECTURE.md` §15 also sketches an `mcp` adapter for
+`F-mcp-ide-bridge` — termherd as an MCP *client* of Claude's IDE bridge — and
+that one is unbuilt.
 
 ## Architecture — the dependency rule
 
@@ -445,12 +447,13 @@ app  ──►  core  ◄──  adapters          (adapters depend on core, nev
   via the `claude` codec; implements `core::ports::ProjectScanner`).
 - `crates/pty` — terminal adapter (`portable-pty` + `alacritty_terminal`);
   implements `core::ports::PtyHost`.
-- `store` (Should, PRD rev. 4) is the one adapter still unbuilt. The **MCP
-  control surface shipped** as a module inside `app`, not as its own crate —
-  it is a bridge into the shell, not a port `core` calls out through. The
-  separate `mcp` *crate* sketched in `docs/ARCHITECTURE.md` §15 is a different
-  feature (`F-mcp-ide-bridge`: termherd as an MCP **client** of Claude's IDE
-  bridge), still unbuilt.
+- `crates/mcp` — the stdio MCP server binary (`termherd-mcp`) and the pure
+  settings-option catalogue; depends on `core` and `claude`, and `app` links
+  its library for the live bridge's option tools.
+- The **live MCP bridge** is a module inside `app` (`app::mcp` +
+  `shell::bridge` / `shell::serve`), not a port `core` calls out through.
+- `store` (Should, PRD rev. 4) is the one adapter still unbuilt, as is the IDE
+  bridge `docs/ARCHITECTURE.md` §15 sketches (`F-mcp-ide-bridge`).
 
 When adding code, ask: *which crate does this belong in?* If the answer is
 "`core` should call this adapter directly," the answer is wrong — add a port
@@ -469,7 +472,7 @@ root; mutators (`open`, `split`, …) return `Option<()>` rather than panicking
 when invariants are violated. Follow that pattern: surface broken invariants
 as `None`/`Err`, never `unwrap`.
 
-## Concurrency model (when adapters arrive)
+## Concurrency model
 
 One tokio runtime, **actor-per-session**: each session is owned by a task
 holding its PTY handle and terminal grid. Other parts of the system talk to

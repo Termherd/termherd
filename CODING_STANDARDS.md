@@ -149,8 +149,8 @@ CUPID describes what good code *is*; YAGNI protects against building what you
 don't need yet.
 
 - No abstraction for a second adapter that doesn't exist. A concrete adapter is
-  fine until the next one actually lands (`mcp` is Unsure — don't pre-abstract
-  for it).
+  fine until the next one actually lands (the IDE bridge `F-mcp-ide-bridge` is
+  Unsure — don't pre-abstract for it).
 - No trait with a single implementation — **except a port** that deliberately
   decouples `core` from an adapter. That is the hexagonal contract, not
   speculation; the distinction is whether the trait exists to invert a
@@ -220,29 +220,30 @@ Reflect rules:
 - **Reflect after Green-but-no-Refactor cycles too.** "There was nothing to
   clean" is itself a signal — either the design is good or you're not looking
   hard enough.
-- **Always surface findings to the user with a recommendation.** Every
-  reflection that produces a finding (a new test worth pinning, a surprise that
-  suggests a missing concept, a smell you noticed) gets a one-line decision
-  prompt: *"apply now / add to today / add to the roadmap / forget it"*. Do not
+- **Always surface findings to the user as a decision.** Every reflection
+  that produces a finding (a new test worth pinning, a surprise that suggests a
+  missing concept, a smell you noticed) gets a one-line decision prompt:
+  *"apply now / add to today / add to the roadmap / forget it"*. Do not
   silently carry findings forward and do not silently apply them.
 
-  Recommend the best move per the principles, and say *why* in one short
-  clause. Heuristics:
+  The user picks. Give a recommendation only when asked, then name the move
+  and its *why* in one short clause. Heuristics:
   - **Apply now** — the finding closes a still-open hole from the cycle just
     finished, the fix is small, and skipping it would leave the work
     half-done. (e.g. forward contract test landed → reverse test is ~30 LOC →
     apply now closes the lesson.)
   - **Add to today** — same-session work, but it would derail the current
     task; better as the next discrete cycle.
-  - **Add to the roadmap** — useful but not on the critical path; capture it in
-    [`ROADMAP.md`](ROADMAP.md) so it's not lost.
+  - **Add to the roadmap** — useful but not on the critical path; capture it as
+    a feature file in `.roadmap/features/` (never in the generated
+    `ROADMAP.md`) so it's not lost.
   - **Forget it** — speculative, low-leverage, or you're not sure it's real.
     Recording every passing thought is its own debt.
 
-  Default leans toward *apply now* when the finding is small and directly tied
-  to the cycle that surfaced it (Tidy First: keep the diff coherent). Lean
-  toward *roadmap* when the finding is larger than the cycle it interrupted
-  (CUPID-Composable: don't bundle unrelated work).
+  *Apply now* fits a finding that is small and directly tied to the cycle that
+  surfaced it (Tidy First: keep the diff coherent); *roadmap* fits one larger
+  than the cycle it interrupted (CUPID-Composable: don't bundle unrelated
+  work).
 
 ### Testing in `termherd`
 
@@ -373,10 +374,12 @@ Types:
 - `refactor`: code change that neither fixes a bug nor adds a feature
 - `test`: adding or fixing tests
 - `chore`: build tooling, dependencies
+- `ci`: CI workflows
 - `perf`: performance improvement
 
-Scopes in this repo are either a **milestone** (`m0`, `m1`, `m2`) or a
-**crate/area** (`core`, `claude`, `pty`, `scan`, `app`, `ci`, `dist`, `docs`).
+The scope names where the change lands: a crate (`core`, `claude`, `pty`,
+`scan`, `mcp`, `app`), a module or surface (`tabs`, `keymap`, `instance`), or
+a doc area (`agents`, `standards`, `roadmap`, `ci`).
 
 Breaking changes include `BREAKING CHANGE:` in the footer or `!` after the
 type. Commit messages carry **no "Claude" signature** (per the global user
@@ -396,6 +399,7 @@ crates/
 ├── claude/  # pure CLI-format codec: path · derive · digest · osc · jsonl
 ├── scan/    # filesystem discovery adapter (implements ProjectScanner)
 ├── pty/     # terminal adapter, actor-per-session (implements PtyHost)
+├── mcp/     # stdio MCP server + the settings-option catalogue
 └── app/     # iced GUI shell; constructs adapters in main() and injects them
 ```
 
