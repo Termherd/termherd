@@ -293,9 +293,9 @@ pub(crate) fn spawn_waiter(
 /// rides every prompt, so most repeat the last one, and forwarding those would
 /// wake the whole update loop to change nothing. Stated twice it would drift on
 /// the first edit that touched one of them.
-fn news(seen: &mut Option<String>, reported: Option<String>) -> Option<String> {
+fn news<T: PartialEq + Clone>(seen: &mut Option<T>, reported: Option<T>) -> Option<T> {
     let reported = reported?;
-    if seen.as_deref() == Some(reported.as_str()) {
+    if seen.as_ref() == Some(&reported) {
         return None;
     }
     *seen = Some(reported.clone());
