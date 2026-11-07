@@ -6807,6 +6807,7 @@ mod key_routing {
         use std::time::{Duration, Instant};
 
         let _serialised = one_real_pty_at_a_time();
+        let private = tempfile::tempdir().expect("tempdir");
 
         let (tx, rx) = mpsc::channel::<PtyEvent>();
         let sink: termherd_pty::EventSink = Arc::new(move |ev| {
@@ -6816,6 +6817,7 @@ mod key_routing {
             sink,
             None,
             termherd_pty::Palette::default(),
+            termherd_pty::PrivateFiles::new(private.path()),
         ));
         let mut shell = shell_over(pty.clone());
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
@@ -6877,6 +6879,7 @@ mod key_routing {
             return;
         }
         let _serialised = one_real_pty_at_a_time();
+        let private = tempfile::tempdir().expect("tempdir");
 
         let (tx, rx) = mpsc::channel::<PtyEvent>();
         let sink: termherd_pty::EventSink = Arc::new(move |ev| {
@@ -6889,6 +6892,7 @@ mod key_routing {
                 args: Vec::new(),
             }),
             termherd_pty::Palette::default(),
+            termherd_pty::PrivateFiles::new(private.path()),
         ));
         let mut shell = shell_over(pty.clone());
         // Named for this process: two concurrent runs must not race over one

@@ -57,14 +57,20 @@ impl PtyManager {
     /// `sink` receives every session's output and exit, from the reader
     /// threads. Wrap a channel sender to bridge into the GUI subscription.
     /// `shell` is the configured shell to launch, or `None` for the platform
-    /// default; `palette` the terminal colour scheme (FR10).
-    pub fn new(sink: EventSink, shell: Option<Shell>, palette: Palette) -> Self {
+    /// default; `palette` the terminal colour scheme (FR10); `private` where
+    /// each session's private files go.
+    pub fn new(
+        sink: EventSink,
+        shell: Option<Shell>,
+        palette: Palette,
+        private: PrivateFiles,
+    ) -> Self {
         Self {
             sessions: Mutex::new(HashMap::new()),
             sink,
             shell: RwLock::new(shell),
             palette: Arc::new(RwLock::new(palette)),
-            private: PrivateFiles::new(std::env::temp_dir()),
+            private,
         }
     }
 
@@ -324,6 +330,121 @@ mod tests {
         SessionId(NonZeroU64::new(n).expect("non-zero"))
     }
 
+    /// Session ids restart at 1 per process, so a test writing session files
+    /// into the shared temp dir writes — and on teardown deletes — those of
+    /// the termherd the developer is running. Reruns this binary under a temp
+    /// dir holding a running app's files, which must come through untouched,
+    /// and must gain none of the suite's.
+    #[test]
+    fn the_suite_leaves_a_running_apps_session_files_alone() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let live = plant_live_session_files(tmp.path());
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--skip",
+                "the_suite_leaves_a_running_apps_session_files_alone",
+            ])
+            .env("TMPDIR", tmp.path())
+            .env("TMP", tmp.path())
+            .env("TEMP", tmp.path())
+            .output()
+            .expect("rerun the test binary");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        let touched: Vec<_> = live
+            .iter()
+            .filter(|path| std::fs::read_to_string(path).ok().as_deref() != Some("live"))
+            .collect();
+        assert!(
+            touched.is_empty(),
+            "tests touched the app's files: {touched:?}"
+        );
+        let added: Vec<String> = std::fs::read_dir(tmp.path())
+            .expect("the temp dir is readable")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| {
+                name.starts_with("termherd-")
+                    && !LIVE_IDS.flat_map(live_names).any(|live| live == *name)
+            })
+            .collect();
+        assert!(
+            added.is_empty(),
+            "tests left termherd files there: {added:?}"
+        );
+        assert!(
+            output.status.success() && stdout.contains("test result: ok."),
+            "the app's files survived, but the rerun failed, so that proves nothing:\n{stdout}"
+        );
+    }
+
+    /// The sessions of the running app whose files are planted: its first.
+    const LIVE_IDS: std::ops::RangeInclusive<u64> = 1..=8;
+
+    /// The shell dir, mcp config and settings overlay the app names for `id`.
+    fn live_names(id: u64) -> [String; 3] {
+        [
+            format!("termherd-shell-{id}"),
+            format!("termherd-mcp-{id}.json"),
+            format!("termherd-settings-{id}.json"),
+        ]
+    }
+
+    /// The running app's files for [`LIVE_IDS`], each holding `live`;
+    /// returns every file planted.
+    fn plant_live_session_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut planted = Vec::new();
+        for id in LIVE_IDS {
+            let [shell, mcp, settings] = live_names(id).map(|name| root.join(name));
+            std::fs::create_dir(&shell).expect("the app's shell dir");
+            planted.extend([shell.join(".zshrc"), mcp, settings]);
+        }
+        for path in &planted {
+            std::fs::write(path, "live").expect("the app's file");
+        }
+        planted
+    }
+
+    /// A manager over the platform's default shell whose private files go to
+    /// a temp dir of its own, held for as long as the manager is.
+    fn manager(sink: EventSink, palette: Palette) -> (tempfile::TempDir, PtyManager) {
+        let private = tempfile::tempdir().expect("tempdir");
+        let mgr = PtyManager::new(sink, None, palette, PrivateFiles::new(private.path()));
+        (private, mgr)
+    }
+
+    /// The root a manager is given is where a real session's files land and
+    /// where its teardown removes them from. `bash` named explicitly, because
+    /// its recipe always writes a file there; a host without it skips.
+    #[test]
+    fn a_real_sessions_private_files_live_under_the_root_it_was_given() {
+        let Some(bash) = ["/bin/bash", "/usr/bin/bash"]
+            .into_iter()
+            .find(|path| std::path::Path::new(path).is_file())
+        else {
+            eprintln!("skipped: no bash on this host");
+            return;
+        };
+        let root = tempfile::tempdir().expect("tempdir");
+        let shell = Shell {
+            program: bash.to_owned(),
+            args: Vec::new(),
+        };
+        let mgr = PtyManager::new(
+            Arc::new(|_| {}),
+            Some(shell),
+            Palette::default(),
+            PrivateFiles::new(root.path()),
+        );
+        let id = sid(3);
+        mgr.spawn(spec(id)).expect("spawn");
+        let dir = root.path().join("termherd-shell-3");
+        assert!(dir.is_dir(), "the shell's startup files went elsewhere");
+
+        mgr.kill(id).expect("kill");
+        assert!(!dir.exists(), "the teardown left them behind");
+    }
+
     fn spec(session: SessionId) -> SpawnSpec {
         SpawnSpec {
             session,
@@ -343,7 +464,7 @@ mod tests {
         let sink: EventSink = Arc::new(move |ev| {
             let _ = tx.send(ev);
         });
-        let mgr = PtyManager::new(sink, None, Palette::default());
+        let (_private, mgr) = manager(sink, Palette::default());
         let id = sid(1);
 
         mgr.spawn(spec(id)).expect("spawn");
@@ -407,7 +528,7 @@ mod tests {
         let sink: EventSink = Arc::new(move |ev| {
             let _ = tx.send(ev);
         });
-        let mgr = PtyManager::new(sink, None, Palette::default());
+        let (_private, mgr) = manager(sink, Palette::default());
         let id = sid(1);
         mgr.spawn(spec(id)).expect("spawn");
         mgr.write(
@@ -465,7 +586,7 @@ mod tests {
         let sink: EventSink = Arc::new(move |ev| {
             let _ = tx.send(ev);
         });
-        let mgr = PtyManager::new(sink, None, Palette::default());
+        let (_private, mgr) = manager(sink, Palette::default());
         let id = sid(4);
         mgr.spawn(spec(id)).expect("spawn");
 
@@ -521,7 +642,7 @@ mod tests {
         let sink: EventSink = Arc::new(move |ev| {
             let _ = tx.send(ev);
         });
-        let mgr = PtyManager::new(sink, None, Palette::default());
+        let (_private, mgr) = manager(sink, Palette::default());
         let id = sid(5);
         mgr.spawn(spec(id)).expect("spawn");
         mgr.write(id, b"sleep 2\r\n").expect("write");
@@ -574,7 +695,7 @@ mod tests {
         let sink: EventSink = Arc::new(move |ev| {
             let _ = tx.send(ev);
         });
-        let mgr = PtyManager::new(sink, None, Palette::default());
+        let (_private, mgr) = manager(sink, Palette::default());
         let id = sid(2);
         mgr.spawn(spec(id)).expect("spawn");
         // `exit 0`: a bare `exit` returns whatever status the startup files left.
@@ -614,7 +735,7 @@ mod tests {
         let sink: EventSink = Arc::new(move |ev| {
             let _ = tx.send(ev);
         });
-        let mgr = PtyManager::new(sink, None, palette.clone());
+        let (_private, mgr) = manager(sink, palette.clone());
         let id = sid(7);
         mgr.spawn(spec(id)).expect("spawn");
 
@@ -660,7 +781,7 @@ mod tests {
         let sink: EventSink = Arc::new(move |ev| {
             let _ = tx.send(ev);
         });
-        let mgr = PtyManager::new(sink, None, Palette::default());
+        let (_private, mgr) = manager(sink, Palette::default());
         let id = sid(8);
         mgr.spawn(spec(id)).expect("spawn");
         mgr.set_palette(next.clone());
@@ -688,7 +809,7 @@ mod tests {
     #[test]
     fn control_methods_reject_unknown_sessions() {
         let sink: EventSink = Arc::new(|_| {});
-        let mgr = PtyManager::new(sink, None, Palette::default());
+        let (_private, mgr) = manager(sink, Palette::default());
         let id = sid(42);
         assert!(matches!(
             mgr.write(id, b"x"),

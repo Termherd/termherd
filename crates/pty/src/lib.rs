@@ -56,4 +56,5 @@ mod workdir;
 pub use events::{EventSink, PtyEvent};
 pub use grid::{HyperlinkSpan, Palette, Screen, ScreenCell};
 pub use input::{KeyMods, TermKey, key_bytes, mouse_bytes, paste_bytes, wheel_bytes};
+pub use launch::PrivateFiles;
 pub use manager::{PtyManager, Shell};
