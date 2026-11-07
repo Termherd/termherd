@@ -12,15 +12,15 @@ use termherd_core::McpConfig;
 use termherd_core::workspace::SessionId;
 use termherd_pty::{PrivateFiles, write_mcp_config, write_title_settings};
 
-fn session(id: u64) -> SessionId {
-    SessionId(NonZeroU64::new(id).expect("nonzero"))
+fn session(id: u64) -> Option<SessionId> {
+    NonZeroU64::new(id).map(SessionId)
 }
 
 /// A root for private files that no other process shares.
-fn scratch() -> (tempfile::TempDir, PrivateFiles) {
-    let tmp = tempfile::tempdir().expect("tempdir");
+fn scratch() -> std::io::Result<(tempfile::TempDir, PrivateFiles)> {
+    let tmp = tempfile::tempdir()?;
     let private = PrivateFiles::new(tmp.path());
-    (tmp, private)
+    Ok((tmp, private))
 }
 
 fn mcp_config() -> McpConfig {
@@ -32,8 +32,8 @@ fn mcp_config() -> McpConfig {
 
 #[test]
 fn a_file_planted_world_readable_does_not_receive_the_token_as_is() {
-    let (_tmp, private) = scratch();
-    let session = session(81);
+    let (_tmp, private) = scratch().expect("scratch");
+    let session = session(81).expect("nonzero");
     let path = private.mcp_config(session);
     std::fs::write(&path, "").expect("plant the file");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
@@ -64,8 +64,8 @@ fn a_symlink_planted_at_either_path_is_never_written_through() {
         ),
     ];
     for (name, id, path_of, write) in writers {
-        let (_tmp, private) = scratch();
-        let session = session(id);
+        let (_tmp, private) = scratch().expect("scratch");
+        let session = session(id).expect("nonzero");
         let victim_dir = tempfile::tempdir().expect("the victim's dir");
         let victim = victim_dir.path().join("victim");
         std::fs::write(&victim, "victim").expect("the victim's file");

@@ -7,12 +7,8 @@ use std::path::Path;
 
 use termherd_private_fs::{ensure_dir, is_private, write_file};
 
-fn mode(path: &Path) -> u32 {
-    std::fs::metadata(path)
-        .expect("metadata")
-        .permissions()
-        .mode()
-        & 0o777
+fn mode(path: &Path) -> std::io::Result<u32> {
+    Ok(std::fs::metadata(path)?.permissions().mode() & 0o777)
 }
 
 #[test]
@@ -20,7 +16,7 @@ fn a_created_file_is_owner_only() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("dump.png");
     write_file(&path, b"\x89PNG").expect("write");
-    assert_eq!(mode(&path), 0o600);
+    assert_eq!(mode(&path).expect("mode"), 0o600);
     assert_eq!(std::fs::read(&path).expect("read"), b"\x89PNG");
 }
 
@@ -29,7 +25,7 @@ fn a_missing_directory_is_created_owner_only_with_its_parents() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("data").join("captures");
     ensure_dir(&path).expect("ensure");
-    assert_eq!(mode(&path), 0o700);
+    assert_eq!(mode(&path).expect("mode"), 0o700);
 }
 
 #[test]
@@ -39,7 +35,7 @@ fn an_existing_world_readable_directory_is_tightened_not_refused() {
     std::fs::create_dir(&path).expect("create");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("open it up");
     ensure_dir(&path).expect("ensure");
-    assert_eq!(mode(&path), 0o700);
+    assert_eq!(mode(&path).expect("mode"), 0o700);
 }
 
 #[test]
