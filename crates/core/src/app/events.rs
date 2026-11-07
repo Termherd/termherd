@@ -33,6 +33,10 @@ pub enum Event {
         session: SessionId,
         bytes: Vec<u8>,
     },
+    /// Submit what was typed into a terminal: Enter, kept apart from the text.
+    TerminalSubmit {
+        session: SessionId,
+    },
     /// A terminal pane changed size (in cells); propagate to the PTY (FR4).
     TerminalResized {
         session: SessionId,
