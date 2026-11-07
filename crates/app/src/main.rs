@@ -11,6 +11,7 @@ mod docs;
 mod image;
 mod instance;
 mod json_store;
+mod link_inbox;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mcp;
@@ -36,8 +37,26 @@ use tracing::{info, warn};
 fn main() -> iced::Result {
     tracing_init::init_tracing();
 
+    // A `termherd://` link on the command line goes to the inbox whichever
+    // instance reads it: this one at startup, or the one holding the lock.
+    let data_dir = paths::DataDir::user();
+    let handed_over = link_inbox::url_argument(std::env::args())
+        .zip(data_dir.as_ref())
+        .is_some_and(|(url, data)| {
+            link_inbox::deposit(&link_inbox::inbox_dir(data), &url)
+                .inspect_err(|error| warn!(%error, "termherd link not handed over"))
+                .is_ok()
+        });
+
     // Hold the single-instance guard for the whole GUI lifetime.
-    let instance = instance::acquire_single_instance();
+    let instance = instance::acquire_single_instance(handed_over);
+
+    // macOS hands a link to the running app as an Apple Event instead.
+    #[cfg(target_os = "macos")]
+    let _link_relay = data_dir
+        .as_ref()
+        .zip(objc2_foundation::MainThreadMarker::new())
+        .map(|(data, mtm)| macos::relay_links(mtm, link_inbox::inbox_dir(data)));
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -61,7 +80,6 @@ fn main() -> iced::Result {
     // host, the theme into the iced shell. A corrupt file falls back to
     // defaults rather than blocking startup — set aside, and reported in the
     // sidebar, so the defaults never overwrite it.
-    let data_dir = paths::DataDir::user();
     let settings_file = data_dir.as_ref().map(settings::path);
     let (settings, settings_problem) = settings_file
         .as_deref()

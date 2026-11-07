@@ -140,6 +140,7 @@ impl Shell {
             | Effect::CancelRecording => {
                 return self.record.run_one(effect, self.captures.as_deref());
             }
+            Effect::TabShown => return self.settle_after_tab_switch(),
         };
         if let Err(error) = outcome {
             tracing::warn!(%error, "pty effect failed");

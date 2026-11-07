@@ -49,6 +49,12 @@ icons = [
     "icons/512x512.png",
 ]
 
+# Register `termherd://` with the OS: `CFBundleURLTypes` in the `.app`, an
+# `x-scheme-handler` MIME type in the `.deb`, a URL protocol key in the NSIS
+# installer. The AppImage registers nothing: it installs nothing.
+[[package.metadata.packager.deep-link-protocols]]
+schemes = ["termherd"]
+
 [package.metadata.packager.macos]
 minimum-system-version = "10.15"
 
@@ -142,8 +148,9 @@ tempfile = "3"
 proptest = "1"
 
 # AppKit menu surgery to route Cmd+Q through the iced runtime instead of
-# AppKit's `terminate:`, and to replay Character Viewer text winit drops as an
-# input-method commit. Pinned to the exact objc2 versions winit 0.30 already
+# AppKit's `terminate:`, to replay Character Viewer text winit drops as an
+# input-method commit, and to answer the `GetURL` Apple Event a
+# `termherd://` link arrives as. Pinned to the exact objc2 versions winit 0.30 already
 # builds, so this adds no duplicate native crates to the tree.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5.2"
@@ -155,7 +162,12 @@ objc2-app-kit = { version = "0.2.2", features = [
     "NSResponder",
     "NSWindow",
 ] }
-objc2-foundation = { version = "0.2.2", features = ["NSArray"] }
+objc2-foundation = { version = "0.2.2", features = [
+    "NSAppleEventDescriptor",
+    "NSAppleEventManager",
+    "NSArray",
+    "NSNotification",
+] }
 # Already in the tree as notify-rust's macOS backend. Called directly for the
 # one thing notify-rust 4.18 cannot ask it: to block until a notification is
 # clicked. Its `wait_for_response` sends with no button and no `wait_for_click`,

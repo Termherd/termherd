@@ -68,8 +68,8 @@ Non-negotiable, and CI-enforced:
 - `unwrap`, `expect` and `panic` are **clippy-denied** in `core` and `claude`.
   Production paths return typed errors.
 - `unsafe_code` is **denied workspace-wide**. The one sanctioned exception is
-  the macOS AppKit FFI for the Cmd+Q quit path: a `cfg`-gated module with a
-  `SAFETY:` note on every block.
+  the macOS AppKit FFI (the Cmd+Q quit path, the menus, the text and link
+  relays): a `cfg`-gated module with a `SAFETY:` note on every block.
 - **No global mutable state** — no `static mut`, no `lazy_static`, no
   require-time singletons. Dependencies are built in `main()` and injected.
 - **One logging stack**: `tracing`. No `println!` outside tests.

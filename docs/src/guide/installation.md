@@ -104,10 +104,13 @@ Never under `~/.claude`. Everything it owns lives in `~/.termherd`
 | `~/.termherd/window.json` | window size and position |
 | `~/.termherd/metadata.json` | stars, archives, custom session titles, hand-added repositories |
 | `~/.termherd/captures/` | `capture-<ts>.json` / `.png` / `.gif` — see [Capture and record](../workspace/capture.md) |
+| `~/.termherd/inbox/` | `termherd://` links waiting for the running window — see [Opening a tab from a link](../workspace/tabs-and-splits.md#opening-a-tab-from-a-link) |
 
 TermHerd is **single-instance**: an advisory lock file under the system temp
-directory. To run a second build alongside one that already holds the lock,
-point it at a throwaway temp dir so its lock differs. On macOS and Linux:
+directory. A second launch carrying a `termherd://` link hands it to the
+running window and exits; without one, it exits with code 2. To run a second
+build alongside one that already holds the lock, point it at a throwaway temp
+dir so its lock differs. On macOS and Linux:
 
 ```bash
 TMPDIR=$(mktemp -d) cargo run -p termherd-app

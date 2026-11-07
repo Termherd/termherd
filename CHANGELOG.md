@@ -14,6 +14,19 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that answers after you moved to another doc no longer marks that doc
   `saved` nor changes its on-disk baseline (#384).
 
+### Fixed (the active tab's status dot reads on its fill)
+
+- The status dot on the active tab is shaded against that tab's fill rather
+  than the window background, so it keeps 3:1 contrast on every theme. On
+  stock Dark a busy dot sat near 2.5:1 on the blue chip, on Dracula near
+  1.3:1 (#382).
+
+### Security (the live bridge checks Host and Origin itself)
+
+- The MCP live bridge refuses, with a 403, a request whose `Host` or `Origin`
+  is not `127.0.0.1`, `localhost` or `[::1]` on its own port. It used to rely
+  on the MCP library's default Host check, and checked no Origin (#293).
+
 ### Fixed (the session scan stays inside `~/.claude/projects`)
 
 - The sidebar's scan no longer follows a symlink under `~/.claude/projects`,
@@ -42,6 +55,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   F10, mc's function-key bar and vim mappings receive them. They used to
   send nothing (#321).
 
+### Fixed (double-click selection of a path or URL)
+
+- A double-click on a path or URL selects what a link click opens: a
+  sentence's closing `.` and a compiler's trailing `:` are left out, a `:42`
+  suffix is kept, a URL's `?query` is included and an OSC 8 label selects
+  whole. It used to take the raw run of path characters (#442).
+
 ### Fixed (Ctrl+Space in the terminal)
 
 - Ctrl+Space sends NUL, which Emacs reads as set-mark and zsh's
@@ -66,8 +86,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added (termherd:// links in the terminal)
 
 - A `termherd://` URL in terminal output is a link: Cmd/Ctrl+hover underlines
-  it, Cmd/Ctrl+click hands it to the OS. termherd does not handle the scheme
-  yet (#446).
+  it, Cmd/Ctrl+click hands it to the OS.
+
+### Added (opening a tab from a termherd:// link)
+
+- `termherd://open?repo=<absolute path>` shows the tab working in that repo,
+  or opens a shell there. A link never types into a session nor starts
+  Claude, and anything else is refused. The macOS `.app`, the `.deb` and the
+  Windows installer register the scheme; a link reaching a second launch is
+  handed to the running instance (#446). A release from before this one, still
+  running, never reads the hand-over: quit it first.
 
 ### Changed (a second instance on Windows and Linux)
 
