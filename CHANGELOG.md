@@ -13,6 +13,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before it has any session, as soon as it is added, and drops it when the
   repo is forgotten. It used to wait for the repo's first session (#444).
 
+### Fixed (the session scan stays inside `~/.claude/projects`)
+
+- The sidebar's scan no longer follows a symlink under `~/.claude/projects`,
+  so a link there can no longer surface another file's content in the sidebar
+  and search. A transcript over 256 MiB is read as its first and last 128 MiB
+  instead of whole, and titles, slugs, version, model and effort are cut to
+  120 characters (#290).
+
 ### Fixed (zoom in with Cmd/Ctrl + Shift + `+`)
 
 - <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> (<kbd>Ctrl</kbd> off macOS)
