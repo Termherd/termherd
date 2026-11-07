@@ -3973,10 +3973,12 @@ version = "0.0.0"
 dependencies = [
  "libc",
  "notify",
+ "proptest",
  "tempfile",
  "termherd-claude",
  "termherd-core",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
