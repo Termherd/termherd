@@ -80,7 +80,7 @@ impl Shell {
         let effects = self
             .core
             .apply(termherd_core::Event::DeclareRepo(key.to_owned()));
-        self.perform(effects)
+        Task::batch([self.perform(effects), self.refresh_docs()])
     }
 
     /// Drop a declaration. The row may survive on its sessions, which is worth
@@ -96,6 +96,6 @@ impl Shell {
             kept = self.core.repo_has_sessions(key),
             "repo declaration dropped"
         );
-        self.perform(effects)
+        Task::batch([self.perform(effects), self.refresh_docs()])
     }
 }
