@@ -113,6 +113,28 @@ impl PtyManager {
     }
 }
 
+/// The command a session's shell is spawned from, before any per-session
+/// integration: the configured shell (or the platform default), in `cwd`, with
+/// the environment every session gets. Free of the PTY, so the spawn
+/// environment is unit-testable.
+fn shell_command(configured: Option<&Shell>, cwd: Option<&str>) -> CommandBuilder {
+    let mut cmd = match configured {
+        Some(shell) => {
+            let mut c = CommandBuilder::new(&shell.program);
+            for arg in &shell.args {
+                c.arg(arg);
+            }
+            c
+        }
+        None => CommandBuilder::new_default_prog(),
+    };
+    if let Some(cwd) = cwd {
+        cmd.cwd(cwd);
+    }
+    apply_terminal_env(&mut cmd);
+    cmd
+}
+
 impl PtyHost for PtyManager {
     fn spawn(&self, spec: SpawnSpec) -> Result<(), PtyError> {
         let size = PtySize {
@@ -134,20 +156,7 @@ impl PtyHost for PtyManager {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let mut cmd = match &configured {
-            Some(shell) => {
-                let mut c = CommandBuilder::new(&shell.program);
-                for arg in &shell.args {
-                    c.arg(arg);
-                }
-                c
-            }
-            None => CommandBuilder::new_default_prog(),
-        };
-        if let Some(cwd) = &spec.cwd {
-            cmd.cwd(cwd);
-        }
-        apply_terminal_env(&mut cmd);
+        let mut cmd = shell_command(configured.as_ref(), spec.cwd.as_deref());
         // Which shell is about to run decides the integration recipe; the
         // default program only resolves to a name here, so ask the builder.
         let program = match &configured {
