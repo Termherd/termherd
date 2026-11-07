@@ -21,11 +21,17 @@ pub const MOD_CMD: u8 = 8;
 /// digit is 1-based for the user; the tab index it carries is 0-based.
 pub const NUMBER_ROW_TABS: usize = 9;
 
-/// The platform's primary command modifier — ⌘ on macOS, Ctrl elsewhere. This
-/// is the modifier the number-row tab jumps bind to by default.
+/// The platform's primary command modifier — ⌘ on macOS, Ctrl elsewhere.
 #[must_use]
 pub const fn primary_mod() -> u8 {
     Platform::current().primary_mod()
+}
+
+/// The modifier the number-row tab jumps bind to by default on the platform
+/// this build runs on.
+#[must_use]
+pub const fn tab_jump_mod() -> u8 {
+    Platform::current().tab_jump_mod()
 }
 
 /// A key plus its modifiers — the left-hand side of a binding. `key` is a
@@ -446,6 +452,10 @@ impl Platform {
         }
     }
 
+    const fn tab_jump_mod(self) -> u8 {
+        self.primary_mod()
+    }
+
     /// The primary modifier as chord syntax spells it: `cmd` or `ctrl`.
     const fn primary_name(self) -> &'static str {
         match self {
@@ -476,7 +486,7 @@ pub fn default_bindings(platform: Platform) -> Vec<(KeyChord, Action)> {
     // 1-based for the user; the action carries the 0-based index.
     pairs.extend((1..=NUMBER_ROW_TABS).map(|n| {
         (
-            KeyChord::new(n.to_string(), platform.primary_mod()),
+            KeyChord::new(n.to_string(), platform.tab_jump_mod()),
             Action::ActivateTab(n - 1),
         )
     }));
@@ -936,11 +946,11 @@ mod tests {
         let map = Keymap::defaults();
         // 1-based digit, 0-based tab index.
         assert_eq!(
-            map.lookup(&KeyChord::new("1", primary_mod())),
+            map.lookup(&KeyChord::new("1", tab_jump_mod())),
             Some(Action::ActivateTab(0))
         );
         assert_eq!(
-            map.lookup(&KeyChord::new("9", primary_mod())),
+            map.lookup(&KeyChord::new("9", tab_jump_mod())),
             Some(Action::ActivateTab(8))
         );
         // The row stops at nine — zero belongs to zoom-reset, not a
@@ -968,7 +978,7 @@ mod tests {
         fn every_number_row_digit_binds_to_its_zero_based_tab(n in 1usize..=9) {
             let map = Keymap::defaults();
             proptest::prop_assert_eq!(
-                map.lookup(&KeyChord::new(n.to_string(), primary_mod())),
+                map.lookup(&KeyChord::new(n.to_string(), tab_jump_mod())),
                 Some(Action::ActivateTab(n - 1))
             );
         }
