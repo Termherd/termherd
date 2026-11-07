@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (a TermHerd started from a Claude session)
+
+- A TermHerd started from inside a Claude Code session no longer passes that
+  session's identity (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
+  its messaging socket, …) to every pane. A Claude launched in such a
+  TermHerd now writes its session file again, so its agent name, hover card
+  and MCP identity are found (#356).
+
 ### Security (the live bridge checks Host and Origin itself)
 
 - The MCP live bridge refuses, with a 403, a request whose `Host` or `Origin`

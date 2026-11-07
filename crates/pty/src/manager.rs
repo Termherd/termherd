@@ -18,8 +18,8 @@ use crate::events::EventSink;
 use crate::grid::Palette;
 use crate::kill::finish_kill;
 use crate::launch::{
-    apply_integration, apply_terminal_env, discard_private_files, launch_command, write_mcp_config,
-    write_title_settings,
+    apply_integration, apply_terminal_env, discard_private_files, launch_command,
+    strip_inherited_session_env, write_mcp_config, write_title_settings,
 };
 use crate::session::{
     Session, SharedMaster, SharedPalette, SharedWriter, TermCmd, spawn_reader, spawn_term,
@@ -113,6 +113,29 @@ impl PtyManager {
     }
 }
 
+/// The command a session's shell is spawned from, before any per-session
+/// integration: the configured shell (or the platform default), in `cwd`, with
+/// the environment every session gets. Free of the PTY, so the spawn
+/// environment is unit-testable.
+fn shell_command(configured: Option<&Shell>, cwd: Option<&str>) -> CommandBuilder {
+    let mut cmd = match configured {
+        Some(shell) => {
+            let mut c = CommandBuilder::new(&shell.program);
+            for arg in &shell.args {
+                c.arg(arg);
+            }
+            c
+        }
+        None => CommandBuilder::new_default_prog(),
+    };
+    if let Some(cwd) = cwd {
+        cmd.cwd(cwd);
+    }
+    strip_inherited_session_env(&mut cmd);
+    apply_terminal_env(&mut cmd);
+    cmd
+}
+
 impl PtyHost for PtyManager {
     fn spawn(&self, spec: SpawnSpec) -> Result<(), PtyError> {
         let size = PtySize {
@@ -134,20 +157,7 @@ impl PtyHost for PtyManager {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let mut cmd = match &configured {
-            Some(shell) => {
-                let mut c = CommandBuilder::new(&shell.program);
-                for arg in &shell.args {
-                    c.arg(arg);
-                }
-                c
-            }
-            None => CommandBuilder::new_default_prog(),
-        };
-        if let Some(cwd) = &spec.cwd {
-            cmd.cwd(cwd);
-        }
-        apply_terminal_env(&mut cmd);
+        let mut cmd = shell_command(configured.as_ref(), spec.cwd.as_deref());
         // Which shell is about to run decides the integration recipe; the
         // default program only resolves to a name here, so ask the builder.
         let program = match &configured {
@@ -330,6 +340,67 @@ mod tests {
             rows: 24,
             mcp: None,
         }
+    }
+
+    /// Marks the re-run of this binary that has a parent Claude session seeded
+    /// into its real environment.
+    const SEEDED_RERUN: &str = "TERMHERD_TEST_SEEDED_CLAUDE_SESSION";
+
+    /// What a Claude Code session exports that names it, against what a user
+    /// configures in the same namespace.
+    const PARENT_SESSION: &[&str] = &[
+        "CLAUDECODE",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_PID",
+    ];
+    const USER_CONFIGURED: &str = "CLAUDE_CONFIG_DIR";
+
+    /// `CommandBuilder` reads the process environment, which a test cannot
+    /// set for itself (`set_var` is `unsafe`, and the workspace denies it), and
+    /// on a machine with no Claude session there is nothing to strip. So the
+    /// binary reruns its seeded half with the variables put there.
+    #[test]
+    fn a_session_spawned_from_inside_claude_inherits_none_of_its_identity() {
+        let mut rerun = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        rerun
+            .args([
+                "--exact",
+                "manager::tests::seeded_shell_command_drops_the_parent_session",
+                "--ignored",
+            ])
+            .env(SEEDED_RERUN, "1")
+            .env(USER_CONFIGURED, "/seeded/config");
+        for name in PARENT_SESSION {
+            rerun.env(name, "parent-session");
+        }
+        let output = rerun.output().expect("rerun the test binary");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && stdout.contains("test result: ok. 1 passed"),
+            "the seeded half failed or did not run:\n{stdout}"
+        );
+    }
+
+    #[test]
+    #[ignore = "run with a seeded environment by \
+                a_session_spawned_from_inside_claude_inherits_none_of_its_identity"]
+    fn seeded_shell_command_drops_the_parent_session() {
+        assert!(
+            std::env::var_os(SEEDED_RERUN).is_some(),
+            "only meaningful with the parent session seeded; run the test that reruns it"
+        );
+        let cmd = shell_command(None, None);
+        for name in PARENT_SESSION {
+            assert!(std::env::var_os(name).is_some(), "{name} was not seeded");
+            assert_eq!(cmd.get_env(name), None, "{name} reached the spawn");
+        }
+        assert_eq!(
+            cmd.get_env(USER_CONFIGURED),
+            Some(std::ffi::OsStr::new("/seeded/config")),
+            "user configuration must still reach the spawn"
+        );
     }
 
     /// Spawn a shell, run a command that prints a unique marker, and assert it
