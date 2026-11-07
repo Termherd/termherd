@@ -132,6 +132,7 @@ focused tab:
 | New Claude session here | `new-claude-session-here` | every tab |
 | Split right | `split-vertical` | every tab |
 | Split down | `split-horizontal` | every tab |
+| Park tab | `toggle-park-tab` | every tab |
 | Close pane | `close-focused` | every tab |
 
 Each entry is the keyboard action of the same name, so it does exactly what
@@ -191,6 +192,25 @@ A plain click still just activates the tab.
 The order lives in the pure workspace model — the tab strip holds only
 transient pointer state, so there is no second, rival tab tree to drift out
 of sync.
+
+### Parking a tab
+
+**Park a tab you are not working in** with the menu's *Park tab*, or with the
+`toggle-park-tab` action, which has no default chord (bind one in
+[settings](../reference/settings.md)). The tab shrinks to its activity dot and
+kind mark, moves to the right end of the strip, after the other tabs, and
+leaves the <kbd>Ctrl</kbd>+<kbd>Tab</kbd> cycle. Parking does not pause
+anything: its sessions keep running, and their status and notifications keep
+flowing. Hovering a parked tab still shows its card.
+
+A parked tab comes back when you select it: click it, jump to it by number, or
+reopen its session from the sidebar. It then takes its place at the end of
+the unparked tabs. A session in it that asks for attention brings it back as
+well, without switching to it — unless every tab was parked, since a parked
+tab is shown only then. Dragging a tab past the last unparked tab parks it,
+and dragging a parked tab before it unparks it. New tabs open before the
+parked ones, and a closed parked tab reopens unparked. The tab menu offers
+*Park tab* on unparked tabs only.
 
 ## Splits
 

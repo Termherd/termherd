@@ -37,6 +37,7 @@ exception is paste on Windows, below.
 | `rename-tab` | `mod+shift+i` | rename the focused tab, as a double-click does |
 | `open-tab-menu` | `mod+shift+m` | open the focused tab's menu, as a right-click does |
 | `pick-tab-color` | *(unbound)* | pick the focused tab's colour |
+| `toggle-park-tab` | *(unbound)* | park the focused tab, or unpark it ([parking](../workspace/tabs-and-splits.md#parking-a-tab)) |
 | `open-new-session` | *(unbound)* | reserved — no surface yet |
 
 `rename-tab` opens the same inline field a double-click on the tab opens,

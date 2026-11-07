@@ -59,6 +59,11 @@ is the colour picked for its tab (see
 [tabs](../workspace/tabs-and-splits.md#tabs)), else that of a Claude run in
 it by hand — and a Claude pane whose Claude has exited counts as a shell.
 
+A `snapshot` tab carries `parked`: `true` for a tab parked at the strip's
+end, out of the tab cycle (see [parking a tab](../workspace/tabs-and-splits.md#parking-a-tab)).
+Its sessions keep running, so its panes report as any other's. `focus_pane`
+on a handle in a parked tab unparks it.
+
 **`snapshot` is light by default**: structure only, no terminal text. Scope
 text to named handles with `terminals` (or set `focused_terminal: true` for the
 focused pane, when you do not know its handle yet), or pass `sections` (any of `"config"`,

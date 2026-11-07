@@ -6,7 +6,7 @@
 use iced::{Task, window};
 
 use termherd_core::Effect;
-use termherd_core::workspace::{SessionId, index_after_removal};
+use termherd_core::workspace::{SessionId, Step, index_after_removal};
 
 use super::{Focus, Message, Shell, TabDrag};
 
@@ -146,17 +146,38 @@ impl Shell {
     /// nothing.
     pub(super) fn activate_tab(&mut self, index: usize) -> Task<Message> {
         let effects = self.core.apply(termherd_core::Event::ActivateTab(index));
+        Task::batch([self.perform(effects), self.settle_after_tab_switch()])
+    }
+
+    /// What follows any change of the shown tab: the keys go back to the
+    /// terminal, a pending confirmation is dropped, and the panes are sized
+    /// to the tab now shown.
+    pub(super) fn settle_after_tab_switch(&mut self) -> Task<Message> {
+        self.tab_switch_settled = true;
         self.focus = Focus::Terminal;
         self.closing = None;
         self.archiving = None;
-        Task::batch([self.perform(effects), self.resize_panes()])
+        self.resize_panes()
     }
 
-    /// Switch the active tab by `delta`, wrapping around (FR9 `NextTab` /
-    /// `PrevTab`). `None` when nothing is open, so a caller learns the cycle had
-    /// nowhere to go instead of being told the tab changed.
-    pub(super) fn cycle_tab(&mut self, delta: i32) -> Option<Task<Message>> {
-        let next = self.core.workspace.cycled_tab(delta)?;
+    /// Park the active tab, or unpark it when it is parked. `None` with no tab
+    /// open, so the caller reports the action as inert.
+    pub(super) fn toggle_park_active_tab(&mut self) -> Option<Task<Message>> {
+        let index = self.core.workspace.active;
+        self.core.workspace.tabs.get(index)?;
+        let effects = self.core.apply(termherd_core::Event::ToggleParkTab(index));
+        Some(Task::batch([
+            self.perform(effects),
+            self.settle_after_tab_switch(),
+        ]))
+    }
+
+    /// Switch the active tab one `step` among the unparked tabs, wrapping
+    /// around (FR9 `NextTab` / `PrevTab`). `None` when no tab is unparked, so a
+    /// caller learns the cycle had nowhere to go instead of being told the tab
+    /// changed.
+    pub(super) fn cycle_tab(&mut self, step: Step) -> Option<Task<Message>> {
+        let next = self.core.workspace.cycled_tab(step)?;
         Some(self.activate_tab(next))
     }
 

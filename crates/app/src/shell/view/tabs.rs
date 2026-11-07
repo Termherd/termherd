@@ -42,6 +42,9 @@ impl Shell {
             std::cmp::Ordering::Less => Some(over),
             std::cmp::Ordering::Equal => None,
         });
+        let first_parked = self.core.workspace.first_parked();
+        let carried_parked =
+            drag.is_some_and(|(from, _)| tabs.get(from).is_some_and(Tab::is_parked));
         let mut bar = row![].spacing(4).align_y(iced::Center);
         for (index, tab) in tabs.iter().enumerate() {
             let active = index == self.core.workspace.active;
@@ -56,7 +59,7 @@ impl Shell {
             let renaming_this = self
                 .tab_rename
                 .as_ref()
-                .is_some_and(|(anchor, _)| tab.sessions().contains(anchor));
+                .is_some_and(|(anchor, _)| tab.hosts(*anchor));
             // The status dot, then the kind mark — shared by the chip and its
             // rename editor so editing a title never hides what the tab runs.
             let mut inner = row![].spacing(6).align_y(iced::Center);
@@ -89,19 +92,24 @@ impl Shell {
                     .style(move |theme: &iced::Theme| tab_chip_style(theme, active, false, color))
                     .into()
             } else {
-                inner = inner.push(text(clip(tab.display_title(), 24)).size(12));
-                // The × lives inside the chip so it sits on the active tab's fill,
-                // and its colour follows the chip's text so it stays legible there.
-                inner = inner.push(
-                    button(text("×").size(14))
-                        .on_press(Message::RequestCloseTab(index))
-                        .style(move |theme: &iced::Theme, _status| button::Style {
-                            background: None,
-                            text_color: tab_chip_text(theme, active),
-                            ..button::Style::default()
-                        })
-                        .padding(0),
-                );
+                // A parked chip keeps only the dot and the kind mark; its
+                // title stays in the hover card.
+                if !tab.is_parked() {
+                    inner = inner.push(text(clip(tab.display_title(), 24)).size(12));
+                    // The × lives inside the chip so it sits on the active tab's
+                    // fill, and its colour follows the chip's text so it stays
+                    // legible there.
+                    inner = inner.push(
+                        button(text("×").size(14))
+                            .on_press(Message::RequestCloseTab(index))
+                            .style(move |theme: &iced::Theme, _status| button::Style {
+                                background: None,
+                                text_color: tab_chip_text(theme, active),
+                                ..button::Style::default()
+                            })
+                            .padding(0),
+                    );
+                }
                 let chip = container(inner)
                     .padding(6)
                     .style(move |theme: &iced::Theme| {
@@ -128,7 +136,18 @@ impl Shell {
                 )
                 .into()
             };
-            if caret_at == Some(index) {
+            let caret_here = caret_at == Some(index);
+            if index == first_parked && index > 0 {
+                // A drop on the boundary keeps the carried tab's zone, so its
+                // caret sits on that zone's side of the gap.
+                if caret_here && !carried_parked {
+                    bar = bar.push(insertion_caret());
+                }
+                bar = bar.push(iced::widget::Space::new().width(12));
+                if caret_here && carried_parked {
+                    bar = bar.push(insertion_caret());
+                }
+            } else if caret_here {
                 bar = bar.push(insertion_caret());
             }
             bar = bar.push(chip);

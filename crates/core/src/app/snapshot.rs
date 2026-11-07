@@ -138,6 +138,7 @@ impl App {
             .enumerate()
             .map(|(index, tab)| TabSnapshot {
                 active: active_tab == Some(index),
+                parked: tab.is_parked(),
                 title: tab.display_title().to_owned(),
                 status: self.tab_status(index),
                 panes: tab
@@ -955,5 +956,21 @@ mod tests {
         };
         let (app, id) = pane_with(Some(stale), Some(session_file(4399, "termherd-b0", "s")));
         assert_eq!(app.peer_name(id), None);
+    }
+
+    #[test]
+    fn the_tab_snapshot_says_which_tabs_are_parked() {
+        let mut app = App::new();
+        launch(&mut app, "kept");
+        launch(&mut app, "parked");
+        app.apply(Event::ToggleParkTab(1));
+
+        let snap = app.snapshot(&only_sections(&[Section::Tabs]), &SnapshotInputs::default());
+        let tabs = snap.tabs.expect("tabs were requested");
+        let parked: Vec<(&str, bool)> = tabs
+            .iter()
+            .map(|tab| (tab.title.as_str(), tab.parked))
+            .collect();
+        assert_eq!(parked, vec![("kept", false), ("parked", true)]);
     }
 }

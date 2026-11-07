@@ -103,7 +103,6 @@ issues #18–#29.
 | [F-session-grid](#f-session-grid) | feature | workspace | ☐ | A layout preset over the pane model. |
 | [F-session-reveal](#f-session-reveal) | feature | sessions, workspace | ☐ | Reveal a session's directory and transcript in the OS file manager. |
 | [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
-| [F-tab-park](#f-tab-park) | feature | workspace, keymap | ☐ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
 | [F-url-scheme](#f-url-scheme) | feature | workspace, packaging | ☐ | Open a tab from an HTML link: a `termherd://` URL scheme. |
 | [F-worktree-launch](#f-worktree-launch) | feature | sessions, sidebar | ☐ | Start a Claude session in a fresh git worktree, grouped under its project. |
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
@@ -125,6 +124,7 @@ issues #18–#29.
 | [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ✅ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
 | [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ✅ | The tab hover card shows agent name, model, effort, version and elapsed time. |
 | [F-tab-kind-icon](#f-tab-kind-icon) | feature | workspace | ✅ | A kind mark beside each tab's status dot, instead of a glyph in its title. |
+| [F-tab-park](#f-tab-park) | feature | workspace, keymap | ✅ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
 | [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ✅ | A Claude tab's title follows the session name Claude holds. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
 
@@ -1278,19 +1278,6 @@ its shell afterwards, since success is not observable. macOS and Windows x64
 only. Torture report:
 `.personal/feature-torture/reports/F-session-send-desktop.md`.
 
-<a id="f-tab-park"></a>
-
-### F-tab-park
-
-Park a tab: a compact chip at the strip's end, out of the tab cycle.
-
-Presentational only: the session keeps running and its status still flows
-(#353). Active tabs come first and parked tabs after, an order every
-`Workspace` mutator keeps. Selecting a parked tab, dragging it out, or its
-session asking for attention reactivates it; dragging a tab into the parked
-zone parks it. A natural entry for [F-tab-context-menu](#f-tab-context-menu).
-Torture report: `.personal/feature-torture/reports/F-tab-park.md`.
-
 <a id="f-url-scheme"></a>
 
 ### F-url-scheme
@@ -1829,6 +1816,28 @@ that opens a tab shows what the tab will. Lands ahead of
 [F-tab-title-sync](#f-tab-title-sync), which rewrites the same title policy.
 Torture report:
 `.personal/feature-torture/reports/F-tab-kind-icon.md`.
+
+<a id="f-tab-park"></a>
+
+### F-tab-park
+
+Park a tab: a compact chip at the strip's end, out of the tab cycle.
+
+Presentational only: the session keeps running and its status still flows
+(#353). Active tabs come first and parked tabs after, an order every
+`Workspace` mutator keeps. Selecting a parked tab, dragging it out, or its
+session asking for attention unparks it; dragging a tab into the parked
+zone parks it. A natural entry for [F-tab-context-menu](#f-tab-context-menu).
+Torture report: `.personal/feature-torture/reports/F-tab-park.md`.
+
+Shipped (#353): `toggle-park-tab` with no default chord, a *Park tab* entry in
+the tab menu, and `parked` on the snapshot. Attention unparks without taking
+the focus; a drag takes the zone it lands in.
+
+Deferred to a later tidy-first (#454): shell tab state stored by session rather
+than as an index re-anchored after each message, a `core` effect for a
+change of the shown tab, and one drop-zone rule shared by the strip view and
+`Workspace::move_tab`.
 
 <a id="f-tab-title-sync"></a>
 

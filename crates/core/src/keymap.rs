@@ -138,6 +138,10 @@ pub enum Action {
     /// as `/color`, behind the same confirmation; a shell tab keeps it itself.
     /// Inert with no tab, or on a Claude pane that cannot take a command now.
     PickTabColor,
+    /// Park the active tab, or unpark it when it is parked: a parked tab is a
+    /// compact chip at the strip's end, out of the tab cycle, its sessions
+    /// still running. Inert with no tab.
+    TogglePark,
     /// Jump the focused terminal's viewport to the top of its scrollback.
     ScrollTop,
     /// Jump the focused terminal's viewport back to the live bottom.
@@ -265,6 +269,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef::new(Action::CopyAgentName, "copy-agent-name", &[]),
     ActionDef::new(Action::SendToDesktop, "send-to-desktop", &[]),
     ActionDef::new(Action::PickTabColor, "pick-tab-color", &[]),
+    ActionDef::new(Action::TogglePark, "toggle-park-tab", &[]),
     // Ctrl+Up / Down stay the program's; Windows Terminal's Home / End instead.
     ActionDef::new(Action::ScrollTop, "scroll-top", &["mod+up"]).off_mac(&["ctrl+shift+home"]),
     ActionDef::new(Action::ScrollBottom, "scroll-bottom", &["mod+down"])
@@ -1000,5 +1005,21 @@ mod tests {
             Some(Action::Paste)
         );
         assert_eq!(map.lookup(&KeyChord::new("v", MOD_CTRL)), None);
+    }
+
+    #[test]
+    fn toggle_park_tab_is_named_in_settings_and_unbound_by_default() {
+        assert_eq!(
+            Action::from_config_name("toggle-park-tab"),
+            Some(Action::TogglePark)
+        );
+        for platform in [Platform::MacOs, Platform::Windows, Platform::Linux] {
+            assert!(
+                default_bindings(platform)
+                    .iter()
+                    .all(|(_, action)| *action != Action::TogglePark),
+                "no default chord on {platform:?}"
+            );
+        }
     }
 }

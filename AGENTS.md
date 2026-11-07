@@ -562,6 +562,13 @@ exists). Do not relax them locally.
   complexity. A function that exceeds it on purpose (a flat dispatcher / layout
   builder) carries a local `#[allow(clippy::too_many_lines)]` with a rationale,
   never a relaxed global threshold.
+- **A tab index the shell keeps is a copy of a position `core` may move.**
+  Parking (#353) let `core` reorder the strip on its own, after a drag or a
+  parked session asking for attention, and the shell's `closing`, `tab_drag`
+  and `split_drag` kept the old slot: an armed close confirmation would have
+  closed the neighbour. `Shell::update` re-anchors them by session after each
+  message (`TabAnchors`). New shell state names a tab by a session it hosts,
+  as the tab rename already did.
 - **An invariant expressed twice will drift — extract the predicate.** Two
   call sites deciding "has this settled?" with hand-written conditions is a
   bug waiting on the first edit that touches one of them. It bit the

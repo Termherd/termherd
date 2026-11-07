@@ -29,14 +29,14 @@ pub enum Direction {
 }
 
 impl Direction {
-    /// The split orientation this move traverses, and whether it heads toward
-    /// the B (right/bottom) branch.
-    fn axis_toward_b(self) -> (SplitDir, bool) {
+    /// The split orientation this move traverses, and the branch it heads
+    /// toward: B is right/bottom, A is left/top.
+    fn axis_toward(self) -> (SplitDir, Branch) {
         match self {
-            Direction::Right => (SplitDir::Vertical, true),
-            Direction::Left => (SplitDir::Vertical, false),
-            Direction::Down => (SplitDir::Horizontal, true),
-            Direction::Up => (SplitDir::Horizontal, false),
+            Direction::Right => (SplitDir::Vertical, Branch::B),
+            Direction::Left => (SplitDir::Vertical, Branch::A),
+            Direction::Down => (SplitDir::Horizontal, Branch::B),
+            Direction::Up => (SplitDir::Horizontal, Branch::A),
         }
     }
 }
@@ -46,6 +46,34 @@ impl Direction {
 pub enum Branch {
     A,
     B,
+}
+
+impl Branch {
+    fn opposite(self) -> Self {
+        match self {
+            Branch::A => Branch::B,
+            Branch::B => Branch::A,
+        }
+    }
+}
+
+/// One step through an ordered cycle of tabs or panes, wrapping at both ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    Next,
+    Prev,
+}
+
+impl Step {
+    /// The index one step from `current` in a cycle of `len` items; `None`
+    /// when the cycle is empty.
+    fn index_after(self, current: usize, len: usize) -> Option<usize> {
+        let offset = match self {
+            Step::Next => 1,
+            Step::Prev => len.checked_sub(1)?,
+        };
+        (current + offset).checked_rem(len)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,6 +109,9 @@ pub struct Tab {
     pub color: Option<ClaudeColor>,
     /// Every source [`Self::title`] is resolved from.
     titles: TabTitles,
+    /// Out of the tab cycle, at the strip's end. Private: [`Workspace`] keeps
+    /// every parked tab after every unparked one.
+    parked: bool,
 }
 
 /// The sources a tab's derived title is resolved from, each kept apart so a
@@ -94,6 +125,29 @@ struct TabTitles {
 }
 
 impl Tab {
+    /// A tab hosting `session` alone, titled after its launch.
+    fn new(session: SessionId, title: String) -> Self {
+        Self {
+            root: Pane::Leaf(session),
+            focus: Vec::new(),
+            title: title.clone(),
+            custom_title: None,
+            color: None,
+            titles: TabTitles {
+                launch: title,
+                ..TabTitles::default()
+            },
+            parked: false,
+        }
+    }
+
+    /// Whether the tab is parked: shown as a compact chip after the unparked
+    /// tabs, and skipped by the tab cycle. Its sessions keep running.
+    #[must_use]
+    pub fn is_parked(&self) -> bool {
+        self.parked
+    }
+
     /// Every session hosted by this tab, in left-to-right pane order. A tab
     /// without splits yields exactly one id; closing the tab kills them all.
     #[must_use]
@@ -101,6 +155,13 @@ impl Tab {
         let mut out = Vec::new();
         collect_leaves(&self.root, &mut out);
         out
+    }
+
+    /// Whether one of this tab's panes hosts `session`. Unlike
+    /// [`Self::sessions`], it allocates nothing.
+    #[must_use]
+    pub fn hosts(&self, session: SessionId) -> bool {
+        pane_hosts(&self.root, session)
     }
 
     /// The session in this tab's first (leftmost) pane — the one the tab is
@@ -163,6 +224,13 @@ impl Tab {
     }
 }
 
+fn pane_hosts(pane: &Pane, session: SessionId) -> bool {
+    match pane {
+        Pane::Leaf(leaf) => *leaf == session,
+        Pane::Split { a, b, .. } => pane_hosts(a, session) || pane_hosts(b, session),
+    }
+}
+
 fn collect_leaves(pane: &Pane, out: &mut Vec<SessionId>) {
     match pane {
         Pane::Leaf(session) => out.push(*session),
@@ -190,23 +258,23 @@ impl Workspace {
         self.active = self.append(session, title);
     }
 
-    /// Open a session as a new tab at the end of the strip without activating
-    /// it, returning its index. Into an empty workspace the new tab is the only
-    /// one, so it is active all the same.
+    /// Open a session as a new tab after the unparked tabs without activating
+    /// it, returning its index. When no other tab is unparked, the new tab is
+    /// active all the same.
     pub fn append(&mut self, session: SessionId, title: impl Into<String>) -> usize {
-        let title = title.into();
-        self.tabs.push(Tab {
-            root: Pane::Leaf(session),
-            focus: Vec::new(),
-            title: title.clone(),
-            custom_title: None,
-            color: None,
-            titles: TabTitles {
-                launch: title,
-                ..TabTitles::default()
-            },
-        });
-        self.tabs.len() - 1
+        self.insert_tab(Tab::new(session, title.into()))
+    }
+
+    /// Place a new unparked tab before the parked group, returning its index.
+    fn insert_tab(&mut self, tab: Tab) -> usize {
+        let at = self.first_parked();
+        self.tabs.insert(at, tab);
+        // An active index at or past `at` named a parked tab, which only holds
+        // while every tab is parked: the new tab takes over.
+        if self.active >= at {
+            self.active = at;
+        }
+        at
     }
 
     /// Index of the tab hosting `session`, if any. A session lives in exactly
@@ -217,9 +285,17 @@ impl Workspace {
     /// sibling close would shift.
     #[must_use]
     pub fn tab_of(&self, session: SessionId) -> Option<usize> {
-        self.tabs
-            .iter()
-            .position(|tab| tab.sessions().contains(&session))
+        self.tabs.iter().position(|tab| tab.hosts(session))
+    }
+
+    /// Park the tab at `index`, or unpark it when it is parked. `None`,
+    /// changing nothing, for a missing tab.
+    pub fn toggle_park(&mut self, index: usize) -> Option<()> {
+        if self.tabs.get(index)?.parked {
+            self.unpark(index).map(drop)
+        } else {
+            self.park(index)
+        }
     }
 
     /// Split the focused leaf in the active tab, opening `new` on side B.
@@ -305,32 +381,101 @@ impl Workspace {
             .map(Tab::display_title)
     }
 
-    /// Make the tab at `index` active (FR5). Returns `None` if the index is
-    /// out of range, leaving the active tab unchanged.
-    pub fn activate(&mut self, index: usize) -> Option<()> {
-        if index < self.tabs.len() {
-            self.active = index;
-            Some(())
-        } else {
-            None
+    /// Index of the first parked tab: the number of unparked tabs, since every
+    /// parked tab sits after them. The strip's length when none is parked.
+    #[must_use]
+    pub fn first_parked(&self) -> usize {
+        self.tabs
+            .iter()
+            .position(Tab::is_parked)
+            .unwrap_or(self.tabs.len())
+    }
+
+    /// Park the unparked tab at `index`: it moves to the front of the parked
+    /// group. When it was active, the active tab becomes the unparked one that
+    /// slides into its slot, else the new last unparked tab; with none left it
+    /// stays active. `None`, changing nothing, for a parked or missing tab.
+    pub fn park(&mut self, index: usize) -> Option<()> {
+        if self.tabs.get(index)?.parked {
+            return None;
         }
+        let front_of_parked = self.first_parked() - 1;
+        self.relocate(index, front_of_parked, true);
+        Some(())
+    }
+
+    /// Unpark the parked tab at `index`: it moves to the end of the unparked
+    /// group, returning its new index. The active tab stays the same tab,
+    /// unless every tab was parked: the unparked one then becomes active.
+    /// `None`, changing nothing, for an unparked or missing tab.
+    pub fn unpark(&mut self, index: usize) -> Option<usize> {
+        if !self.tabs.get(index)?.parked {
+            return None;
+        }
+        let end_of_unparked = self.first_parked();
+        self.relocate(index, end_of_unparked, false);
+        Some(end_of_unparked)
+    }
+
+    /// Make the tab at `index` active (FR5), unparking it first when it is
+    /// parked. Returns `None` if the index is out of range, leaving the active
+    /// tab unchanged.
+    pub fn activate(&mut self, index: usize) -> Option<()> {
+        let tab = self.tabs.get(index)?;
+        self.active = if tab.parked {
+            self.unpark(index)?
+        } else {
+            index
+        };
+        Some(())
     }
 
     /// Move the tab at `from` so it lands at index `to` (FR5 drag-reorder),
-    /// shifting the tabs in between. The active tab is kept pointing at
-    /// the *same* tab, whether it was the moved one or merely shifted by it.
-    /// Returns `None` (no change) if either index is out of range; `from == to`
-    /// is a successful no-op.
+    /// shifting the tabs in between. The tab takes the zone it lands in, parked
+    /// or not; landing on the boundary keeps its own. The active tab is kept
+    /// pointing at the *same* tab, whether it was the moved one or merely
+    /// shifted by it, unless the move parked it. Returns `None` (no change) if
+    /// either index is out of range; `from == to` is a successful no-op.
     pub fn move_tab(&mut self, from: usize, to: usize) -> Option<()> {
         if from >= self.tabs.len() || to >= self.tabs.len() {
             return None;
         }
         if from != to {
-            let tab = self.tabs.remove(from);
-            self.tabs.insert(to, tab);
-            self.active = shift_index(self.active, from, to);
+            let was_parked = self.tabs[from].parked;
+            let unparked_besides = self.first_parked() - usize::from(!was_parked);
+            let parked = match to.cmp(&unparked_besides) {
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Equal => was_parked,
+                std::cmp::Ordering::Greater => true,
+            };
+            self.relocate(from, to, parked);
         }
         Some(())
+    }
+
+    /// Move the tab at `from` to index `to` of the resulting strip with
+    /// `parked` as its state. The callers pick a `to` that keeps every parked
+    /// tab after every unparked one. The active index follows its tab, unless
+    /// that tab is now parked while unparked tabs remain: then the unparked tab
+    /// in the slot it left takes over, else the last unparked one.
+    fn relocate(&mut self, from: usize, to: usize, parked: bool) {
+        let mut tab = self.tabs.remove(from);
+        tab.parked = parked;
+        self.tabs.insert(to, tab);
+        self.active = shift_index(self.active, from, to);
+        if self.tabs[self.active].parked && self.first_parked() > 0 {
+            self.active = self.unparked_fallback(from);
+        }
+    }
+
+    /// The unparked tab nearest `slot`: the one at it, else the last unparked
+    /// one. The last tab when every tab is parked.
+    fn unparked_fallback(&self, slot: usize) -> usize {
+        let unparked = match self.first_parked() {
+            0 => self.tabs.len(),
+            count => count,
+        };
+        slot.min(unparked.saturating_sub(1))
     }
 
     /// Close the tab at `index` (FR5), returning the sessions it hosted so the
@@ -343,9 +488,14 @@ impl Workspace {
             return Vec::new();
         }
         let sessions = self.tabs.remove(index).sessions();
-        let last = self.tabs.len().saturating_sub(1);
-        self.active = index_after_removal(self.active, index).unwrap_or(index.min(last));
+        self.active = self.active_after_removing(index);
         sessions
+    }
+
+    /// The active index once the tab at `removed` has left the strip: the same
+    /// tab when it survives, else the unparked tab nearest its slot.
+    fn active_after_removing(&self, removed: usize) -> usize {
+        index_after_removal(self.active, removed).unwrap_or_else(|| self.unparked_fallback(removed))
     }
 
     /// Session id of the focused pane in the active tab, if any.
@@ -420,12 +570,12 @@ impl Workspace {
     /// Move focus to the next pane in the active tab (FR6), left to right and
     /// wrapping. No-op without an active tab.
     pub fn focus_next(&mut self) -> Option<()> {
-        self.cycle_focus(1)
+        self.cycle_focus(Step::Next)
     }
 
     /// Move focus to the previous pane in the active tab (FR6), wrapping.
     pub fn focus_prev(&mut self) -> Option<()> {
-        self.cycle_focus(-1)
+        self.cycle_focus(Step::Prev)
     }
 
     /// Move focus to the leaf hosting `session` in the active tab
@@ -444,18 +594,12 @@ impl Workspace {
     /// its tab first, then focusing the leaf. The counterpart of
     /// [`Workspace::focus_pane_of`], which only reaches the *active* tab because
     /// a click cannot land anywhere else; a caller addressing a pane by handle
-    /// can. Returns `None` — leaving both the active tab and the focus untouched
-    /// — when no tab hosts it.
+    /// can. A parked tab is unparked. Returns `None` — leaving both the active
+    /// tab and the focus untouched — when no tab hosts it.
     pub fn reveal_pane_of(&mut self, session: SessionId) -> Option<()> {
         let index = self.tab_of(session)?;
-        let previous = self.active;
-        self.active = index;
-        // Restore the previous tab if the leaf turns out to be unreachable, so a
-        // failed reveal changes nothing at all.
-        self.focus_pane_of(session).or_else(|| {
-            self.active = previous;
-            None
-        })
+        self.activate(index)?;
+        self.focus_pane_of(session)
     }
 
     /// Move pane focus one step in a spatial direction (FR6), cycling within
@@ -464,63 +608,29 @@ impl Workspace {
     /// the far edge it wraps to the opposite end. Returns `None` (focus
     /// unchanged) when no split of that orientation exists to move through.
     pub fn focus_dir(&mut self, dir: Direction) -> Option<()> {
-        let (axis, toward_b) = dir.axis_toward_b();
+        let (axis, toward) = dir.axis_toward();
         let tab = self.tabs.get_mut(self.active)?;
-        let focus = tab.focus.clone();
-
-        // A directional step: the nearest ancestor split of this axis where the
-        // focused subtree sits on the branch we can leave in this direction.
-        for i in (0..focus.len()).rev() {
-            let parent = &focus[..i];
-            let leaving = focus[i];
-            let on_near_branch = leaving == if toward_b { Branch::A } else { Branch::B };
-            if on_near_branch && ancestor_is(&tab.root, parent, axis) {
-                let mut path = parent.to_vec();
-                path.push(if toward_b { Branch::B } else { Branch::A });
-                descend_edge(&tab.root, &mut path, toward_b);
-                tab.focus = path;
-                return Some(());
-            }
-        }
-
-        // Already at the far edge → wrap to the opposite end of the outermost
-        // split of this axis. No such split → nothing to move through.
-        for i in 0..focus.len() {
-            let parent = &focus[..i];
-            if ancestor_is(&tab.root, parent, axis) {
-                let mut path = parent.to_vec();
-                path.push(if toward_b { Branch::A } else { Branch::B });
-                descend_edge(&tab.root, &mut path, toward_b);
-                tab.focus = path;
-                return Some(());
-            }
-        }
-        None
-    }
-
-    fn cycle_focus(&mut self, delta: i32) -> Option<()> {
-        let tab = self.tabs.get_mut(self.active)?;
-        let paths = leaf_paths(&tab.root);
-        if paths.is_empty() {
-            return None;
-        }
-        let current = paths.iter().position(|p| *p == tab.focus).unwrap_or(0);
-        let len = paths.len() as i32;
-        let next = (current as i32 + delta).rem_euclid(len) as usize;
-        tab.focus = paths[next].clone();
+        tab.focus = step_across(&tab.root, &tab.focus, axis, toward)
+            .or_else(|| wrap_around(&tab.root, &tab.focus, axis, toward))?;
         Some(())
     }
 
-    /// The active-tab index after cycling by `delta`, wrapping around both ends
-    /// (FR9 `NextTab` / `PrevTab`). `None` when there are no tabs, so the caller
-    /// no-ops rather than switching to a tab that isn't there.
+    fn cycle_focus(&mut self, step: Step) -> Option<()> {
+        let tab = self.tabs.get_mut(self.active)?;
+        let mut paths = leaf_paths(&tab.root);
+        let current = paths.iter().position(|p| *p == tab.focus).unwrap_or(0);
+        let next = step.index_after(current, paths.len())?;
+        tab.focus = paths.swap_remove(next);
+        Some(())
+    }
+
+    /// The active-tab index one `step` away among the unparked tabs, wrapping
+    /// around both ends (FR9 `NextTab` / `PrevTab`). `None` when no tab is
+    /// unparked, so the caller no-ops rather than switching to a tab that isn't
+    /// in the cycle.
     #[must_use]
-    pub fn cycled_tab(&self, delta: i32) -> Option<usize> {
-        let count = self.tabs.len();
-        if count == 0 {
-            return None;
-        }
-        Some((self.active as i32 + delta).rem_euclid(count as i32) as usize)
+    pub fn cycled_tab(&self, step: Step) -> Option<usize> {
+        step.index_after(self.active, self.first_parked())
     }
 }
 
@@ -584,12 +694,50 @@ fn ancestor_is(root: &Pane, path: &[Branch], axis: SplitDir) -> bool {
 }
 
 /// Descend from the node at `path` to the leaf on the edge nearest the pane we
-/// arrived from: moving toward B (right/down) lands on the sibling's leftmost /
-/// topmost leaf, moving toward A on its rightmost / bottommost.
-fn descend_edge(root: &Pane, path: &mut Vec<Branch>, toward_b: bool) {
+/// arrived from, that is on the side opposite to `toward`: moving right lands
+/// on the leftmost leaf, moving up on the bottommost.
+fn descend_edge(root: &Pane, path: &mut Vec<Branch>, toward: Branch) {
     while let Some(Pane::Split { .. }) = navigate(root, path) {
-        path.push(if toward_b { Branch::A } else { Branch::B });
+        path.push(toward.opposite());
     }
+}
+
+/// A directional step: across the nearest ancestor split of `axis` where the
+/// focused subtree sits on the branch we can leave toward `toward`.
+fn step_across(
+    root: &Pane,
+    focus: &[Branch],
+    axis: SplitDir,
+    toward: Branch,
+) -> Option<Vec<Branch>> {
+    (0..focus.len()).rev().find_map(|i| {
+        let parent = &focus[..i];
+        (focus[i] == toward.opposite() && ancestor_is(root, parent, axis))
+            .then(|| edge_leaf(root, parent, toward, toward))
+    })
+}
+
+/// Already at the far edge: the opposite end of the outermost split of `axis`.
+/// No such split → nothing to move through.
+fn wrap_around(
+    root: &Pane,
+    focus: &[Branch],
+    axis: SplitDir,
+    toward: Branch,
+) -> Option<Vec<Branch>> {
+    (0..focus.len()).find_map(|i| {
+        let parent = &focus[..i];
+        ancestor_is(root, parent, axis).then(|| edge_leaf(root, parent, toward.opposite(), toward))
+    })
+}
+
+/// The path into `branch` of the split at `parent`, descended to the edge leaf
+/// a move `toward` arrives on.
+fn edge_leaf(root: &Pane, parent: &[Branch], branch: Branch, toward: Branch) -> Vec<Branch> {
+    let mut path = parent.to_vec();
+    path.push(branch);
+    descend_edge(root, &mut path, toward);
+    path
 }
 
 /// Every leaf's path from the root, left to right.
@@ -644,6 +792,69 @@ mod tests {
         SessionId(NonZeroU64::new(n).unwrap_or(NonZeroU64::MIN))
     }
 
+    /// A workspace holding `count` single-session tabs, active on the last one.
+    fn workspace_with_tabs(count: usize) -> Workspace {
+        let mut ws = Workspace::new();
+        for n in 0..count {
+            ws.open(sid(n as u64 + 1), format!("t{n}"));
+        }
+        ws
+    }
+
+    /// One tab, `1 | 2`, focus on 2.
+    fn side_by_side() -> Workspace {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Vertical, sid(2));
+        ws
+    }
+
+    /// One tab, `1 | 2 | 3` built as `Vertical(1, Vertical(2, 3))`, focus on 3.
+    fn three_columns() -> Workspace {
+        let mut ws = side_by_side();
+        ws.split(SplitDir::Vertical, sid(3));
+        ws
+    }
+
+    /// One tab, 1 on the left, 2 stacked over 3 on the right:
+    /// `Vertical(1, Horizontal(2, 3))`, focus on 3.
+    fn column_beside_stack() -> Workspace {
+        let mut ws = side_by_side();
+        ws.split(SplitDir::Horizontal, sid(3));
+        ws
+    }
+
+    /// One tab, 1 on top, `2 | 3` below: `Horizontal(1, Vertical(2, 3))`,
+    /// focus on 3.
+    fn row_over_columns() -> Workspace {
+        let mut ws = Workspace::new();
+        ws.open(sid(1), "a");
+        ws.split(SplitDir::Horizontal, sid(2));
+        ws.split(SplitDir::Vertical, sid(3));
+        ws
+    }
+
+    /// Move focus one step and report where it landed; `None` when the move
+    /// was refused.
+    fn step(ws: &mut Workspace, dir: Direction) -> Option<SessionId> {
+        ws.focus_dir(dir)?;
+        ws.focused_session()
+    }
+
+    /// The ratio of the split at `path` in the first tab.
+    fn ratio_at(ws: &Workspace, path: &[Branch]) -> f32 {
+        match navigate(&ws.tabs[0].root, path) {
+            Some(Pane::Split { ratio, .. }) => *ratio,
+            other => panic!("expected a split at {path:?}, found {other:?}"),
+        }
+    }
+
+    /// The session ids hosted by each tab, in tab order — a stable identity to
+    /// assert reordering against.
+    fn tab_order(ws: &Workspace) -> Vec<SessionId> {
+        ws.tabs.iter().map(|t| t.sessions()[0]).collect()
+    }
+
     #[test]
     fn open_creates_a_tab_with_the_session() {
         let mut ws = Workspace::new();
@@ -656,18 +867,20 @@ mod tests {
 
     #[test]
     fn cycled_tab_wraps_both_directions() {
-        let mut ws = Workspace::new();
-        assert_eq!(ws.cycled_tab(1), None, "no tabs: nothing to cycle to");
+        assert_eq!(
+            Workspace::new().cycled_tab(Step::Next),
+            None,
+            "no tabs: nothing to cycle to"
+        );
+        assert_eq!(Workspace::new().cycled_tab(Step::Prev), None);
 
-        ws.open(sid(1), "a"); // tab 0
-        ws.open(sid(2), "b"); // tab 1
-        ws.open(sid(3), "c"); // tab 2, now active
+        let ws = workspace_with_tabs(3);
         assert_eq!(ws.active, 2);
 
         // Forward from the last tab wraps round to the first.
-        assert_eq!(ws.cycled_tab(1), Some(0));
+        assert_eq!(ws.cycled_tab(Step::Next), Some(0));
         // Backward from the last tab steps to the middle.
-        assert_eq!(ws.cycled_tab(-1), Some(1));
+        assert_eq!(ws.cycled_tab(Step::Prev), Some(1));
         // The query is pure — it computes the next index, it does not switch.
         assert_eq!(ws.active, 2, "cycled_tab must not mutate the active index");
     }
@@ -698,54 +911,50 @@ mod tests {
 
     #[test]
     fn focus_dir_moves_and_wraps_within_a_vertical_split() {
-        // Two panes side by side (sid1 | sid2), focus on sid2 (the new pane).
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
+        let mut ws = side_by_side();
         assert_eq!(ws.focused_session(), Some(sid(2)));
 
         // Left steps to the pane on the left.
-        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(1)));
+        assert_eq!(step(&mut ws, Direction::Left), Some(sid(1)));
         // Left again from the leftmost wraps to the rightmost (cyclic on axis).
-        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(2)));
+        assert_eq!(step(&mut ws, Direction::Left), Some(sid(2)));
         // Right from the rightmost wraps back to the leftmost.
-        assert_eq!(ws.focus_dir(Direction::Right), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(1)));
+        assert_eq!(step(&mut ws, Direction::Right), Some(sid(1)));
 
         // Up/Down find no horizontal split to traverse: no-op.
-        assert_eq!(ws.focus_dir(Direction::Up), None);
+        assert_eq!(step(&mut ws, Direction::Up), None);
         assert_eq!(ws.focused_session(), Some(sid(1)));
     }
 
     #[test]
     fn focus_dir_traverses_the_matching_axis_in_a_nested_split() {
-        // Left column sid1; right column stacked sid2 over sid3.
-        //   Vertical( sid1 , Horizontal( sid2 , sid3 ) )
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2)); // focus sid2 (right)
-        ws.split(SplitDir::Horizontal, sid(3)); // focus sid3 (bottom-right)
+        let mut ws = column_beside_stack();
         assert_eq!(ws.focused_session(), Some(sid(3)));
 
         // Up moves within the right column to sid2.
-        assert_eq!(ws.focus_dir(Direction::Up), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(2)));
+        assert_eq!(step(&mut ws, Direction::Up), Some(sid(2)));
         // Left crosses the outer vertical split to the left column.
-        assert_eq!(ws.focus_dir(Direction::Left), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(1)));
+        assert_eq!(step(&mut ws, Direction::Left), Some(sid(1)));
         // Right crosses back; the edge nearest the divider is sid2 (top-right).
-        assert_eq!(ws.focus_dir(Direction::Right), Some(()));
-        assert_eq!(ws.focused_session(), Some(sid(2)));
+        assert_eq!(step(&mut ws, Direction::Right), Some(sid(2)));
+    }
+
+    #[test]
+    fn focus_dir_wraps_through_the_outermost_split_of_its_axis() {
+        let mut ws = three_columns();
+        assert_eq!(ws.focused_session(), Some(sid(3)));
+
+        // Right from the rightmost wraps to the far left, not to the inner
+        // split's own left pane (sid2).
+        assert_eq!(step(&mut ws, Direction::Right), Some(sid(1)));
+        // Left from the leftmost wraps to the far right, descending through the
+        // inner split to its rightmost leaf.
+        assert_eq!(step(&mut ws, Direction::Left), Some(sid(3)));
     }
 
     #[test]
     fn focus_pane_of_moves_focus_to_the_leaf_hosting_a_session() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        // A split moves focus to the new pane (sid(2)).
-        ws.split(SplitDir::Vertical, sid(2));
+        let mut ws = side_by_side();
         assert_eq!(ws.focused_session(), Some(sid(2)));
 
         // Clicking the other pane jumps focus to the leaf hosting sid(1).
@@ -759,9 +968,7 @@ mod tests {
 
     #[test]
     fn focus_pane_of_does_not_reach_into_another_tab() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let mut ws = workspace_with_tabs(2);
         // A click cannot land on an inactive tab, so this stays a no-op — the
         // guarantee `reveal_pane_of` exists to lift.
         assert_eq!(ws.focus_pane_of(sid(1)), None);
@@ -771,9 +978,7 @@ mod tests {
 
     #[test]
     fn reveal_pane_of_activates_the_tab_hosting_the_session() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
+        let mut ws = side_by_side();
         ws.open(sid(3), "b");
         assert_eq!(ws.active, 1);
 
@@ -786,9 +991,7 @@ mod tests {
 
     #[test]
     fn reveal_pane_of_leaves_everything_untouched_for_an_unhosted_session() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let mut ws = workspace_with_tabs(2);
         assert_eq!(ws.reveal_pane_of(sid(99)), None);
         assert_eq!(ws.active, 1, "the active tab must not move");
         assert_eq!(ws.focused_session(), Some(sid(2)));
@@ -841,9 +1044,7 @@ mod tests {
 
     #[test]
     fn tab_of_locates_the_hosting_tab_as_a_stable_rename_anchor() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let ws = workspace_with_tabs(2);
         assert_eq!(ws.tab_of(sid(2)), Some(1));
         assert_eq!(ws.tab_of(sid(9)), None);
     }
@@ -870,10 +1071,7 @@ mod tests {
 
     #[test]
     fn open_multiple_makes_latest_active() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
-        ws.open(sid(3), "c");
+        let ws = workspace_with_tabs(3);
         assert_eq!(ws.tabs.len(), 3);
         assert_eq!(ws.active, 2);
         assert_eq!(ws.focused_session(), Some(sid(3)));
@@ -899,75 +1097,42 @@ mod tests {
 
     #[test]
     fn set_split_ratio_updates_the_requested_tab_and_nested_path() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-        ws.split(SplitDir::Horizontal, sid(3));
+        let mut ws = column_beside_stack();
         ws.open(sid(4), "b");
 
         assert_eq!(ws.set_split_ratio(0, &[Branch::B], 0.25), Some(()));
-        let Pane::Split { ratio, b, .. } = &ws.tabs[0].root else {
-            panic!("expected a root split");
-        };
-        assert_eq!(*ratio, 0.5, "the root split remains unchanged");
-        let Pane::Split { ratio, .. } = b.as_ref() else {
-            panic!("expected a nested split");
-        };
-        assert_eq!(*ratio, 0.25);
+        assert_eq!(ratio_at(&ws, &[]), 0.5, "the root split remains unchanged");
+        assert_eq!(ratio_at(&ws, &[Branch::B]), 0.25);
         assert_eq!(ws.active, 1, "the explicitly targeted tab stays in place");
     }
 
     #[test]
     fn set_split_ratio_keeps_each_pane_at_least_ten_percent() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-
+        let mut ws = side_by_side();
         assert_eq!(ws.set_split_ratio(0, &[], 0.0), Some(()));
-        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
-            panic!("expected a root split");
-        };
-        assert_eq!(*ratio, 0.1);
+        assert_eq!(ratio_at(&ws, &[]), 0.1);
         assert_eq!(ws.set_split_ratio(0, &[], 1.0), Some(()));
-        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
-            panic!("expected a root split");
-        };
-        assert_eq!(*ratio, 0.9);
+        assert_eq!(ratio_at(&ws, &[]), 0.9);
     }
 
     #[test]
     fn set_split_ratio_rejects_non_finite_values() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-
+        let mut ws = side_by_side();
         assert_eq!(ws.set_split_ratio(0, &[], f32::NAN), None);
-        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
-            panic!("expected a root split");
-        };
-        assert_eq!(*ratio, 0.5);
+        assert_eq!(ratio_at(&ws, &[]), 0.5);
     }
 
     #[test]
     fn set_split_ratio_rejects_a_leaf_or_missing_tab() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-
+        let mut ws = side_by_side();
         assert_eq!(ws.set_split_ratio(0, &[Branch::A], 0.25), None);
         assert_eq!(ws.set_split_ratio(9, &[], 0.25), None);
-        let Pane::Split { ratio, .. } = &ws.tabs[0].root else {
-            panic!("expected a root split");
-        };
-        assert_eq!(*ratio, 0.5);
+        assert_eq!(ratio_at(&ws, &[]), 0.5);
     }
 
     #[test]
     fn nested_splits_keep_focus_on_newest_leaf() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Horizontal, sid(2));
-        ws.split(SplitDir::Vertical, sid(3));
+        let ws = row_over_columns();
         // focus is at B,B inside two nested splits
         assert_eq!(ws.tabs[0].focus, vec![Branch::B, Branch::B]);
         assert_eq!(ws.focused_session(), Some(sid(3)));
@@ -983,9 +1148,7 @@ mod tests {
 
     #[test]
     fn activate_switches_the_active_tab_and_rejects_out_of_range() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let mut ws = workspace_with_tabs(2);
         assert_eq!(ws.active, 1);
         assert!(ws.activate(0).is_some());
         assert_eq!(ws.active, 0);
@@ -993,15 +1156,6 @@ mod tests {
         // Out of range leaves the active tab untouched.
         assert!(ws.activate(9).is_none());
         assert_eq!(ws.active, 0);
-    }
-
-    /// A workspace holding `count` single-session tabs, active on the last one.
-    fn workspace_with_tabs(count: usize) -> Workspace {
-        let mut ws = Workspace::new();
-        for n in 0..count {
-            ws.open(sid(n as u64 + 1), format!("t{n}"));
-        }
-        ws
     }
 
     proptest::proptest! {
@@ -1058,20 +1212,14 @@ mod tests {
 
     #[test]
     fn tab_sessions_lists_every_leaf_in_pane_order() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-        ws.split(SplitDir::Horizontal, sid(3));
+        let ws = column_beside_stack();
         assert_eq!(ws.tabs[0].sessions(), vec![sid(1), sid(2), sid(3)]);
     }
 
     #[test]
     fn close_tab_returns_its_sessions_and_keeps_active_valid() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
-        ws.open(sid(3), "c");
-        // Active is the last tab (c). Closing an earlier tab shifts it down.
+        let mut ws = workspace_with_tabs(3);
+        // Active is the last tab. Closing an earlier tab shifts it down.
         assert_eq!(ws.active, 2);
         assert_eq!(ws.close_tab(0), vec![sid(1)]);
         assert_eq!(ws.tabs.len(), 2);
@@ -1081,9 +1229,7 @@ mod tests {
 
     #[test]
     fn closing_the_active_last_tab_focuses_the_new_last() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let mut ws = workspace_with_tabs(2);
         assert_eq!(ws.active, 1);
         assert_eq!(ws.close_tab(1), vec![sid(2)]);
         assert_eq!(ws.active, 0);
@@ -1092,9 +1238,7 @@ mod tests {
 
     #[test]
     fn close_tab_kills_all_sessions_in_a_split() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
+        let mut ws = side_by_side();
         assert_eq!(ws.close_tab(0), vec![sid(1), sid(2)]);
         assert!(ws.tabs.is_empty());
         assert_eq!(ws.active, 0);
@@ -1102,10 +1246,8 @@ mod tests {
 
     #[test]
     fn tab_of_locates_the_hosting_tab_including_inside_a_split() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
-        ws.split(SplitDir::Vertical, sid(3)); // sid 3 joins tab "b" as a split
+        let mut ws = workspace_with_tabs(2);
+        ws.split(SplitDir::Vertical, sid(3)); // sid 3 joins tab 1 as a split
         assert_eq!(ws.tab_of(sid(1)), Some(0));
         assert_eq!(ws.tab_of(sid(2)), Some(1));
         assert_eq!(ws.tab_of(sid(3)), Some(1), "a split member maps to its tab");
@@ -1114,8 +1256,7 @@ mod tests {
 
     #[test]
     fn close_tab_out_of_range_is_a_noop() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
+        let mut ws = workspace_with_tabs(1);
         assert!(ws.close_tab(5).is_empty());
         assert_eq!(ws.tabs.len(), 1);
         assert_eq!(ws.active, 0);
@@ -1123,9 +1264,7 @@ mod tests {
 
     #[test]
     fn close_focused_collapses_the_split_onto_the_sibling() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2)); // focus on B (sid 2)
+        let mut ws = side_by_side();
         // Closing the focused pane removes sid 2 and leaves just sid 1.
         assert_eq!(ws.close_focused(), Some(sid(2)));
         assert_eq!(ws.tabs.len(), 1);
@@ -1135,10 +1274,8 @@ mod tests {
 
     #[test]
     fn close_focused_on_a_single_pane_tab_closes_the_tab() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
-        // Active tab is the single-leaf "b"; closing its pane closes the tab.
+        let mut ws = workspace_with_tabs(2);
+        // Active tab is the single-leaf tab 1; closing its pane closes the tab.
         assert_eq!(ws.close_focused(), Some(sid(2)));
         assert_eq!(ws.tabs.len(), 1);
         assert_eq!(ws.focused_session(), Some(sid(1)));
@@ -1146,10 +1283,7 @@ mod tests {
 
     #[test]
     fn close_focused_in_a_nested_split_keeps_a_leaf_focused() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Horizontal, sid(2));
-        ws.split(SplitDir::Vertical, sid(3)); // focus B,B = sid 3
+        let mut ws = row_over_columns();
         assert_eq!(ws.close_focused(), Some(sid(3)));
         // The sibling (sid 2) takes the inner split's place and is focused.
         assert_eq!(ws.focused_session(), Some(sid(2)));
@@ -1158,9 +1292,7 @@ mod tests {
 
     #[test]
     fn close_pane_of_collapses_an_unfocused_leaf_and_keeps_focus() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2)); // focus on B (sid 2)
+        let mut ws = side_by_side();
         // Closing the *unfocused* pane (sid 1) must not steal focus from sid 2.
         assert_eq!(ws.close_pane_of(sid(1)), Some(sid(1)));
         assert_eq!(ws.tabs[0].root, Pane::Leaf(sid(2)));
@@ -1169,9 +1301,7 @@ mod tests {
 
     #[test]
     fn close_pane_of_the_focused_leaf_moves_focus_to_the_sibling() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2)); // focus on B (sid 2)
+        let mut ws = side_by_side();
         assert_eq!(ws.close_pane_of(sid(2)), Some(sid(2)));
         assert_eq!(ws.tabs[0].root, Pane::Leaf(sid(1)));
         assert_eq!(ws.focused_session(), Some(sid(1)));
@@ -1179,9 +1309,7 @@ mod tests {
 
     #[test]
     fn close_pane_of_reaches_into_an_inactive_tab_without_switching() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
+        let mut ws = side_by_side();
         ws.open(sid(3), "b"); // active tab is now "b"
         assert_eq!(ws.close_pane_of(sid(2)), Some(sid(2)));
         assert_eq!(ws.tabs[0].root, Pane::Leaf(sid(1)));
@@ -1192,9 +1320,7 @@ mod tests {
 
     #[test]
     fn close_pane_of_a_root_leaf_closes_the_whole_tab() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.open(sid(2), "b");
+        let mut ws = workspace_with_tabs(2);
         assert_eq!(ws.close_pane_of(sid(1)), Some(sid(1)));
         assert_eq!(ws.tabs.len(), 1);
         assert_eq!(ws.focused_session(), Some(sid(2)));
@@ -1202,18 +1328,14 @@ mod tests {
 
     #[test]
     fn close_pane_of_an_unknown_session_is_a_noop() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
+        let mut ws = workspace_with_tabs(1);
         assert_eq!(ws.close_pane_of(sid(9)), None);
         assert_eq!(ws.tabs.len(), 1);
     }
 
     #[test]
     fn focus_next_and_prev_cycle_through_panes() {
-        let mut ws = Workspace::new();
-        ws.open(sid(1), "a");
-        ws.split(SplitDir::Vertical, sid(2));
-        ws.split(SplitDir::Vertical, sid(3)); // leaves in order: 1, 2, 3; focus on 3
+        let mut ws = three_columns();
         assert_eq!(ws.focused_session(), Some(sid(3)));
         // Wrap forward to the first leaf, then walk back.
         assert!(ws.focus_next().is_some());
@@ -1229,12 +1351,6 @@ mod tests {
         let mut ws = Workspace::new();
         assert!(ws.focus_next().is_none());
         assert!(ws.close_focused().is_none());
-    }
-
-    /// The session ids hosted by each tab, in tab order — a stable identity to
-    /// assert reordering against.
-    fn tab_order(ws: &Workspace) -> Vec<SessionId> {
-        ws.tabs.iter().map(|t| t.sessions()[0]).collect()
     }
 
     #[test]
@@ -1313,6 +1429,308 @@ mod tests {
                 proptest::prop_assert_eq!(ws.tabs[ws.active].sessions()[0], active_before);
             } else {
                 proptest::prop_assert_eq!(result, None);
+            }
+        }
+    }
+
+    mod park {
+        use proptest::collection::vec;
+        use proptest::prelude::*;
+
+        use super::*;
+
+        /// `unparked` then `parked` single-session tabs, ids 1.. in strip
+        /// order, active on the last unparked tab, or on the last tab when
+        /// every one is parked.
+        fn strip(unparked: usize, parked: usize) -> Workspace {
+            let mut ws = workspace_with_tabs(unparked + parked);
+            for tab in &mut ws.tabs[unparked..] {
+                tab.parked = true;
+            }
+            ws.active = unparked
+                .checked_sub(1)
+                .unwrap_or(ws.tabs.len().saturating_sub(1));
+            ws
+        }
+
+        fn parked_ids(ws: &Workspace) -> Vec<SessionId> {
+            ws.tabs
+                .iter()
+                .filter(|tab| tab.is_parked())
+                .map(Tab::first_session)
+                .collect()
+        }
+
+        fn active_id(ws: &Workspace) -> SessionId {
+            ws.tabs[ws.active].first_session()
+        }
+
+        /// The ordering rules every mutator keeps: parked tabs form the strip's
+        /// tail, `active` names a tab, and that tab is parked only when every
+        /// tab is.
+        fn strip_rules_hold(ws: &Workspace) -> Result<(), String> {
+            let boundary = ws.first_parked();
+            if ws.tabs[boundary..].iter().any(|tab| !tab.is_parked()) {
+                return Err(format!("an unparked tab sits after index {boundary}"));
+            }
+            if ws.tabs.is_empty() {
+                return Ok(());
+            }
+            if ws.active >= ws.tabs.len() {
+                return Err(format!("active {} is out of range", ws.active));
+            }
+            if ws.tabs[ws.active].is_parked() && boundary > 0 {
+                return Err("the active tab is parked while unparked tabs remain".into());
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn parking_moves_a_tab_to_the_front_of_the_parked_group() {
+            let mut ws = strip(3, 1);
+            assert_eq!(ws.park(0), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(2), sid(3), sid(1), sid(4)]);
+            assert_eq!(parked_ids(&ws), vec![sid(1), sid(4)]);
+            assert_eq!(ws.first_parked(), 2);
+            assert_eq!(
+                active_id(&ws),
+                sid(3),
+                "parking another tab keeps the active one"
+            );
+        }
+
+        #[test]
+        fn parking_the_active_tab_activates_the_unparked_tab_sliding_into_its_slot() {
+            let mut ws = strip(3, 0);
+            ws.activate(1);
+            assert_eq!(ws.park(1), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(3), sid(2)]);
+            assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[test]
+        fn parking_the_last_unparked_active_tab_activates_the_new_last_unparked() {
+            let mut ws = strip(3, 1);
+            assert_eq!(ws.park(2), Some(()));
+            assert_eq!(parked_ids(&ws), vec![sid(3), sid(4)]);
+            assert_eq!(active_id(&ws), sid(2));
+        }
+
+        #[test]
+        fn parking_the_only_unparked_tab_keeps_it_active() {
+            let mut ws = strip(1, 1);
+            assert_eq!(ws.park(0), Some(()));
+            assert_eq!(parked_ids(&ws), vec![sid(1), sid(2)]);
+            assert_eq!(ws.first_parked(), 0);
+            assert_eq!(active_id(&ws), sid(1));
+        }
+
+        #[test]
+        fn park_refuses_a_parked_or_missing_tab() {
+            let mut ws = strip(2, 1);
+            assert_eq!(ws.park(2), None);
+            assert_eq!(ws.park(9), None);
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(3)]);
+            assert_eq!(parked_ids(&ws), vec![sid(3)]);
+            assert_eq!(active_id(&ws), sid(2));
+        }
+
+        #[test]
+        fn unparking_moves_a_tab_to_the_end_of_the_unparked_group() {
+            let mut ws = strip(2, 2);
+            assert_eq!(ws.unpark(3), Some(2));
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(4), sid(3)]);
+            assert_eq!(parked_ids(&ws), vec![sid(3)]);
+            assert_eq!(active_id(&ws), sid(2), "unparking does not activate");
+        }
+
+        #[test]
+        fn unpark_refuses_an_unparked_or_missing_tab() {
+            let mut ws = strip(2, 1);
+            assert_eq!(ws.unpark(0), None);
+            assert_eq!(ws.unpark(9), None);
+            assert_eq!(parked_ids(&ws), vec![sid(3)]);
+        }
+
+        #[test]
+        fn activating_a_parked_tab_unparks_it() {
+            let mut ws = strip(2, 2);
+            assert_eq!(ws.activate(3), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(4), sid(3)]);
+            assert_eq!(parked_ids(&ws), vec![sid(3)]);
+            assert_eq!(active_id(&ws), sid(4));
+        }
+
+        #[test]
+        fn new_tabs_open_before_the_parked_group() {
+            let mut ws = strip(2, 1);
+            ws.open(sid(9), "nine");
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(9), sid(3)]);
+            assert_eq!(active_id(&ws), sid(9));
+            assert_eq!(ws.append(sid(8), "eight"), 3);
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(9), sid(8), sid(3)]);
+            assert_eq!(active_id(&ws), sid(9));
+            assert_eq!(parked_ids(&ws), vec![sid(3)]);
+        }
+
+        #[test]
+        fn closing_the_active_tab_never_falls_back_onto_a_parked_tab() {
+            let mut ws = strip(2, 1);
+            assert_eq!(ws.close_tab(1), vec![sid(2)]);
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(3)]);
+            assert_eq!(active_id(&ws), sid(1));
+        }
+
+        #[test]
+        fn the_tab_cycle_skips_parked_tabs() {
+            let ws = strip(3, 2);
+            assert_eq!(ws.cycled_tab(Step::Next), Some(0));
+            assert_eq!(ws.cycled_tab(Step::Prev), Some(1));
+        }
+
+        #[test]
+        fn the_tab_cycle_has_nowhere_to_go_when_every_tab_is_parked() {
+            let ws = strip(0, 2);
+            assert_eq!(ws.cycled_tab(Step::Next), None);
+            assert_eq!(ws.cycled_tab(Step::Prev), None);
+        }
+
+        #[test]
+        fn revealing_a_pane_in_a_parked_tab_unparks_it() {
+            let mut ws = strip(2, 1);
+            assert_eq!(ws.reveal_pane_of(sid(3)), Some(()));
+            assert_eq!(parked_ids(&ws), vec![]);
+            assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[test]
+        fn dragging_a_tab_into_the_parked_zone_parks_it() {
+            let mut ws = strip(3, 2);
+            assert_eq!(ws.move_tab(0, 3), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(2), sid(3), sid(4), sid(1), sid(5)]);
+            assert_eq!(parked_ids(&ws), vec![sid(4), sid(1), sid(5)]);
+            assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[test]
+        fn dragging_a_parked_tab_into_the_unparked_zone_unparks_it() {
+            let mut ws = strip(3, 2);
+            assert_eq!(ws.move_tab(4, 0), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(5), sid(1), sid(2), sid(3), sid(4)]);
+            assert_eq!(parked_ids(&ws), vec![sid(4)]);
+            assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[test]
+        fn a_drop_on_the_boundary_keeps_the_tab_in_its_zone() {
+            let mut ws = strip(3, 2);
+            assert_eq!(ws.move_tab(0, 2), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(2), sid(3), sid(1), sid(4), sid(5)]);
+            assert_eq!(parked_ids(&ws), vec![sid(4), sid(5)]);
+
+            let mut ws = strip(3, 2);
+            assert_eq!(ws.move_tab(4, 3), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(3), sid(5), sid(4)]);
+            assert_eq!(parked_ids(&ws), vec![sid(5), sid(4)]);
+        }
+
+        #[test]
+        fn dragging_the_active_tab_into_the_parked_zone_activates_the_last_unparked() {
+            let mut ws = strip(3, 2);
+            assert_eq!(ws.move_tab(2, 4), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(1), sid(2), sid(4), sid(5), sid(3)]);
+            assert_eq!(parked_ids(&ws), vec![sid(4), sid(5), sid(3)]);
+            assert_eq!(active_id(&ws), sid(2));
+        }
+
+        #[test]
+        fn dragging_among_parked_tabs_keeps_the_active_one_when_every_tab_is_parked() {
+            let mut ws = strip(0, 3);
+            assert_eq!(active_id(&ws), sid(3));
+            assert_eq!(ws.move_tab(0, 1), Some(()));
+            assert_eq!(tab_order(&ws), vec![sid(2), sid(1), sid(3)]);
+            assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[derive(Debug, Clone)]
+        enum Op {
+            Open,
+            Append,
+            Park(usize),
+            Unpark(usize),
+            Activate(usize),
+            Move(usize, usize),
+            Close(usize),
+            Reveal(u64),
+        }
+
+        fn op() -> impl Strategy<Value = Op> {
+            prop_oneof![
+                Just(Op::Open),
+                Just(Op::Append),
+                (0usize..8).prop_map(Op::Park),
+                (0usize..8).prop_map(Op::Unpark),
+                (0usize..8).prop_map(Op::Activate),
+                (0usize..8, 0usize..8).prop_map(|(from, to)| Op::Move(from, to)),
+                (0usize..8).prop_map(Op::Close),
+                (1u64..12).prop_map(Op::Reveal),
+            ]
+        }
+
+        fn apply(ws: &mut Workspace, op: &Op, last_id: &mut u64) {
+            match *op {
+                Op::Open => {
+                    *last_id += 1;
+                    ws.open(sid(*last_id), "opened");
+                }
+                Op::Append => {
+                    *last_id += 1;
+                    ws.append(sid(*last_id), "appended");
+                }
+                Op::Park(index) => {
+                    ws.park(index);
+                }
+                Op::Unpark(index) => {
+                    ws.unpark(index);
+                }
+                Op::Activate(index) => {
+                    ws.activate(index);
+                }
+                Op::Move(from, to) => {
+                    ws.move_tab(from, to);
+                }
+                Op::Close(index) => {
+                    ws.close_tab(index);
+                }
+                Op::Reveal(id) => {
+                    ws.reveal_pane_of(sid(id));
+                }
+            }
+        }
+
+        proptest! {
+            #[test]
+            fn every_mutator_keeps_parked_tabs_after_unparked_ones(ops in vec(op(), 0..40)) {
+                let mut ws = strip(3, 2);
+                let mut last_id = 5;
+                for op in &ops {
+                    apply(&mut ws, op, &mut last_id);
+                    prop_assert_eq!(strip_rules_hold(&ws), Ok(()), "after {:?}", op);
+                }
+            }
+
+            #[test]
+            fn the_tab_cycle_never_lands_on_a_parked_tab(ops in vec(op(), 0..40)) {
+                let mut ws = strip(3, 2);
+                let mut last_id = 5;
+                for op in &ops {
+                    apply(&mut ws, op, &mut last_id);
+                }
+                for step in [Step::Next, Step::Prev] {
+                    if let Some(index) = ws.cycled_tab(step) {
+                        prop_assert!(!ws.tabs[index].is_parked(), "{:?} landed on {}", step, index);
+                    }
+                }
             }
         }
     }

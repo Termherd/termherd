@@ -26,6 +26,8 @@ enum Offered {
     /// Only where a colour can be picked for the focused pane, as the
     /// `pick-tab-color` action decides it — so not on a busy Claude.
     WhenColorPickable,
+    /// Only on an unparked tab, which the action would park.
+    WhenUnparked,
 }
 
 /// What the focused pane allows, read once when the menu opens.
@@ -33,6 +35,7 @@ enum Offered {
 pub(super) struct Offers {
     pub(super) agent_named: bool,
     pub(super) color_pickable: bool,
+    pub(super) unparked: bool,
 }
 
 impl Offers {
@@ -41,6 +44,7 @@ impl Offers {
             Offered::OnEveryTab => true,
             Offered::WithAgentName => self.agent_named,
             Offered::WhenColorPickable => self.color_pickable,
+            Offered::WhenUnparked => self.unparked,
         }
     }
 }
@@ -90,6 +94,11 @@ pub(super) const ENTRIES: &[Entry] = &[
         action: Action::SplitHorizontal,
         label: strings::TAB_MENU_SPLIT_DOWN,
         offered: Offered::OnEveryTab,
+    },
+    Entry {
+        action: Action::TogglePark,
+        label: strings::TAB_MENU_PARK,
+        offered: Offered::WhenUnparked,
     },
     Entry {
         action: Action::CloseFocused,
@@ -215,6 +224,12 @@ impl Shell {
         let offers = Offers {
             agent_named: self.focused_agent_name().is_some(),
             color_pickable: self.color_pickable(anchor),
+            unparked: self
+                .core
+                .workspace
+                .tabs
+                .get(self.core.workspace.active)
+                .is_some_and(|tab| !tab.is_parked()),
         };
         self.tab_menu = Some(TabMenu {
             anchor,

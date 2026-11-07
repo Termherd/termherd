@@ -115,6 +115,9 @@ pub enum Event {
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.
     CloseTab(usize),
+    /// Park the tab at `index`, or unpark it when it is parked. Presentational:
+    /// its sessions keep running, so it yields no effects.
+    ToggleParkTab(usize),
     /// Close the pane hosting `SessionId` wherever it lives, killing its PTY,
     /// without bringing it into view first: the active tab and the focus stay
     /// unless the closed pane held the focus, which then passes to its
