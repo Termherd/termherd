@@ -33,6 +33,19 @@ pub enum Event {
         session: SessionId,
         bytes: Vec<u8>,
     },
+    /// The user pasted `text` into a terminal whose bracketed-paste mode is
+    /// `bracketed`. Written at once, or held for confirmation when the terminal
+    /// would run its lines one by one — see
+    /// [`paste_needs_confirmation`](super::paste_needs_confirmation).
+    Paste {
+        session: SessionId,
+        text: String,
+        bracketed: bool,
+    },
+    /// Write the paste held for confirmation.
+    ConfirmPaste,
+    /// Drop the paste held for confirmation without writing it.
+    CancelPaste,
     /// Submit what was typed into a terminal: Enter, kept apart from the text.
     TerminalSubmit {
         session: SessionId,
