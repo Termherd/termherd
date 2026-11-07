@@ -11,7 +11,7 @@
 use iced::Task;
 use iced::keyboard;
 use termherd_core::workspace::SessionId;
-use termherd_core::{ClaudeColor, ClaudeCommand, ColorKeeper, Event};
+use termherd_core::{ClaudeColor, ClaudeCommand, ColorKeeper, CommandRefusal, Event};
 
 use super::routing::{KeyVerdict, KeyboardOwner};
 use super::tab_menu::{ListKey, step};
@@ -46,24 +46,24 @@ impl Shell {
             .filter(|picker| self.core.workspace.focused_session() == Some(picker.anchor))
     }
 
-    /// Whether a colour could be picked for `session` now: always for a pane
-    /// termherd colours, and for a Claude only while it can take `/color` —
-    /// idle, its prompt empty and on screen. Asked by the picker before it
-    /// opens and by the tab menu before it offers the picker, so neither
-    /// offers a list that cannot work.
-    pub(super) fn color_pickable(&self, session: SessionId) -> bool {
+    /// Why no colour can be picked for `session` now, `None` when one can:
+    /// always for a pane termherd colours, and for a Claude only while it can
+    /// take `/color` — idle, its prompt empty and on screen. Asked by the
+    /// picker before it opens and by the tab menu before it offers the
+    /// picker, so neither offers a list that cannot work.
+    pub(super) fn color_refusal(&self, session: SessionId) -> Option<CommandRefusal> {
         self.core
             .color_pick(session, &self.prompt_input(session))
-            .is_ok()
+            .err()
     }
 
     /// Open the focused tab's picker on the colour it wears — *None* for an
     /// uncoloured tab, so an Enter straight away changes nothing. `None` when
     /// no pane is focused or no colour can be picked for it now
-    /// ([`Self::color_pickable`]), so the keymap reports a refusal.
+    /// ([`Self::color_refusal`]), so the keymap reports a refusal.
     pub(super) fn open_color_picker(&mut self) -> Option<()> {
         let anchor = self.core.workspace.focused_session()?;
-        if !self.color_pickable(anchor) {
+        if self.color_refusal(anchor).is_some() {
             return None;
         }
         let worn = self
