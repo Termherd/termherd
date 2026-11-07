@@ -7,6 +7,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (a dead key shows its pending character)
+
+- A dead key (`^`, `¨`, `` ` ``, `~` on a French layout) shows its pending
+  character underlined at the cursor until the next key completes it, as
+  other macOS terminals do. It clears on the commit, on Escape, and when the
+  window or the terminal loses focus (#322).
+
 ### Fixed (a doc save lands on the doc it wrote)
 
 - A doc keeps its `• modified` mark when you type while its save is in

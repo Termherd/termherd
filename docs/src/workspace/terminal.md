@@ -38,6 +38,15 @@ a US one.
 <kbd>⌥Enter</kbd> (a newline in Claude), <kbd>⌥⌫</kbd> and <kbd>⌥←</kbd> /
 <kbd>⌥→</kbd> work with either key. On Windows and Linux, Alt is always Meta.
 
+### Accents and composed text
+
+Dead keys and input methods compose in the focused terminal: <kbd>^</kbd> then
+<kbd>e</kbd> types `ê` on a French layout, and CJK input methods work the same
+way. While a composition is pending, its text shows underlined over the
+cursor cell, at the terminal's font size but in the interface font. It goes
+away when the character is typed, and when you press <kbd>Escape</kbd>, leave
+the window or open a prompt.
+
 ### Mouse gestures
 
 The two classic terminal conventions are available, both **off by default** —
