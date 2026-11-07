@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 630a1bf56fc6bdf165ae72632c1e8b30a40dafdae991b3388196993aeb57508d # shrinks to lines = ["{\"message\":\"a\",\"type\":\"user\"}", "{\"slug\":\"𝄞a𝄞\\n\\n\\na𝄞a a𝄞𝄞\\naa  𝄞\\n\\na𝄞\\na𝄞\\n 𝄞a\\n𝄞   a\\na\\nc 𝄞  q𝄞\\n𝄞jtp𝄞i𝄞\\nf\\n𝄞l𝄞𝄞hmqupo\\n\\nay 𝄞y 𝄞w 𝄞k\\nv   𝄞   v\\n\\n\\np \\ny\\nu\"}"]
+cc 783572bce0f7ce6dbf62c4fe39e1092b4cd02b2972ef9acd570c74f90e1161ba # shrinks to entries = [String("red")]

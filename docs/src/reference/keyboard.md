@@ -82,7 +82,7 @@ without Shift.
 
 | Action | Default | Does |
 | --- | --- | --- |
-| `split-vertical` | `mod+d`; `alt+shift+=`, `alt+shift+plus` off macOS | split side by side |
+| `split-vertical` | `mod+d`; `alt+shift+=` off macOS | split side by side |
 | `split-horizontal` | `mod+shift+d`; `alt+shift+-`, `alt+shift+d` off macOS | split stacked |
 | `focus-left` | `mod+shift+left` | focus the pane to the left |
 | `focus-right` | `mod+shift+right` | … to the right |
@@ -101,7 +101,7 @@ without Shift.
 | `send-to-desktop` | *(unbound)* | *(unbound)* |
 | `scroll-top` | `cmd+up` | `ctrl+shift+home` |
 | `scroll-bottom` | `cmd+down` | `ctrl+shift+end` |
-| `zoom-in` | `cmd+=`, `cmd+plus`, `cmd+shift+plus` | `ctrl+…` (same three) |
+| `zoom-in` | `cmd+=`, `cmd+shift+=`, `cmd+plus` | `ctrl+…` (same three) |
 | `zoom-out` | `cmd+-` | `ctrl+-` |
 | `zoom-reset` | `cmd+0` | `ctrl+0` |
 
@@ -136,12 +136,14 @@ first: <kbd>Enter</kbd> types it, <kbd>Escape</kbd> drops it. It does nothing
 unless that Claude is idle with nothing typed in its prompt. Bind it yourself;
 it has no default.
 
-Zoom-in binds three chords because `=` is the unshifted face of the `+` key on
-QWERTY and the unshifted key on AZERTY. On those two layouts only `mod+=`
-reaches the action: there `+` needs Shift, and a chord is matched on the key
-before Shift applies (see above), so the two `plus` spellings never match. On a
-layout with an unshifted `+` key, such as German QWERTZ, `mod+plus` matches and
-`mod+shift+plus` still does not. That is tracked as #370.
+Zoom-in binds three chords. On QWERTY and AZERTY `+` is
+<kbd>Shift</kbd>+<kbd>=</kbd>, and a chord is matched on the key before Shift
+applies (see above), so <kbd>Cmd</kbd>+<kbd>+</kbd> arrives as `mod+shift+=`
+and <kbd>Cmd</kbd>+<kbd>=</kbd> as `mod+=`. `mod+plus` is the keypad
+<kbd>+</kbd>, or the <kbd>+</kbd> key of a layout that types it without Shift,
+such as German QWERTZ. On Windows and Linux AZERTY, where `-` shares the
+<kbd>6</kbd> key, zoom-out answers the keypad minus only, as `split-horizontal`
+does above.
 
 ### App
 
@@ -181,7 +183,10 @@ way an [MCP caller](../mcp/keyboard.md) can answer a prompt it armed.
 Case- and order-insensitive. Modifiers `ctrl`, `shift`, `alt`, `cmd`, joined to
 a key with `+`. Aliases: `control` for `ctrl`, `option` for `alt`, and
 `super`, `logo`, `win` or `meta` for `cmd`. The `+` key itself is spelled
-`plus`, since a literal `+` is the separator:
+`plus`, since a literal `+` is the separator. It names a key that types `+`
+without Shift, such as the keypad <kbd>+</kbd>: on QWERTY and AZERTY,
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> is `ctrl+shift+=`, never
+`ctrl+shift+plus`.
 
 ```json
 "keys": {

@@ -200,7 +200,7 @@
   //   new-shell-here            mod+T ; Ctrl+Shift+T off macOS
   //   new-claude-session-here   mod+Alt+T
   //   open-new-session          (unbound)
-  //   split-vertical            mod+D ; Alt+Shift+= / Alt+Shift+plus off macOS
+  //   split-vertical            mod+D ; Alt+Shift+= off macOS
   //   split-horizontal          mod+Shift+D ; Alt+Shift+- / Alt+Shift+D off macOS
   //   focus-left / -right       mod+Shift+Left / Right
   //   focus-up / -down          mod+Shift+Up / Down
@@ -208,7 +208,7 @@
   //   focus-search              mod+F ; Ctrl+Shift+F off macOS
   //   toggle-sidebar            mod+B ; Ctrl+Shift+B off macOS
   //   scroll-top / -bottom      mod+Up / mod+Down ; Ctrl+Shift+Home / End off macOS
-  //   zoom-in                   mod+= / mod+plus / mod+Shift+plus
+  //   zoom-in                   mod+= / mod+Shift+= / mod+plus (keypad +)
   //   zoom-out                  mod+-
   //   zoom-reset                mod+0
   //   capture                   mod+Shift+S (state dump for an AI assistant)
