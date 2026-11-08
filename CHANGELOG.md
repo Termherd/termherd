@@ -7,6 +7,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0-prerelease.6] - 2026-11-08
+
 ### Fixed (a long Claude command submits on the first Enter)
 
 - A confirmed `/rename` long enough for Claude Code to read as a paste now
