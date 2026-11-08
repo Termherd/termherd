@@ -392,9 +392,8 @@ mod tests {
     }
 
     #[test]
-    fn to_term_key_maps_characters_and_named_keys() {
-        // Characters carry their base char; every named key is spelled out in
-        // `SPELLED_NAMED_KEYS`.
+    fn to_term_key_maps_characters_and_drops_keys_without_a_sequence() {
+        // Characters carry their base char; named keys are in `SPELLED_NAMED_KEYS`.
         assert_eq!(
             to_term_key(&Key::Character("a".into())),
             Some(TermKey::Char('a'))
