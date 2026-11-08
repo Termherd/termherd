@@ -195,7 +195,11 @@ Abbreviated acceptance criteria.
 
 ### Shell
 
-- FR11 — Single-instance: a second launch focuses the existing window (Q8).
+- FR11 — Single-instance: one termherd per login session (Q8). A second
+  launch hands any `termherd://` link to the running instance and exits; the
+  exit codes are in `docs/src/guide/installation.md`, the per-OS link path
+  in `F-url-scheme`. termherd does not raise its window when a link or a
+  second launch arrives.
 - FR12 — Window bounds persist and restore.
 
 ## 7. Non-functional requirements
