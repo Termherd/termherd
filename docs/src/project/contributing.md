@@ -7,7 +7,7 @@ The full conventions live in the repository, and they are the authority:
 - [`AGENTS.md`](https://github.com/Termherd/termherd/blob/main/AGENTS.md) — the
   engineering rules: dependency rule, quality bar, how work is tracked
 - [`CODING_STANDARDS.md`](https://github.com/Termherd/termherd/blob/main/CODING_STANDARDS.md)
-  — Tidy First, CUPID, YAGNI, TDD
+  — Tidy First, CUPID, YAGNI, test first
 - [`docs/CI.md`](https://github.com/Termherd/termherd/blob/main/docs/CI.md) —
   every gate, why it exists, and how to mirror it
 

@@ -6,8 +6,8 @@ usually apply them:
 
 1. **Tidy First** — separate behaviour changes from clean-ups.
 2. **CUPID & YAGNI** — properties to aim for in design and refactoring.
-3. **TDD (Red → Green → Refactor → Reflect)** — the loop that keeps the above
-   honest.
+3. **Test first** — design, failing tests, implementation, then one
+   simplify-and-review pass over the diff.
 4. **Clean Code** — local taste rules that survive automation.
 
 Repo-specific rules take precedence when they collide. The authoritative
@@ -167,86 +167,88 @@ the second use case.
 
 ---
 
-## 3. TDD with a fourth step — Reflect
+## 3. Test first, one refactor at the end
 
-The standard Red → Green → Refactor loop, with a deliberate **Reflect** beat at
-the end of each cycle. The reflect step is what keeps the loop from grinding
-out lots of small green tests that don't add up to a coherent design.
+Work in this repo is done almost entirely by agents, and agents never kept the
+per-cycle Red → Green → Refactor → Reflect loop. What works for them is
+**test first**: design the change, write the failing tests, implement, then
+clean up once over the whole diff. One issue runs through these steps:
 
 ```text
-   ┌──────────┐
-   │   RED    │   Write the smallest failing test that names the
-   │          │   behaviour you want. Run it. Confirm it fails for
-   │          │   the right reason (not a typo, not an import).
-   └────┬─────┘
-        │
-        ▼
-   ┌──────────┐
-   │  GREEN   │   Write the least code that makes the test pass.
-   │          │   Ugly is fine here. Don't generalise yet.
-   └────┬─────┘
-        │
-        ▼
-   ┌──────────┐
-   │ REFACTOR │   With the test green, clean up — names, duplication,
-   │          │   shape. Tests stay green between every keystroke.
-   │          │   This is a TIDY (see §1); commit it separately.
-   └────┬─────┘
-        │
-        ▼
-   ┌──────────┐
-   │ REFLECT  │   Pause. Ask:
-   │          │     • What did this cycle teach me?
-   │          │     • What surprised me (red took longer? green was
-   │          │       trivial? refactor revealed a missing concept)?
-   │          │     • Is the *next* test on my list still the right
-   │          │       one, or did this cycle change the plan?
-   │          │     • Is there a test I should retire because it now
-   │          │       overlaps with a stronger one?
-   │          │     • Did I learn a domain rule worth pinning in
-   │          │       another test, separate from the one I just
-   │          │       wrote?
-   │          │   Update the test list. Then loop.
-   └────┬─────┘
-        │
-        ▼
-       (next test)
+   ┌──────────────┐
+   │ FRAME+DESIGN │   Read the issue, its board fields and the feature
+   │              │   file. Decide the crate, any port trait, the
+   │              │   cfg-gated surface, the error types, and the tests
+   │              │   to write. Apply the AGENTS.md quality bar here,
+   │              │   before any code. Branch from an up-to-date main.
+   └──────┬───────┘
+          ▼
+   ┌──────────────┐
+   │ TIDY         │   Only if the change is hard to make: prepare the
+   │ (optional)   │   code in its own commit, suite green (see §1).
+   └──────┬───────┘
+          ▼
+   ┌──────────────┐
+   │ TESTS FIRST  │   Write the failing tests that name the behaviour.
+   │              │   Run them. Confirm each fails for the right reason
+   │              │   (not a typo, not an import). A bug's first test
+   │              │   reproduces it.
+   └──────┬───────┘
+          ▼
+   ┌──────────────┐
+   │ IMPLEMENT    │   The code that turns them green, within the rules
+   │              │   decided at design time.
+   └──────┬───────┘
+          ▼
+   ┌──────────────┐
+   │ SIMPLIFY     │   `/simplify` over the branch diff: reuse, dead
+   │              │   weight, shape. The one refactor step. It leaves the
+   │              │   work clean for whoever comes next; Tidy prepared
+   │              │   it, the two are not the same step.
+   └──────┬───────┘
+          ▼
+   ┌──────────────┐
+   │ REVIEW       │   `/code-review` on the branch diff (`low` for an S,
+   │              │   `medium` for an M), with the review mindset below
+   │              │   and the AGENTS.md quality bar as its grid.
+   └──────┬───────┘
+          ▼
+   ┌──────────────┐
+   │ GATES + PR   │   Local gates, the book and CHANGELOG.md in the same
+   │              │   PR, then wait for `ci-success` to finish.
+   └──────┬───────┘
+          ▼
+   ┌──────────────┐
+   │ CLOSE        │   After the merge: the feature's `status`, the board,
+   │              │   and `/wrap` when the work reached a milestone.
+   └──────────────┘
 ```
 
-Reflect rules:
+Simplify and review run once per branch, after the tests are green, so the
+review reads the code that will merge rather than code simplify then changes.
+On a one-file fix, the review alone is enough.
 
-- **Reflect is short.** A minute, sometimes thirty seconds. If it becomes a
-  meeting, do it asynchronously between cycles.
-- **Reflect updates the plan, not the code.** If reflection reveals code that
-  should change, that's the *next* RED test, not an edit you smuggle into the
-  current cycle.
-- **Reflect after Green-but-no-Refactor cycles too.** "There was nothing to
-  clean" is itself a signal — either the design is good or you're not looking
-  hard enough.
-- **Always surface findings to the user as a decision.** Every reflection
-  that produces a finding (a new test worth pinning, a surprise that suggests a
-  missing concept, a smell you noticed) gets a one-line decision prompt:
-  *"apply now / add to today / add to the roadmap / forget it"*. Do not
-  silently carry findings forward and do not silently apply them.
+**Surface findings to the user as a decision.** A finding from any step (a
+test worth pinning, a missing concept, a smell) gets a one-line decision
+prompt: *"apply now / add to today / add to the roadmap / forget it"*. Do not
+silently carry findings forward and do not silently apply them.
 
-  The user picks. Give a recommendation only when asked, then name the move
-  and its *why* in one short clause. Heuristics:
-  - **Apply now** — the finding closes a still-open hole from the cycle just
-    finished, the fix is small, and skipping it would leave the work
-    half-done. (e.g. forward contract test landed → reverse test is ~30 LOC →
-    apply now closes the lesson.)
-  - **Add to today** — same-session work, but it would derail the current
-    task; better as the next discrete cycle.
-  - **Add to the roadmap** — useful but not on the critical path; capture it as
-    a feature file in `.roadmap/features/` (never in the generated
-    `ROADMAP.md`) so it's not lost.
-  - **Forget it** — speculative, low-leverage, or you're not sure it's real.
-    Recording every passing thought is its own debt.
+The user picks. Give a recommendation only when asked, then name the move and
+its *why* in one short clause. Heuristics:
 
-  *Apply now* fits a finding that is small and directly tied to the cycle that
-  surfaced it (Tidy First: keep the diff coherent); *roadmap* fits one larger
-  than the cycle it interrupted (CUPID-Composable: don't bundle unrelated
-  work).
+- **Apply now** — the finding closes a still-open hole in the work just
+  finished, the fix is small, and skipping it would leave the work half-done.
+- **Add to today** — same-session work, but it would derail the current task;
+  better as the next discrete step.
+- **Add to the roadmap** — useful but not on the critical path; capture it as a
+  feature file in `.roadmap/features/` (never in the generated `ROADMAP.md`) so
+  it's not lost.
+- **Forget it** — speculative, low-leverage, or you're not sure it's real.
+  Recording every passing thought is its own debt.
+
+*Apply now* fits a finding that is small and directly tied to the work that
+surfaced it (Tidy First: keep the diff coherent); *roadmap* fits one larger
+than that work (CUPID-Composable: don't bundle unrelated work).
 
 ### Testing in `termherd`
 
