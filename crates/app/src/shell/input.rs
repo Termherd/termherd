@@ -392,23 +392,11 @@ mod tests {
     }
 
     #[test]
-    fn to_term_key_maps_characters_and_named_keys() {
-        // Characters carry their base char; the named keys the codec handles
-        // map to their `TermKey`.
+    fn to_term_key_maps_characters_and_drops_keys_without_a_sequence() {
+        // Characters carry their base char; named keys are in `SPELLED_NAMED_KEYS`.
         assert_eq!(
             to_term_key(&Key::Character("a".into())),
             Some(TermKey::Char('a'))
-        );
-        assert_eq!(to_term_key(&Key::Named(Named::Enter)), Some(TermKey::Enter));
-        assert_eq!(to_term_key(&Key::Named(Named::ArrowUp)), Some(TermKey::Up));
-        assert_eq!(
-            to_term_key(&Key::Named(Named::PageDown)),
-            Some(TermKey::PageDown)
-        );
-        assert_eq!(to_term_key(&Key::Named(Named::F2)), Some(TermKey::F2));
-        assert_eq!(
-            to_term_key(&Key::Named(Named::Insert)),
-            Some(TermKey::Insert)
         );
         // Keys with no terminal sequence reach no PTY.
         assert_eq!(to_term_key(&Key::Named(Named::CapsLock)), None);
@@ -677,6 +665,58 @@ mod tests {
             let chord = KeyChord::new(row.name, keymap::MOD_SHIFT);
             assert_eq!(round_trip(&chord).as_ref(), Some(&chord), "`{}`", row.name);
         }
+    }
+
+    /// Every named key as a real press reports it, with the chord name and the
+    /// terminal key it must resolve to, spelled out. The round trips above read
+    /// `NAMED_KEYS` in both directions, so two rows with swapped iced keys pass
+    /// them; only a list written independently of the table can fail.
+    const SPELLED_NAMED_KEYS: &[(Named, &str, TermKey)] = &[
+        (Named::Tab, "tab", TermKey::Tab),
+        (Named::Enter, "enter", TermKey::Enter),
+        (Named::Escape, "escape", TermKey::Escape),
+        (Named::ArrowUp, "up", TermKey::Up),
+        (Named::ArrowDown, "down", TermKey::Down),
+        (Named::ArrowLeft, "left", TermKey::Left),
+        (Named::ArrowRight, "right", TermKey::Right),
+        (Named::Home, "home", TermKey::Home),
+        (Named::End, "end", TermKey::End),
+        (Named::PageUp, "pageup", TermKey::PageUp),
+        (Named::PageDown, "pagedown", TermKey::PageDown),
+        (Named::Insert, "insert", TermKey::Insert),
+        (Named::Delete, "delete", TermKey::Delete),
+        (Named::Backspace, "backspace", TermKey::Backspace),
+        (Named::Space, "space", TermKey::Space),
+        (Named::F1, "f1", TermKey::F1),
+        (Named::F2, "f2", TermKey::F2),
+        (Named::F3, "f3", TermKey::F3),
+        (Named::F4, "f4", TermKey::F4),
+        (Named::F5, "f5", TermKey::F5),
+        (Named::F6, "f6", TermKey::F6),
+        (Named::F7, "f7", TermKey::F7),
+        (Named::F8, "f8", TermKey::F8),
+        (Named::F9, "f9", TermKey::F9),
+        (Named::F10, "f10", TermKey::F10),
+        (Named::F11, "f11", TermKey::F11),
+        (Named::F12, "f12", TermKey::F12),
+    ];
+
+    #[test]
+    fn a_real_named_key_resolves_to_its_spelled_name_and_terminal_key() {
+        for &(named, name, term) in SPELLED_NAMED_KEYS {
+            let key = Key::Named(named);
+            assert_eq!(key_name(&key).as_deref(), Some(name), "{named:?}");
+            assert_eq!(to_term_key(&key), Some(term), "{named:?}");
+        }
+    }
+
+    #[test]
+    fn the_spelled_list_matches_the_name_table_row_for_row() {
+        // Derived from the table the code reads, so a row added or dropped
+        // there without its spelled twin fails here rather than going unchecked.
+        let table: Vec<Named> = NAMED_KEYS.iter().map(|row| row.key).collect();
+        let spelled: Vec<Named> = SPELLED_NAMED_KEYS.iter().map(|row| row.0).collect();
+        assert_eq!(spelled, table);
     }
 
     #[test]

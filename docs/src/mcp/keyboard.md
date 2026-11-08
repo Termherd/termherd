@@ -16,6 +16,11 @@ the resulting `focused_handle`.
 [chord syntax](../reference/keyboard.md#chord-syntax) does. A chord bound to
 nothing reaches the focused terminal through TermHerd's own key encoder, so
 `"pageup"` or `"shift+f5"` there shows the bytes TermHerd sends for that key.
+An arrow follows the cursor-key mode the program asked for, so `"up"` sends
+`ESC O A` in vim and `ESC [ A` at a shell prompt that leaves that mode off.
+`"alt+."` sends `ESC .`: off macOS Alt is always Meta, and on macOS a
+synthesised Alt has no side, so it is Meta unless `terminal.option_as_meta` is
+`"none"` or the user holds only the Option key the setting excludes.
 `run_in_session` writes the caller's bytes as they are and cannot show it.
 
 ## Why it is a real key event
