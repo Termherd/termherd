@@ -60,6 +60,9 @@ mod view;
 
 pub(crate) use bridge::{Requests as BridgeRequests, channel as bridge_channel};
 use docs::{DocDiscard, DocVersion, OpenDoc};
+/// A path as a shell reports it, for a test fixture that hands one to `git`.
+#[cfg(test)]
+pub(crate) use links::resolved;
 
 /// The live-bridge runtime wiring handed to the shell, grouped so the
 /// constructor stays within argument bounds. Carries the subscription source
