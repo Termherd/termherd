@@ -289,9 +289,12 @@ app on one it cannot answer; a sidebar rename used to be the exception
 renames. The rename fields use the same commit path for MCP and widget submit
 ([#246]).
 
-One follow-up remains: the pointer at TermHerd's own interface ([#301]): it
-reaches a session's terminal, and through it a program reading the mouse, but
-not yet the sidebar, tabs or gutters. A client TermHerd did *not* spawn can now
+Follow-ups remain. The pointer at TermHerd's own interface ([#301]) reaches a
+session's terminal, and through it a program reading the mouse, but not yet
+the sidebar, tabs or gutters. Six more would let an agent check what it cannot
+reach today: layout and IME keys, the app's own log, window focus, the docs
+editor, double-click, and the overlay that holds the keyboard ([#482],
+[#483], [#484], [#485], [#492], [#493]). A client TermHerd did *not* spawn can now
 reach the bridge too, once `mcp.attach` is turned on ([#267]).
 
 ### The stdio server (manual)
@@ -323,6 +326,12 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 [#246]: https://github.com/Termherd/termherd/issues/246
 [#267]: https://github.com/Termherd/termherd/issues/267
 [#301]: https://github.com/Termherd/termherd/issues/301
+[#482]: https://github.com/Termherd/termherd/issues/482
+[#483]: https://github.com/Termherd/termherd/issues/483
+[#484]: https://github.com/Termherd/termherd/issues/484
+[#485]: https://github.com/Termherd/termherd/issues/485
+[#492]: https://github.com/Termherd/termherd/issues/492
+[#493]: https://github.com/Termherd/termherd/issues/493
 
 ## Test
 

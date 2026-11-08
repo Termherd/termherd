@@ -225,7 +225,8 @@ exists). Do not relax them locally; the incident behind each linked rule is in
 - **Claude Code's screen and input are matched on bytes, and its bytes
   drift.** Build fixtures from a live capture (`⌘⇧S`, then `xxd` on the row).
   `\r` is Enter, `\n` a line break, and a burst of about 64 bytes or more is a
-  paste, so Enter goes as its own write after a gap.
+  paste: Enter goes as its own write after a gap, and so does a control byte,
+  which a paste strips before holding the line for review.
   [Why](docs/agents/lessons.md#claude-codes-bytes-drift)
 
 ## Conventions

@@ -24,6 +24,12 @@ one `cargo mutants` survivor was a stale `termherd-shell-97/` from an earlier
 failing run, not a real gap. A test that writes under `std::env::temp_dir()`
 must clear its target first and remove it after.
 
+**A mutation run leaves proptest seeds behind.** A mutant that fails a
+`proptest!` makes it write the shrunk case to `proptest-regressions/`,
+untracked, beside the seeds that guard real failures. The file records a
+failure of the mutant, not of the code, so delete it rather than commit it.
+An `--in-place` run on #496 left one under `crates/core/`.
+
 **Timeouts dominate the wall clock.** Do not force `--timeout`; the
 auto-derived value (baseline × a factor) is far tighter. And keep test fixtures
 small — one 3000×2000 test frame took a run from 8 minutes to 22, because a
