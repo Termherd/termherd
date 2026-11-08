@@ -5,16 +5,9 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-/// A worktree about to be added: where it goes, and the branch it checks out.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Plan {
-    pub path: PathBuf,
-    pub branch: String,
-}
-
 /// Why no worktree was added.
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(crate) enum Error {
     #[error("not a name git can take as a branch: {0:?}")]
     InvalidName(String),
     #[error("could not run git: {0}")]
@@ -26,7 +19,7 @@ pub enum Error {
 /// The worktree name for a session minted under `id`: `claude-` and the id's
 /// first eight hex digits.
 #[must_use]
-pub fn name_for(id: &str) -> String {
+pub(crate) fn name_for(id: &str) -> String {
     let digits: String = id
         .chars()
         .filter(char::is_ascii_hexdigit)
@@ -52,8 +45,7 @@ fn is_plain_name(name: &str) -> bool {
 /// prints it so. A worktree started from a linked worktree still lands in the
 /// main one, where the others are. A shared dir not named `.git` (a bare
 /// repository, a separate git dir) names no checkout, so `root` stands in.
-#[must_use]
-pub fn main_checkout(common_dir: &Path, root: &Path) -> PathBuf {
+fn main_checkout(common_dir: &Path, root: &Path) -> PathBuf {
     // Re-joined, so git's forward slashes become the platform's own.
     let common_dir: PathBuf = root.join(common_dir).components().collect();
     match common_dir.parent() {
@@ -64,26 +56,22 @@ pub fn main_checkout(common_dir: &Path, root: &Path) -> PathBuf {
 
 /// Where the worktree `name` of the checkout `main` goes: the folder
 /// `claude --worktree` uses, which the scan files under `main`.
-#[must_use]
-pub fn plan(main: &Path, name: &str) -> Plan {
-    Plan {
-        path: main.join(".claude").join("worktrees").join(name),
-        branch: name.to_owned(),
-    }
+fn worktree_path(main: &Path, name: &str) -> PathBuf {
+    main.join(".claude").join("worktrees").join(name)
 }
 
-/// Add the worktree `name` on a new branch off the HEAD of the checkout at
-/// `root`, and return its path. Blocks on `git`: run it off the GUI thread.
+/// Add the worktree `name` on a new branch of the same name, off the HEAD of
+/// the checkout at `root`, and return its path. Blocks on `git`: run it off the GUI thread.
 ///
 /// # Errors
 ///
 /// A name git could not take, a `git` that cannot be run, or a git step that
 /// fails (not a repository, the branch or folder already taken).
-pub fn create(root: &Path, name: &str) -> Result<PathBuf, Error> {
+pub(crate) fn create(root: &Path, name: &str) -> Result<PathBuf, Error> {
     if !is_plain_name(name) {
         return Err(Error::InvalidName(name.to_owned()));
     }
-    let plan = plan(&main_of(root)?, name);
+    let path = worktree_path(&main_of(root)?, name);
     git(
         root,
         "worktree add",
@@ -91,12 +79,12 @@ pub fn create(root: &Path, name: &str) -> Result<PathBuf, Error> {
             OsStr::new("worktree"),
             OsStr::new("add"),
             OsStr::new("-b"),
-            OsStr::new(&plan.branch),
+            OsStr::new(name),
             OsStr::new("--"),
-            plan.path.as_os_str(),
+            path.as_os_str(),
         ],
     )?;
-    Ok(plan.path)
+    Ok(path)
 }
 
 /// The main checkout of the repo `root` is in, spelled as the user reached it
@@ -174,8 +162,9 @@ fn said(stderr: &str) -> String {
 #[cfg(test)]
 pub(crate) fn test_repo() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().expect("tempdir");
-    // Canonical, so the paths git prints compare equal on macOS (`/private`).
-    let repo = tmp.path().canonicalize().expect("canonical").join("app");
+    // Not canonicalised: on macOS the temp dir is reached through the `/var`
+    // symlink, so every test proves a worktree keeps the repo's spelling.
+    let repo = tmp.path().join("app");
     std::fs::create_dir(&repo).expect("mkdir");
     tests::git(&repo, &["init", "-q"]);
     tests::git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
@@ -228,23 +217,8 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_keeps_the_spelling_the_repo_was_reached_by() {
-        // Not canonicalised: on macOS the temp dir is reached through the
-        // `/var` symlink, and git would answer `/private/var`.
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let repo = tmp.path().join("app");
-        std::fs::create_dir(&repo).expect("mkdir");
-        git(&repo, &["init", "-q"]);
-        git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
-        let first = create(&repo, "claude-00000001").expect("first");
-        assert_eq!(first, repo.join(".claude/worktrees/claude-00000001"));
-        let second = create(&first, "claude-00000002").expect("second");
-        assert_eq!(second, repo.join(".claude/worktrees/claude-00000002"));
-    }
-
-    #[test]
     fn a_linked_worktree_outside_the_scans_folders_asks_git_for_its_repo() {
-        let (tmp, repo) = repo();
+        let (tmp, repo) = test_repo();
         let elsewhere = tmp
             .path()
             .canonicalize()
@@ -262,6 +236,8 @@ mod tests {
             ],
         );
         let made = create(&elsewhere, "claude-00000003").expect("made");
+        // git's answer, so the spelling with symlinks resolved.
+        let repo = repo.canonicalize().expect("canonical");
         assert_eq!(made, repo.join(".claude/worktrees/claude-00000003"));
     }
 
@@ -288,13 +264,10 @@ mod tests {
     }
 
     #[test]
-    fn a_worktree_goes_under_claudes_worktree_folder_on_a_branch_of_its_name() {
+    fn a_worktree_goes_under_claudes_worktree_folder() {
         assert_eq!(
-            plan(Path::new("/dev/app"), "claude-3f2a9c1b"),
-            Plan {
-                path: PathBuf::from("/dev/app/.claude/worktrees/claude-3f2a9c1b"),
-                branch: "claude-3f2a9c1b".to_owned(),
-            }
+            worktree_path(Path::new("/dev/app"), "claude-3f2a9c1b"),
+            PathBuf::from("/dev/app/.claude/worktrees/claude-3f2a9c1b")
         );
     }
 
@@ -314,8 +287,8 @@ mod tests {
             id in "[0-9a-f]{32}",
         ) {
             // The scan's own rule, so the session joins its project's row (FR1).
-            let planned = plan(Path::new(&main), &name_for(&id));
-            let path = planned.path.to_string_lossy();
+            let planned = worktree_path(Path::new(&main), &name_for(&id));
+            let path = planned.to_string_lossy();
             prop_assert_eq!(
                 termherd_claude::derive::collapse_worktree(&path),
                 Some(main.as_str())
@@ -345,13 +318,9 @@ mod tests {
         String::from_utf8_lossy(&out.stdout).trim().to_owned()
     }
 
-    fn repo() -> (tempfile::TempDir, PathBuf) {
-        test_repo()
-    }
-
     #[test]
     fn a_worktree_is_added_under_the_checkout_on_its_own_branch() {
-        let (_tmp, repo) = repo();
+        let (_tmp, repo) = test_repo();
         let path = create(&repo, "claude-3f2a9c1b").expect("created");
         assert_eq!(path, repo.join(".claude/worktrees/claude-3f2a9c1b"));
         assert_eq!(git(&path, &["branch", "--show-current"]), "claude-3f2a9c1b");
@@ -364,7 +333,7 @@ mod tests {
 
     #[test]
     fn a_worktree_asked_from_a_linked_worktree_lands_under_the_main_checkout() {
-        let (_tmp, repo) = repo();
+        let (_tmp, repo) = test_repo();
         let first = create(&repo, "claude-00000001").expect("first");
         git(
             &first,
@@ -381,7 +350,7 @@ mod tests {
 
     #[test]
     fn a_created_worktree_is_filed_under_its_repo_by_the_scans_key() {
-        let (_tmp, repo) = repo();
+        let (_tmp, repo) = test_repo();
         let path = create(&repo, "claude-3f2a9c1b").expect("created");
         assert_eq!(
             termherd_scan::sidebar_key(&path.to_string_lossy()),
@@ -391,7 +360,7 @@ mod tests {
 
     #[test]
     fn a_taken_name_is_refused_by_git() {
-        let (_tmp, repo) = repo();
+        let (_tmp, repo) = test_repo();
         create(&repo, "claude-3f2a9c1b").expect("first");
         let error = create(&repo, "claude-3f2a9c1b").expect_err("taken");
         assert!(matches!(error, Error::Git { .. }), "{error}");
@@ -407,7 +376,7 @@ mod tests {
 
     #[test]
     fn a_name_git_would_read_as_an_option_never_reaches_it() {
-        let (_tmp, repo) = repo();
+        let (_tmp, repo) = test_repo();
         for name in ["-b", "--force", "a b", "../escape", "", "claude-"] {
             let error = create(&repo, name).expect_err(name);
             assert!(matches!(error, Error::InvalidName(_)), "{name}: {error}");

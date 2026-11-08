@@ -164,8 +164,7 @@ impl Shell {
             Ok(path) => {
                 self.notice = None;
                 let undisturbed = self.core.workspace.focused_session() == Some(ask.from)
-                    && self.closing.is_none()
-                    && self.archiving.is_none();
+                    && self.keyboard_owner().is_none();
                 let placement = if undisturbed {
                     Placement::Foreground
                 } else {
