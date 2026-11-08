@@ -270,7 +270,10 @@ Both fold into the same `SessionStatus`. A shell whose integration did not take
 (an unknown shell, an unwritable temp directory) falls back on the PTY's
 foreground process group — a stand-in the first real signal or mark retires for
 good, since it would otherwise call every Claude session busy forever. ConPTY
-exposes no foreground group, so that fallback is silent on Windows.
+exposes no foreground group, so that fallback is silent on Windows. The job in
+front is read there off the process tree below the shell instead (the nearest
+`claude.exe`, else the shell's first child, through the Win32 FFI in
+`pty::status::win_process`), so a Claude's session file is still found.
 
 The same injected snippet answers a second question at the same prompt hook:
 **where** the shell is. It announces its directory as an OSC 7 `file://` url,

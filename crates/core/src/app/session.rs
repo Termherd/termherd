@@ -40,8 +40,8 @@ pub struct LiveSession {
     /// Activity derived from the OSC stream (FR8).
     pub status: SessionStatus,
     /// The job in front of the shell, as the PTY adapter last reported it
-    /// ([`Event::ForegroundJobChanged`]). `None` at the prompt and wherever the
-    /// platform has no foreground process group (ConPTY).
+    /// ([`Event::ForegroundJobChanged`]). `None` at the prompt and until the
+    /// adapter has read it.
     pub foreground: Option<ForegroundJob>,
     /// Claude's session file for the job in front, as the shell last read it
     /// ([`Event::SessionFileRead`]). Only a cache: whether it names this job
@@ -55,13 +55,13 @@ pub struct LiveSession {
     /// The shell's clock, not core's: core only keeps the stamp.
     pub spawned_at: Option<SystemTime>,
     /// Whether the adapter has ever reported a job in front of this pane's
-    /// shell. Until it has, an empty [`Self::foreground`] proves nothing —
-    /// ConPTY never reports one — so only after it does can an empty one mean
-    /// the program in front has exited.
+    /// shell. Until it has, an empty [`Self::foreground`] proves nothing — the
+    /// adapter may not have read it yet, or cannot — so only after it does can
+    /// an empty one mean the program in front has exited.
     pub foreground_reported: bool,
     /// Whether the adapter has read this pane's foreground process group at
-    /// all — set by its first reading, job or none. Never on ConPTY, which
-    /// has no such group, so there [`Self::foreground`] is unknown, not empty.
+    /// all — set by its first reading, job or none. Never where the adapter
+    /// cannot read it, so there [`Self::foreground`] is unknown, not empty.
     pub foreground_known: bool,
     /// Whether the program in this terminal is on the alternate screen
     /// ([`Event::AltScreenChanged`]).
@@ -181,7 +181,7 @@ impl LiveSession {
 
     /// Whether a program other than the shell has the terminal. The PTY's
     /// foreground process group answers that wherever it can be read; where
-    /// it cannot (ConPTY), a program on the alternate screen is the sign of
+    /// it cannot, a program on the alternate screen is the sign of
     /// one — which catches an editor or a pager, not a long `make`.
     fn runs_program_in_front(&self) -> bool {
         if self.foreground_known {
@@ -1350,7 +1350,7 @@ mod tests {
         Job,
         /// The shell itself is in front: it was read, and no job was there.
         Shell,
-        /// Never read: the platform has no foreground process group (ConPTY).
+        /// Never read: the adapter could not say.
         Unknown,
     }
 

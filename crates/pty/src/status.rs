@@ -20,6 +20,11 @@ use termherd_core::SessionStatus;
 
 use crate::prompt::PromptMark;
 
+#[cfg(any(windows, test))]
+mod process_tree;
+#[cfg(windows)]
+mod win_process;
+
 /// How long Claude's idle title must stand, unbroken by work, before a busy
 /// session reads idle. Between two busy stretches Claude can show idle for
 /// about 20 ms, and a wait settling on that returns mid-turn.
@@ -189,6 +194,31 @@ pub(crate) fn foreground_leader(_master: &dyn MasterPty) -> Option<i32> {
     None
 }
 
+/// The job in front of `shell` — `Some(None)` while the shell itself is —
+/// or `None` when the platform cannot read it. Unix reads it off the
+/// foreground process group ([`foreground_job`]). ConPTY has none, so there
+/// it is the nearest `claude.exe` below the shell, or else the shell's first
+/// child (`process_tree::job_under`).
+///
+/// shortcut: the listing's parent pids are taken as they are, so a process
+/// orphaned before the shell started, whose dead parent's pid the shell then
+/// reused, reads as the shell's child; comparing creation times would rule it
+/// out, if that ever shows up.
+#[cfg(windows)]
+pub(crate) fn job_in_front(_leader: Option<i32>, shell: Option<u32>) -> Option<Option<u32>> {
+    let shell = shell?;
+    Some(process_tree::job_under(
+        &win_process::processes()?,
+        shell,
+        "claude.exe",
+    ))
+}
+
+#[cfg(not(windows))]
+pub(crate) fn job_in_front(leader: Option<i32>, shell: Option<u32>) -> Option<Option<u32>> {
+    foreground_status(leader, shell).map(|_| foreground_job(leader, shell))
+}
+
 /// The activity a PTY's foreground process group implies: the shell itself in
 /// the foreground means nothing is running (`Idle`); any other process group
 /// owns the terminal, so a command is (`Busy`).
@@ -212,14 +242,25 @@ pub(crate) fn foreground_status(leader: Option<i32>, shell: Option<u32>) -> Opti
 /// say. A job's process-group leader is its first process, so for a Claude
 /// launched at the prompt this is Claude's own pid — the one naming its
 /// session file.
+#[cfg(any(not(windows), test))]
 pub(crate) fn foreground_job(leader: Option<i32>, shell: Option<u32>) -> Option<u32> {
     let (leader, shell) = (u32::try_from(leader?).ok()?, shell?);
     (leader != shell).then_some(leader)
 }
 
 /// When process `pid` started, in the form Claude Code stamps its session
+/// file with (`procStart`): on Windows, the process's creation `FILETIME` as
+/// one integer (`win_process::creation_stamp`). `None` when the process is
+/// gone or may not be queried.
+#[cfg(windows)]
+pub(crate) fn process_start(pid: u32) -> Option<String> {
+    win_process::creation_stamp(pid)
+}
+
+/// When process `pid` started, in the form Claude Code stamps its session
 /// file with (`procStart`): `ps`'s `lstart` column, in UTC and the C locale.
 /// `None` when `ps` cannot say: the process is gone, or there is no `ps`.
+#[cfg(not(windows))]
 pub(crate) fn process_start(pid: u32) -> Option<String> {
     let output = std::process::Command::new("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
@@ -236,6 +277,7 @@ pub(crate) fn process_start(pid: u32) -> Option<String> {
 }
 
 /// The stamp in `ps -o lstart=` output, which pads it with trailing blanks.
+#[cfg(any(not(windows), test))]
 fn lstart(stdout: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(stdout).ok()?.trim();
     (!text.is_empty()).then(|| text.to_owned())
@@ -403,10 +445,16 @@ mod tests {
 
     #[test]
     fn a_live_process_has_a_start_stamp_and_a_missing_one_has_none() {
+        let stamp = process_start(std::process::id()).expect("this test's own process");
+        assert_eq!(process_start(u32::MAX), None);
         if cfg!(windows) {
+            // The `FILETIME` form, checked in `win_process`.
+            assert!(
+                stamp.parse::<u64>().is_ok(),
+                "a FILETIME stamp, got {stamp:?}"
+            );
             return;
         }
-        let stamp = process_start(std::process::id()).expect("this test's own process");
         let year = stamp
             .rsplit(' ')
             .next()
@@ -415,7 +463,6 @@ mod tests {
             year.is_some_and(|year| year >= 2024),
             "an lstart stamp, got {stamp:?}"
         );
-        assert_eq!(process_start(u32::MAX), None);
     }
 
     #[test]

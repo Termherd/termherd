@@ -20,7 +20,7 @@ use crate::strings;
 enum Offered {
     OnEveryTab,
     /// Only where the focused pane's Claude has a name to copy, read as the
-    /// `copy-agent-name` action reads it — so never on Windows, and on a shell
+    /// `copy-agent-name` action reads it — so on a shell
     /// tab whenever a Claude runs in front of it.
     WithAgentName,
     /// On every tab, but runnable only where a colour can be picked for the

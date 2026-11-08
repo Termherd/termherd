@@ -50,7 +50,8 @@ always present:
 
 - when no Claude is in front (a shell prompt, any other program);
 - when the file in place belongs to an earlier process with the same pid;
-- on Windows, which reports no foreground process to take the `pid` from;
+- on Windows, for a Claude that is neither a `claude.exe` below the pane's
+  shell nor the shell's own child (one started through a wrapper script);
 - while Claude Code has written no session file, or one without `procStart`
   (an older CLI, a session still starting).
 

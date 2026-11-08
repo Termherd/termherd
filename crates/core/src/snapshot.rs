@@ -259,8 +259,9 @@ pub struct PaneSnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ClaudeIdentity {
     /// The Claude process id — the job in front of the pane's shell. `None`
-    /// on Windows, where ConPTY reports no foreground process group, and for a
-    /// job with no session file, which is no Claude this can vouch for.
+    /// for a job with no session file, which is no Claude this can vouch for,
+    /// and on Windows for a Claude neither running as `claude.exe` nor started
+    /// by the shell itself, the two ways the process tree below it is read.
     pub pid: Option<u32>,
     /// The name other Claude sessions address this one by, from its session
     /// file. `None` when the file names none.

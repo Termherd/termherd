@@ -943,7 +943,7 @@ mod tests {
 
     #[test]
     fn no_job_in_front_names_nobody_whatever_file_was_read() {
-        // Windows: ConPTY reports no foreground group, so there is no pid.
+        // No job in front, so there is no pid to prove the file by.
         let (app, id) = pane_with(None, Some(session_file(4399, "termherd-b0", "s")));
         assert_eq!(app.peer_name(id), None);
     }

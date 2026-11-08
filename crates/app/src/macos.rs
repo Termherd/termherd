@@ -1,4 +1,5 @@
-//! macOS AppKit glue — the single audited `unsafe` module in the workspace.
+//! macOS AppKit glue — one of the workspace's two audited `unsafe` modules,
+//! beside `crates/pty/src/status/win_process.rs`.
 //!
 //! Repairs to what winit 0.30 does on macOS, all *mechanism only*: the policy
 //! each one feeds stays in the safe, headless-tested shell.

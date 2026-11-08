@@ -703,14 +703,12 @@ mod tests {
     /// A **real job** in front of a real shell is reported by its pid, and the
     /// shell's return to the front clears it — the seam a Claude pane's
     /// session file is found through. `sleep` stands in for `claude`: both are
-    /// a foreground job the shell started.
-    ///
-    /// Skipped on Windows: ConPTY exposes no foreground process group.
+    /// a foreground job the shell started. Windows has no foreground process
+    /// group, so there the job is read off the process tree below the shell,
+    /// and `ping` stands in: an external program, where a shell's own `sleep`
+    /// may run inside it and start no process at all.
     #[test]
     fn a_job_in_front_of_a_real_shell_is_reported_by_pid_then_cleared() {
-        if cfg!(windows) {
-            return;
-        }
         let (tx, rx) = mpsc::channel::<PtyEvent>();
         let sink: EventSink = Arc::new(move |ev| {
             let _ = tx.send(ev);
@@ -718,7 +716,12 @@ mod tests {
         let (_private, mgr) = manager(sink, Palette::default());
         let id = sid(5);
         mgr.spawn(spec(id)).expect("spawn");
-        mgr.write(id, b"sleep 2\r\n").expect("write");
+        let job: &[u8] = if cfg!(windows) {
+            b"ping -n 3 127.0.0.1\r\n"
+        } else {
+            b"sleep 2\r\n"
+        };
+        mgr.write(id, job).expect("write");
 
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut reported = Vec::new();

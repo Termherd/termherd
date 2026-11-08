@@ -830,8 +830,7 @@ mod tests {
 
     #[test]
     fn a_claude_launch_never_seen_in_front_still_counts_as_claude() {
-        // ConPTY reports no foreground job at all, so an absent one proves
-        // nothing until one has been reported.
+        // Before the adapter has read a job, an absent one proves nothing.
         let mut app = App::new();
         let pane = launch_claude(&mut app);
         app.apply(Event::ForegroundJobChanged {

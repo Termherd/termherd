@@ -69,8 +69,10 @@ distinction useless.
 
 Each handler that can refuse this way says so at its own refusal site.
 
-`copy-agent-name` is the one `no-context` nothing can create on Windows:
-ConPTY reports no foreground process, so no Claude there is ever named.
+On Windows, `copy-agent-name` finds a Claude by walking down from the pane's
+shell: the nearest `claude.exe`, or else the shell's first child. A Claude
+started any other way (through a wrapper script that runs `node`) is never
+named there, so that `no-context` cannot be created.
 
 `copy` refuses on the terminal's own answer: it holds a selection or it does
 not, wherever that selection has scrolled to. An MCP drag in a `forwarded`
