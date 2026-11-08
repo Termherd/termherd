@@ -200,8 +200,11 @@ before touching it:
 To drive an isolated dev build from outside with plain `curl`, see
 [running.md](running.md#driving-an-isolated-build-from-outside).
 
-**Still open.** One feature: the pointer at termherd's own chrome (#301 — the
-sidebar, tabs and gutters still have no mouse).
+**Still open on the driving surface.** The pointer at termherd's own chrome
+(#301 — the sidebar, tabs and gutters still have no mouse), and six features
+that would let an agent verify a fix it cannot reach today: layout and IME keys
+(#482), the app's own log (#483), window focus (#484), the docs editor (#485),
+double-click (#492) and the open overlay in the snapshot (#493).
 No defect is open beside them. The bridge's hardening is done: first #284,
 then #293, which moved the Host/Origin check from rmcp's defaults into
 termherd's own gate (403 before the token's 401). Four other defects are
