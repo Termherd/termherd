@@ -259,6 +259,9 @@ impl Shell {
             // reopen the last closed tab.
             Action::NewShellHere => self.new_shell_here(),
             Action::NewClaudeSessionHere => self.new_claude_here().ok_or(Inertia::NoContext)?,
+            Action::NewClaudeSessionInWorktree => {
+                self.new_claude_in_worktree().ok_or(Inertia::NoContext)?
+            }
             Action::ReopenClosedTab => self.reopen_closed_tab().ok_or(Inertia::NoContext)?,
             // Capture the current state for the AI dev loop.
             Action::Capture => self.capture(),

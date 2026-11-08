@@ -10,6 +10,7 @@ mod capture;
 mod cli;
 mod collapsed_store;
 mod docs;
+mod git_worktree;
 mod image;
 mod instance;
 mod json_store;
