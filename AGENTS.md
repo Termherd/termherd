@@ -97,7 +97,7 @@ app  ──►  core  ◄──  adapters          (adapters depend on core, nev
   the one home of that permission fork; depends on no other crate, so `pty`
   and `app` both write private files through it.
 - Unbuilt: the `store` adapter (Should, PRD rev. 4), and the IDE bridge
-  `docs/ARCHITECTURE.md` §15 sketches
+  `docs/ARCHITECTURE.md` §7 sketches
   (`F-mcp-ide-bridge`, termherd as an MCP *client* — not `crates/mcp`).
 
 When adding code, ask: *which crate does this belong in?* If the answer is

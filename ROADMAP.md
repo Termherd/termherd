@@ -1934,10 +1934,10 @@ Keymap concerns from the gist that need design, layered on the shipped
   keys on every layout (QWERTY/AZERTY/QWERTZ/…)
 - per-command keymap configuration (different bindings per running command)
   — **stays design-first** (feature-torture 🧬 `F-keymap-advanced.md`):
-  was blocked on foreground-process detection. macOS and Linux read the PTY
-  foreground process group (#236); #143 added the alternate screen as the
-  Windows ConPTY fallback for the close confirmation, so a non-full-screen
-  command is still invisible there; file only once that's designed
+  blocked on foreground-process detection on Windows: macOS and Linux read
+  the PTY foreground process group (#236), but ConPTY sees only full-screen
+  commands, through the alternate screen (#143); file only once that's
+  designed
 - ~~a configurable "bypass" key so a modifier passes through to the terminal
   instead of the app (cf. Ghostty `macos-option-as-alt`)~~ — **done** with
   #59: `terminal.option_as_meta` (`none` / `left` / `right` / `both`, default

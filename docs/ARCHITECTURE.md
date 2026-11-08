@@ -88,9 +88,8 @@ structurally prevents a new god-object.
    │portable- │ │ notify + │ │ (unbuilt)│
    │pty+alacr.│ │ rayon    │ │          │
    └──────────┘ └──────────┘ └──────────┘
-   also depending inward, but implementing no port:
-   crates/mcp        — stdio MCP server + option catalogue; on core alone
-   crates/private-fs — owner-only files; on no crate, used by pty and app
+   crates/mcp and crates/private-fs also point inward but implement no
+   port (roles in §15).
    crates/app builds the concrete adapters in main() and injects them.
 ```
 
@@ -209,10 +208,9 @@ Each adapter implements a `core` port and fixes a specific v0.0.30 defect.
   runs the other way round — termherd is the *server* and the Claude sessions
   it hosts are the clients. The live bridge lives in `app` (`app::mcp` over
   `shell::bridge` / `shell::serve`), because it is a bridge *into* the shell
-  rather than a port `core` calls *out* through. The `crates/mcp` crate holds
-  the stdio server binary and the settings-option catalogue `app` links; it
-  implements no port. The `tokio::timeout`-on-every-round-trip rule (Q7) is
-  shared: it is enforced in `BridgeHandle::call`.
+  rather than a port `core` calls *out* through; what `crates/mcp` holds is
+  in §15. The `tokio::timeout`-on-every-round-trip rule (Q7) is shared: it is
+  enforced in `BridgeHandle::call`.
 
 ## 8. GUI shell (iced)
 
@@ -348,8 +346,8 @@ TermHerd does **not** register as an IDE and Claude uses the real editor.
   (certificate sourcing OQ5). **Linux:** signed checksums. CI builds and
   tests on a 3-OS matrix from M0.
 - Toolchain pinned via `rust-toolchain.toml`; local packaging steps and the
-  architecture gates live in the `justfile`, mirroring `package.yml` and the
-  matching `ci.yml` jobs. There is no `xtask`.
+  architecture gates live in the `justfile` (not an `xtask`), mirroring
+  `package.yml` and the matching `ci.yml` jobs.
 
 ## 15. Module / responsibility map
 

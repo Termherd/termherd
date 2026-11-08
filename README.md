@@ -344,7 +344,7 @@ Pinned to **rust 1.95.0** via `rust-toolchain.toml`. Edition 2024.
 
 ## Layout
 
-The crates and what each one owns are listed once, in
+Crates and their roles:
 [`AGENTS.md`](AGENTS.md#architecture--the-dependency-rule).
 
 The hexagonal dependency rule: `app` → `core` ← `adapters` (and `core` →

@@ -196,10 +196,10 @@ Abbreviated acceptance criteria.
 ### Shell
 
 - FR11 — Single-instance: one termherd per login session (Q8). A second
-  process carrying a `termherd://` link hands it to the running instance and
-  exits 0; without one it exits 2. On macOS a link click starts no second
-  process: the OS sends it to the running app as an Apple Event. termherd
-  does not raise its own window when a link or a second launch arrives.
+  launch hands any `termherd://` link to the running instance and exits; the
+  exit codes are in `docs/src/guide/installation.md`, the per-OS link path
+  in `F-url-scheme`. termherd does not raise its window when a link or a
+  second launch arrives.
 - FR12 — Window bounds persist and restore.
 
 ## 7. Non-functional requirements
