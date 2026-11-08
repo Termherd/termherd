@@ -17,3 +17,6 @@ install-path = "CARGO_HOME"
 install-updater = false
 # Skip running 'dist plan' on every pull request push; release.yml runs on tags
 pr-run-mode = "skip"
+# Dependabot bumps the actions in release.yml past the versions dist pins, so
+# `dist plan` would refuse the release as out of date
+allow-dirty = ["ci"]
