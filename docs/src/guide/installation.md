@@ -106,6 +106,24 @@ Never under `~/.claude`. Everything it owns lives in `~/.termherd`
 | `~/.termherd/metadata.json` | stars, archives, custom session titles, hand-added repositories |
 | `~/.termherd/captures/` | `capture-<ts>.json` / `.png` / `.gif` — see [Capture and record](../workspace/capture.md) |
 | `~/.termherd/inbox/` | `termherd://` links waiting for the running window — see [Opening a tab from a link](../workspace/tabs-and-splits.md#opening-a-tab-from-a-link) |
+| `~/.termherd/termherd.log` | the log, on Windows only — see [Where the log goes](#where-the-log-goes) |
+
+### Where the log goes
+
+On macOS and Linux, TermHerd logs to stderr: start it from a terminal to read
+it. On Windows, a release build appends its log to
+`%USERPROFILE%\.termherd\termherd.log` instead, even when started from a
+terminal. A log that has reached 5 MB is renamed `termherd.log.old` at the
+next launch, replacing the previous one, and a fresh log starts. A build from
+source in debug mode (`cargo run -p termherd-app`) logs to the terminal on
+every OS.
+
+Started from Explorer or the Start menu, TermHerd opens no console window
+beside its own on Windows 11 24H2 or later. Older Windows versions still open
+one; closing it closes TermHerd.
+
+`RUST_LOG` sets what is logged wherever it goes, for example
+`RUST_LOG=termherd=debug`.
 
 TermHerd is **single-instance**: an advisory lock file under the system temp
 directory. A second launch carrying a `termherd://` link hands it to the

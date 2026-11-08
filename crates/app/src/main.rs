@@ -16,6 +16,7 @@ mod instance;
 mod json_store;
 mod layout_store;
 mod link_inbox;
+mod log_file;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mcp;
@@ -39,9 +40,9 @@ use termherd_scan::FsScanner;
 use tracing::{info, warn};
 
 fn main() -> iced::Result {
-    tracing_init::init_tracing();
-
     let data_dir = paths::DataDir::user();
+
+    tracing_init::init_tracing(log_file::path(data_dir.as_ref()).as_deref());
 
     // Answer a question about the *running* instance before touching anything
     // that would disturb it: the single-instance lock below exits(2) on a second

@@ -2,6 +2,9 @@
 //! startup. Split out of `main` so the default filter and its parse guard
 //! live together.
 
+use std::path::Path;
+use std::sync::Arc;
+
 use tracing_subscriber::EnvFilter;
 
 /// Default tracing filter: our crates at `info`; the iced/wgpu/winit stack
@@ -17,13 +20,33 @@ const DEFAULT_FILTER: &str = "info,\
 /// config file; a warn line landing in that pipe would corrupt the JSON the
 /// user is capturing. Nothing this binary prints is protocol traffic, so the
 /// split costs nothing and `2>&1` recovers the old behaviour.
-pub fn init_tracing() {
+///
+/// With a `log_file`, diagnostics go there instead (see [`crate::log_file`]),
+/// uncoloured; one that cannot be opened falls back to stderr and says so.
+pub fn init_tracing(log_file: Option<&Path>) {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(std::io::stderr)
-        .try_init();
+    let builder = tracing_subscriber::fmt().with_env_filter(filter);
+    let opened = log_file.map(|path| {
+        (
+            path,
+            crate::log_file::open(path, crate::log_file::ROTATE_AT),
+        )
+    });
+    match opened {
+        Some((_, Ok(file))) => {
+            let _ = builder
+                .with_writer(Arc::new(file))
+                .with_ansi(false)
+                .try_init();
+        }
+        other => {
+            let _ = builder.with_writer(std::io::stderr).try_init();
+            if let Some((path, Err(error))) = other {
+                tracing::warn!(path = %path.display(), %error, "log file unavailable; logging to stderr");
+            }
+        }
+    }
 }
 
 #[cfg(test)]

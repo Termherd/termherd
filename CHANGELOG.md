@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (no console window beside TermHerd on Windows)
+
+- Launching TermHerd from Explorer or the Start menu on Windows 11 24H2 or
+  later no longer opens a console window next to it; older Windows versions
+  still do. A release build on Windows now logs to
+  `%USERPROFILE%\.termherd\termherd.log`, set aside as `termherd.log.old` once
+  it reaches 5 MB. `termherd mcp-config` is unchanged, in every shell (#405).
+
 ### Fixed (a long Claude command submits on the first Enter)
 
 - A confirmed `/rename` long enough for Claude Code to read as a paste now
