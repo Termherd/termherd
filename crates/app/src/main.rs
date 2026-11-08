@@ -164,12 +164,12 @@ fn main() -> iced::Result {
     // the instance that is actually running — and unconditionally, so a launch
     // that publishes nothing still clears the last one's file.
     let published = data_dir.as_ref().and_then(|data| {
-        publish_bridge(
+        attach::reconcile(
             &attach::bridge_path(data),
             settings.mcp.attach,
             std::env::var(attach::ATTACH_ENV).ok().as_deref(),
-            mcp_endpoint.as_ref(),
-            &mcp_tokens,
+            mcp_endpoint.as_ref().map(|endpoint| endpoint.url.as_str()),
+            || mcp_tokens.issue(),
         )
     });
 
@@ -230,61 +230,6 @@ fn main() -> iced::Result {
     drop(bridge_runtime);
     drop(instance);
     result
-}
-
-/// Reconcile the published bridge file with what this launch was asked for:
-/// clear whatever the last one left behind, then publish `{ url, token }` if the
-/// setting (and any environment override) says so. Returns the path to withdraw
-/// at teardown, or `None` when nothing was published.
-///
-/// **The clear is unconditional, and that is the point.** Teardown is not a
-/// reliable place to remove the file: a crash skips it, so does every macOS exit
-/// through AppKit `terminate:` (Dock → Quit, logout), and a launch that opts
-/// *out* has no teardown of its own to run — so an opt-out would otherwise leave
-/// the previous run's endpoint on disk forever, advertising a port this process
-/// does not own. Startup is the one moment that always happens, and the one
-/// moment we know what the file should say.
-///
-/// The token is minted here and never revoked while the app runs: it is the
-/// instance's own, not a session's, so it outlives every session.
-fn publish_bridge(
-    path: &std::path::Path,
-    mode: attach::AttachMode,
-    env: Option<&str>,
-    endpoint: Option<&mcp::Endpoint>,
-    tokens: &mcp::Tokens,
-) -> Option<std::path::PathBuf> {
-    if let Err(error) = attach::withdraw(path) {
-        warn!(%error, path = %path.display(), "could not clear a leftover mcp bridge file");
-    }
-
-    let verdict = attach::decide(mode, env);
-    if verdict.override_refused {
-        info!(
-            variable = attach::ATTACH_ENV,
-            "mcp.attach is \"never\"; the environment override is ignored"
-        );
-    }
-    if !verdict.publish {
-        return None;
-    }
-    // Nothing bound, nothing to advertise — but the clear above still ran, which
-    // is the whole reason this is not gated on the endpoint.
-    let endpoint = endpoint?;
-    let published = attach::Published {
-        url: endpoint.url.clone(),
-        token: tokens.issue(),
-    };
-    match attach::publish(path, &published) {
-        Ok(()) => {
-            info!(path = %path.display(), "mcp live bridge published for outside clients");
-            Some(path.to_owned())
-        }
-        Err(error) => {
-            warn!(%error, "could not publish the mcp bridge; outside clients can't attach");
-            None
-        }
-    }
 }
 
 /// Print the running instance's `mcpServers` snippet, or say why there is none

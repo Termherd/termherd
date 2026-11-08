@@ -169,6 +169,60 @@ pub(crate) fn withdraw(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Reconcile the published bridge file with what this launch was asked for:
+/// clear whatever the last one left behind, then publish `{ url, token }` if the
+/// setting (and any environment override) says so. Returns the path to withdraw
+/// at teardown, or `None` when nothing was published.
+///
+/// **The clear is unconditional, and that is the point.** Teardown is not a
+/// reliable place to remove the file: a crash skips it, so does every macOS exit
+/// through AppKit `terminate:` (Dock → Quit, logout), and a launch that opts
+/// *out* has no teardown of its own to run — so an opt-out would otherwise leave
+/// the previous run's endpoint on disk forever, advertising a port this process
+/// does not own. Startup is the one moment that always happens, and the one
+/// moment we know what the file should say.
+///
+/// The token is minted here and never revoked while the app runs: it is the
+/// instance's own, not a session's, so it outlives every session.
+pub(crate) fn reconcile(
+    path: &Path,
+    mode: AttachMode,
+    env: Option<&str>,
+    url: Option<&str>,
+    mint_token: impl FnOnce() -> String,
+) -> Option<PathBuf> {
+    if let Err(error) = withdraw(path) {
+        tracing::warn!(%error, path = %path.display(), "could not clear a leftover mcp bridge file");
+    }
+
+    let verdict = decide(mode, env);
+    if verdict.override_refused {
+        tracing::info!(
+            variable = ATTACH_ENV,
+            "mcp.attach is \"never\"; the environment override is ignored"
+        );
+    }
+    if !verdict.publish {
+        return None;
+    }
+    // Nothing bound, nothing to advertise — but the clear above still ran, which
+    // is the whole reason this is not gated on the endpoint.
+    let published = Published {
+        url: url?.to_owned(),
+        token: mint_token(),
+    };
+    match publish(path, &published) {
+        Ok(()) => {
+            tracing::info!(path = %path.display(), "mcp live bridge published for outside clients");
+            Some(path.to_owned())
+        }
+        Err(error) => {
+            tracing::warn!(%error, "could not publish the mcp bridge; outside clients can't attach");
+            None
+        }
+    }
+}
+
 /// Read back a published endpoint. `Err` when the file is absent or does not
 /// parse — both mean "no instance is offering the bridge here".
 pub(crate) fn read(path: &Path) -> Result<Published, AttachError> {
