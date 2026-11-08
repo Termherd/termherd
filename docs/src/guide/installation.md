@@ -109,7 +109,8 @@ Never under `~/.claude`. Everything it owns lives in `~/.termherd`
 
 TermHerd is **single-instance**: an advisory lock file under the system temp
 directory. A second launch carrying a `termherd://` link hands it to the
-running window and exits with code 0; without one, it exits with code 2. To
+running instance and exits with code 0; the tab opens there without bringing
+the window forward. Without a link, it exits with code 2. To
 run a second build alongside one that already holds the lock, point it at a
 throwaway temp dir so its lock differs. On macOS and Linux:
 
