@@ -7,6 +7,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (attach to the live bridge from outside)
+
+- A client TermHerd did not launch — a script, an editor, the terminal you
+  started TermHerd from — can now reach the live MCP bridge. Opt in with
+  `"mcp": { "attach": true }` in `settings.json` (or
+  `TERMHERD_MCP_ATTACH=1` for one launch); the running instance then
+  publishes its endpoint to an owner-only `~/.termherd/bridge.json`, and
+  `termherd mcp-config` prints the `mcpServers` snippet for it after
+  checking it still answers. `"never"` refuses the exposure even against
+  the environment variable. Off by default, since the bridge can type into
+  a terminal. TermHerd's log now goes to stderr (#267).
+
 ### Fixed (the sidebar no longer goes stale)
 
 - Session colours, titles and new sessions reach the sidebar even when the

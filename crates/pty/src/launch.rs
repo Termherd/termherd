@@ -228,19 +228,17 @@ impl PrivateFiles {
 
 /// Write the `mcpServers` config for a Claude launch and return its path, so
 /// `launch_command` can point `--mcp-config` at it. The file — not argv — holds
-/// the bearer token. Both fields are known-safe for a bare JSON string (a
-/// loopback url and a hex token), so no escaping is needed. `None` (logged, not
-/// fatal) if the write fails: the session then launches without the live bridge.
+/// the bearer token. The text itself comes from
+/// [`termherd_claude::mcp::servers_config`], shared with the attach path so one
+/// config format stays one config format. `None` (logged, not fatal) if the
+/// write fails: the session then launches without the live bridge.
 pub fn write_mcp_config(
     private: &PrivateFiles,
     session: SessionId,
     config: &McpConfig,
 ) -> Option<PathBuf> {
     let path = private.mcp_config(session);
-    let json = format!(
-        r#"{{"mcpServers":{{"termherd":{{"type":"http","url":"{}","headers":{{"Authorization":"Bearer {}"}}}}}}}}"#,
-        config.url, config.token
-    );
+    let json = termherd_claude::mcp::servers_config(&config.url, &config.token);
     match termherd_private_fs::write_file(&path, &json) {
         Ok(()) => Some(path),
         Err(error) => {

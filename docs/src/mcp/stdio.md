@@ -66,6 +66,10 @@ That is the whole write surface today. The `close`, `sidebar`, `record`,
 [`settings.json`](../reference/settings.md) are file-only — `keys` is
 readable as a resource, below.
 
+`mcp` is file-only by design rather than by backlog: its keys govern who may
+reach the live bridge and what it may do there, and a surface able to widen
+its own reach is not a setting.
+
 ## Resources
 
 | URI | Holds |

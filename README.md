@@ -154,7 +154,9 @@ you want and strip the comments (the real file is strict JSON). In short:
   which cannot honour a line number).
 - `mcp` — `allow_claude_nesting`: whether `prompt_in_session` may prompt
   another *Claude* session over the live bridge (default `false`; a shell is
-  never gated).
+  never gated); `attach`: whether a running instance publishes its live bridge
+  for a client it did not spawn — `false` (default), `true`, or `"never"`,
+  which also refuses the `TERMHERD_MCP_ATTACH` override.
 - `keys` — keyboard overrides, one chord or a list per action; the full
   action vocabulary and its default chords are listed in the template.
 
@@ -287,11 +289,10 @@ app on one it cannot answer; a sidebar rename used to be the exception
 renames. The rename fields use the same commit path for MCP and widget submit
 ([#246]).
 
-Two follow-ups remain: reaching the bridge from outside a session termherd
-spawned — the launcher cannot drive it today ([#267]) — and the pointer at
-TermHerd's own interface ([#301]): it reaches a session's terminal, and
-through it a program reading the mouse, but not yet the sidebar, tabs or
-gutters.
+One follow-up remains: the pointer at TermHerd's own interface ([#301]): it
+reaches a session's terminal, and through it a program reading the mouse, but
+not yet the sidebar, tabs or gutters. A client TermHerd did *not* spawn can now
+reach the bridge too, once `mcp.attach` is turned on ([#267]).
 
 ### The stdio server (manual)
 

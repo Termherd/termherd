@@ -13,6 +13,10 @@ shell-integration directory, the settings overlay — are deleted when the
 session is torn down. Each is created afresh and owner-only; if another user
 already holds its name, the session starts without the bridge.
 
+A client TermHerd did **not** launch can reach the same server, and the same
+tools, once the instance is told to publish its address — see [Attaching from
+outside](./attach.md). Everything below applies unchanged there.
+
 ## The tools
 
 ### Perception
@@ -387,9 +391,8 @@ A worked example, from inside a session TermHerd launched:
 
 ## What is still open
 
-Two follow-ups, and they are independent of each other:
+One follow-up:
 
 | Gap | Issue |
 | --- | --- |
-| The bridge is reachable only from a session termherd spawned, so the launcher itself cannot drive it — see [Two surfaces](./index.md). | [#267](https://github.com/Termherd/termherd/issues/267) |
 | No pointer at TermHerd's own interface: the sidebar, the tab strip, a split gutter. | [#301](https://github.com/Termherd/termherd/issues/301) |

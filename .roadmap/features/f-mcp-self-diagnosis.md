@@ -11,7 +11,7 @@ Ship with the bridge what an agent now learns from this repo's docs.
 Design-first; nothing here is scoped. The review of the agent context files
 on 2026-11-07 moved the calling rules into the server's instructions, and
 left four things an agent outside this repo still cannot learn or do from the
-bridge alone:
+bridge alone; a fifth, the app's own log, was filed since:
 
 - **Guidance as MCP resources or prompts.** The diagnosis recipes live only
   in a project skill (`drive-termherd`), so a client
@@ -30,3 +30,7 @@ bridge alone:
   caller is told to wait for `busy` first; `prompt_in_session` fixed it for
   its own loop only (#435). A wait for the next transition would make the
   rule unnecessary. Related open defect: #436.
+- **The app's own log** (#483, filed). A warning exists only on the stderr of
+  whoever launched termherd, which for a release build is no terminal at all,
+  so "this warning appears, or no longer does" cannot be checked over the
+  bridge.

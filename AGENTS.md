@@ -179,6 +179,10 @@ exists). Do not relax them locally; the incident behind each linked rule is in
   whenever a precondition is absent becomes a bug the day that precondition is
   permanently absent.
   [Why](docs/agents/lessons.md#a-flag-breaks-whoever-depended-on-its-side-effects)
+- **Cleanup that only runs at teardown does not run**: reconcile at startup,
+  unconditionally, and keep the teardown for the clean exit. Diagnostics go to
+  stderr; stdout is a subcommand's product.
+  [Why](docs/agents/lessons.md#cleanup-that-only-runs-at-teardown-does-not-run)
 - **A guard is unreachable and goes, or reachable and gets a test.**
   [Why](docs/agents/lessons.md#a-guard-is-unreachable-or-tested)
 - **A value that reaches a command line** is validated where it becomes an
