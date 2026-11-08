@@ -207,9 +207,11 @@ Abbreviated acceptance criteria.
 
 Mapped from the NFR scorecard; each prior gap becomes a requirement.
 
-- **Packaging** — signed installers for all three platforms via `dist`
-  (cargo-dist): macOS Apple-Silicon `.dmg`, Windows installer, Linux package
-  (format OQ5); CI builds and tests on a macOS/Windows/Linux matrix.
+- **Packaging** — signed installers for all three platforms: macOS
+  Apple-Silicon `.dmg`, Windows installer, Linux package (format OQ5); CI
+  builds and tests on a macOS/Windows/Linux matrix. As built, `cargo-packager`
+  makes the installers, still unsigned, and `dist` the CLI archives
+  (`docs/ARCHITECTURE.md` §14).
 - **Signing** — macOS: hardened runtime + notarization **without**
   JIT/unsigned-memory/library-validation entitlements (Q9) — a security
   upgrade over Electron. Windows: Authenticode (certificate sourcing is OQ5).
