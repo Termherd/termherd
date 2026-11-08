@@ -127,6 +127,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   status waited for. A read right after an `idle` could still show Claude's
   spinner, one screen behind (#436).
 
+### Added (the tab strip comes back at launch)
+
+- Quitting writes the tab strip to `~/.termherd/layout.json`, and the next
+  launch reopens it: tabs in order, splits with their ratios and focused
+  pane, tab names and colours, parked tabs, and the tab you were on. Each
+  pane restarts in its directory; a Claude pane resumes its conversation
+  (#421).
+
 ### Fixed (a long Claude command is submitted)
 
 - A confirmed Claude command with a long argument, such as a `/rename` to a

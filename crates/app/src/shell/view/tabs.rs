@@ -32,7 +32,7 @@ impl Shell {
         // One wall-clock read per render feeds every tab's relative "last
         // activity" age, matching the sidebar; the app layer owns the clock.
         let now = SystemTime::now();
-        let drag = self.tab_drag.map(|d| (d.from, d.over));
+        let drag = self.tab_drag_slots();
         // Where a release would drop the carried tab: `move_tab` lands it *at*
         // index `over`, so the insertion bar sits before `over` when dragging
         // left and after it when dragging right. `None` until the pointer has

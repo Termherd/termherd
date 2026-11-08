@@ -41,7 +41,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace             # CI uses `cargo nextest run --workspace`
 cargo deny check                   # if cargo-deny installed
 cargo machete                      # unused deps; if cargo-machete installed
-just check-deps                    # hexagonal crate dependency rule (deps point inward)
+just check-deps                    # dependency rule (deps point inward) + the crate list below
 just check-arch                    # intra-crate module boundaries + OS-cfg containment (+ length report)
 
 # Markdown is also gated in CI (ROADMAP.md included — a lint failure there is a
@@ -91,13 +91,16 @@ app  ──►  core  ◄──  adapters          (adapters depend on core, nev
 - `crates/pty` — terminal adapter (`portable-pty` + `alacritty_terminal`);
   implements `core::ports::PtyHost`.
 - `crates/mcp` — the stdio MCP server binary (`termherd-mcp`) and the pure
-  settings-option catalogue; depends on `core` and `claude`, and `app` links
+  settings-option catalogue; depends on `core` alone, and `app` links
   its library for the live bridge's option tools.
 - `crates/private-fs` — owner-only files and directories (`0600` / `0700`),
   the one home of that permission fork; depends on no other crate, so `pty`
   and `app` both write private files through it.
+- `just check-deps` fails when the `crates/…` bullets above and the
+  workspace members disagree, and when the allow-list in
+  `scripts/check-crate-deps.sh` holds an edge no crate uses.
 - Unbuilt: the `store` adapter (Should, PRD rev. 4), and the IDE bridge
-  `docs/ARCHITECTURE.md` §15 sketches as an `mcp` adapter
+  `docs/ARCHITECTURE.md` §7 sketches
   (`F-mcp-ide-bridge`, termherd as an MCP *client* — not `crates/mcp`).
 
 When adding code, ask: *which crate does this belong in?* If the answer is

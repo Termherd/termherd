@@ -88,7 +88,6 @@ issues #18–#29.
 | [F-capture](#f-capture) | feature | workspace | ☐ | Capture termherd along a fidelity ladder: debug dumps, promo, bug repros. |
 | [F-file-browser](#f-file-browser) | feature | workspace, sidebar | ☐ | A file tree for the focused repository, floating or as a right pane. |
 | [F-launch-profiles](#f-launch-profiles) | feature | sessions | ☐ | Persistent per-project `--add-dir`, applied to fresh and resumed launches. |
-| [F-layout-restore](#f-layout-restore) | feature | workspace, sessions | ☐ | Restore tabs, splits and resumable sessions at launch. |
 | [F-mcp-control-surface](#f-mcp-control-surface) | feature | mcp | ☐ | Termherd exposes its own control and orchestration surface as an MCP server. |
 | [F-mcp-ide-bridge](#f-mcp-ide-bridge) | feature | mcp | ☐ | A live MCP/IDE bridge to Claude — termherd as the client, not the server. |
 | [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) | feature | mcp, workspace | ☐ | The pointer rung, chrome half: click and drag termherd's own interface. |
@@ -105,6 +104,7 @@ issues #18–#29.
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
 | [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ✅ | A `rename-tab` keymap action opening the focused tab's inline rename. |
+| [F-layout-restore](#f-layout-restore) | feature | workspace, sessions | ✅ | Restore tabs, splits and resumable sessions at launch. |
 | [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
 | [F-mcp-attach](#f-mcp-attach) | feature | mcp, workspace | ✅ | The attach rung: reach the live bridge from outside a spawned session. |
 | [F-mcp-background-tab](#f-mcp-background-tab) | feature | mcp, workspace | ✅ | Open and close a tab over MCP without moving the user's focus. |
@@ -135,8 +135,8 @@ issues #18–#29.
 | [F-i18n](#f-i18n) | feature | workspace | ☐ | Internationalization — parked; the English-first externalization shipped. |
 | [F-keymap-advanced](#f-keymap-advanced) | feature | keymap, terminal | ☐ | The keymap concerns from the gist that still need design. |
 | [F-mcp-self-diagnosis](#f-mcp-self-diagnosis) | feature | mcp | ☐ | Ship with the bridge what an agent now learns from this repo's docs. |
-| [F-search-ux](#f-search-ux) | feature | sidebar | ☐ | Search activation and scope; the one real gap was a match snippet. |
 | [F-favorites](#f-favorites) | feature | sidebar | ✅ | Favorites in the sidebar — one concept with the session star. |
+| [F-search-ux](#f-search-ux) | feature | sidebar | ✅ | Search activation and scope; the one real gap was a match snippet. |
 
 ## Unsure
 
@@ -932,18 +932,6 @@ resume }` (`crates/core/src/app.rs`) and the command is *typed* into the shell
 (`launch_command`, `crates/pty/src/lib.rs`), so the one real cost is
 cross-shell path quoting (pwsh vs bash)
 
-<a id="f-layout-restore"></a>
-
-### F-layout-restore
-
-Restore tabs, splits and resumable sessions at launch.
-
-The window position survives a restart (FR12); the workspace inside it does
-not. `Workspace` is plain data and sessions already resume (FR4), so this is
-saving and replaying the tree.
-
-Issue: #421.
-
 <a id="f-mcp-control-surface"></a>
 
 ### F-mcp-control-surface
@@ -1309,6 +1297,18 @@ cannot tell from Ctrl+I (Tab). It opens the field a double-click opens, filled
 with the tab's current name, and reports `inert` / `no-context` with no tab
 open. Over MCP, `enter` commits the field and `escape` abandons it, using the
 same commit message as the widget submit (#246).
+
+<a id="f-layout-restore"></a>
+
+### F-layout-restore
+
+Restore tabs, splits and resumable sessions at launch.
+
+The window position survives a restart (FR12); the workspace inside it does
+not. `Workspace` is plain data and sessions already resume (FR4), so this is
+saving and replaying the tree.
+
+Issue: #421.
 
 <a id="f-mcp-agent-loop"></a>
 
@@ -1972,8 +1972,10 @@ Keymap concerns from the gist that need design, layered on the shipped
   keys on every layout (QWERTY/AZERTY/QWERTZ/…)
 - per-command keymap configuration (different bindings per running command)
   — **stays design-first** (feature-torture 🧬 `F-keymap-advanced.md`):
-  blocked on foreground-process detection (macOS `tcgetpgrp` vs Windows
-  ConPTY gap); file only once that's designed
+  blocked on foreground-process detection on Windows: macOS and Linux read
+  the PTY foreground process group (#236), but ConPTY sees only full-screen
+  commands, through the alternate screen (#143); file only once that's
+  designed
 - ~~a configurable "bypass" key so a modifier passes through to the terminal
   instead of the app (cf. Ghostty `macos-option-as-alt`)~~ — **done** with
   #59: `terminal.option_as_meta` (`none` / `left` / `right` / `both`, default
@@ -2013,19 +2015,6 @@ bridge alone; a fifth, the app's own log, was filed since:
   so "this warning appears, or no longer does" cannot be checked over the
   bridge.
 
-<a id="f-search-ux"></a>
-
-### F-search-ux
-
-Search activation and scope; the one real gap was a match snippet.
-
-Search activation + scope. **Designed (✂️ reshape, feature-torture
-`F-search-ux.md`)**: most of it already shipped — `Cmd+F` focuses search and
-`filter_projects` already searches content + titles across every project. The
-one real gap, a **match snippet**, graduated to #58. A flat relevance-ranked
-results view is explicitly *not* pursued (the grouped in-context filter is
-better UX)
-
 <a id="f-favorites"></a>
 
 ### F-favorites
@@ -2048,6 +2037,19 @@ sidebar; a repo row in the section would only duplicate the shipped 🤖/`$`
 launch buttons (#23) or navigate to an already-top group, and mixing
 non-resumable repos into a "resume a favourite session" list breaks its model.
 Favorites stays sessions-only
+
+<a id="f-search-ux"></a>
+
+### F-search-ux
+
+Search activation and scope; the one real gap was a match snippet.
+
+Search activation + scope. **Designed (✂️ reshape, feature-torture
+`F-search-ux.md`)**: most of it already shipped — `Cmd+F` focuses search and
+`filter_projects` already searches content + titles across every project. The
+one real gap, a **match snippet**, graduated to #58 and shipped in #103. A
+flat relevance-ranked results view is explicitly *not* pursued (the grouped
+in-context filter is better UX)
 
 <a id="f-file-diff-panel"></a>
 

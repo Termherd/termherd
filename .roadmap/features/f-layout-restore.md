@@ -2,7 +2,7 @@
 id = "F-layout-restore"
 type = "feature"
 area = ["workspace", "sessions"]
-status = "todo"
+status = "done"
 target = ["Could"]
 +++
 

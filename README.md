@@ -345,11 +345,8 @@ Pinned to **rust 1.95.0** via `rust-toolchain.toml`. Edition 2024.
 
 ## Layout
 
-```text
-crates/core    — domain, headless App, workspace (pane tree), keymap, ports
-crates/claude  — Claude CLI format codec (path encode/derive, JSONL)  [pure]
-crates/app     — iced GUI shell (M3+); currently a tracing+single-instance stub
-```
+Crates and their roles:
+[`AGENTS.md`](AGENTS.md#architecture--the-dependency-rule).
 
 The hexagonal dependency rule: `app` → `core` ← `adapters` (and `core` →
 `claude`). `core` depends on nothing concrete.

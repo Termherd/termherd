@@ -168,13 +168,7 @@ impl Tab {
     /// named after, and whose conversation it stands for.
     #[must_use]
     pub fn first_session(&self) -> SessionId {
-        let mut pane = &self.root;
-        loop {
-            match pane {
-                Pane::Leaf(session) => return *session,
-                Pane::Split { a, .. } => pane = a,
-            }
-        }
+        first_leaf(&self.root)
     }
 
     /// The session in this tab's focused pane, `None` if the focus path no
@@ -332,8 +326,39 @@ impl Workspace {
         let Pane::Split { ratio: current, .. } = navigate_mut(&mut tab.root, path)? else {
             return None;
         };
-        *current = ratio.clamp(0.1, 0.9);
+        *current = kept_ratio(ratio);
         Some(())
+    }
+
+    /// Open a tab holding a whole pane tree, as a saved layout left it, and
+    /// return its index: before the parked tabs, or at the strip's end when
+    /// `parked`. A focus path that does not end on a leaf falls back to the
+    /// first pane, and each ratio is brought into the range a drag keeps it in
+    /// (a ratio that is not a number splits evenly). The active tab is left as
+    /// it is unless every other tab is parked.
+    pub fn restore(
+        &mut self,
+        root: Pane,
+        focus: Vec<Branch>,
+        title: impl Into<String>,
+        parked: bool,
+    ) -> usize {
+        let root = with_kept_ratios(root);
+        let focus = if matches!(navigate(&root, &focus), Some(Pane::Leaf(_))) {
+            focus
+        } else {
+            first_leaf_path(&root)
+        };
+        let mut tab = Tab::new(first_leaf(&root), title.into());
+        tab.root = root;
+        tab.focus = focus;
+        if parked {
+            tab.parked = true;
+            self.tabs.push(tab);
+            self.tabs.len() - 1
+        } else {
+            self.insert_tab(tab)
+        }
     }
 
     /// Record the OSC title `session` reported on the tab hosting it. Only the
@@ -775,6 +800,48 @@ fn collect_paths(pane: &Pane, path: &mut Vec<Branch>, out: &mut Vec<Vec<Branch>>
             path.pop();
         }
     }
+}
+
+/// A split ratio as the workspace keeps it: neither pane under ten percent.
+fn kept_ratio(ratio: f32) -> f32 {
+    ratio.clamp(0.1, 0.9)
+}
+
+/// `pane` with every ratio kept in range, an unreadable one split evenly.
+fn with_kept_ratios(pane: Pane) -> Pane {
+    match pane {
+        Pane::Leaf(_) => pane,
+        Pane::Split { dir, ratio, a, b } => Pane::Split {
+            dir,
+            ratio: if ratio.is_finite() {
+                kept_ratio(ratio)
+            } else {
+                0.5
+            },
+            a: Box::new(with_kept_ratios(*a)),
+            b: Box::new(with_kept_ratios(*b)),
+        },
+    }
+}
+
+/// The session of the first (leftmost, topmost) leaf under `pane`.
+fn first_leaf(mut pane: &Pane) -> SessionId {
+    loop {
+        match pane {
+            Pane::Leaf(session) => return *session,
+            Pane::Split { a, .. } => pane = a,
+        }
+    }
+}
+
+/// The path from `pane` down to its first leaf.
+fn first_leaf_path(mut pane: &Pane) -> Vec<Branch> {
+    let mut path = Vec::new();
+    while let Pane::Split { a, .. } = pane {
+        path.push(Branch::A);
+        pane = a;
+    }
+    path
 }
 
 fn navigate<'a>(mut pane: &'a Pane, path: &[Branch]) -> Option<&'a Pane> {

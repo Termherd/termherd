@@ -205,4 +205,21 @@ impl Shell {
         self.archiving = None;
         Some(Task::batch([spawn, self.resize_panes()]))
     }
+
+    /// Replay the strip a last run left. `core` reports the tab it shows, which
+    /// settles the view; every other restored tab is sized now, so the program
+    /// in it draws its first screen at the size it will be shown at.
+    pub(super) fn restore_layout(&mut self, layout: termherd_core::Layout) -> Task<Message> {
+        let before = self.core.workspace.tabs.len();
+        let effects = self.core.apply(termherd_core::Event::RestoreLayout(
+            layout.with_fresh_ids(mint_session_id),
+        ));
+        let spawn = self.perform(effects);
+        let shown = self.core.workspace.active;
+        let sizes: Vec<_> = (before..self.core.workspace.tabs.len())
+            .filter(|&index| index != shown)
+            .map(|index| self.resize_tab(index))
+            .collect();
+        Task::batch(std::iter::once(spawn).chain(sizes))
+    }
 }

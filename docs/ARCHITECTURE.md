@@ -82,14 +82,15 @@ structurally prevents a new god-object.
                        └────────────────────────────────────┘
 
    adapters implement core::ports and depend on core (not the reverse):
-   ┌──────────┐ ┌──────────┐ ┌──────────┐    ┌───────────────────┐
-   │crates/   │ │crates/   │ │crates/   │    │ crates/mcp        │
-   │ store    │ │ pty      │ │ scan     │    │ (DEFERRED/Unsure) │
-   │ rusqlite │ │portable- │ │ notify + │    │ tokio ws jsonrpc  │
-   │ + FTS5   │ │pty+alacr.│ │ rayon    │    └───────────────────┘
+   ┌──────────┐ ┌──────────┐ ┌──────────┐
+   │crates/   │ │crates/   │ │crates/   │
+   │ pty      │ │ scan     │ │ store    │
+   │portable- │ │ notify + │ │ (unbuilt)│
+   │pty+alacr.│ │ rayon    │ │          │
    └──────────┘ └──────────┘ └──────────┘
+   crates/mcp and crates/private-fs also point inward but implement no
+   port (roles in §15).
    crates/app builds the concrete adapters in main() and injects them.
-   xtask/  — build & release automation (replaces npm scripts)
 ```
 
 - `core` defines port traits (`SessionStore`, `PtyHost`, `ProjectScanner`,
@@ -199,17 +200,17 @@ Each adapter implements a `core` port and fixes a specific v0.0.30 defect.
 - **`claude`** (pure) — ported domain knowledge: lossy folder encode/decode,
   `cwd`-based path derivation + worktree collapse, JSONL → digest parse, OSC
   decode, fork/plan-accept signals. No I/O ⇒ unit- and property-tested.
-- **`mcp`** (`IdeBridge`) — *deferred (Unsure)*. If built: a per-session WS
-  server with a `~/.claude/ide` lock and JSON-RPC, `tokio::timeout` on every
-  round-trip (Q7). Not in the v1 path.
+- **IDE bridge** (`IdeBridge`) — *deferred (Unsure)*. If built: a
+  per-session WS server with a `~/.claude/ide` lock and JSON-RPC,
+  `tokio::timeout` on every round-trip (Q7). Not in the v1 path.
 
   **Not to be confused with the shipped MCP control surface** (#90). That one
   runs the other way round — termherd is the *server* and the Claude sessions
-  it hosts are the clients — and it lives in `app` (`app::mcp` over
-  `shell::bridge` / `shell::serve`), not in a crate of its own, because it is a
-  bridge *into* the shell rather than a port `core` calls *out* through. The
-  `tokio::timeout`-on-every-round-trip rule (Q7) is shared: it is enforced in
-  `BridgeHandle::call`.
+  it hosts are the clients. The live bridge lives in `app` (`app::mcp` over
+  `shell::bridge` / `shell::serve`), because it is a bridge *into* the shell
+  rather than a port `core` calls *out* through; what `crates/mcp` holds is
+  in §15. The `tokio::timeout`-on-every-round-trip rule (Q7) is shared: it is
+  enforced in `BridgeHandle::call`.
 
 ## 8. GUI shell (iced)
 
@@ -336,16 +337,24 @@ TermHerd does **not** register as an IDE and Claude uses the real editor.
 
 ## 14. Build, release, signing, update
 
-- **`dist` (cargo-dist):** one release pipeline for all three platforms —
-  mac-ARM signed `.dmg`, Windows installer, Linux package (format OQ5) — on
-  GitHub Releases with self-update; the Rust-native analogue of
-  electron-builder + electron-updater.
-- **macOS:** hardened runtime + notarization, **no** JIT/unsigned-memory/
-  library-validation entitlements (Q9). **Windows:** Authenticode signing
-  (certificate sourcing OQ5). **Linux:** signed checksums. CI builds and
-  tests on a 3-OS matrix from M0.
-- Toolchain pinned via `rust-toolchain.toml`; custom steps (icons, dmg layout)
-  live in `xtask`, keeping CI YAML thin.
+A tag push runs two pipelines onto one GitHub Release; `docs/CI.md` holds
+their job graphs.
+
+- **`dist` (cargo-dist), `release.yml`:** CLI archives and shell/PowerShell
+  installers for five targets. No updater is installed
+  (`install-updater = false`); self-update is `F-auto-update`, unbuilt.
+- **`cargo-packager`, `package.yml`:** the desktop installers — `.app` and
+  `.dmg` on macOS, `.deb` and AppImage on Linux, NSIS on Windows.
+- **Signing:** `sign-release.yml` publishes `SHA256SUMS` and a keyless
+  Sigstore provenance attestation over the Linux archives. The macOS and
+  Windows installers ship **unsigned** for now (certificate sourcing OQ5).
+  The target stays: macOS hardened runtime + notarization with **no**
+  JIT/unsigned-memory/library-validation entitlements (Q9), Windows code
+  signing.
+- CI builds and tests on a 3-OS matrix from M0.
+- Toolchain pinned via `rust-toolchain.toml`; local packaging steps and the
+  architecture gates live in the `justfile` (not an `xtask`), mirroring
+  `package.yml` and the matching `ci.yml` jobs.
 
 ## 15. Module / responsibility map
 
@@ -353,12 +362,13 @@ TermHerd does **not** register as an IDE and Claude uses the real editor.
 | ----- | -------------- | -------- | ------ |
 | `core` | domain + headless `App` + workspace + keymap + ports | `claude` | Must |
 | `claude` | Claude CLI format codec (pure) | — | Must |
-| `store` | SQLite cache, metadata, FTS5 | `rusqlite` | Should (rev. 4) |
+| `store` | SQLite cache, metadata, FTS5 | `rusqlite` | Should (rev. 4), unbuilt |
 | `pty` | PTY spawn + terminal grid/OSC, per-session task | `portable-pty`, `alacritty_terminal` | Must |
 | `scan` | fs scan + watch | `notify`, `rayon` | Must |
-| `app` | iced GUI: sidebar, tabs, splits, terminal | `iced` | Must |
-| `xtask` | build/release automation | — | Must |
-| `mcp` | per-session IDE/MCP WS server | `tokio-tungstenite` | Deferred |
+| `app` | iced GUI: sidebar, tabs, splits, terminal; live MCP bridge | `iced` | Must |
+| `mcp` | stdio MCP server binary + settings-option catalogue | `core` | Shipped |
+| `private-fs` | owner-only files and directories | — | Shipped |
+| IDE bridge | per-session IDE/MCP WS server (termherd as MCP client) | `tokio-tungstenite` | Deferred |
 
 ## 16. Migration path from the Electron app
 
