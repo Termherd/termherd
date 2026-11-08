@@ -19,9 +19,10 @@ code under `crates/app/`. The incidents behind them are in
 ## Shell state
 
 - **A tab index the shell keeps is a copy of a position `core` may move.**
-  New shell state names a tab by a session it hosts; `Shell::update`
-  re-anchors `closing`, `tab_drag` and `split_drag` by session after each
-  message (`TabAnchors`).
+  Shell state that outlives a message names a tab by a session it hosts
+  (`Shell::anchor_of`) and resolves the index with `Workspace::tab_of` when it
+  reads it, as `closing`, `tab_drag`, `split_drag` and `tab_rename` do. A new
+  anchor joins the `follow` in `after_pane_vanished`.
   [Why](../../docs/agents/lessons.md#a-tab-index-is-a-copy-core-may-move)
 
 ## The keyboard ladder

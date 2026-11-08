@@ -82,9 +82,9 @@ impl Shell {
 
     /// The close-confirmation card, shown when a tab close is armed: it names
     /// the session about to die and offers Fermer (confirm) / Annuler. `None`
-    /// when nothing is pending or the armed index has since gone away.
+    /// when nothing is pending or the armed tab has since gone away.
     fn close_confirmation(&self) -> Option<Element<'_, Message>> {
-        let index = self.closing?;
+        let index = self.closing_tab()?;
         let tab = self.core.workspace.tabs.get(index)?;
         Some(Self::confirmation_bar(
             strings::close_tab_prompt(&clip(tab.display_title(), 24)),

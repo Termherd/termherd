@@ -221,6 +221,22 @@ and dragging a parked tab before it unparks it. New tabs open before the
 parked ones, and a closed parked tab reopens unparked. The tab menu offers
 *Park tab* on unparked tabs only.
 
+### Coming back after a restart
+
+Quitting TermHerd writes the tab strip to `~/.termherd/layout.json`, and the
+next launch opens it again: every tab in its order, each split with its
+ratios and focused pane, the tab names and colours you set, the parked tabs,
+and the tab you were on. Each pane starts afresh in the directory it was in
+when you quit. A Claude pane resumes the conversation it held last, once the
+sidebar listed it; one that never got that far starts a new conversation, as
+reopening a closed tab does. A shell pane comes back as a new shell: what ran
+in it, and its scrollback, do not.
+
+The strip is written when you quit, not as you work, so a crash or a forced
+kill brings back the strip of the last clean quit. A link that starts
+TermHerd is followed once the strip is back, so it shows a restored tab
+working in its repo before it opens a shell.
+
 ### Opening a tab from a link
 
 A page can link straight into termherd: a README, a dashboard, a report

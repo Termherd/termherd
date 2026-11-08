@@ -200,7 +200,8 @@ Abbreviated acceptance criteria.
   exit codes are in `docs/src/guide/installation.md`, the per-OS link path
   in `F-url-scheme`. termherd does not raise its window when a link or a
   second launch arrives.
-- FR12 — Window bounds persist and restore.
+- FR12 — Window bounds persist and restore, and so does the tab strip inside
+  the window (`layout.json`, `F-layout-restore`).
 
 ## 7. Non-functional requirements
 

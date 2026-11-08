@@ -23,6 +23,7 @@ mod command;
 mod effects;
 mod events;
 mod hover;
+pub mod layout;
 mod metadata;
 mod notify;
 mod open;
@@ -266,6 +267,7 @@ impl App {
                 Vec::new()
             }
             Event::ReopenClosedTab { fresh_claude_id } => self.reopen_closed_tab(fresh_claude_id),
+            Event::RestoreLayout(layout) => self.restore_layout(layout),
             Event::RenameTab { index, title } => self.rename_tab(index, &title),
             Event::SetTabColor { index, color } => self.set_tab_color(index, color),
             Event::SplitFocused(dir) => self.split_focused(dir),

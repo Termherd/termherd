@@ -102,6 +102,7 @@ Never under `~/.claude`. Everything it owns lives in `~/.termherd`
 | --- | --- |
 | `~/.termherd/settings.json` | your settings — [reference](../reference/settings.md) |
 | `~/.termherd/window.json` | window size and position |
+| `~/.termherd/layout.json` | the tab strip a launch reopens — see [Coming back after a restart](../workspace/tabs-and-splits.md#coming-back-after-a-restart) |
 | `~/.termherd/metadata.json` | stars, archives, custom session titles, hand-added repositories |
 | `~/.termherd/captures/` | `capture-<ts>.json` / `.png` / `.gif` — see [Capture and record](../workspace/capture.md) |
 | `~/.termherd/inbox/` | `termherd://` links waiting for the running window — see [Opening a tab from a link](../workspace/tabs-and-splits.md#opening-a-tab-from-a-link) |

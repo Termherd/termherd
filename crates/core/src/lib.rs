@@ -20,6 +20,7 @@ pub mod snapshot;
 pub mod title;
 pub mod workspace;
 
+pub use app::layout::{Layout, PaneLaunch, PaneLayout, TabLayout};
 pub use app::{
     App, ClaudeLaunch, ColorKeeper, CommandRefusal, DEFAULT_FONT_SIZE, Effect, Event,
     ForegroundJob, HoverTarget, Launch, LaunchSpec, LiveSession, McpConfig, MouseReporting,

@@ -13,6 +13,7 @@ mod docs;
 mod image;
 mod instance;
 mod json_store;
+mod layout_store;
 mod link_inbox;
 #[cfg(target_os = "macos")]
 mod macos;
@@ -182,6 +183,10 @@ fn main() -> iced::Result {
         .as_ref()
         .map(metadata_store::load)
         .unwrap_or_default();
+    let (layout, layout_problem) = data_dir
+        .as_ref()
+        .map(layout_store::load)
+        .unwrap_or_default();
     let startup = shell::Startup {
         settings,
         metadata,
@@ -189,9 +194,11 @@ fn main() -> iced::Result {
             .as_ref()
             .map(collapsed_store::load)
             .unwrap_or_default(),
+        layout,
         load_problems: settings_problem
             .into_iter()
             .chain(metadata_problem)
+            .chain(layout_problem)
             .collect(),
         data_dir,
         settings_file,
