@@ -132,6 +132,7 @@ focused tab:
 | Copy agent name | `copy-agent-name` | a tab whose focused pane has a named Claude in front |
 | New shell here | `new-shell-here` | every tab |
 | New Claude session here | `new-claude-session-here` | every tab |
+| New Claude session in a worktree | `new-claude-session-in-worktree` | a tab whose focused pane is in a git checkout ([below](#a-claude-session-in-a-new-worktree)) |
 | Split right | `split-vertical` | every tab |
 | Split down | `split-horizontal` | every tab |
 | Park tab | `toggle-park-tab` | every tab |
@@ -220,6 +221,27 @@ tab is shown only then. Dragging a tab past the last unparked tab parks it,
 and dragging a parked tab before it unparks it. New tabs open before the
 parked ones, and a closed parked tab reopens unparked. The tab menu offers
 *Park tab* on unparked tabs only.
+
+### A Claude session in a new worktree
+
+**Run two Claude sessions on one repo without them editing the same files**:
+the menu's *New Claude session in a worktree*, or the
+`new-claude-session-in-worktree` action, which has no default chord, adds a
+git worktree to the focused pane's repo and opens a fresh Claude session in
+it.
+
+- The worktree goes in `.claude/worktrees/claude-<8 hex digits>` under the
+  repo's main checkout, the folder `claude --worktree` uses, on a new branch
+  of the same name. It branches off what the focused pane's checkout has
+  checked out, a linked worktree included.
+- The session joins the repo's row in the sidebar, as any worktree's does.
+- Nothing is removed for you: when you are done, merge the branch and run
+  `git worktree remove` on the folder. Add `.claude/worktrees/` to the repo's
+  `.gitignore` if `git status` lists it.
+
+The tab opens once `git` has finished. When it fails — no `git` on the
+`PATH`, or the name already taken — a notice under the tab strip says why, and
+no tab opens.
 
 ### Opening a tab from a link
 

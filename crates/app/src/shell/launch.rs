@@ -15,6 +15,19 @@ fn mint_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// Add the worktree `name` to the checkout at `repo`, answering with the
+/// message that opens it. Runs `git` where it is polled: the caller hands it to
+/// a task, so the GUI thread never waits on it.
+pub(super) async fn add_worktree(repo: std::path::PathBuf, name: String) -> Message {
+    let added = crate::git_worktree::create(&repo, &name)
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|error| error.to_string());
+    Message::WorktreeAdded {
+        repo: repo.to_string_lossy().into_owned(),
+        added,
+    }
+}
+
 impl Shell {
     /// Launch a terminal: register it in `core`, perform the spawn, focus it,
     /// and size its PTY to the current pane (FR4). A fresh Claude starts under
@@ -99,6 +112,33 @@ impl Shell {
             .focused_repo()
             .map_or(cwd, |root| root.to_string_lossy().into_owned());
         Some(self.launch(root, Launch::Claude(ClaudeLaunch::Fresh(None))))
+    }
+
+    /// Add a git worktree to the focused session's repo, off the HEAD of its
+    /// checkout, and open a fresh Claude in it once `git` is done. `None` when
+    /// no repo holds the focused session.
+    pub(super) fn new_claude_in_worktree(&mut self) -> Option<Task<Message>> {
+        let repo = self.focused_repo()?;
+        let name = crate::git_worktree::name_for(&mint_session_id());
+        Some(Task::perform(
+            add_worktree(repo, name),
+            std::convert::identity,
+        ))
+    }
+
+    /// Open the worktree `git` just added for `repo`, or say why there is none.
+    pub(super) fn worktree_added(
+        &mut self,
+        repo: String,
+        added: Result<String, String>,
+    ) -> Task<Message> {
+        match added {
+            Ok(path) => self.launch(path, Launch::Claude(ClaudeLaunch::Fresh(None))),
+            Err(why) => {
+                self.notice = Some(crate::strings::worktree_failed(&repo, &why));
+                Task::none()
+            }
+        }
     }
 
     /// Reopen the most recently closed tab, restoring its mode and

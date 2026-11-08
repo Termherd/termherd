@@ -30,6 +30,8 @@ enum Offered {
     WhenColorPickable,
     /// Only on an unparked tab, which the action would park.
     WhenUnparked,
+    /// Only where a git checkout holds the focused pane's directory.
+    InRepo,
 }
 
 /// What the focused pane allows, read once when the menu opens.
@@ -39,6 +41,7 @@ pub(super) struct Offers {
     /// Why no colour can be picked for the pane; `None` when one can.
     pub(super) color_refusal: Option<CommandRefusal>,
     pub(super) unparked: bool,
+    pub(super) in_repo: bool,
 }
 
 impl Offers {
@@ -56,6 +59,7 @@ impl Offers {
                 refusal: self.color_refusal.as_ref(),
             }),
             Offered::WhenUnparked => self.unparked.then_some(enabled),
+            Offered::InRepo => self.in_repo.then_some(enabled),
         }
     }
 }
@@ -102,6 +106,11 @@ pub(super) const ENTRIES: &[Entry] = &[
         action: Action::NewClaudeSessionHere,
         label: strings::TAB_MENU_NEW_CLAUDE,
         offered: Offered::OnEveryTab,
+    },
+    Entry {
+        action: Action::NewClaudeSessionInWorktree,
+        label: strings::TAB_MENU_NEW_CLAUDE_WORKTREE,
+        offered: Offered::InRepo,
     },
     Entry {
         action: Action::SplitVertical,
@@ -251,6 +260,7 @@ impl Shell {
                 .tabs
                 .get(self.core.workspace.active)
                 .is_some_and(|tab| !tab.is_parked()),
+            in_repo: self.focused_repo().is_some(),
         };
         self.tab_menu = Some(TabMenu {
             anchor,

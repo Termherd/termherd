@@ -103,7 +103,6 @@ issues #18–#29.
 | [F-session-grid](#f-session-grid) | feature | workspace | ☐ | A layout preset over the pane model. |
 | [F-session-reveal](#f-session-reveal) | feature | sessions, workspace | ☐ | Reveal a session's directory and transcript in the OS file manager. |
 | [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
-| [F-worktree-launch](#f-worktree-launch) | feature | sessions, sidebar | ☐ | Start a Claude session in a fresh git worktree, grouped under its project. |
 | [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
 | [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
 | [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ✅ | A `rename-tab` keymap action opening the focused tab's inline rename. |
@@ -127,6 +126,7 @@ issues #18–#29.
 | [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ✅ | A Claude tab's title follows the session name Claude holds. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
 | [F-url-scheme](#f-url-scheme) | feature | workspace, packaging | ✅ | Open a tab from an HTML link: a `termherd://` URL scheme. |
+| [F-worktree-launch](#f-worktree-launch) | feature | sessions, sidebar | ✅ | Start a Claude session in a fresh git worktree, grouped under its project. |
 
 ## Backlog
 
@@ -1279,17 +1279,6 @@ its shell afterwards, since success is not observable. macOS and Windows x64
 only. Torture report:
 `.personal/feature-torture/reports/F-session-send-desktop.md`.
 
-<a id="f-worktree-launch"></a>
-
-### F-worktree-launch
-
-Start a Claude session in a fresh git worktree, grouped under its project.
-
-The sidebar already groups worktrees (FR1); only creating one at launch is
-missing.
-
-Issue: #422.
-
 <a id="f-claude-command"></a>
 
 ### F-claude-command
@@ -1904,6 +1893,20 @@ Event lands in the same inbox. The installers declare the scheme through
 Open: `session/<resume_id>` as a second action, should a link need to name
 one conversation. Discovery from outside overlaps
 [F-mcp-attach](#f-mcp-attach).
+
+<a id="f-worktree-launch"></a>
+
+### F-worktree-launch
+
+Start a Claude session in a fresh git worktree, grouped under its project.
+
+Shipped with #422: the tab menu's *New Claude session in a worktree* (and the
+unbound `new-claude-session-in-worktree` action) has termherd run
+`git worktree add` itself, under `.claude/worktrees/` of the main checkout,
+then open a fresh Claude there. `claude --worktree` was set aside: Claude
+changes directory inside its own process, so the pane would stay recorded in
+the main checkout and a reopen or a restored layout would resume from the
+wrong directory. The sidebar's repo row offers no worktree launch yet.
 
 <a id="f-i18n"></a>
 

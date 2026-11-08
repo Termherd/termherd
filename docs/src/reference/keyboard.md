@@ -37,6 +37,7 @@ on Windows, and zoom-out stays on <kbd>Ctrl</kbd>+<kbd>-</kbd> — both below.
 | `activate-tab-1` … `-9` | `cmd+1` … `cmd+9`; `alt+1` … `alt+9` off macOS | jump to tab N |
 | `new-shell-here` | `mod+t`; `ctrl+shift+t` off macOS | new shell in the focused session's directory |
 | `new-claude-session-here` | `mod+alt+t` | new Claude session in that directory |
+| `new-claude-session-in-worktree` | *(unbound)* | new Claude session in a new git worktree of that repo ([worktrees](../workspace/tabs-and-splits.md#a-claude-session-in-a-new-worktree)) |
 | `reopen-closed-tab` | `mod+shift+t`; `ctrl+alt+shift+t` off macOS | reopen the tab you just closed |
 | `close-focused` | `mod+w`; `ctrl+shift+w` off macOS | close the focused pane; a lone pane closes its tab |
 | `rename-tab` | `mod+shift+i` | rename the focused tab, as a double-click does |

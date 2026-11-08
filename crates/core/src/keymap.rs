@@ -158,6 +158,9 @@ pub enum Action {
     /// Open a fresh Claude session in the repo containing the focused session.
     /// Inert when there is no focused session to derive a repo from.
     NewClaudeSessionHere,
+    /// Open a fresh Claude session in a new git worktree of the focused
+    /// session's repo. Inert when no repo holds the focused session.
+    NewClaudeSessionInWorktree,
     /// Reopen the most recently closed tab, restoring its mode and directory.
     /// A no-op when no tab has been closed yet.
     ReopenClosedTab,
@@ -295,6 +298,12 @@ const ACTIONS: &[ActionDef] = &[
         Action::NewClaudeSessionHere,
         "new-claude-session-here",
         &["mod+alt+t"],
+    ),
+    // No default chord: every free one collides with a program on some layout.
+    ActionDef::new(
+        Action::NewClaudeSessionInWorktree,
+        "new-claude-session-in-worktree",
+        &[],
     ),
     ActionDef::new(
         Action::ReopenClosedTab,
@@ -897,6 +906,22 @@ mod tests {
             Action::from_config_name("reopen-closed-tab"),
             Some(Action::ReopenClosedTab)
         );
+    }
+
+    #[test]
+    fn the_worktree_launch_has_a_name_and_no_default_chord() {
+        assert_eq!(
+            Action::from_config_name("new-claude-session-in-worktree"),
+            Some(Action::NewClaudeSessionInWorktree)
+        );
+        for platform in [Platform::MacOs, Platform::Windows, Platform::Linux] {
+            assert!(
+                default_bindings(platform)
+                    .iter()
+                    .all(|(_, action)| *action != Action::NewClaudeSessionInWorktree),
+                "{platform:?}"
+            );
+        }
     }
 
     #[test]

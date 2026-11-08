@@ -130,6 +130,7 @@ pub const TAB_MENU_COLOR: &str = "Tab colour…";
 pub const TAB_MENU_COPY_AGENT_NAME: &str = "Copy agent name";
 pub const TAB_MENU_NEW_SHELL: &str = "New shell here";
 pub const TAB_MENU_NEW_CLAUDE: &str = "New Claude session here";
+pub const TAB_MENU_NEW_CLAUDE_WORKTREE: &str = "New Claude session in a worktree";
 pub const TAB_MENU_SPLIT_RIGHT: &str = "Split right";
 pub const TAB_MENU_SPLIT_DOWN: &str = "Split down";
 pub const TAB_MENU_PARK: &str = "Park tab";
@@ -219,6 +220,12 @@ pub fn claude_command_prompt(line: &str, title: &str) -> String {
 #[must_use]
 pub fn rename_refused(why: &str) -> String {
     format!("Claude was not renamed: {why}.")
+}
+
+/// Why no worktree was added to `repo`, under the tab strip.
+#[must_use]
+pub fn worktree_failed(repo: &str, why: &str) -> String {
+    format!("No worktree was added to {repo}: {why}")
 }
 
 /// Close-a-tab confirmation prompt.
