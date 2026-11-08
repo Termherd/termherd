@@ -104,7 +104,7 @@ for pair in \
 done
 
 if [[ "$violations" -ne 0 ]]; then
-    echo "FAIL: $violations dependency-rule / toolchain lockstep violation(s)." >&2
+    echo "FAIL: $violations violation(s) of the dependency rule, the AGENTS.md crate list or the toolchain lockstep." >&2
     exit 1
 fi
 
