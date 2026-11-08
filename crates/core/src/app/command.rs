@@ -10,7 +10,7 @@
 
 use std::fmt;
 
-use crate::claude_command::{ClaudeCommand, PromptInput};
+use crate::claude_command::{CLEAR_DRAFT, ClaudeCommand, PromptInput, SUBMIT};
 
 use super::*;
 
@@ -101,9 +101,12 @@ impl App {
         vec![
             Effect::Write {
                 session,
-                bytes: command.typed(),
+                bytes: CLEAR_DRAFT.to_vec(),
             },
-            Effect::submit(session),
+            Effect::Paced {
+                session,
+                writes: vec![command.line().into_bytes(), SUBMIT.to_vec()],
+            },
         ]
     }
 }
@@ -113,6 +116,7 @@ mod tests {
     use super::*;
     use crate::app::testsupport::*;
     use crate::claude_command::ClaudeColor;
+    use proptest::prelude::*;
 
     fn set_status(app: &mut App, session: SessionId, status: SessionStatus) {
         app.apply(Event::StatusChanged { session, status });
@@ -156,51 +160,99 @@ mod tests {
         }
     }
 
+    /// The writes `effects` would make, in order, each with whether it is
+    /// paced (sent on its own after a pause) or sent at once.
+    fn writes_of(effects: &[Effect], session: SessionId) -> Vec<(bool, Vec<u8>)> {
+        effects
+            .iter()
+            .flat_map(|effect| match effect {
+                Effect::Write { session: to, bytes } if *to == session => {
+                    vec![(false, bytes.clone())]
+                }
+                Effect::Paced {
+                    session: to,
+                    writes,
+                } if *to == session => writes.iter().map(|w| (true, w.clone())).collect(),
+                other => panic!("an effect that is not a write: {other:?}"),
+            })
+            .collect()
+    }
+
+    fn rename_in_idle_claude(name: &str) -> (SessionId, Vec<Effect>) {
+        let mut app = App::new();
+        let session = launch_claude(&mut app);
+        set_status(&mut app, session, SessionStatus::Idle);
+        let command = ClaudeCommand::rename(name).expect("a typeable name");
+        let effects = app.apply(Event::SendClaudeCommand {
+            session,
+            command,
+            prompt: PromptInput::Empty,
+        });
+        (session, effects)
+    }
+
     #[test]
-    fn an_idle_claude_takes_the_line_then_a_submit_of_its_own() {
+    fn an_idle_claude_takes_the_clear_the_line_and_the_enter_each_apart() {
         let mut app = App::new();
         let session = launch_claude(&mut app);
         set_status(&mut app, session, SessionStatus::Idle);
 
         assert_eq!(check(&app, session), Ok(()));
         let effects = send(&mut app, session);
-        assert!(
-            matches!(
-                effects.as_slice(),
-                [
-                    Effect::Write { session: typed_to, bytes },
-                    Effect::Paced { session: submitted_to, writes },
-                ] if *typed_to == session
-                    && bytes == b"\x15/color pink"
-                    && *submitted_to == session && *writes == [b"\r".to_vec()]
-            ),
+        assert_eq!(
+            writes_of(&effects, session),
+            vec![
+                (false, b"\x15".to_vec()),
+                (true, b"/color pink".to_vec()),
+                (true, b"\r".to_vec()),
+            ],
             "{effects:?}"
         );
     }
 
     #[test]
-    fn a_rename_long_enough_to_read_as_a_paste_still_submits_apart() {
-        let mut app = App::new();
-        let session = launch_claude(&mut app);
-        set_status(&mut app, session, SessionStatus::Idle);
+    fn a_rename_long_enough_to_read_as_a_paste_keeps_its_clear_out_of_the_burst() {
+        // Live, Claude Code 2.1.319: `\x15` inside a paste burst is stripped
+        // ("Removed 1 invisible character") and the line held for review, so
+        // the Enter after it only acknowledges the review.
         let name = "a session name long enough to be read as a paste by claude code";
-        let command = ClaudeCommand::rename(name).expect("a typeable name");
-        assert!(command.typed().len() >= 64, "the case the paste rule bites");
+        let line = format!("/rename {name}");
+        assert!(line.len() >= 64, "the case the paste rule bites");
 
-        let effects = app.apply(Event::SendClaudeCommand {
-            session,
-            command,
-            prompt: PromptInput::Empty,
-        });
-        let expected = format!("\x15/rename {name}");
-        assert!(
-            matches!(
-                effects.as_slice(),
-                [Effect::Write { bytes, .. }, Effect::Paced { session: to, writes }]
-                    if *bytes == expected.as_bytes() && *to == session && *writes == [b"\r".to_vec()]
-            ),
+        let (session, effects) = rename_in_idle_claude(name);
+        assert_eq!(
+            writes_of(&effects, session),
+            vec![
+                (false, b"\x15".to_vec()),
+                (true, line.into_bytes()),
+                (true, b"\r".to_vec()),
+            ],
             "{effects:?}"
         );
+    }
+
+    proptest! {
+        #[test]
+        fn a_control_byte_never_shares_a_write_with_text(name in "\\PC{1,120}") {
+            prop_assume!(ClaudeCommand::rename(&name).is_ok());
+            let (session, effects) = rename_in_idle_claude(&name);
+            for (_, bytes) in writes_of(&effects, session) {
+                let control = bytes.iter().any(|b| b.is_ascii_control());
+                prop_assert!(
+                    !control || bytes.len() == 1,
+                    "a control byte rides with text: {bytes:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn every_write_after_the_clear_is_paced(name in "\\PC{1,120}") {
+            prop_assume!(ClaudeCommand::rename(&name).is_ok());
+            let (session, effects) = rename_in_idle_claude(&name);
+            let writes = writes_of(&effects, session);
+            prop_assert!(writes.len() >= 2, "{writes:?}");
+            prop_assert!(writes[1..].iter().all(|(paced, _)| *paced), "{writes:?}");
+        }
     }
 
     #[test]

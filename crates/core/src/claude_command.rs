@@ -23,7 +23,9 @@ pub use termherd_claude::prompt::{PromptInput, read_prompt};
 pub const MAX_ARGUMENT_GRAPHEMES: usize = 80;
 
 /// Ctrl+U: Claude Code's prompt deletes from the cursor to the start of the
-/// line.
+/// line. Written on its own, ahead of the line: inside a burst long enough to
+/// read as a paste, Claude Code strips it as an invisible character and holds
+/// the line for review, so the Enter after it submits nothing.
 ///
 /// Not what keeps a draft out of the command — that is refusing unless the
 /// screen shows the prompt empty ([`read_prompt`]), since Ctrl+U clears only
@@ -147,7 +149,7 @@ impl ClaudeCommand {
     }
 
     /// The line typed at Claude's prompt — what the confirmation shows, and,
-    /// byte for byte, what [`Self::typed`] sends after clearing the draft.
+    /// byte for byte, what is written once the draft is cleared.
     #[must_use]
     pub fn line(&self) -> String {
         match self {
@@ -155,15 +157,6 @@ impl ClaudeCommand {
             Self::Color(color) => format!("/color {}", color.name()),
             Self::Desktop => "/desktop".to_owned(),
         }
-    }
-
-    /// The write that types this command: the draft cleared and the line
-    /// typed. Enter is not part of it; it goes as a submit of its own.
-    #[must_use]
-    pub fn typed(&self) -> Vec<u8> {
-        let mut typed = CLEAR_DRAFT.to_vec();
-        typed.extend_from_slice(self.line().as_bytes());
-        typed
     }
 }
 
@@ -270,12 +263,6 @@ mod tests {
         assert_eq!(name.chars().count(), 2 * MAX_ARGUMENT_GRAPHEMES);
     }
 
-    #[test]
-    fn the_typed_write_clears_the_draft_and_types_the_line_without_enter() {
-        let command = ClaudeCommand::Color(ClaudeColor::Red);
-        assert_eq!(command.typed(), b"\x15/color red");
-    }
-
     proptest! {
         #[test]
         fn whatever_the_name_the_typed_line_is_one_safe_line(raw in any::<String>()) {
@@ -290,8 +277,6 @@ mod tests {
             prop_assert!(
                 line.graphemes(true).count() <= "/rename ".len() + MAX_ARGUMENT_GRAPHEMES
             );
-            let typed = command.typed();
-            prop_assert!(!typed.contains(&b'\r') && !typed.contains(&b'\n'));
         }
 
         #[test]

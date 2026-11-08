@@ -712,10 +712,11 @@ enum Message {
         resolved: Option<termherd_core::ResolvedPath>,
     },
     /// The pause before the next of a paced run of writes has passed: write
-    /// the first of `writes` now, and pace the rest.
+    /// `due` now, and pace `rest`.
     PacedDue {
         session: termherd_core::SessionId,
-        writes: Vec<Vec<u8>>,
+        due: Vec<u8>,
+        rest: Vec<Vec<u8>>,
     },
     /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
@@ -1529,7 +1530,7 @@ impl Shell {
                     .apply(termherd_core::Event::PathResolved { request, resolved });
                 self.perform(effects)
             }
-            Message::PacedDue { session, writes } => self.write_paced(session, writes),
+            Message::PacedDue { session, due, rest } => self.write_paced(session, due, rest),
             Message::CaptureScreenshot {
                 screenshot,
                 png_path,
@@ -2398,7 +2399,8 @@ mod key_routing {
 
         let _ = shell.update(Message::PacedDue {
             session,
-            writes: vec![b"\r".to_vec()],
+            due: b"\r".to_vec(),
+            rest: Vec::new(),
         });
         assert_eq!(pty.writes_seen(), vec![(session, b"\r".to_vec())]);
     }
@@ -2421,7 +2423,8 @@ mod key_routing {
         });
         let _ = shell.update(Message::PacedDue {
             session,
-            writes: vec![b"\r".to_vec()],
+            due: b"\r".to_vec(),
+            rest: Vec::new(),
         });
         assert!(pty.writes().is_empty());
     }
@@ -5924,7 +5927,7 @@ mod key_routing {
     }
 
     #[test]
-    fn an_armed_claude_command_types_nothing_until_enter_then_clears_and_submits() {
+    fn an_armed_claude_command_types_nothing_until_enter_then_clears_types_and_submits_apart() {
         let (mut shell, pty, session) = shell_with_idle_claude();
         let command = ClaudeCommand::rename("api work").expect("a name");
 
@@ -5947,19 +5950,34 @@ mod key_routing {
         );
         assert_eq!(
             pty.writes_seen(),
-            vec![(session, b"\x15/rename api work".to_vec())],
-            "the draft is cleared and the line typed, with no Enter in the burst"
+            vec![(session, b"\x15".to_vec())],
+            "only the draft is cleared at once: the line waits for its pause"
         );
         assert!(shell.keyboard_owner().is_none(), "and the prompt lets go");
 
         let _ = shell.update(Message::PacedDue {
             session,
-            writes: vec![b"\r".to_vec()],
+            due: b"/rename api work".to_vec(),
+            rest: vec![b"\r".to_vec()],
+        });
+        assert_eq!(
+            pty.writes_seen(),
+            vec![
+                (session, b"\x15".to_vec()),
+                (session, b"/rename api work".to_vec()),
+            ],
+            "the line goes in a write of its own once the pause is due, \
+             and Enter waits for the next"
+        );
+        let _ = shell.update(Message::PacedDue {
+            session,
+            due: b"\r".to_vec(),
+            rest: Vec::new(),
         });
         assert_eq!(
             pty.writes_seen().last(),
             Some(&(session, b"\r".to_vec())),
-            "Enter follows on its own once the pause is due"
+            "Enter follows on its own after another pause"
         );
     }
 
@@ -6263,7 +6281,11 @@ mod key_routing {
         );
         assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
         let _ = shell.update(Message::ConfirmClaudeCommand);
-        assert_eq!(pty.writes()[0], b"\x15/desktop");
+        assert_eq!(
+            pty.writes(),
+            vec![b"\x15".to_vec()],
+            "the draft is cleared at once; the line follows after its pause"
+        );
 
         let (mut plain, _pty) = shell_with_terminal();
         let (refused, _task) = plain.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
@@ -9417,7 +9439,11 @@ mod key_routing {
             assert_eq!(shell.core.workspace.tabs[0].color, None, "no local copy");
 
             let _ = press_all(&mut shell, &["enter"]);
-            assert_eq!(pty.writes()[0], b"\x15/color cyan");
+            assert_eq!(
+                pty.writes(),
+                vec![b"\x15".to_vec()],
+                "the draft is cleared at once; the line follows after its pause"
+            );
         }
 
         #[test]

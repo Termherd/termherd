@@ -37,13 +37,19 @@ pub(super) async fn enter_gap() {
     std::thread::sleep(ENTER_GAP);
 }
 
-/// Hand `writes` to [`Shell::write_paced`] once [`ENTER_GAP`] has passed, or
-/// nothing when none are left.
+/// Hand the first of `writes` to [`Shell::write_paced`] once [`ENTER_GAP`]
+/// has passed, or nothing when none are left.
 fn pace(session: SessionId, writes: Vec<Vec<u8>>) -> Task<Message> {
-    if writes.is_empty() {
+    let mut writes = writes.into_iter();
+    let Some(due) = writes.next() else {
         return Task::none();
-    }
-    Task::perform(enter_gap(), move |()| Message::PacedDue { session, writes })
+    };
+    let rest = writes.collect();
+    Task::perform(enter_gap(), move |()| Message::PacedDue {
+        session,
+        due,
+        rest,
+    })
 }
 
 /// Open a resolved file. The configured command fails *visibly* — a click
@@ -176,23 +182,20 @@ impl Shell {
         Task::none()
     }
 
-    /// Write the first of `writes` to `session` now that its pause has
-    /// passed, and pace the rest. Through `core`, so a session that exited
-    /// during the pause is not written to.
+    /// Write `due` to `session` now that its pause has passed, and pace
+    /// `rest`. Through `core`, so a session that exited during the pause is
+    /// not written to.
     pub(super) fn write_paced(
         &mut self,
         session: SessionId,
-        mut writes: Vec<Vec<u8>>,
+        due: Vec<u8>,
+        rest: Vec<Vec<u8>>,
     ) -> Task<Message> {
-        if writes.is_empty() {
-            return Task::none();
-        }
-        let due = writes.remove(0);
         let effects = self.core.apply(termherd_core::Event::TerminalInput {
             session,
             bytes: due,
         });
-        Task::batch([self.perform(effects), pace(session, writes)])
+        Task::batch([self.perform(effects), pace(session, rest)])
     }
 
     /// Tell `core` when `session`'s PTY started, by the wall clock it has no
