@@ -102,8 +102,10 @@ class Truncated(Exception):
     """
 
 
-def gh_json(args: list[str]) -> dict | list:
-    out = subprocess.run(["gh", *args], capture_output=True, text=True,
+def gh_json(args: list[str], prog: tuple[str, ...] = ("gh",)) -> dict | list:
+    # `gh` writes UTF-8 whatever the locale; text mode without an encoding
+    # decodes with the locale codec, cp1252 on Windows.
+    out = subprocess.run([*prog, *args], capture_output=True, encoding="utf-8",
                          check=True, timeout=GH_TIMEOUT)
     return json.loads(out.stdout)
 
@@ -285,6 +287,18 @@ def selftest() -> int:
     for exc, want_sub in reason_cases:
         if want_sub not in reason(exc):
             fails.append(f"reason({exc!r}) = {reason(exc)!r}, missing {want_sub!r}")
+
+    # A real child process, not a stub: the decoding happens in `subprocess`,
+    # below anything a stub replaces.
+    utf8_title = "⚠ board — ✓"
+    emit = ("import sys; sys.stdout.buffer.write("
+            f"{json.dumps({'title': utf8_title}, ensure_ascii=False).encode()!r})")
+    try:
+        got = gh_json(["-c", emit], prog=(sys.executable,))
+        if got != {"title": utf8_title}:
+            fails.append(f"gh_json decoded UTF-8 output as {got!r}")
+    except FETCH_ERRORS as exc:
+        fails.append(f"gh_json failed on UTF-8 output: {exc!r}")
 
     # `gh` stubbed out: truncation must refuse to report, and a payload of the
     # wrong shape must come back as a named cause rather than a traceback
