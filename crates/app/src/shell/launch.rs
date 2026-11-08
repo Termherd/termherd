@@ -82,15 +82,22 @@ impl Shell {
         self.launch(cwd, Launch::Shell)
     }
 
-    /// Open a fresh Claude session in the repo containing the focused session.
-    /// Walks up to the repo root so a session running in a subdirectory
-    /// still lands at the repo. `None` when nothing is open — there is no context
-    /// to derive a repo from, and a caller is told so rather than told it ran.
+    /// The root of the git checkout holding the focused session's directory, so
+    /// a session running in a subdirectory still names its repo. `None` when
+    /// nothing is focused, its directory is unknown, or no checkout holds it.
+    pub(super) fn focused_repo(&self) -> Option<std::path::PathBuf> {
+        termherd_scan::repo_root(std::path::Path::new(&self.focused_cwd()?))
+    }
+
+    /// Open a fresh Claude session in the repo containing the focused session,
+    /// or in its directory when no repo holds it. `None` when nothing is open —
+    /// there is no context to derive a repo from, and a caller is told so
+    /// rather than told it ran.
     pub(super) fn new_claude_here(&mut self) -> Option<Task<Message>> {
         let cwd = self.focused_cwd()?;
-        let root = termherd_scan::repo_root(std::path::Path::new(&cwd))
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or(cwd);
+        let root = self
+            .focused_repo()
+            .map_or(cwd, |root| root.to_string_lossy().into_owned());
         Some(self.launch(root, Launch::Claude(ClaudeLaunch::Fresh(None))))
     }
 
