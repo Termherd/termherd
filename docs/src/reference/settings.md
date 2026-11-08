@@ -269,8 +269,9 @@ launch, so an agent may read them but never set them. The `close`, `sidebar`,
 `terminal.option_as_meta` blocks are file-only for now; `keys` is published
 as a read-only resource.
 
-`mcp` is file-only by design rather than by backlog: a surface that could grant
-itself wider reach is not a setting, it is an escalation.
+`mcp` is file-only by design rather than by backlog: its keys govern who may
+reach the live bridge and what it may do there, and a surface able to widen
+its own reach is not a setting.
 
 A `set_option` write lands in `settings.json` and applies **as soon as it is
 written**, like any other edit to the file.
