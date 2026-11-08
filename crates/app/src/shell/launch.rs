@@ -15,6 +15,28 @@ fn mint_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// A worktree launch waiting on `git`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeAsk {
+    /// The checkout the worktree branches off.
+    pub repo: std::path::PathBuf,
+    /// The Claude session id it opens under, which also names the worktree.
+    pub id: String,
+    /// The pane it was asked from: the new tab takes focus only if this one
+    /// still has it.
+    pub from: SessionId,
+}
+
+/// Add the worktree `ask` names, answering with the message that opens it.
+/// Runs `git` where it is polled: the caller hands it to a task, so the GUI
+/// thread never waits on it.
+pub(super) async fn add_worktree(ask: WorktreeAsk) -> Message {
+    let added = crate::git_worktree::create(&ask.repo, &crate::git_worktree::name_for(&ask.id))
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|error| error.to_string());
+    Message::WorktreeAdded { ask, added }
+}
+
 impl Shell {
     /// Launch a terminal: register it in `core`, perform the spawn, focus it,
     /// and size its PTY to the current pane (FR4). A fresh Claude starts under
@@ -33,7 +55,18 @@ impl Shell {
         launch: Launch,
         placement: Placement,
     ) -> (Option<SessionId>, Task<Message>) {
-        let launch = launch.with_fresh_id(mint_session_id);
+        self.launch_minting(cwd, launch, placement, mint_session_id)
+    }
+
+    /// [`Self::launch_at`], a fresh Claude taking its id from `mint`.
+    fn launch_minting(
+        &mut self,
+        cwd: String,
+        launch: Launch,
+        placement: Placement,
+        mint: impl FnOnce() -> String,
+    ) -> (Option<SessionId>, Task<Message>) {
+        let launch = launch.with_fresh_id(mint);
         let title = self.core.tab_title(&cwd, &launch);
         let effects = self
             .core
@@ -82,16 +115,76 @@ impl Shell {
         self.launch(cwd, Launch::Shell)
     }
 
-    /// Open a fresh Claude session in the repo containing the focused session.
-    /// Walks up to the repo root so a session running in a subdirectory
-    /// still lands at the repo. `None` when nothing is open — there is no context
-    /// to derive a repo from, and a caller is told so rather than told it ran.
+    /// The root of the git checkout holding the focused session's directory, so
+    /// a session running in a subdirectory still names its repo. `None` when
+    /// nothing is focused, its directory is unknown, or no checkout holds it.
+    pub(super) fn focused_repo(&self) -> Option<std::path::PathBuf> {
+        termherd_scan::repo_root(std::path::Path::new(&self.focused_cwd()?))
+    }
+
+    /// Open a fresh Claude session in the repo containing the focused session,
+    /// or in its directory when no repo holds it. `None` when nothing is open —
+    /// there is no context to derive a repo from, and a caller is told so
+    /// rather than told it ran.
     pub(super) fn new_claude_here(&mut self) -> Option<Task<Message>> {
         let cwd = self.focused_cwd()?;
-        let root = termherd_scan::repo_root(std::path::Path::new(&cwd))
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or(cwd);
+        let root = self
+            .focused_repo()
+            .map_or(cwd, |root| root.to_string_lossy().into_owned());
         Some(self.launch(root, Launch::Claude(ClaudeLaunch::Fresh(None))))
+    }
+
+    /// Add a git worktree to the focused session's repo, off the HEAD of its
+    /// checkout, and open a fresh Claude in it once `git` is done. `None` when
+    /// no repo holds the focused session.
+    pub(super) fn new_claude_in_worktree(&mut self) -> Option<Task<Message>> {
+        let ask = self.worktree_request()?;
+        Some(Task::perform(add_worktree(ask), std::convert::identity))
+    }
+
+    /// What a worktree launch from the focused pane asks of `git`.
+    pub(super) fn worktree_request(&self) -> Option<WorktreeAsk> {
+        Some(WorktreeAsk {
+            repo: self.focused_repo()?,
+            id: mint_session_id(),
+            from: self.core.workspace.focused_session()?,
+        })
+    }
+
+    /// Open the worktree `git` just added, or say why there is none. The new
+    /// tab is brought forward only when the user is still where they asked
+    /// from: git may take seconds, and a tab taking focus meanwhile would
+    /// catch their keys and drop a prompt they opened since.
+    pub(super) fn worktree_added(
+        &mut self,
+        ask: WorktreeAsk,
+        added: Result<String, String>,
+    ) -> Task<Message> {
+        match added {
+            Ok(path) => {
+                self.notice = None;
+                let undisturbed = self.core.workspace.focused_session() == Some(ask.from)
+                    && self.keyboard_owner().is_none();
+                let placement = if undisturbed {
+                    Placement::Foreground
+                } else {
+                    Placement::Background
+                };
+                let id = ask.id;
+                self.launch_minting(
+                    path,
+                    Launch::Claude(ClaudeLaunch::Fresh(None)),
+                    placement,
+                    || id,
+                )
+                .1
+            }
+            Err(why) => {
+                let repo = ask.repo.to_string_lossy();
+                self.notice = Some(crate::strings::worktree_failed(&repo, &why));
+                Task::none()
+            }
+        }
     }
 
     /// Reopen the most recently closed tab, restoring its mode and

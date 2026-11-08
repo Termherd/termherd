@@ -450,6 +450,11 @@ enum Message {
     /// Start a fresh Claude session in the given project directory (FR4a, `✳`
     /// button) — distinct from resuming an existing one.
     LaunchClaude(String),
+    /// `git` finished adding a worktree to `repo`: its path, or why not.
+    WorktreeAdded {
+        ask: launch::WorktreeAsk,
+        added: Result<String, String>,
+    },
     /// Resume a Claude session in its project directory (FR4).
     LaunchSession {
         cwd: String,
@@ -1073,6 +1078,7 @@ impl Shell {
                 self.perform(effects)
             }
             Message::LaunchProject(cwd) => self.launch(cwd, Launch::Shell),
+            Message::WorktreeAdded { ask, added } => self.worktree_added(ask, added),
             Message::LaunchClaude(cwd) => {
                 self.launch(cwd, Launch::Claude(ClaudeLaunch::Fresh(None)))
             }
@@ -3519,9 +3525,8 @@ mod key_routing {
         // What `run_in_session` cannot show: the bytes termherd itself sends for
         // a key, so an agent can audit the encoder on a live pane.
         //
-        // Every key is spelled with its bytes, because the round trip alone
-        // cannot see two rows of the name table swapped: `f11` naming F12 and
-        // `f12` naming F11 read back consistently, yet bind the wrong key.
+        // Catches a row whose name and terminal key disagree; swapped iced keys
+        // cancel out here, so `shell::input`'s spelled list covers that column.
         for (spec, bytes) in [
             ("pageup", b"\x1b[5~".as_slice()),
             ("pagedown", b"\x1b[6~"),
@@ -3553,6 +3558,24 @@ mod key_routing {
             ("f12", b"\x1b[24~"),
         ] {
             let (mut shell, pty) = shell_with_terminal();
+            assert_eq!(press_chord(&mut shell, spec), PressStep::Typed, "{spec}");
+            assert_eq!(pty.writes(), vec![bytes.to_vec()], "{spec}");
+        }
+    }
+
+    #[test]
+    fn meta_chords_reach_the_terminal_as_escape_prefixed_bytes() {
+        // The chords the key encoder issue captured at the PTY with `dd | xxd`,
+        // plus Alt+Space, driven the way an agent drives them. A synthesised
+        // Alt has no side; `sends_meta`'s own tests cover each setting for it.
+        for (spec, bytes) in [
+            ("alt+.", b"\x1b.".as_slice()),
+            ("alt+shift+b", b"\x1bB"),
+            ("ctrl+alt+b", b"\x1b\x02"),
+            ("alt+space", b"\x1b "),
+        ] {
+            let (mut shell, pty) = shell_with_terminal();
+            shell.option_as_meta = OptionAsMeta::Left;
             assert_eq!(press_chord(&mut shell, spec), PressStep::Typed, "{spec}");
             assert_eq!(pty.writes(), vec![bytes.to_vec()], "{spec}");
         }
@@ -7129,6 +7152,143 @@ mod key_routing {
         assert_eq!(pty.spawn_count(), 0, "no repo to derive — no launch");
     }
 
+    /// A shell whose one focused terminal stands in a real git checkout.
+    fn shell_in_repo() -> (Shell, Arc<RecordingPty>, tempfile::TempDir, PathBuf) {
+        let (tmp, repo) = crate::git_worktree::test_repo();
+        let pty = Arc::new(RecordingPty::default());
+        let mut shell = shell_over(pty.clone());
+        let _ = shell.launch(repo.display().to_string(), Launch::Shell);
+        (shell, pty, tmp, repo)
+    }
+
+    #[test]
+    fn a_worktree_launch_waits_for_git_then_opens_claude_in_the_worktree() {
+        let (mut shell, pty, _tmp, repo) = shell_in_repo();
+        let before = pty.spawn_count();
+        assert!(
+            shell.run_action(Action::NewClaudeSessionInWorktree).is_ok(),
+            "a repo is in context"
+        );
+        assert_eq!(
+            pty.spawn_count(),
+            before,
+            "nothing opens before git answers"
+        );
+
+        let ask = shell.worktree_request().expect("a repo is in context");
+        assert_eq!(ask.repo, repo);
+        let name = crate::git_worktree::name_for(&ask.id);
+        let id = ask.id.clone();
+        shell.notice = Some("an earlier failure".to_owned());
+        let answer = iced::futures::executor::block_on(launch::add_worktree(ask));
+        let _ = shell.update(answer);
+
+        let worktree = repo.join(".claude").join("worktrees").join(&name);
+        assert!(
+            worktree.join(".git").is_file(),
+            "git added a linked worktree"
+        );
+        assert_eq!(pty.spawn_count(), before + 1);
+        assert_eq!(
+            minted_fresh_claude(pty.launches().last()),
+            Some(id.as_str()),
+            "the session runs under the id that names its worktree"
+        );
+        assert_eq!(focused_cwd(&shell), Some(worktree.display().to_string()));
+        assert_eq!(shell.notice, None, "a success clears an earlier failure");
+    }
+
+    #[test]
+    fn a_worktree_git_answers_after_the_user_moved_on_opens_behind() {
+        let (mut shell, pty, _tmp, repo) = shell_in_repo();
+        let ask = shell.worktree_request().expect("a repo is in context");
+        // While git runs, the user opens another tab and works there.
+        let _ = shell.launch("/tmp/elsewhere".to_owned(), Launch::Shell);
+        let working = shell.core.workspace.focused_session();
+        let tabs = shell.core.workspace.tabs.len();
+
+        let answer = iced::futures::executor::block_on(launch::add_worktree(ask));
+        let _ = shell.update(answer);
+
+        assert_eq!(shell.core.workspace.tabs.len(), tabs + 1, "the tab opened");
+        assert_eq!(pty.spawn_count(), 3);
+        assert_eq!(
+            shell.core.workspace.focused_session(),
+            working,
+            "focus stays where the user went"
+        );
+        assert!(repo.join(".claude").join("worktrees").is_dir());
+    }
+
+    #[test]
+    fn a_worktree_git_answers_over_a_pending_close_opens_behind_and_keeps_it() {
+        let (mut shell, _pty, _tmp, _repo) = shell_in_repo();
+        let ask = shell.worktree_request().expect("a repo is in context");
+        shell.closing = Some(ask.from);
+        let answer = iced::futures::executor::block_on(launch::add_worktree(ask.clone()));
+        let _ = shell.update(answer);
+        assert_eq!(shell.closing, Some(ask.from), "the prompt is still open");
+        assert_eq!(shell.core.workspace.focused_session(), Some(ask.from));
+    }
+
+    #[test]
+    fn a_worktree_git_refused_is_said_under_the_tab_strip_and_opens_nothing() {
+        let (mut shell, pty) = shell_with_terminal();
+        let before = pty.spawn_count();
+        let from = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::WorktreeAdded {
+            ask: launch::WorktreeAsk {
+                repo: PathBuf::from("/dev/app"),
+                id: "3f2a9c1b-0000".to_owned(),
+                from,
+            },
+            added: Err("fatal: a branch named 'claude-1' already exists".to_owned()),
+        });
+        assert_eq!(pty.spawn_count(), before);
+        let notice = shell.notice.clone().expect("the failure is shown");
+        assert!(notice.contains("/dev/app"), "it names the repo: {notice}");
+        assert!(notice.contains("already exists"), "it says why: {notice}");
+    }
+
+    #[test]
+    fn a_worktree_launch_is_inert_where_no_repo_holds_the_focused_session() {
+        let (mut shell, pty) = shell_with_terminal();
+        let before = pty.spawn_count();
+        assert_eq!(
+            shell.run_action(Action::NewClaudeSessionInWorktree).err(),
+            Some(routing::Inertia::NoContext)
+        );
+        assert_eq!(pty.spawn_count(), before);
+        let (mut empty, _pty) = empty_shell();
+        assert_eq!(
+            empty.run_action(Action::NewClaudeSessionInWorktree).err(),
+            Some(routing::Inertia::NoContext)
+        );
+    }
+
+    /// The labels the focused tab's menu lists.
+    fn tab_menu_labels(shell: &mut Shell) -> Vec<&'static str> {
+        let _ = shell.update(Message::OpenTabMenu(0));
+        shell
+            .live_tab_menu()
+            .expect("open")
+            .lines()
+            .map(|line| line.entry.label)
+            .collect()
+    }
+
+    #[test]
+    fn the_tab_menu_offers_a_worktree_only_where_a_repo_holds_the_pane() {
+        let (mut in_repo, _pty, _tmp, _repo) = shell_in_repo();
+        assert!(
+            tab_menu_labels(&mut in_repo).contains(&crate::strings::TAB_MENU_NEW_CLAUDE_WORKTREE)
+        );
+        let (mut outside, _pty) = shell_with_terminal();
+        assert!(
+            !tab_menu_labels(&mut outside).contains(&crate::strings::TAB_MENU_NEW_CLAUDE_WORKTREE)
+        );
+    }
+
     #[test]
     fn reopen_closed_tab_restores_the_last_close_and_then_drains() {
         // close a tab, mod+Shift+T brings it back; a second reopen with an
@@ -9110,6 +9270,7 @@ mod key_routing {
                 agent_named: false,
                 color_refusal: Some(BUSY),
                 unparked: false,
+                in_repo: false,
             }
         }
 
@@ -9136,6 +9297,7 @@ mod key_routing {
                 agent_named: true,
                 color_refusal: None,
                 unparked: true,
+                in_repo: true,
             };
             assert_eq!(lines(&everything).count(), ENTRIES.len());
             assert_eq!(disabled(&everything), vec![]);
@@ -9149,6 +9311,11 @@ mod key_routing {
                 ..nothing()
             };
             assert_eq!(added_by(&unparked), vec![Action::TogglePark]);
+            let in_repo = Offers {
+                in_repo: true,
+                ..nothing()
+            };
+            assert_eq!(added_by(&in_repo), vec![Action::NewClaudeSessionInWorktree]);
         }
 
         #[test]

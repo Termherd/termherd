@@ -222,6 +222,7 @@
   //   reopen-closed-tab         mod+Shift+T ; Ctrl+Alt+Shift+T off macOS
   //   new-shell-here            mod+T ; Ctrl+Shift+T off macOS
   //   new-claude-session-here   mod+Alt+T
+  //   new-claude-session-in-worktree (unbound) a fresh Claude in a new git worktree
   //   open-new-session          (unbound)
   //   split-vertical            mod+D ; Alt+Shift+= off macOS
   //   split-horizontal          mod+Shift+D ; Alt+Shift+- / Alt+Shift+D off macOS

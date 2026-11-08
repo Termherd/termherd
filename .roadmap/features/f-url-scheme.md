@@ -20,6 +20,7 @@ and exits, a cold start reads it at startup, and on macOS the `GetURL` Apple
 Event lands in the same inbox. The installers declare the scheme through
 `cargo-packager`'s `deep-link-protocols`; the AppImage registers nothing.
 
-Open: `session/<resume_id>` as a second action, should a link need to name
-one conversation. Discovery from outside overlaps
+Open: bringing the running window forward when a link arrives, since the tab
+opens out of sight (#489). `session/<resume_id>` as a second action, should a
+link need to name one conversation. Discovery from outside overlaps
 [F-mcp-attach](#f-mcp-attach).

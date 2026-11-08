@@ -45,7 +45,7 @@ validated: a session workspace is squarely in pure-native-Rust territory.
 | FS scan/watch | **notify** + **rayon** | debounced watch + parallel scan off the UI thread | Must |
 | Async runtime | **tokio** | PTY read loops, fs watch, (later) MCP | Must |
 | Errors / logging | **thiserror**/`anyhow` + **tracing** | typed errors, structured logs | Must |
-| Release/update | **dist** (cargo-dist) + axoupdater | signed installers for mac/win/linux, GitHub release, self-update | Must (update = Should) |
+| Release/update | **dist** (CLI archives) + **cargo-packager** (installers) | one GitHub release; installers unsigned for now and no self-update yet (§14) | Must (update = Should) |
 | MCP/IDE server | tokio-tungstenite | per-session WS + JSON-RPC | **Deferred (Unsure)** |
 | Diff / highlight | `similar` + `syntect` | diff + syntax for the panel | **Deferred (Unsure)** |
 

@@ -26,6 +26,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the environment variable. Off by default, since the bridge can type into
   a terminal. TermHerd's log now goes to stderr (#267).
 
+### Added (a Claude session in a new git worktree)
+
+- *New Claude session in a worktree*, in the tab menu and as the unbound
+  `new-claude-session-in-worktree` action, adds a git worktree under the
+  repo's `.claude/worktrees/` on a new branch and opens a fresh Claude
+  session in it, so parallel sessions on one repo no longer share a checkout.
+  The session joins the repo's sidebar row; a `git` failure is said under the
+  tab strip (#422).
+
 ### Fixed (the sidebar no longer goes stale)
 
 - Session colours, titles and new sessions reach the sidebar even when the
