@@ -25,7 +25,7 @@ This file holds the rules. The rest loads when the task needs it:
 | Mutation testing, CI waits, board ids, git and lint traps | [`docs/agents/tooling.md`](docs/agents/tooling.md) |
 | Code under `crates/app/` | [`crates/app/AGENTS.md`](crates/app/AGENTS.md) |
 | Every CI gate, when it runs, how to mirror it | [`docs/CI.md`](docs/CI.md) |
-| Coding standards (Tidy First, CUPID, TDD, comments) | [`CODING_STANDARDS.md`](CODING_STANDARDS.md) |
+| Coding standards (Tidy First, CUPID, test first, comments) | [`CODING_STANDARDS.md`](CODING_STANDARDS.md) |
 
 ## Commands
 
@@ -231,7 +231,7 @@ exists). Do not relax them locally; the incident behind each linked rule is in
 
 ## Conventions
 
-- Coding standards (Tidy First, CUPID & YAGNI, TDD + Reflect, Clean Code) live
+- Coding standards (Tidy First, CUPID & YAGNI, test first, Clean Code) live
   in [`CODING_STANDARDS.md`](CODING_STANDARDS.md). This file (AGENTS.md) takes
   precedence where they collide.
 - Markdown prose: 80-col wrap (tables / code blocks exempt, see
