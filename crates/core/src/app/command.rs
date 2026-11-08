@@ -233,25 +233,19 @@ mod tests {
 
     proptest! {
         #[test]
-        fn a_control_byte_never_shares_a_write_with_text(name in any::<String>()) {
+        fn the_clear_goes_alone_and_every_write_after_it_is_paced(name in any::<String>()) {
             prop_assume!(ClaudeCommand::rename(&name).is_ok());
             let (session, effects) = rename_in_idle_claude(&name);
-            for (_, bytes) in writes_of(&effects, session) {
+            let writes = writes_of(&effects, session);
+            prop_assert!(writes.len() >= 2, "{writes:?}");
+            prop_assert!(writes[1..].iter().all(|(paced, _)| *paced), "{writes:?}");
+            for (_, bytes) in &writes {
                 let control = bytes.iter().any(|b| b.is_ascii_control());
                 prop_assert!(
                     !control || bytes.len() == 1,
                     "a control byte rides with text: {bytes:?}"
                 );
             }
-        }
-
-        #[test]
-        fn every_write_after_the_clear_is_paced(name in any::<String>()) {
-            prop_assume!(ClaudeCommand::rename(&name).is_ok());
-            let (session, effects) = rename_in_idle_claude(&name);
-            let writes = writes_of(&effects, session);
-            prop_assert!(writes.len() >= 2, "{writes:?}");
-            prop_assert!(writes[1..].iter().all(|(paced, _)| *paced), "{writes:?}");
         }
     }
 

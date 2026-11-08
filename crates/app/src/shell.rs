@@ -2393,6 +2393,15 @@ mod key_routing {
         assert_eq!(pty.writes(), vec![b"ls\n".to_vec()], "the bytes were typed");
     }
 
+    /// The paced Enter of a submit, come due.
+    fn enter_due(session: termherd_core::SessionId) -> Message {
+        Message::PacedDue {
+            session,
+            due: b"\r".to_vec(),
+            rest: Vec::new(),
+        }
+    }
+
     #[test]
     fn submit_action_presses_enter_only_once_its_pause_is_due() {
         let (mut shell, pty) = shell_with_terminal();
@@ -2403,11 +2412,7 @@ mod key_routing {
         assert_eq!(outcome.error, None);
         assert!(pty.writes().is_empty(), "no Enter inside the pause");
 
-        let _ = shell.update(Message::PacedDue {
-            session,
-            due: b"\r".to_vec(),
-            rest: Vec::new(),
-        });
+        let _ = shell.update(enter_due(session));
         assert_eq!(pty.writes_seen(), vec![(session, b"\r".to_vec())]);
     }
 
@@ -2427,19 +2432,15 @@ mod key_routing {
             session,
             clean: true,
         });
-        let _ = shell.update(Message::PacedDue {
-            session,
-            due: b"\r".to_vec(),
-            rest: Vec::new(),
-        });
+        let _ = shell.update(enter_due(session));
         assert!(pty.writes().is_empty());
     }
 
     #[test]
-    fn the_enter_gap_waits_out_the_whole_pause() {
+    fn the_pace_gap_waits_out_the_whole_pause() {
         let start = std::time::Instant::now();
-        block_on(effects::enter_gap());
-        assert!(start.elapsed() >= effects::ENTER_GAP);
+        block_on(effects::pace_gap());
+        assert!(start.elapsed() >= effects::PACE_GAP);
     }
 
     /// Drive a future to completion on a throwaway runtime.
@@ -5992,11 +5993,7 @@ mod key_routing {
             "the line goes in a write of its own once the pause is due, \
              and Enter waits for the next"
         );
-        let _ = shell.update(Message::PacedDue {
-            session,
-            due: b"\r".to_vec(),
-            rest: Vec::new(),
-        });
+        let _ = shell.update(enter_due(session));
         assert_eq!(
             pty.writes_seen().last(),
             Some(&(session, b"\r".to_vec())),

@@ -212,7 +212,7 @@ follow. `report_status` now publishes any held screen first, and a chunk's
 status goes out only after the chunk is drawn. A long `claude_command` that
 Claude read as a paste (#439): a control byte inside a paste burst is
 stripped and the line held for review, so the command writes Ctrl+U alone,
-then the line and Enter as an `Effect::Paced` run, each after `ENTER_GAP`.
+then the line and Enter as an `Effect::Paced` run, each after `PACE_GAP`.
 A status reading `idle` while Claude still works (#427): `prompt_in_session` no
 longer settles on the status from before its prompt (#435; a bare
 `wait_for_status` still needs `busy` first), and Claude's idle title must stand
