@@ -40,14 +40,18 @@ test-hooks:
 # having shipped. Run before a planning pass. Exits 0 clean / 1 drift found /
 # 2 a dimension could not be fetched — a missing `project` scope reads as
 # "unchecked", never as clean, which is also why this is not a CI gate: the
-# default GITHUB_TOKEN lacks that scope. Stdlib-only, so plain python3.
+# default GITHUB_TOKEN lacks that scope. Stdlib-only, so a bare interpreter:
+# `py -3` on Windows, where `python3` is often the Microsoft Store stub that
+# only prints an install hint, and `python3` elsewhere.
+python := if os_family() == "windows" { "py -3" } else { "python3" }
+
 [doc("Report board/issue drift (unclassified, or Status vs Horizon)")]
 board-check:
-    python3 scripts/board_check.py --check
+    {{python}} scripts/board_check.py --check
 
 [doc("Offline guards for the board check (no `gh`, no network)")]
 board-check-selftest:
-    python3 scripts/board_check.py --selftest
+    {{python}} scripts/board_check.py --selftest
 
 # Recompile ROADMAP.md from `.roadmap/`. ROADMAP.md is an artifact — edit the
 # feature files, never it. Run this and commit both, or the `roadmap` CI job

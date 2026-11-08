@@ -89,10 +89,10 @@ type — the native type is *not* named by that bullet, but an unclassified type
 is as invisible as an empty field — and `gh project item-edit` per board field.
 `just board-check` is what tells you it took, and it needs the sandbox
 disabled: inside it, the recipe fails on TLS and reports *unchecked*, exit 2,
-which is not the same as clean. On Windows the recipe does not run at all
-until #428 lands: call `py -3 -I -X utf8 scripts/board_check.py --check`.
-Without `-X utf8` the `gh` output fails to decode and the board reads as
-*unreachable*, which looks like a network fault, not a clean board.
+which is not the same as clean. On Windows the recipe runs `py -3`, since
+`python3` there is usually the Microsoft Store stub, and the script decodes
+`gh` output as UTF-8 itself: before #428, the locale codec failed on it and
+the board read as *unreachable*, which looks like a network fault.
 
 ## Editing files from a script
 

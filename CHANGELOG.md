@@ -15,6 +15,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `%USERPROFILE%\.termherd\termherd.log`, set aside as `termherd.log.old` once
   it reaches 5 MB. `termherd mcp-config` is unchanged, in every shell (#405).
 
+## [0.1.0-prerelease.6] - 2026-11-08
+
 ### Fixed (a long Claude command submits on the first Enter)
 
 - A confirmed `/rename` long enough for Claude Code to read as a paste now
