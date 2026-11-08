@@ -59,3 +59,13 @@ shippable:
   half: click and drag termherd's own interface.
 - [x] [F-mcp-options-bridge](#f-mcp-options-bridge) — `list_options` and
   `set_option` on the live bridge too, over the stdio slice's catalogue.
+- [ ] Layout and IME key injection (#482) — a press whose key differs from its
+  text, and IME pre-edit / commit, which `press_keys` cannot build. Extends
+  [F-mcp-keys](#f-mcp-keys).
+- [ ] The app's own log over the bridge (#483) — read termherd's `tracing`
+  output, so "this warning appears" becomes checkable. Part of
+  [F-mcp-self-diagnosis](#f-mcp-self-diagnosis).
+- [ ] Window focus loss and gain (#484) — feed the blur and focus events
+  without stealing the user's focus with OS tooling.
+- [ ] The docs editor (#485) — open, edit, save and read back a doc, none of
+  which the bridge reaches today.

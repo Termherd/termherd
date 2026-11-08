@@ -1001,6 +1001,16 @@ shippable:
   half: click and drag termherd's own interface.
 - [x] [F-mcp-options-bridge](#f-mcp-options-bridge) — `list_options` and
   `set_option` on the live bridge too, over the stdio slice's catalogue.
+- [ ] Layout and IME key injection (#482) — a press whose key differs from its
+  text, and IME pre-edit / commit, which `press_keys` cannot build. Extends
+  [F-mcp-keys](#f-mcp-keys).
+- [ ] The app's own log over the bridge (#483) — read termherd's `tracing`
+  output, so "this warning appears" becomes checkable. Part of
+  [F-mcp-self-diagnosis](#f-mcp-self-diagnosis).
+- [ ] Window focus loss and gain (#484) — feed the blur and focus events
+  without stealing the user's focus with OS tooling.
+- [ ] The docs editor (#485) — open, edit, save and read back a doc, none of
+  which the bridge reaches today.
 
 <a id="f-mcp-ide-bridge"></a>
 
@@ -1025,7 +1035,9 @@ A set of affordances exists only under the mouse, so no agent can reach or
 regression-test any of them: drag a split gutter (#55), drag a tab to another
 window (#153) or out to detach it (#154), auto-scroll a drag-selection at the
 edge (#157), alt+drag for column selection (#159), Cmd/Ctrl-click a hyperlink
-(#84, shipped — the gesture exists and an agent still cannot make it). The
+(#84, shipped — the gesture exists and an agent still cannot make it), open
+the tab menu to see why *Tab colour…* is withheld (#373, fixed, verified only
+by hand). The
 argument that produced [F-mcp-keys](#f-mcp-keys) — a surface an
 agent cannot reach is a surface an agent cannot regression-test — applies
 unchanged to the pointer, with a larger uncovered surface behind it.
@@ -1515,6 +1527,12 @@ MCP reply, and in the tests — the code was the only name that disagreed. Both
 rename handlers now route `enter` to their existing commit messages, while
 the widget submit callbacks remain in place for human input (#246).
 
+**What the rung still cannot press (#482).** A chord builds its key event from
+itself alone, so the key, the modified key and the text are one value. A real
+press on a non-US layout differs on all three (AZERTY `Ctrl+&` is the physical
+`1`), and IME pre-edit and commit are not key presses at all. Bugs that hang
+on either are checkable only at a real keyboard until that issue lands.
+
 <a id="f-mcp-live-bridge"></a>
 
 ### F-mcp-live-bridge
@@ -1968,7 +1986,7 @@ Ship with the bridge what an agent now learns from this repo's docs.
 Design-first; nothing here is scoped. The review of the agent context files
 on 2026-11-07 moved the calling rules into the server's instructions, and
 left four things an agent outside this repo still cannot learn or do from the
-bridge alone:
+bridge alone; a fifth, the app's own log, was filed since:
 
 - **Guidance as MCP resources or prompts.** The diagnosis recipes live only
   in a project skill (`drive-termherd`), so a client
@@ -1987,6 +2005,10 @@ bridge alone:
   caller is told to wait for `busy` first; `prompt_in_session` fixed it for
   its own loop only (#435). A wait for the next transition would make the
   rule unnecessary. Related open defect: #436.
+- **The app's own log** (#483, filed). A warning exists only on the stderr of
+  whoever launched termherd, which for a release build is no terminal at all,
+  so "this warning appears, or no longer does" cannot be checked over the
+  bridge.
 
 <a id="f-search-ux"></a>
 

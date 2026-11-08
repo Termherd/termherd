@@ -80,3 +80,9 @@ which is the assumption that let this one through. Tidy-first prerequisite:
 MCP reply, and in the tests — the code was the only name that disagreed. Both
 rename handlers now route `enter` to their existing commit messages, while
 the widget submit callbacks remain in place for human input (#246).
+
+**What the rung still cannot press (#482).** A chord builds its key event from
+itself alone, so the key, the modified key and the text are one value. A real
+press on a non-US layout differs on all three (AZERTY `Ctrl+&` is the physical
+`1`), and IME pre-edit and commit are not key presses at all. Bugs that hang
+on either are checkable only at a real keyboard until that issue lands.
