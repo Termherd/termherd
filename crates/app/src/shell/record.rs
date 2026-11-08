@@ -130,12 +130,12 @@ impl RecordState {
             tracing::warn!("no data directory; recording skipped");
             return;
         };
-        if let Err(error) = std::fs::create_dir_all(dir) {
+        if let Err(error) = termherd_private_fs::ensure_dir(dir) {
             tracing::warn!(%error, "could not create captures dir; recording skipped");
             return;
         }
         let stamp = crate::capture::stamp(SystemTime::now());
-        let path = dir.join(format!("capture-{stamp}.gif"));
+        let path = crate::capture::artefact_path(dir, &stamp, crate::capture::Artefact::Screencast);
         self.recorder = Some(Recorder::start(path, self.config));
         tracing::info!(
             fps = self.config.fps,

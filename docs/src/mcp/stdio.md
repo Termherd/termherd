@@ -60,10 +60,15 @@ empty object would discard the rest of the file. `null` is
 always accepted on a writable id — it unsets the option.
 
 That is the whole write surface today. The `close`, `sidebar`, `record`,
-`open`, `mcp`, `keys`, `terminal.font_size`, `terminal.copy_on_select`,
-`terminal.paste_on_right_click` and `terminal.option_as_meta` blocks of
+`capture`, `open`, `mcp`, `keys`, `terminal.font_size`,
+`terminal.copy_on_select`, `terminal.paste_on_right_click` and
+`terminal.option_as_meta` blocks of
 [`settings.json`](../reference/settings.md) are file-only — `keys` is
 readable as a resource, below.
+
+`mcp` is file-only by design rather than by backlog: its keys govern who may
+reach the live bridge and what it may do there, and a surface able to widen
+its own reach is not a setting.
 
 ## Resources
 

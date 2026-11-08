@@ -20,19 +20,14 @@ const INSTANCE_LOCK: &str = "dev.termherd.lock";
 /// - **Linux**: an abstract socket name, at most 107 bytes.
 ///
 /// Hence a hash of the dir off macOS, never the path.
-fn lock_name() -> std::borrow::Cow<'static, str> {
+fn lock_name(temp_dir: &std::path::Path) -> String {
     #[cfg(target_os = "macos")]
     {
-        std::borrow::Cow::Owned(
-            std::env::temp_dir()
-                .join(INSTANCE_LOCK)
-                .to_string_lossy()
-                .into_owned(),
-        )
+        temp_dir.join(INSTANCE_LOCK).to_string_lossy().into_owned()
     }
     #[cfg(not(target_os = "macos"))]
     {
-        std::borrow::Cow::Owned(scoped_name(&std::env::temp_dir()))
+        scoped_name(temp_dir)
     }
 }
 
@@ -61,8 +56,8 @@ enum Claim {
     TakenByAnother,
 }
 
-fn claim() -> Claim {
-    let name = lock_name();
+fn claim(temp_dir: &std::path::Path) -> Claim {
+    let name = lock_name(temp_dir);
     match SingleInstance::new(&name) {
         Ok(instance) if instance.is_single() => Claim::Held(instance),
         Ok(_) => Claim::TakenByAnother,
@@ -85,8 +80,11 @@ fn claim() -> Claim {
 ///
 /// `handed_over` says this launch already gave its link to the inbox: the
 /// running instance acts on it, so exiting is this launch's success.
-pub fn acquire_single_instance(handed_over: bool) -> Option<SingleInstance> {
-    match claim() {
+pub fn acquire_single_instance(
+    temp_dir: &std::path::Path,
+    handed_over: bool,
+) -> Option<SingleInstance> {
+    match claim(temp_dir) {
         Claim::Held(instance) => Some(instance),
         Claim::Unavailable => None,
         Claim::TakenByAnother => {
@@ -119,7 +117,7 @@ mod tests {
     #[test]
     fn lock_name_is_absolute_on_macos() {
         assert!(
-            std::path::Path::new(super::lock_name().as_ref()).is_absolute(),
+            std::path::Path::new(&super::lock_name(&std::env::temp_dir())).is_absolute(),
             "macOS single-instance lock path must be CWD-independent"
         );
     }
@@ -128,7 +126,7 @@ mod tests {
     #[test]
     fn lock_name_has_no_backslash_on_windows() {
         assert!(
-            !super::lock_name().contains('\\'),
+            !super::lock_name(&std::env::temp_dir()).contains('\\'),
             "Windows single-instance mutex name must not contain backslashes"
         );
     }

@@ -110,6 +110,7 @@ impl Shell {
         self.gestures = settings.clipboard_gestures();
         self.option_as_meta = settings.option_as_meta_on(Platform::current());
         self.record.set_config(settings.record_config());
+        self.redact_captures = settings.redacts_captures();
         self.config = super::config_input(settings);
         for event in [
             termherd_core::Event::SessionLimitLoaded(settings.session_limit()),

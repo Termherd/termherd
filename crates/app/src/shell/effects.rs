@@ -85,6 +85,13 @@ impl Shell {
                 spawned
             }
             Effect::Write { session, bytes } => self.pty.write(session, &bytes),
+            Effect::Paste {
+                session,
+                text,
+                bracketed,
+            } => self
+                .pty
+                .write(session, &termherd_pty::paste_bytes(&text, bracketed)),
             Effect::Submit { session } => {
                 return Task::perform(enter_gap(), move |()| Message::SubmitDue(session));
             }
@@ -328,16 +335,23 @@ impl Shell {
         dir: &std::path::Path,
         dump: WorkspaceSnapshot,
     ) -> Task<Message> {
-        if let Err(error) = std::fs::create_dir_all(dir) {
+        if let Err(error) = termherd_private_fs::ensure_dir(dir) {
             tracing::warn!(%error, "could not create captures dir; capture skipped");
             return Task::none();
         }
+        let dump = if self.redact_captures {
+            crate::capture::redacted(dump)
+        } else {
+            dump
+        };
         let stamp = crate::capture::stamp(SystemTime::now());
         match crate::capture::write_dump(dir, &stamp, &dump) {
             Ok(path) => tracing::info!(path = %path.display(), "capture dump written"),
             Err(error) => tracing::warn!(%error, "could not write capture dump"),
         }
-        let png_path = crate::capture::png_path(dir, &stamp);
+        crate::capture::enforce_retention(dir);
+        let png_path =
+            crate::capture::artefact_path(dir, &stamp, crate::capture::Artefact::Screenshot);
         // Screenshot the live window (rung 1), then encode + write the PNG.
         // `Task::<Option>::and_then` only fires for `Some`, so a window-less run
         // simply skips the PNG and the JSON dump still stands.

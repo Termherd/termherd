@@ -170,18 +170,49 @@ carry is modifiers: the event lost its `modifiers` field in #311 as dead
 weight, and it comes back as one type shared with `KeyMods` when a caller
 needs it, not before.
 
-**Still open.** Two features: `F-mcp-attach` (#267 — the bridge is reachable
-only from a session termherd spawned, so the launcher itself cannot drive it)
-and the pointer at termherd's own chrome (#301 — the sidebar, tabs and gutters
-still have no mouse). Neither blocks the other.
-One defect is open beside them: a `read_terminal` that can return the
-screen from before the status it waited for (#436). The bridge's hardening
-is done: #284, then #293, which moved the Host/Origin check from rmcp's
-defaults into termherd's own gate (403 before the token's 401). Three other
-defects are fixed. A long `claude_command` that Claude read as a paste
-(#439): every submit, the command's and `run_in_session`'s, is now
-`Effect::Submit`, whose Enter the shell's effect executor alone writes after
-`ENTER_GAP`. A status reading `idle` while Claude still
+**A client termherd did not spawn can attach** (#267). The bridge used to be
+reachable only from a session termherd launched — which is how it holds an
+endpoint and a token at all — so the launcher itself could not drive the app it
+had started. Nothing was missing from the *capability*: the server accepts any
+token it minted, whoever presents it. What was missing was the address.
+
+A running instance publishes `{ url, token }` to a `0o600`
+`~/.termherd/bridge.json` when `mcp.attach` is on, and `termherd mcp-config`
+renders the `mcpServers` snippet from it — the same tool set, no new one
+(`crates/app/src/attach.rs`, `crates/app/src/cli.rs`). Three things to know
+before touching it:
+
+- **The setting is tri-state on purpose.** `mcp.attach` takes `false`
+  (default), `true`, or `"never"`; `TERMHERD_MCP_ATTACH` flips the first two
+  for one launch and is inert against the third, logging that it was ignored.
+  A boolean would have made a machine-level refusal undoable by an ambient
+  variable. It stays file-only: a surface that can widen its own reach is not
+  a setting. It is read at launch, not on a settings reload.
+- **The subcommand is parsed before the single-instance lock.** It asks
+  *about* the running instance; taking the lock would exit(2) instead of
+  answering, and opening a window would answer a different question.
+- **Staleness is decided by an `initialize` handshake, not a pid.** A crash
+  skips the teardown that removes the file, so the reader must assume the file
+  lies, and the next launch clears it unconditionally before deciding whether
+  to publish. A refused token (401) is reported apart from a dead port — the
+  two send the caller to opposite places.
+
+To drive an isolated dev build from outside with plain `curl`, see
+[running.md](running.md#driving-an-isolated-build-from-outside).
+
+**Still open.** One feature: the pointer at termherd's own chrome (#301 — the
+sidebar, tabs and gutters still have no mouse).
+No defect is open beside them. The bridge's hardening is done: first #284,
+then #293, which moved the Host/Origin check from rmcp's defaults into
+termherd's own gate (403 before the token's 401). Four other defects are
+fixed. A `read_terminal` that returned the screen from before the status it waited
+for (#436): the terminal thread paces screens (one per 8 ms) but sent a
+status the moment it decoded it, so the screen of the same bytes could
+follow. `report_status` now publishes any held screen first, and a chunk's
+status goes out only after the chunk is drawn. A long `claude_command` that
+Claude read as a paste (#439): every submit, the command's and
+`run_in_session`'s, is now `Effect::Submit`, whose Enter the shell's effect
+executor alone writes after `ENTER_GAP`. A status reading `idle` while Claude still
 works (#427): `prompt_in_session` no longer settles on the status from before
 its prompt (#435; a bare `wait_for_status` still needs `busy` first), and
 Claude's idle title must stand 150 ms (`pty::status::IDLE_HOLD`) before a

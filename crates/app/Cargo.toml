@@ -68,6 +68,7 @@ termherd-claude = { path = "../claude" }
 termherd-scan = { path = "../scan" }
 termherd-pty = { path = "../pty" }
 termherd-mcp = { path = "../mcp" }
+termherd-private-fs = { path = "../private-fs" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 single-instance = "0.3"

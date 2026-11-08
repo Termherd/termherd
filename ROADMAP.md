@@ -88,7 +88,6 @@ issues #18–#29.
 | [F-capture](#f-capture) | feature | workspace | ☐ | Capture termherd along a fidelity ladder: debug dumps, promo, bug repros. |
 | [F-file-browser](#f-file-browser) | feature | workspace, sidebar | ☐ | A file tree for the focused repository, floating or as a right pane. |
 | [F-launch-profiles](#f-launch-profiles) | feature | sessions | ☐ | Persistent per-project `--add-dir`, applied to fresh and resumed launches. |
-| [F-mcp-attach](#f-mcp-attach) | feature | mcp, workspace | ☐ | The attach rung: reach the live bridge from outside a spawned session. |
 | [F-mcp-control-surface](#f-mcp-control-surface) | feature | mcp | ☐ | Termherd exposes its own control and orchestration surface as an MCP server. |
 | [F-mcp-ide-bridge](#f-mcp-ide-bridge) | feature | mcp | ☐ | A live MCP/IDE bridge to Claude — termherd as the client, not the server. |
 | [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) | feature | mcp, workspace | ☐ | The pointer rung, chrome half: click and drag termherd's own interface. |
@@ -108,6 +107,7 @@ issues #18–#29.
 | [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ✅ | A `rename-tab` keymap action opening the focused tab's inline rename. |
 | [F-layout-restore](#f-layout-restore) | feature | workspace, sessions | ✅ | Restore tabs, splits and resumable sessions at launch. |
 | [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
+| [F-mcp-attach](#f-mcp-attach) | feature | mcp, workspace | ✅ | The attach rung: reach the live bridge from outside a spawned session. |
 | [F-mcp-background-tab](#f-mcp-background-tab) | feature | mcp, workspace | ✅ | Open and close a tab over MCP without moving the user's focus. |
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
 | [F-mcp-keys](#f-mcp-keys) | feature | mcp, keymap | ✅ | The keyboard rung: drive the app by key chords through the real keymap. |
@@ -135,8 +135,8 @@ issues #18–#29.
 | [F-i18n](#f-i18n) | feature | workspace | ☐ | Internationalization — parked; the English-first externalization shipped. |
 | [F-keymap-advanced](#f-keymap-advanced) | feature | keymap, terminal | ☐ | The keymap concerns from the gist that still need design. |
 | [F-mcp-self-diagnosis](#f-mcp-self-diagnosis) | feature | mcp | ☐ | Ship with the bridge what an agent now learns from this repo's docs. |
-| [F-search-ux](#f-search-ux) | feature | sidebar | ☐ | Search activation and scope; the one real gap was a match snippet. |
 | [F-favorites](#f-favorites) | feature | sidebar | ✅ | Favorites in the sidebar — one concept with the session star. |
+| [F-search-ux](#f-search-ux) | feature | sidebar | ✅ | Search activation and scope; the one real gap was a match snippet. |
 
 ## Unsure
 
@@ -932,61 +932,6 @@ resume }` (`crates/core/src/app.rs`) and the command is *typed* into the shell
 (`launch_command`, `crates/pty/src/lib.rs`), so the one real cost is
 cross-shell path quoting (pwsh vs bash)
 
-<a id="f-mcp-attach"></a>
-
-### F-mcp-attach
-
-The attach rung: reach the live bridge from outside a spawned session.
-
-Filed as #267. **The rung the ladder never had.** Every other rung of
-[F-mcp-control-surface](#f-mcp-control-surface) assumes the caller is a Claude
-session **termherd launched** — that is how it holds a token and an endpoint at
-all, both injected into its `mcpServers` at spawn. An agent running anywhere
-else, including the very terminal that launched termherd, sees nothing: an
-ephemeral port it cannot learn and a per-session token it was never handed.
-
-The asymmetry is invisible until you meet it, and then it is total. It is what
-made the documentation screenshots (#264) unautomatable: the app can screenshot
-itself and press its own keys, and the one process that needed to ask it to —
-the launcher — was the one process with no way to speak to it. `press_keys`,
-`screenshot` and `wait_for_status` were all there, all unreachable.
-
-So the missing piece is **discovery, not capability**. No new tool: the same
-tool set the spawned session gets, reached by a client that was not spawned
-as a child.
-
-**The shape, to settle.** The pieces are small and their arrangement is not:
-
-- **Where a running instance publishes itself.** A `0o600` file beside the rest
-  of termherd's state (`~/.termherd/`) carrying `{ url, token }`, written at
-  startup and removed at teardown, is the obvious answer — and inherits the
-  single-instance lock, which is why "which instance?" needs no field. A stale
-  file after a crash must read as stale rather than as an endpoint.
-- **How a client registers it.** A subcommand emitting the `mcpServers` snippet
-  (`termherd mcp-config`) keeps the token out of shell history and out of argv,
-  where an `--print-token` flag would put it in both.
-- **Whether the surface is the same set of tools.** Probably yes: a narrower
-  read-only surface would be a second contract to keep true, and the
-  interesting uses (drive, wait, screenshot) are the mutating ones.
-
-**The security delta is the real design question, and it is not zero.** A
-spawned session's token reaches it through a file only that session's process
-tree is handed; a published endpoint is discoverable by anything running as the
-user. The capability behind it is not modest — `run_in_session` types into a
-terminal, which is arbitrary command execution as the user, and `read_terminal`
-reads back whatever is on screen. That is already reachable by any process that
-can read a session's `--mcp-config` file, so the change is *discoverable by
-default* rather than *newly possible* — but "already true elsewhere" is an
-argument for stating the exposure, not for skipping it. Expect an opt-in
-setting rather than an always-on file, and expect that decision to be the one
-this feature actually turns on.
-
-Adjacent and **not** the same thing:
-[F-mcp-ide-bridge](#f-mcp-ide-bridge) runs the other way round (termherd as
-the *client* of Claude's IDE bridge), and the stdio `termherd-mcp` server
-already reaches any session from anywhere — but only the settings file, never
-the running workspace, which is exactly the gap this closes.
-
 <a id="f-mcp-control-surface"></a>
 
 ### F-mcp-control-surface
@@ -1036,7 +981,7 @@ shippable:
   PNG, for what text cannot answer.
 - [x] [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) — One model, two readers: the
   capture dump is now the MCP snapshot.
-- [ ] [F-mcp-attach](#f-mcp-attach) — The attach rung: reach the live bridge
+- [x] [F-mcp-attach](#f-mcp-attach) — The attach rung: reach the live bridge
   from outside, not only from a session it spawned.
 - [x] [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) — The pointer rung,
   terminal half: a mouse event inside a session. Unblocked #155, now fixed.
@@ -1044,6 +989,16 @@ shippable:
   half: click and drag termherd's own interface.
 - [x] [F-mcp-options-bridge](#f-mcp-options-bridge) — `list_options` and
   `set_option` on the live bridge too, over the stdio slice's catalogue.
+- [ ] Layout and IME key injection (#482) — a press whose key differs from its
+  text, and IME pre-edit / commit, which `press_keys` cannot build. Extends
+  [F-mcp-keys](#f-mcp-keys).
+- [ ] The app's own log over the bridge (#483) — read termherd's `tracing`
+  output, so "this warning appears" becomes checkable. Part of
+  [F-mcp-self-diagnosis](#f-mcp-self-diagnosis).
+- [ ] Window focus loss and gain (#484) — feed the blur and focus events
+  without stealing the user's focus with OS tooling.
+- [ ] The docs editor (#485) — open, edit, save and read back a doc, none of
+  which the bridge reaches today.
 
 <a id="f-mcp-ide-bridge"></a>
 
@@ -1068,7 +1023,9 @@ A set of affordances exists only under the mouse, so no agent can reach or
 regression-test any of them: drag a split gutter (#55), drag a tab to another
 window (#153) or out to detach it (#154), auto-scroll a drag-selection at the
 edge (#157), alt+drag for column selection (#159), Cmd/Ctrl-click a hyperlink
-(#84, shipped — the gesture exists and an agent still cannot make it). The
+(#84, shipped — the gesture exists and an agent still cannot make it), open
+the tab menu to see why *Tab colour…* is withheld (#373, fixed, verified only
+by hand). The
 argument that produced [F-mcp-keys](#f-mcp-keys) — a surface an
 agent cannot reach is a surface an agent cannot regression-test — applies
 unchanged to the pointer, with a larger uncovered surface behind it.
@@ -1375,6 +1332,77 @@ primitive shipped as `run_in_session` (#194) and is kind-agnostic, so what is
 left is the one-round-trip composition, the guards, and an opt-in scoped to the
 nested-Claude case only. Depends on #195
 
+<a id="f-mcp-attach"></a>
+
+### F-mcp-attach
+
+The attach rung: reach the live bridge from outside a spawned session.
+
+Filed as #267. **The rung the ladder never had.** Every other rung of
+[F-mcp-control-surface](#f-mcp-control-surface) assumes the caller is a Claude
+session **termherd launched** — that is how it holds a token and an endpoint at
+all, both injected into its `mcpServers` at spawn. An agent running anywhere
+else, including the very terminal that launched termherd, sees nothing: an
+ephemeral port it cannot learn and a per-session token it was never handed.
+
+The asymmetry is invisible until you meet it, and then it is total. It is what
+made the documentation screenshots (#264) unautomatable: the app can screenshot
+itself and press its own keys, and the one process that needed to ask it to —
+the launcher — was the one process with no way to speak to it. `press_keys`,
+`screenshot` and `wait_for_status` were all there, all unreachable.
+
+So the missing piece is **discovery, not capability**. No new tool: the same
+tool set the spawned session gets, reached by a client that was not spawned
+as a child.
+
+**The shape, as shipped.** The pieces are small and their arrangement was not:
+
+- **Where a running instance publishes itself.** A `0o600`
+  `~/.termherd/bridge.json` carrying `{ url, token }`, written after the
+  single-instance lock — so "which instance?" needs no field. Removed on a clean
+  quit, and *cleared unconditionally at the next startup*, which is the removal
+  that counts: a crash skips teardown, so does a macOS `terminate:` exit, and a
+  launch that opts out has no teardown of its own — that last one would
+  otherwise leave the previous run's endpoint advertised forever. Between a hard
+  exit and the next launch the file is stale, which is why the reader probes.
+- **How a client registers it.** `termherd mcp-config` prints the `mcpServers`
+  snippet on stdout, keeping the token out of argv and out of shell history
+  where an `--print-token` flag would have put it in both. It is recognised
+  before the single-instance lock is taken and before any window opens: a
+  question about the running instance must not disturb it.
+- **How a stale file reads as stale.** By an MCP `initialize` against the
+  published endpoint, not by a pid. A cheaper proxy can pass while the endpoint
+  refuses every real call; probing with the operation actually intended cannot.
+  A refused token (401) is reported apart from a dead port, since the two send
+  the caller to opposite places.
+- **The surface is the same tool set a spawned session gets.** A narrower
+  read-only variant would be a second contract to keep true, and the
+  interesting uses (drive, wait, screenshot) are the mutating ones.
+
+**The security delta was the real design question, and it is not zero.** A
+spawned session's token reaches it through a file only that session's process
+tree is handed; a published endpoint is discoverable by anything running as the
+user. The capability behind it is not modest — `run_in_session` types into a
+terminal, which is arbitrary command execution as the user, and `read_terminal`
+reads back whatever is on screen. That is already reachable by any process that
+can read a session's `--mcp-config` file, so the change is *discoverable by
+default* rather than *newly possible* — but "already true elsewhere" is an
+argument for stating the exposure, not for skipping it.
+
+So publishing is **opt-in and tri-state**: `mcp.attach` takes `false` (the
+default), `true`, or `"never"`. `TERMHERD_MCP_ATTACH` flips the first two for a
+single launch, which is what an automation run wants; against `"never"` it is
+inert and says so at `info`, which is what a shared machine wants — a policy an
+ambient environment variable cannot quietly undo. That third state is the whole
+reason the setting is not a boolean, and it stays file-only: a surface able to
+widen its own reach is not a setting.
+
+Adjacent and **not** the same thing:
+[F-mcp-ide-bridge](#f-mcp-ide-bridge) runs the other way round (termherd as
+the *client* of Claude's IDE bridge), and the stdio `termherd-mcp` server
+already reaches any session from anywhere — but only the settings file, never
+the running workspace, which is exactly the gap this closes.
+
 <a id="f-mcp-background-tab"></a>
 
 ### F-mcp-background-tab
@@ -1498,6 +1526,12 @@ which is the assumption that let this one through. Tidy-first prerequisite:
 MCP reply, and in the tests — the code was the only name that disagreed. Both
 rename handlers now route `enter` to their existing commit messages, while
 the widget submit callbacks remain in place for human input (#246).
+
+**What the rung still cannot press (#482).** A chord builds its key event from
+itself alone, so the key, the modified key and the text are one value. A real
+press on a non-US layout differs on all three (AZERTY `Ctrl+&` is the physical
+`1`), and IME pre-edit and commit are not key presses at all. Bugs that hang
+on either are checkable only at a real keyboard until that issue lands.
 
 <a id="f-mcp-live-bridge"></a>
 
@@ -1637,9 +1671,10 @@ the pixels, read the terminal — and with #229 shipped, #196 is what remains of
 *that* trio. The **gesture** gap the three parts left — the surface pressed
 keys and could not click, so #155 was proposable and unverifiable — closed
 when [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) (#300) landed and #155
-followed. The loop is still out of reach entirely for anything termherd did not
-spawn, which [F-mcp-attach](#f-mcp-attach) (#267) is about: the launcher that
-most wants to verify a fix is the one caller with no way in
+followed. The loop used to be out of reach entirely for anything termherd did
+not spawn — the launcher that most wants to verify a fix was the one caller
+with no way in — which [F-mcp-attach](#f-mcp-attach) (#267) has since closed,
+opt-in, by publishing the endpoint rather than by adding a tool
 
 <a id="f-mcp-snapshot"></a>
 
@@ -1934,8 +1969,10 @@ Keymap concerns from the gist that need design, layered on the shipped
   keys on every layout (QWERTY/AZERTY/QWERTZ/…)
 - per-command keymap configuration (different bindings per running command)
   — **stays design-first** (feature-torture 🧬 `F-keymap-advanced.md`):
-  blocked on foreground-process detection (macOS `tcgetpgrp` vs Windows
-  ConPTY gap); file only once that's designed
+  blocked on foreground-process detection on Windows: macOS and Linux read
+  the PTY foreground process group (#236), but ConPTY sees only full-screen
+  commands, through the alternate screen (#143); file only once that's
+  designed
 - ~~a configurable "bypass" key so a modifier passes through to the terminal
   instead of the app (cf. Ghostty `macos-option-as-alt`)~~ — **done** with
   #59: `terminal.option_as_meta` (`none` / `left` / `right` / `both`, default
@@ -1951,7 +1988,7 @@ Ship with the bridge what an agent now learns from this repo's docs.
 Design-first; nothing here is scoped. The review of the agent context files
 on 2026-11-07 moved the calling rules into the server's instructions, and
 left four things an agent outside this repo still cannot learn or do from the
-bridge alone:
+bridge alone; a fifth, the app's own log, was filed since:
 
 - **Guidance as MCP resources or prompts.** The diagnosis recipes live only
   in a project skill (`drive-termherd`), so a client
@@ -1970,19 +2007,10 @@ bridge alone:
   caller is told to wait for `busy` first; `prompt_in_session` fixed it for
   its own loop only (#435). A wait for the next transition would make the
   rule unnecessary. Related open defect: #436.
-
-<a id="f-search-ux"></a>
-
-### F-search-ux
-
-Search activation and scope; the one real gap was a match snippet.
-
-Search activation + scope. **Designed (✂️ reshape, feature-torture
-`F-search-ux.md`)**: most of it already shipped — `Cmd+F` focuses search and
-`filter_projects` already searches content + titles across every project. The
-one real gap, a **match snippet**, graduated to #58. A flat relevance-ranked
-results view is explicitly *not* pursued (the grouped in-context filter is
-better UX)
+- **The app's own log** (#483, filed). A warning exists only on the stderr of
+  whoever launched termherd, which for a release build is no terminal at all,
+  so "this warning appears, or no longer does" cannot be checked over the
+  bridge.
 
 <a id="f-favorites"></a>
 
@@ -2006,6 +2034,19 @@ sidebar; a repo row in the section would only duplicate the shipped 🤖/`$`
 launch buttons (#23) or navigate to an already-top group, and mixing
 non-resumable repos into a "resume a favourite session" list breaks its model.
 Favorites stays sessions-only
+
+<a id="f-search-ux"></a>
+
+### F-search-ux
+
+Search activation and scope; the one real gap was a match snippet.
+
+Search activation + scope. **Designed (✂️ reshape, feature-torture
+`F-search-ux.md`)**: most of it already shipped — `Cmd+F` focuses search and
+`filter_projects` already searches content + titles across every project. The
+one real gap, a **match snippet**, graduated to #58 and shipped in #103. A
+flat relevance-ranked results view is explicitly *not* pursued (the grouped
+in-context filter is better UX)
 
 <a id="f-file-diff-panel"></a>
 

@@ -23,7 +23,7 @@ terminal, or many, split vertically and horizontally.
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |
 | Next / previous tab | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | same |
-| Jump to tab 1–9 | <kbd>Cmd</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> |
+| Jump to tab 1–9 | <kbd>Cmd</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> |
 | New shell here | <kbd>Cmd</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 | New Claude session here | <kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> |
 | Reopen the tab you closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
@@ -33,7 +33,7 @@ terminal, or many, split vertically and horizontally.
 
 **Jump-to-tab is matched by physical key position**, not by the character the
 key produces. On AZERTY and QWERTZ, where the number row produces `&`, `é`, …
-without Shift, <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>1</kbd> still lands on tab 1.
+without Shift, <kbd>Cmd</kbd>/<kbd>Alt</kbd>+<kbd>1</kbd> still lands on tab 1.
 
 Each tab carries its own **activity dot** (see
 [Status and attention](./status.md)), a **kind mark** — `✳` for a Claude
@@ -63,8 +63,10 @@ Claude runs. In a split tab, the card describes the first pane.
 
 **A Claude tab wears the colour its `/color` set.** Run `/color green` in a
 Claude session and its tab is outlined in green, and its sidebar row gets a
-green bar, within about half a second — the time the sidebar takes to notice
-the transcript changed. `/color default` takes the colour away again. The
+green bar, usually within half a second — the time the sidebar takes to
+notice the transcript changed — and at most about ten seconds later if the
+filesystem watch misses the change. `/color default` takes the colour away
+again. The
 colour is Claude's, read from the session's transcript: there is no setting
 for it, and on a Claude tab no way to override it from TermHerd (a shell tab's
 pick, below, does win over a Claude started by hand in that shell). In a split
@@ -170,7 +172,7 @@ pane:
 
 | Focused pane | A pick | Shows |
 | --- | --- | --- |
-| Claude, still running | types `/color <name>` (`/color default` for *None*), behind the prompt below | once Claude records it, about half a second later |
+| Claude, still running | types `/color <name>` (`/color default` for *None*), behind the prompt below | once Claude records it, usually half a second later (ten seconds at most) |
 | Shell — or a Claude tab whose Claude has exited | is kept on the tab by TermHerd | at once |
 
 A Claude tab's colour is Claude's: TermHerd keeps no copy of it, so it never

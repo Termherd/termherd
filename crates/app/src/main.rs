@@ -5,7 +5,9 @@
 //! scanner, then the iced shell. Pure wiring — the pieces live in their own
 //! modules ([`instance`], [`tracing_init`], the stores).
 
+mod attach;
 mod capture;
+mod cli;
 mod collapsed_store;
 mod docs;
 mod image;
@@ -38,9 +40,17 @@ use tracing::{info, warn};
 fn main() -> iced::Result {
     tracing_init::init_tracing();
 
+    let data_dir = paths::DataDir::user();
+
+    // Answer a question about the *running* instance before touching anything
+    // that would disturb it: the single-instance lock below exits(2) on a second
+    // process, which is the wrong answer to `termherd mcp-config`.
+    if cli::parse(std::env::args()) == cli::Command::McpConfig {
+        return report_mcp_config(data_dir.as_ref());
+    }
+
     // A `termherd://` link on the command line goes to the inbox whichever
     // instance reads it: this one at startup, or the one holding the lock.
-    let data_dir = paths::DataDir::user();
     let handed_over = link_inbox::url_argument(std::env::args())
         .zip(data_dir.as_ref())
         .is_some_and(|(url, data)| {
@@ -49,8 +59,23 @@ fn main() -> iced::Result {
                 .is_ok()
         });
 
+    // A temp dir that does not exist breaks the single-instance lock and every
+    // session's private files without a word: create it, or say so.
+    let temp_dir = paths::TempDir::user();
+    match temp_dir.ensure() {
+        paths::TempDirState::Present => {}
+        paths::TempDirState::Created => {
+            warn!(path = %temp_dir.path().display(), "temp dir was missing; created it");
+        }
+        paths::TempDirState::Unusable(error) => warn!(
+            path = %temp_dir.path().display(), %error,
+            "temp dir is missing and cannot be created; the single-instance lock \
+             and sessions' private files will fail (check TMPDIR / TMP / TEMP)"
+        ),
+    }
+
     // Hold the single-instance guard for the whole GUI lifetime.
-    let instance = instance::acquire_single_instance(handed_over);
+    let instance = instance::acquire_single_instance(temp_dir.path(), handed_over);
 
     // macOS hands a link to the running app as an Apple Event instead.
     #[cfg(target_os = "macos")]
@@ -99,7 +124,7 @@ fn main() -> iced::Result {
         sink,
         shell,
         settings.palette(),
-        PrivateFiles::new(std::env::temp_dir()),
+        PrivateFiles::new(temp_dir.path().to_owned()),
     ));
 
     // Async transport substrate (composition root only): a tokio runtime to host
@@ -133,6 +158,20 @@ fn main() -> iced::Result {
                 None
             }
         }
+    });
+
+    // Publish the endpoint for a client termherd did not spawn, if the user
+    // asked for it. After the single-instance lock, so the file always describes
+    // the instance that is actually running — and unconditionally, so a launch
+    // that publishes nothing still clears the last one's file.
+    let published = data_dir.as_ref().and_then(|data| {
+        attach::reconcile(
+            &attach::bridge_path(data),
+            settings.mcp.attach,
+            std::env::var(attach::ATTACH_ENV).ok().as_deref(),
+            mcp_endpoint.as_ref().map(|endpoint| endpoint.url.as_str()),
+            || mcp_tokens.issue(),
+        )
     });
 
     let live_bridge = shell::LiveBridge {
@@ -181,6 +220,16 @@ fn main() -> iced::Result {
         live_bridge,
         startup,
     );
+    // Stop offering an endpoint that no longer exists. Best-effort only: a crash
+    // skips this, and so does every macOS exit routed through AppKit
+    // `terminate:`. The next launch clears the file unconditionally, and
+    // `termherd mcp-config` probes rather than trusting it, so a skipped
+    // withdraw costs a clear diagnostic rather than a wrong config.
+    if let Some(path) = published
+        && let Err(error) = attach::withdraw(&path)
+    {
+        warn!(%error, "could not withdraw the published mcp bridge");
+    }
     // Keep the single-instance guard and the async substrate alive until the GUI
     // exits: dropping the bridge handle would close the request channel, and
     // dropping the runtime would tear down any transport task hosted on it.
@@ -188,6 +237,40 @@ fn main() -> iced::Result {
     drop(bridge_runtime);
     drop(instance);
     result
+}
+
+/// Print the running instance's `mcpServers` snippet, or say why there is none
+/// and exit non-zero so a script can tell the two apart.
+///
+/// Written straight to the streams rather than through `tracing`: this is a
+/// subcommand whose *product* is its stdout, and a log line is neither
+/// pipeable nor guaranteed to be enabled. Nothing else in the binary prints.
+fn report_mcp_config(data_dir: Option<&paths::DataDir>) -> iced::Result {
+    use std::io::Write;
+
+    let Some(path) = data_dir.map(attach::bridge_path) else {
+        let _ = writeln!(
+            std::io::stderr(),
+            "termherd: no home directory, so no bridge file to read"
+        );
+        std::process::exit(1)
+    };
+    match cli::mcp_config(&path) {
+        Ok(snippet) => {
+            let mut out = std::io::stdout();
+            let _ = writeln!(out, "{snippet}");
+            let _ = out.flush();
+            Ok(())
+        }
+        Err(error) => {
+            let _ = writeln!(
+                std::io::stderr(),
+                "termherd: {}",
+                cli::explain(&error, &path)
+            );
+            std::process::exit(1)
+        }
+    }
 }
 
 /// Build the tokio runtime that hosts the in-process MCP server and the async

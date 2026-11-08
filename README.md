@@ -147,12 +147,16 @@ you want and strip the comments (the real file is strict JSON). In short:
 - `sidebar` — sessions listed per project before the tail folds behind an
   expander (`0` shows all).
 - `record` — the GIF screencast budget (fps, duration cap, frame scale).
+- `capture` — `redact`: whether a state capture masks the secrets its
+  terminal text shows (default `true`).
 - `open` — the editor command a Ctrl/Cmd-clicked file path opens in, with
   `{path}` / `{line}` / `{col}` templates (default: the OS default handler,
   which cannot honour a line number).
 - `mcp` — `allow_claude_nesting`: whether `prompt_in_session` may prompt
   another *Claude* session over the live bridge (default `false`; a shell is
-  never gated).
+  never gated); `attach`: whether a running instance publishes its live bridge
+  for a client it did not spawn — `false` (default), `true`, or `"never"`,
+  which also refuses the `TERMHERD_MCP_ATTACH` override.
 - `keys` — keyboard overrides, one chord or a list per action; the full
   action vocabulary and its default chords are listed in the template.
 
@@ -180,7 +184,7 @@ All shortcuts are configurable via the `keys` section of the config file
 | Copy selection     | `Ctrl+Shift+C`             | `Cmd+C`       |
 | Paste              | `Ctrl+Shift+V`; also `Ctrl+V` on Windows | `Cmd+V` |
 | Next / prev tab    | `Ctrl+Tab` / `Ctrl+Shift+Tab` | (same)     |
-| Jump to tab 1–9    | `Ctrl+1` … `Ctrl+9`        | `Cmd+1` … `Cmd+9` |
+| Jump to tab 1–9    | `Alt+1` … `Alt+9`          | `Cmd+1` … `Cmd+9` |
 | Scroll top/bottom  | `Ctrl+Shift+Home` / `End`  | `Cmd+Up` / `Cmd+Down` |
 | New shell here     | `Ctrl+Shift+T`             | `Cmd+T`       |
 | New Claude here    | `Ctrl+Alt+T`               | `Cmd+Alt+T`   |
@@ -285,11 +289,10 @@ app on one it cannot answer; a sidebar rename used to be the exception
 renames. The rename fields use the same commit path for MCP and widget submit
 ([#246]).
 
-Two follow-ups remain: reaching the bridge from outside a session termherd
-spawned — the launcher cannot drive it today ([#267]) — and the pointer at
-TermHerd's own interface ([#301]): it reaches a session's terminal, and
-through it a program reading the mouse, but not yet the sidebar, tabs or
-gutters.
+One follow-up remains: the pointer at TermHerd's own interface ([#301]): it
+reaches a session's terminal, and through it a program reading the mouse, but
+not yet the sidebar, tabs or gutters. A client TermHerd did *not* spawn can now
+reach the bridge too, once `mcp.attach` is turned on ([#267]).
 
 ### The stdio server (manual)
 
@@ -342,11 +345,8 @@ Pinned to **rust 1.95.0** via `rust-toolchain.toml`. Edition 2024.
 
 ## Layout
 
-```text
-crates/core    — domain, headless App, workspace (pane tree), keymap, ports
-crates/claude  — Claude CLI format codec (path encode/derive, JSONL)  [pure]
-crates/app     — iced GUI shell (M3+); currently a tracing+single-instance stub
-```
+Crates and their roles:
+[`AGENTS.md`](AGENTS.md#architecture--the-dependency-rule).
 
 The hexagonal dependency rule: `app` → `core` ← `adapters` (and `core` →
 `claude`). `core` depends on nothing concrete.

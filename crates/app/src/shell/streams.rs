@@ -16,6 +16,11 @@ use super::Message;
 /// Quiet period before a burst of fs events triggers one rescan.
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(500);
 
+/// How often the sidebar rescans unasked. The fs watch can go silent (FSEvents
+/// has been seen delivering nothing to processes under TermHerd.app), and
+/// without this the sidebar would then stay stale until the next start.
+pub(super) const RESCAN_INTERVAL: Duration = Duration::from_secs(10);
+
 /// A receiver wrapped so an iced `Subscription` can take it exactly once and
 /// stay stable across `view`/`update` cycles: the `Arc` identity is the hash
 /// (so the subscription is not recreated every cycle), and the receiver is
@@ -62,6 +67,7 @@ pub(super) fn pty_message(event: PtyEvent) -> Message {
         PtyEvent::Title { session, title } => Message::PtyTitle { session, title },
         PtyEvent::Cwd { session, cwd } => Message::PtyCwd { session, cwd },
         PtyEvent::ForegroundJob { session, job } => Message::PtyForegroundJob { session, job },
+        PtyEvent::AltScreen { session, on } => Message::PtyAltScreen { session, on },
         PtyEvent::Notification { session, body } => Message::PtyNotify { session, body },
         PtyEvent::Exited { session, clean } => Message::PtyExited { session, clean },
         // The clipboard is global, so the requesting session no longer
@@ -132,6 +138,37 @@ pub(super) fn watch_stream(root: &PathBuf) -> impl Stream<Item = Message> + use<
                 Err(error) => {
                     tracing::warn!(%error, "fs watch unavailable; sidebar will not live-update");
                     iced::futures::future::pending::<()>().await;
+                }
+            }
+        },
+    )
+}
+
+/// A [`Message::RescanTick`] every `interval`. A std thread keeps the time:
+/// iced runs without its tokio feature, so it offers no timer subscription.
+pub(super) fn rescan_tick_stream(interval: &Duration) -> impl Stream<Item = Message> + use<> {
+    let interval = *interval;
+    iced::stream::channel(
+        1,
+        move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            let (tx, mut rx) = iced::futures::channel::mpsc::unbounded::<()>();
+            let ticker = std::thread::Builder::new()
+                .name("termherd-rescan-tick".into())
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(interval);
+                        if tx.unbounded_send(()).is_err() {
+                            break;
+                        }
+                    }
+                });
+            if let Err(error) = ticker {
+                tracing::warn!(%error, "rescan tick unavailable; the sidebar relies on the fs watch alone");
+                iced::futures::future::pending::<()>().await;
+            }
+            while rx.next().await.is_some() {
+                if output.send(Message::RescanTick).await.is_err() {
+                    break;
                 }
             }
         },

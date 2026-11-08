@@ -124,7 +124,9 @@ pub fn save(
 }
 
 /// Write `contents` to `path` via a temp file in the same directory followed by
-/// a rename, so an interrupted write never truncates the original.
+/// a rename, so an interrupted write never truncates the original. The temp
+/// file starts owner-only and takes the original's mode only once written, so
+/// a private file is never exposed through its copy; a new file stays private.
 fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
     let directory = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
@@ -132,7 +134,10 @@ fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let temp = directory.join(format!(".{file_name}.termherd.tmp"));
-    std::fs::write(&temp, contents)?;
+    termherd_private_fs::write_file(&temp, contents)?;
+    if let Ok(original) = std::fs::metadata(path) {
+        std::fs::set_permissions(&temp, original.permissions())?;
+    }
     std::fs::rename(&temp, path)
 }
 
@@ -211,6 +216,48 @@ mod tests {
             std::fs::read_to_string(&plan).expect("read"),
             "new plan body"
         );
+    }
+
+    #[test]
+    fn a_private_file_stays_private_through_a_save() {
+        // The temp copy is what the rename puts in place: written with the
+        // default mode, it would open a private memory file to everyone.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("CLAUDE.md");
+        termherd_private_fs::write_file(&path, "secret").expect("seed");
+
+        atomic_write(&path, "still secret").expect("save");
+
+        assert!(termherd_private_fs::is_private(&path).expect("stat"));
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            "still secret"
+        );
+    }
+
+    #[test]
+    fn a_save_keeps_the_mode_the_file_already_had() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("CLAUDE.md");
+        std::fs::write(&path, "shared").expect("seed");
+        let before = std::fs::metadata(&path).expect("stat").permissions();
+
+        atomic_write(&path, "still shared").expect("save");
+
+        assert_eq!(
+            std::fs::metadata(&path).expect("stat").permissions(),
+            before
+        );
+    }
+
+    #[test]
+    fn a_new_file_is_written_owner_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("new-plan.md");
+
+        atomic_write(&path, "fresh").expect("save");
+
+        assert!(termherd_private_fs::is_private(&path).expect("stat"));
     }
 
     #[test]

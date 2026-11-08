@@ -7,6 +7,117 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (attach to the live bridge from outside)
+
+- A client TermHerd did not launch — a script, an editor, the terminal you
+  started TermHerd from — can now reach the live MCP bridge. Opt in with
+  `"mcp": { "attach": true }` in `settings.json` (or
+  `TERMHERD_MCP_ATTACH=1` for one launch); the running instance then
+  publishes its endpoint to an owner-only `~/.termherd/bridge.json`, and
+  `termherd mcp-config` prints the `mcpServers` snippet for it after
+  checking it still answers. `"never"` refuses the exposure even against
+  the environment variable. Off by default, since the bridge can type into
+  a terminal. TermHerd's log now goes to stderr (#267).
+
+### Fixed (the sidebar no longer goes stale)
+
+- Session colours, titles and new sessions reach the sidebar even when the
+  filesystem watch stays silent, as macOS FSEvents can: the sidebar rescans
+  on its own every ten seconds, skipped while a scan is already running. A
+  session writing its transcript non-stop refreshes it at least every two
+  seconds instead of waiting for a pause, and a watcher error is now logged
+  instead of dropped (#377).
+
+### Changed (tab jumps leave Ctrl+digit to the shell on Windows and Linux)
+
+- On Windows and Linux, jumping to tab 1–9 is now `Alt+1` … `Alt+9`, as in
+  GNOME Terminal and Konsole, instead of `Ctrl+1` … `Ctrl+9`, which reach the
+  program in the pane again. macOS keeps `Cmd+1` … `Cmd+9`. To keep the old
+  chords, set `"activate-tab-1": "ctrl+1"` and so on in the `keys` section
+  of `settings.json`. A test now holds every Windows and Linux default off
+  the bare `Ctrl` chords a shell's line editor reads, short of two recorded
+  exceptions: `Ctrl+V` paste on Windows and `Ctrl+-` zoom-out (#323).
+
+### Fixed (a missing temp dir)
+
+- termherd creates its temp dir (`TMPDIR`, or `TMP` / `TEMP` on Windows) when
+  it is missing, and logs a warning naming it. Without it, the
+  single-instance lock went off silently, so a second termherd could start,
+  and a Windows build was seen to hang before showing its window. A temp dir
+  that cannot be created is named in a warning instead of failing in
+  silence (#441).
+
+### Security (captures are private)
+
+- Captures and screencasts are readable only by you: `~/.termherd/captures/`
+  is `0700` (an existing one is tightened on the next capture) and every
+  JSON, PNG and GIF in it is `0600`. A doc saved from the doc editor keeps
+  its own mode instead of taking the default one through its temp copy, and
+  a new one is created `0600` (#288).
+- A capture masks the secrets its terminal text shows before writing the
+  dump: AWS keys, `sk-…` API keys, GitHub tokens, `Bearer` tokens and PEM
+  private keys become `[redacted]`. On by default; `"capture": { "redact":
+  false }` in `settings.json` turns it off (#288).
+- `~/.termherd/captures/` keeps only the newest 50 captures: older ones are
+  deleted after each capture or screencast. Only files TermHerd named are
+  ever touched (#288).
+
+### Fixed (closing a shell running a program asks first)
+
+- Under the default `confirmWhenActive`, closing a tab or quitting now asks
+  while a shell runs a program in front of it (`vim`, `less`, `htop`, a long
+  `make`), even when its status reads `idle`. macOS and Linux read which
+  process owns the terminal; Windows counts a program on the alternate
+  screen (#143).
+
+### Fixed (a dead key shows its pending character)
+
+- A dead key (`^`, `¨`, `` ` ``, `~` on a French layout) shows its pending
+  character underlined at the cursor until the next key completes it, as
+  other macOS terminals do. It clears on the commit, on Escape, and when the
+  window or the terminal loses focus (#322).
+
+### Fixed (a multi-line paste asks before it runs line by line)
+
+- A paste holding a line break into a terminal that did not turn bracketed
+  paste on — `sh`, `cmd.exe` — now waits for a prompt naming the tab and the
+  line count, instead of running each line as it arrives. **Paste** sends the
+  text unchanged, **Cancel** drops it. Over MCP the prompt is the
+  `paste-confirm` overlay. Single-line pastes, and pastes into Claude Code or
+  any program using bracketed paste, are unchanged (#291).
+
+### Fixed (Meta and cursor keys send what xterm sends)
+
+- The arrows, Home and End send `ESC O A`-style sequences once a program
+  switches to application cursor keys, as vim and less expect; modified
+  arrows keep their `ESC [ 1 ; <mod>` form (#321).
+- Meta reaches more keys: <kbd>Meta</kbd>+<kbd>.</kbd> sends `ESC .`,
+  <kbd>Meta</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> `ESC B`,
+  <kbd>Ctrl</kbd>+<kbd>Meta</kbd>+<kbd>B</kbd> `ESC ^B` and
+  <kbd>Meta</kbd>+<kbd>Space</kbd> `ESC` and a space. They used to drop the
+  `ESC`, the Shift or the Meta. On macOS, Space follows the Option side like
+  a letter: the composing side keeps its plain space (#321).
+
+### Fixed (a doc save lands on the doc it wrote)
+
+- A doc keeps its `• modified` mark when you type while its save is in
+  flight, so closing it still asks before losing those keystrokes. A save
+  that answers after you moved to another doc no longer marks that doc
+  `saved` nor changes its on-disk baseline (#384).
+
+### Fixed (Plans & memory lists an added repo's CLAUDE.md)
+
+- *Plans & memory* lists the `CLAUDE.md` of a repo added to the sidebar
+  before it has any session, as soon as it is added, and drops it when the
+  repo is forgotten. It used to wait for the repo's first session (#444).
+
+### Fixed (a read after a wait shows what the status reported)
+
+- Over MCP, a `read_terminal` after `wait_for_status`, and the text
+  `prompt_in_session` returns, show at least the output that produced the
+  status waited for. A read right after an `idle` could still show Claude's
+  spinner, one screen behind (#436).
+
 ### Added (the tab strip comes back at launch)
 
 - Quitting writes the tab strip to `~/.termherd/layout.json`, and the next

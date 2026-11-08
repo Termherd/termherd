@@ -59,7 +59,7 @@ mod terminal;
 mod view;
 
 pub(crate) use bridge::{Requests as BridgeRequests, channel as bridge_channel};
-use docs::{DocDiscard, OpenDoc};
+use docs::{DocDiscard, DocVersion, OpenDoc};
 
 /// The live-bridge runtime wiring handed to the shell, grouped so the
 /// constructor stays within argument bounds. Carries the subscription source
@@ -74,7 +74,7 @@ pub(crate) struct LiveBridge {
 }
 use input::{AltSides, event_modifiers};
 use record::RecordState;
-use streams::{PtyOutput, pty_stream, watch_stream};
+use streams::{PtyOutput, RESCAN_INTERVAL, pty_stream, rescan_tick_stream, watch_stream};
 
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
@@ -225,6 +225,9 @@ struct Shell {
     /// Where captures and screencasts land: one dir, so the latest is the
     /// highest-named file in it.
     captures: Option<PathBuf>,
+    /// Whether a capture masks the secrets its terminal text shows
+    /// (`capture.redact`).
+    redact_captures: bool,
     fallback_cwd: String,
     claude_dir: Option<crate::paths::ClaudeDir>,
     scan_error: Option<String>,
@@ -304,6 +307,10 @@ struct Shell {
     open_doc: Option<OpenDoc>,
     /// A discard of the open doc's unsaved edits awaiting confirmation.
     discarding_doc: Option<DocDiscard>,
+    /// Edits made to any doc this run; each edit takes the next number. Kept
+    /// across docs, so a save of a closed buffer can never name an edit of a
+    /// later one at the same path.
+    doc_edits: u64,
     /// A close awaiting confirmation: a session of the tab to kill, or `None`.
     /// Killing a session is destructive, so the close button arms this and a
     /// confirmation bar must be accepted before the PTY is actually killed —
@@ -422,6 +429,8 @@ enum Message {
     ScanCompleted(Result<Vec<SessionRecord>, String>),
     /// The fs watcher saw the projects tree change (FR2).
     ProjectsChanged,
+    /// The periodic fallback rescan is due, whatever the watcher saw.
+    RescanTick,
     /// A background plan/memory docs rediscovery finished (F-plans-memory).
     DocsDiscovered(Vec<DocEntry>),
     /// Unfold (or refold) a project's truncated session tail.
@@ -470,6 +479,11 @@ enum Message {
     PtyForegroundJob {
         session: SessionId,
         job: Option<termherd_core::ForegroundJob>,
+    },
+    /// A session's program entered or left the alternate screen.
+    PtyAltScreen {
+        session: SessionId,
+        on: bool,
     },
     /// A session fired an OSC 9 notification; forward it to the OS.
     PtyNotify {
@@ -553,6 +567,10 @@ enum Message {
         session: SessionId,
         content: Option<String>,
     },
+    /// Write the paste held for confirmation (FR4).
+    ConfirmPaste,
+    /// Drop the paste held for confirmation without writing it.
+    CancelPaste,
     /// Ask to close the tab at this index — arms the confirmation bar.
     RequestCloseTab(usize),
     /// Confirm the pending close, killing the tab's session(s) (FR5).
@@ -663,8 +681,12 @@ enum Message {
     DocEdit(text_editor::Action),
     /// Save the open doc to disk (Save button or the save chord).
     SaveDoc,
-    /// A save finished: the file's new mtime, or why it was refused.
-    DocSaved(Result<SystemTime, crate::docs::SaveError>),
+    /// A save finished: which buffer state it wrote, and the file's new mtime
+    /// or why it was refused.
+    DocSaved {
+        version: DocVersion,
+        result: Result<SystemTime, crate::docs::SaveError>,
+    },
     /// Close the doc viewer, returning to the terminal.
     CloseDoc,
     /// Discard the open doc's unsaved edits and finish the armed close or
@@ -871,6 +893,7 @@ impl Shell {
             rescan_pending: false,
             open_doc: None,
             discarding_doc: None,
+            doc_edits: 0,
             closing: None,
             close_confirm: CloseSettings::default(),
             gestures: ClipboardGestures::default(),
@@ -892,6 +915,7 @@ impl Shell {
             fallback_cwd: startup.fallback_cwd,
             claude_dir: startup.claude_dir,
             captures,
+            redact_captures: true,
         };
         shell.adopt_settings(&startup.settings);
         shell
@@ -920,6 +944,17 @@ impl Shell {
         )
     }
 
+    /// The periodic fallback rescan. Skipped while a scan is in flight, and
+    /// never queued behind it as a watch change is: that scan already brings
+    /// what this tick would.
+    fn rescan_tick(&mut self) -> Task<Message> {
+        if self.scan_in_flight {
+            Task::none()
+        } else {
+            self.rescan()
+        }
+    }
+
     /// A scan settled (success or failure): clear the in-flight flag and, if
     /// changes arrived while it ran, start the single follow-up scan they
     /// coalesced into.
@@ -938,18 +973,22 @@ impl Shell {
     /// unplugged network mount, a removed directory) that stat can block for
     /// tens of seconds, so it must never run on the UI thread.
     fn refresh_docs(&self) -> Task<Message> {
-        let paths: Vec<String> = self
-            .core
-            .sidebar
-            .projects
-            .iter()
-            .map(|g| g.path.clone())
-            .collect();
+        let paths = self.doc_project_paths();
         let claude = self.claude_dir.clone();
         Task::perform(
             async move { crate::docs::discover(claude.as_ref(), &paths) },
             Message::DocsDiscovered,
         )
+    }
+
+    /// The repos whose `CLAUDE.md` the doc list offers: every repo the sidebar
+    /// shows, a declaration with no session yet included.
+    fn doc_project_paths(&self) -> Vec<String> {
+        self.core
+            .repo_paths()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
     }
 
     // The iced `update`: a flat `match` over every `Message` variant — the
@@ -1017,6 +1056,7 @@ impl Shell {
                 tracing::debug!("projects tree changed; rescanning");
                 self.rescan()
             }
+            Message::RescanTick => self.rescan_tick(),
             Message::SearchChanged(query) => {
                 let effects = self.core.apply(termherd_core::Event::SearchChanged(query));
                 self.perform(effects)
@@ -1072,6 +1112,12 @@ impl Shell {
                     .core
                     .apply(termherd_core::Event::ForegroundJobChanged { session, job });
                 self.refresh_session_file(session);
+                self.perform(effects)
+            }
+            Message::PtyAltScreen { session, on } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::AltScreenChanged { session, on });
                 self.perform(effects)
             }
             Message::PtyNotify { session, body } => {
@@ -1234,6 +1280,14 @@ impl Shell {
                 Task::batch([focus, read])
             }
             Message::PasteInto { session, content } => self.paste_into(session, content),
+            Message::ConfirmPaste => {
+                let effects = self.core.apply(termherd_core::Event::ConfirmPaste);
+                self.perform(effects)
+            }
+            Message::CancelPaste => {
+                let effects = self.core.apply(termherd_core::Event::CancelPaste);
+                self.perform(effects)
+            }
             Message::RequestCloseTab(index) => self.request_close(index).unwrap_or_else(Task::none),
             Message::CloseTab(index) => self.close_tab(index),
             Message::CancelClose => {
@@ -1449,7 +1503,7 @@ impl Shell {
             }
             Message::DocEdit(action) => self.edit_doc(action),
             Message::SaveDoc => self.save_open_doc(),
-            Message::DocSaved(result) => self.on_doc_saved(result),
+            Message::DocSaved { version, result } => self.on_doc_saved(version, result),
             Message::CloseDoc => self.close_doc(),
             Message::ConfirmDocDiscard => self.confirm_doc_discard(),
             Message::CancelDocDiscard => self.cancel_doc_discard(),
@@ -1589,23 +1643,25 @@ impl Shell {
         self.perform(effects)
     }
 
-    /// Write clipboard `content` into `session` as terminal input, bracketed
-    /// when that session asked for it. The one paste seam: the keyboard chord
-    /// arrives here with the focused session, a right-click with the one under
-    /// the pointer, so neither can grow its own idea of how a paste is framed.
-    /// Empty (or absent) content writes nothing — a paste of nothing must not
-    /// send the bracket markers on their own.
+    /// Paste clipboard `content` into `session`, bracketed when that session
+    /// asked for it. The one paste seam: the keyboard chord arrives here with
+    /// the focused session, a right-click with the one under the pointer, so
+    /// neither can grow its own idea of how a paste is framed, nor a way past
+    /// the confirmation `core` holds a line-by-line paste behind. Empty (or
+    /// absent) content writes nothing — a paste of nothing must not send the
+    /// bracket markers on their own.
     fn paste_into(&mut self, session: SessionId, content: Option<String>) -> Task<Message> {
-        let Some(text) = content.filter(|t| !t.is_empty()) else {
+        let Some(text) = content else {
             return Task::none();
         };
         let bracketed = self
             .screens
             .get(&session)
             .is_some_and(|screen| screen.bracketed_paste);
-        let effects = self.core.apply(termherd_core::Event::TerminalInput {
+        let effects = self.core.apply(termherd_core::Event::Paste {
             session,
-            bytes: termherd_pty::paste_bytes(&text, bracketed),
+            text,
+            bracketed,
         });
         self.perform(effects)
     }
@@ -1678,6 +1734,7 @@ impl Shell {
         ];
         if let Some(root) = &self.watch_root {
             subs.push(Subscription::run_with(root.clone(), watch_stream));
+            subs.push(Subscription::run_with(RESCAN_INTERVAL, rescan_tick_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
         // Always live, not only during a drag: iced broadcasts a batch's events
@@ -2776,6 +2833,32 @@ mod key_routing {
     }
 
     #[test]
+    fn declaring_or_forgetting_a_repo_rediscovers_the_docs() {
+        // A declared repo with no session holds a `CLAUDE.md` the scan never
+        // reports, so waiting for the next scan would leave it unlisted.
+        let (mut shell, _pty) = shell_with_terminal();
+        let task = shell.declare_repo_key("/declared", repos::RepoGesture::Mcp);
+        assert!(task.units() > 0, "declaring refreshes the doc list");
+        let task = shell.forget_repo_key("/declared", repos::RepoGesture::Mcp);
+        assert!(task.units() > 0, "forgetting drops its CLAUDE.md again");
+    }
+
+    #[test]
+    fn a_declared_repo_without_sessions_offers_its_claude_md() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::write(repo.join("CLAUDE.md"), "# memory").unwrap();
+        let _ = shell.declare_repo_key(&repo.display().to_string(), repos::RepoGesture::Mcp);
+
+        let docs = crate::docs::discover(None, &shell.doc_project_paths());
+        assert_eq!(
+            docs.iter().map(|d| d.path.clone()).collect::<Vec<_>>(),
+            vec![repo.join("CLAUDE.md")]
+        );
+    }
+
+    #[test]
     fn forgetting_a_deleted_worktree_removes_the_row_it_was_filed_under() {
         let (mut shell, _pty) = shell_with_terminal();
         let tmp = tempfile::tempdir().unwrap();
@@ -3175,6 +3258,50 @@ mod key_routing {
             "the reported focus is the pane that was asked for"
         );
         assert_eq!(focused(&shell), Some(first.to_string()));
+    }
+
+    #[test]
+    fn a_rescan_tick_starts_a_scan_when_none_is_in_flight() {
+        let mut shell = shell_over(Arc::new(RecordingPty::default()));
+        let _ = shell.update(Message::RescanTick);
+        assert!(shell.scan_in_flight);
+    }
+
+    #[test]
+    fn a_rescan_tick_during_a_scan_neither_overlaps_it_nor_queues_a_follow_up() {
+        let mut shell = shell_over(Arc::new(RecordingPty::default()));
+        let _ = shell.rescan();
+        let _ = shell.update(Message::RescanTick);
+        assert!(shell.scan_in_flight);
+        assert!(!shell.rescan_pending, "the tick queued a follow-up");
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(!shell.scan_in_flight, "a follow-up scan started");
+    }
+
+    #[test]
+    fn a_projects_change_during_a_scan_queues_exactly_one_follow_up() {
+        let mut shell = shell_over(Arc::new(RecordingPty::default()));
+        let _ = shell.rescan();
+        let _ = shell.update(Message::ProjectsChanged);
+        let _ = shell.update(Message::ProjectsChanged);
+        assert!(shell.rescan_pending);
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(shell.scan_in_flight, "the follow-up scan started");
+        assert!(!shell.rescan_pending);
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(!shell.scan_in_flight, "a second follow-up started");
+    }
+
+    #[test]
+    fn the_rescan_tick_stream_keeps_ticking() {
+        let mut stream = Box::pin(streams::rescan_tick_stream(
+            &std::time::Duration::from_millis(10),
+        ));
+        for _ in 0..3 {
+            let message =
+                iced::futures::executor::block_on(iced::futures::StreamExt::next(&mut stream));
+            assert!(matches!(message, Some(Message::RescanTick)), "{message:?}");
+        }
     }
 
     #[test]
@@ -4145,6 +4272,95 @@ mod key_routing {
         assert!(pty.writes().is_empty());
     }
 
+    /// A shell split in two, focus on the new pane: the pane returned is the
+    /// one a right-click points at while it is not focused.
+    fn shell_with_an_unfocused_pane() -> (Shell, Arc<RecordingPty>, SessionId) {
+        let (mut shell, pty) = shell_with_terminal();
+        let pointed = shell.core.workspace.focused_session().expect("focused");
+        let (split, _task) = shell.perform_action(BridgeAction::Split {
+            pane: None,
+            dir: SplitDir::Vertical,
+        });
+        assert_eq!(split.error, None);
+        assert_ne!(shell.core.workspace.focused_session(), Some(pointed));
+        (shell, pty, pointed)
+    }
+
+    #[test]
+    fn a_multi_line_paste_into_an_unbracketed_pane_waits_for_enter() {
+        let (mut shell, pty, pointed) = shell_with_an_unfocused_pane();
+        let text = "echo safe\r\n rm -rf ~\n";
+        let _ = shell.update(Message::PasteInto {
+            session: pointed,
+            content: Some(text.to_string()),
+        });
+        assert!(pty.writes().is_empty(), "nothing runs before the answer");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Paste));
+        assert!(matches!(
+            shell.active_confirmation(),
+            Some((_, Message::CancelPaste))
+        ));
+
+        let _ = press_chord(&mut shell, "x");
+        assert!(pty.writes().is_empty(), "the prompt keeps the keyboard");
+
+        let _ = press_chord(&mut shell, "enter");
+        assert_eq!(
+            pty.writes_seen(),
+            vec![(pointed, termherd_pty::paste_bytes(text, false))],
+            "enter writes exactly what the paste would have, where it pointed"
+        );
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    #[test]
+    fn escape_drops_a_held_paste_without_writing_it() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Paste));
+        let _ = press_chord(&mut shell, "escape");
+        assert_eq!(shell.keyboard_owner(), None);
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn the_paste_buttons_answer_the_prompt() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        let _ = shell.update(Message::CancelPaste);
+        assert!(pty.writes().is_empty());
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        let _ = shell.update(Message::ConfirmPaste);
+        assert_eq!(
+            pty.writes_seen(),
+            vec![(session, termherd_pty::paste_bytes("a\nb", false))]
+        );
+    }
+
+    #[test]
+    fn a_multi_line_paste_into_a_bracketed_pane_is_written_at_once() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let mut screen = screen_of("$ ");
+        screen.bracketed_paste = true;
+        shell.screens.insert(session, screen);
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        assert_eq!(shell.keyboard_owner(), None);
+        assert_eq!(pty.writes(), vec![termherd_pty::paste_bytes("a\nb", true)]);
+    }
+
+    #[test]
+    fn the_paste_prompt_names_its_pane_and_lines() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.update(Message::Paste(Some("one\ntwo\nthree".to_string())));
+        let title = shell.core.workspace.tabs[0].display_title().to_owned();
+        assert_eq!(
+            shell.paste_prompt().as_deref(),
+            Some(crate::strings::paste_prompt(3, &title).as_str())
+        );
+    }
+
     #[test]
     fn the_claude_button_launches_a_fresh_claude_session() {
         let (mut shell, pty) = shell_with_terminal();
@@ -4497,6 +4713,41 @@ mod key_routing {
     }
 
     #[test]
+    fn option_space_types_a_plain_space_on_the_composing_side() {
+        let (mut shell, pty) = shell_holding_alt(Location::Right);
+        let _ = shell.on_key(press(
+            Key::Named(Named::Space),
+            Modifiers::ALT,
+            Some("\u{a0}"),
+        ));
+        assert_eq!(pty.writes(), vec![b" ".to_vec()]);
+    }
+
+    #[test]
+    fn option_space_is_meta_on_the_meta_side() {
+        let (mut shell, pty) = shell_holding_alt(Location::Left);
+        let _ = shell.on_key(press(
+            Key::Named(Named::Space),
+            Modifiers::ALT,
+            Some("\u{a0}"),
+        ));
+        assert_eq!(pty.writes(), vec![b"\x1b ".to_vec()]);
+    }
+
+    #[test]
+    fn an_arrow_follows_the_cursor_mode_of_the_focused_screen() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let up = || press(Key::Named(Named::ArrowUp), Modifiers::default(), None);
+        let _ = shell.on_key(up());
+        let mut screen = screen_of("$ ");
+        screen.cursor_keys = termherd_pty::CursorKeys::Application;
+        shell.screens.insert(session, screen);
+        let _ = shell.on_key(up());
+        assert_eq!(pty.writes(), vec![b"\x1b[A".to_vec(), b"\x1bOA".to_vec()]);
+    }
+
+    #[test]
     fn a_bound_shortcut_is_intercepted_before_the_pty() {
         let (mut shell, pty) = shell_with_terminal();
         // Ctrl+Tab is bound to NextTab on every platform; it must run the
@@ -4555,6 +4806,70 @@ mod key_routing {
             lines: vec![line],
             ..Screen::blank(text.chars().count() as u16, 1)
         }
+    }
+
+    /// The text of the one JSON dump a capture of `screen` writes, with the
+    /// shell's capture redaction set to `redact`.
+    fn dumped_text(screen: &str, redact: bool) -> String {
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of(screen));
+        shell.redact_captures = redact;
+        let dump = shell
+            .core
+            .build_capture(&shell.snapshot_inputs_for(&SnapshotFilter::capture()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = shell.perform_capture(dir.path(), dump);
+        let written = std::fs::read_dir(dir.path())
+            .expect("captures dir exists")
+            .filter_map(Result::ok)
+            .find(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .expect("a dump was written");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(written.path()).expect("read"))
+                .expect("valid json");
+        json["terminals"][session.0.get().to_string()]
+            .as_str()
+            .expect("the focused terminal's text")
+            .to_owned()
+    }
+
+    #[test]
+    fn a_capture_prunes_the_oldest_once_the_dir_is_full() {
+        let (shell, _pty) = shell_with_terminal();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oldest = dir.path().join("capture-19700101-000000-000.json");
+        for n in 0..crate::capture::KEPT_CAPTURES {
+            let name = format!("capture-19700101-000000-{n:03}.json");
+            std::fs::write(dir.path().join(name), "{}").expect("an old capture");
+        }
+        let foreign = dir.path().join("notes.md");
+        std::fs::write(&foreign, "mine").expect("a file of the user's");
+
+        let dump = shell
+            .core
+            .build_capture(&shell.snapshot_inputs_for(&SnapshotFilter::capture()));
+        let _ = shell.perform_capture(dir.path(), dump);
+
+        let dumps = std::fs::read_dir(dir.path())
+            .expect("captures dir")
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .count();
+        assert_eq!(dumps, crate::capture::KEPT_CAPTURES);
+        assert!(!oldest.exists(), "the oldest capture made room");
+        assert!(foreign.exists(), "a file termherd did not write stays");
+    }
+
+    #[test]
+    fn a_capture_masks_the_secrets_on_screen_unless_told_not_to() {
+        let screen = "$ echo ghp_1234567890abcdefghijABCDEFGHIJ123456";
+
+        let masked = dumped_text(screen, true);
+        assert!(masked.starts_with("$ echo [redacted]"), "{masked:?}");
+
+        let verbatim = dumped_text(screen, false);
+        assert!(verbatim.starts_with(screen), "{verbatim:?}");
     }
 
     #[test]
@@ -4638,6 +4953,22 @@ mod key_routing {
 
         let _ = shell.update(Message::CancelRename);
         assert_eq!(taken(&shell), Some("🚀"));
+    }
+
+    #[test]
+    fn a_rename_started_mid_composition_drops_the_preedit() {
+        use iced::advanced::input_method;
+        let (mut shell, _pty) = shell_with_terminal();
+        let mut composition = ime::Composition::default();
+        let dead_key =
+            iced::Event::InputMethod(input_method::Event::Preedit("^".to_string(), Some(1..1)));
+        composition.follow(shell.accepts_terminal_input(), &dead_key);
+        assert!(composition.preedit(iced::Pixels(14.0)).is_some());
+
+        let _ = shell.update(Message::StartTabRename(0));
+        let redraw = iced::Event::Window(iced::window::Event::RedrawRequested(Instant::now()));
+        composition.follow(shell.accepts_terminal_input(), &redraw);
+        assert_eq!(composition.preedit(iced::Pixels(14.0)), None);
     }
 
     #[test]
@@ -4759,6 +5090,27 @@ mod key_routing {
             shell.core.workspace.tabs.is_empty(),
             "the tab is gone after the unprompted close"
         );
+    }
+
+    #[test]
+    fn a_shell_on_the_alternate_screen_confirms_its_close_until_it_leaves() {
+        // No foreground reading ever arrives, as on ConPTY: the alternate
+        // screen is then what says a program (an editor, a pager) is in front.
+        let (mut shell, _pty) = shell_with_terminal();
+        shell.close_confirm.tab = ConfirmClose::ConfirmWhenActive;
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let flip = |on| streams::pty_message(PtyEvent::AltScreen { session, on });
+        let _ = shell.update(flip(true));
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert_eq!(
+            shell.closing,
+            Some(session),
+            "a full-screen program confirms"
+        );
+        let _ = shell.update(Message::CancelClose);
+        let _ = shell.update(flip(false));
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert!(shell.closing.is_none(), "back at the prompt it does not");
     }
 
     /// The first session id hosted by each tab, in tab order — a stable handle
@@ -5934,6 +6286,9 @@ mod key_routing {
             KeyboardOwner::Quit => shell.closing_window = Some(window::Id::unique()),
             KeyboardOwner::TabClose(index) => shell.closing = shell.anchor_of(index),
             KeyboardOwner::Archive => shell.archiving = Some("sess".to_string()),
+            KeyboardOwner::Paste => {
+                let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+            }
             KeyboardOwner::TabMenu => {
                 // Over the active tab: a right-click focuses its tab first, so a
                 // menu on another one would move focus before the sweep looks.
@@ -7254,12 +7609,118 @@ mod key_routing {
     fn a_doc_saved_since_its_last_edit_closes_without_asking() {
         let (mut shell, _pty) = shell_with_terminal();
         modified_doc(&mut shell, "CLAUDE.md");
-        let _ = shell.update(Message::DocSaved(Ok(SystemTime::UNIX_EPOCH)));
+        let saving = open_version(&shell);
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+        assert_eq!(
+            doc_save_state(&shell),
+            (false, Some(Ok(())), Some(SystemTime::UNIX_EPOCH)),
+            "clean, saved, re-based"
+        );
 
         let _ = shell.update(Message::CloseDoc);
 
         assert!(shell.open_doc.is_none());
         assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    /// The buffer state a save started now would write.
+    fn open_version(shell: &Shell) -> DocVersion {
+        shell.open_doc.as_ref().expect("doc open").version()
+    }
+
+    /// The open doc's modified mark, save feedback (`Ok` for saved, `Err` for
+    /// an error) and concurrency baseline.
+    fn doc_save_state(shell: &Shell) -> (bool, Option<Result<(), ()>>, Option<SystemTime>) {
+        let doc = shell.open_doc.as_ref().expect("doc open");
+        let feedback = doc.feedback.as_ref().map(|f| match f {
+            docs::DocFeedback::Saved => Ok(()),
+            docs::DocFeedback::Error(_) => Err(()),
+        });
+        (doc.dirty, feedback, doc.loaded_mtime)
+    }
+
+    /// Let the open doc's edits go through the discard prompt, as a user would.
+    fn discard_open_doc(shell: &mut Shell) {
+        let _ = shell.update(Message::CloseDoc);
+        let _ = shell.update(Message::ConfirmDocDiscard);
+        assert!(shell.open_doc.is_none());
+    }
+
+    #[test]
+    fn a_save_answer_for_another_doc_leaves_the_open_one_untouched() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "a.md");
+        let saving_a = open_version(&shell);
+        discard_open_doc(&mut shell);
+        modified_doc(&mut shell, "b.md");
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving_a,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+
+        assert_eq!(
+            doc_save_state(&shell),
+            (true, None, None),
+            "b.md keeps its modified mark and its own baseline"
+        );
+    }
+
+    #[test]
+    fn an_edit_made_while_saving_keeps_the_doc_modified() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let saving = open_version(&shell);
+        type_into_doc(&mut shell, 'y');
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+
+        assert_eq!(
+            doc_save_state(&shell),
+            (true, None, Some(SystemTime::UNIX_EPOCH)),
+            "the 'y' was never written, yet the file now holds the save"
+        );
+        let _ = shell.update(Message::CloseDoc);
+        assert!(shell.open_doc.is_some(), "closing still asks");
+    }
+
+    #[test]
+    fn a_save_of_a_closed_buffer_does_not_clean_its_reopened_successor() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let saving = open_version(&shell);
+        discard_open_doc(&mut shell);
+        // Reopened and edited exactly as often: a per-buffer edit count would
+        // read the same here and take the old save for this one.
+        modified_doc(&mut shell, "CLAUDE.md");
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+
+        assert!(doc_save_state(&shell).0, "the new edit was never written");
+    }
+
+    #[test]
+    fn a_refused_save_shows_its_error_even_after_more_edits() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let saving = open_version(&shell);
+        type_into_doc(&mut shell, 'y');
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Err(crate::docs::SaveError::OutOfScope),
+        });
+
+        assert_eq!(doc_save_state(&shell), (true, Some(Err(())), None));
     }
 
     #[test]
@@ -7854,6 +8315,23 @@ mod key_routing {
     }
 
     #[test]
+    fn turning_capture_redaction_off_on_disk_reaches_the_capture() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        assert!(shell.redact_captures, "on by default");
+        std::fs::write(
+            crate::settings::path(&dir),
+            r#"{ "capture": { "redact": false } }"#,
+        )
+        .expect("write");
+
+        let _ = shell.update(Message::SettingsFileChanged);
+
+        assert!(!shell.redact_captures);
+    }
+
+    #[test]
     fn a_capture_writes_its_dump_under_the_data_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut shell = shell_persisting_under(&crate::paths::DataDir::at(tmp.path()));
@@ -7866,6 +8344,10 @@ mod key_routing {
             .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
             .collect();
         assert_eq!(dumps.len(), 1, "one JSON dump: {dumps:?}");
+        assert!(
+            termherd_private_fs::is_private(&tmp.path().join("captures")).expect("stat"),
+            "the captures dir is reachable by others"
+        );
     }
 
     #[test]

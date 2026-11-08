@@ -20,6 +20,14 @@ pub enum Effect {
     Spawn(SpawnSpec),
     /// Write bytes to a session's PTY stdin.
     Write { session: SessionId, bytes: Vec<u8> },
+    /// Paste `text` into a session's PTY stdin. The adapter frames it: line
+    /// breaks become Enter, wrapped in the bracketed-paste markers when
+    /// `bracketed`.
+    Paste {
+        session: SessionId,
+        text: String,
+        bracketed: bool,
+    },
     /// Press Enter in a session, in a write of its own after a pause. Claude
     /// Code reads a burst of about 64 bytes or more as a paste, where an Enter
     /// arriving with the text is a line break, not a submit.

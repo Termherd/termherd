@@ -166,12 +166,35 @@
     "scale": 0.5
   },
 
+  // ── State capture (Ctrl/Cmd+Shift+S) ─────────────────────────────────────
+  // Mask the secrets a capture's terminal text shows (access keys, API
+  // tokens, Bearer headers, private keys) before it is written to
+  // ~/.termherd/captures/. A value that is not true/false keeps it on.
+  // Default: true.
+  "capture": {
+    "redact": true
+  },
+
   // ── MCP live bridge ──────────────────────────────────────────────────────
-  // Whether `prompt_in_session` may prompt another *Claude* session (an agent
-  // driving an agent). Shell sessions are never gated. A single call can also
-  // opt in with its own `allow_claude_nesting: true`. Default: false.
+  // allow_claude_nesting: whether `prompt_in_session` may prompt another
+  // *Claude* session (an agent driving an agent). Shell sessions are never
+  // gated. A single call can also opt in with its own
+  // `allow_claude_nesting: true`. Default: false.
+  //
+  // attach: whether a running instance publishes { url, token } to
+  // ~/.termherd/bridge.json (0600) so a client it did NOT spawn — a script,
+  // an editor, the terminal you launched it from — can attach with
+  // `termherd mcp-config`. Default: false.
+  //
+  //   false     nothing is published (the default)
+  //   true      publish; TERMHERD_MCP_ATTACH=0 turns it off for one launch
+  //   "never"   publish nothing, and refuse the environment override entirely
+  //
+  // Off by default because the bridge can type into a terminal: publishing it
+  // makes that reachable by anything running as you.
   "mcp": {
-    "allow_claude_nesting": false
+    "allow_claude_nesting": false,
+    "attach": false
   },
 
   // ── Keyboard overrides ───────────────────────────────────────────────────
@@ -190,7 +213,7 @@
   //   send-to-desktop           (unbound) asks to type /desktop into the focused Claude
   //   next-tab                  Ctrl+Tab
   //   prev-tab                  Ctrl+Shift+Tab
-  //   activate-tab-1 … -9       mod+1 … mod+9 (physical number-row keys)
+  //   activate-tab-1 … -9       Cmd+1 … Cmd+9 (macOS) / Alt+1 … Alt+9 (number-row keys)
   //   close-focused             mod+W ; Ctrl+Shift+W off macOS
   //   rename-tab                mod+Shift+I (inline rename of the focused tab)
   //   open-tab-menu             mod+Shift+M (the focused tab's menu)
@@ -219,6 +242,6 @@
   "keys": {
     "copy": "ctrl+y",
     "paste": ["ctrl+shift+v", "shift+insert"],
-    "activate-tab-1": "alt+1"
+    "activate-tab-1": "ctrl+1"
   }
 }

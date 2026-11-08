@@ -23,9 +23,47 @@ pub(crate) fn mouse_reporting(mode: TermMode) -> Option<MouseReporting> {
     }
 }
 
+/// How the application asked for cursor keys to be encoded: DECCKM (DECSET 1)
+/// switches the unmodified arrows and Home/End from CSI to SS3.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CursorKeys {
+    #[default]
+    Normal,
+    Application,
+}
+
+/// The cursor-key encoding the application negotiated.
+#[must_use]
+pub(crate) fn cursor_keys(mode: TermMode) -> CursorKeys {
+    if mode.contains(TermMode::APP_CURSOR) {
+        CursorKeys::Application
+    } else {
+        CursorKeys::Normal
+    }
+}
+
+/// Whether the application is drawing on the alternate screen (DECSET 1049),
+/// as a full-screen program (an editor, a pager) does.
+#[must_use]
+pub(crate) fn alt_screen(mode: TermMode) -> bool {
+    mode.contains(TermMode::ALT_SCREEN)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_alternate_screen_bit_reads_as_the_alternate_screen() {
+        assert!(!alt_screen(TermMode::empty()));
+        assert!(alt_screen(TermMode::ALT_SCREEN));
+    }
+
+    #[test]
+    fn decckm_reads_as_application_cursor_keys() {
+        assert_eq!(cursor_keys(TermMode::empty()), CursorKeys::Normal);
+        assert_eq!(cursor_keys(TermMode::APP_CURSOR), CursorKeys::Application);
+    }
 
     #[test]
     fn the_mode_bits_read_as_the_reporting_ladder() {

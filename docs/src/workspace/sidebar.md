@@ -4,7 +4,12 @@ The sidebar is the session browser. It lists every Claude session TermHerd
 found by walking `~/.claude/projects`, grouped by project — together with the
 repositories you added by hand, which need no session to appear. It refreshes
 live as the filesystem changes, so a session started elsewhere shows up without
-a restart.
+a restart:
+
+- half a second after the changes stop;
+- two seconds at most while a session keeps writing;
+- ten seconds at most if the filesystem watch delivers nothing at all, as
+  macOS can: the sidebar also rescans on its own every ten seconds.
 
 The walk follows no symlink: a linked project folder, session subdirectory or
 `.jsonl` under `~/.claude/projects` is skipped. A transcript is read whole up
@@ -152,9 +157,10 @@ limit to `0` to always show every session —
 ## Plans & memory
 
 The bottom section lists Claude's plan files (`~/.claude/plans/*.md`) and the
-memory files: the global `~/.claude/CLAUDE.md` and each project's `CLAUDE.md`.
-Clicking one loads it off-thread and opens it in the main pane, replacing the
-terminal view until you close it.
+memory files: the global `~/.claude/CLAUDE.md` and the `CLAUDE.md` of each
+repo in the sidebar, an added repo with no session yet included. Clicking one
+loads it off-thread and opens it in the main pane, replacing the terminal view
+until you close it.
 
 The doc pane can **edit** — `💾 save`, with a `• modified` marker while there
 are unsaved changes and `saved` after a write. Two ways out, and they behave

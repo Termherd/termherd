@@ -35,6 +35,7 @@ the pixels, read the terminal — and with #229 shipped, #196 is what remains of
 *that* trio. The **gesture** gap the three parts left — the surface pressed
 keys and could not click, so #155 was proposable and unverifiable — closed
 when [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) (#300) landed and #155
-followed. The loop is still out of reach entirely for anything termherd did not
-spawn, which [F-mcp-attach](#f-mcp-attach) (#267) is about: the launcher that
-most wants to verify a fix is the one caller with no way in
+followed. The loop used to be out of reach entirely for anything termherd did
+not spawn — the launcher that most wants to verify a fix was the one caller
+with no way in — which [F-mcp-attach](#f-mcp-attach) (#267) has since closed,
+opt-in, by publishing the endpoint rather than by adding a tool
