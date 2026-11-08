@@ -125,6 +125,27 @@ precondition is absent becomes a bug the day a feature makes that
 precondition permanently absent** — the day the mouse became the child's,
 "no visible selection" stopped meaning "look somewhere else".
 
+## Cleanup that only runs at teardown does not run
+
+A crash skips teardown, and so does every OS-initiated exit — on macOS the
+whole AppKit `terminate:` family: Dock → Quit, logout, restart. The case
+nobody pictures is the run that *opts out*: it has no teardown of its own, so
+it silently inherits whatever the last run left on disk. The attach rung's
+published `bridge.json` had all three holes, and the third was permanent — an
+endpoint advertised forever, with a token a foreign process on the recycled
+port could be handed (#267). Put the reconciliation at **startup**,
+unconditionally and before the decision to publish: the one moment that always
+happens and the one moment you know what the file should say. Keep the
+teardown as well, for the clean exit; never let it be the only one.
+
+## stdout belongs to the product
+
+`tracing` initialises to stdout by default, which is invisible in a GUI and
+fatal the day the binary grows a subcommand whose output is meant to be piped:
+`termherd mcp-config > .mcp.json` would capture a warn line in the middle of
+the JSON. The app installs a stderr writer; `2>&1` recovers the old behaviour
+when reading logs.
+
 ## A guard is unreachable or tested
 
 **A guard is unreachable and goes, or reachable and gets a test — there is

@@ -39,10 +39,11 @@ What a live change reaches:
 | Setting | Applies to |
 | --- | --- |
 | `theme`, `terminal.colors` | the chrome and **every open terminal**, at once |
-| `keys`, `close`, `sidebar`, `open`, `mcp`, `capture`, `terminal.copy_on_select`, `terminal.paste_on_right_click`, `terminal.option_as_meta` | the next keypress, click or call |
+| `keys`, `close`, `sidebar`, `open`, `mcp.allow_claude_nesting`, `capture`, `terminal.copy_on_select`, `terminal.paste_on_right_click`, `terminal.option_as_meta` | the next keypress, click or call |
 | `terminal.font_size` | every terminal, at once (your zoom steps are kept on top) |
 | `shell` | the **next session** you open — a running one keeps its program |
 | `record` | the **next recording** — one in progress keeps its budget |
+| `mcp.attach` | the **next launch** — the published endpoint is decided at startup |
 
 A program that read the terminal's colours when it started — Claude Code
 picks its light or dark look that way — keeps its choice until it restarts.
@@ -170,14 +171,42 @@ Turn it off only to debug a capture that masked too much.
 
 ### `mcp`
 
-Whether the live bridge's `prompt_in_session` may prompt another **Claude**
-session — one agent driving another. Off by default; a shell session is never
-gated. A single call can opt in on its own with `allow_claude_nesting: true`
-(see [The live bridge](../mcp/live-bridge.md)).
+Two keys, both off by default.
+
+`allow_claude_nesting`: whether the live bridge's `prompt_in_session` may
+prompt another **Claude** session — one agent driving another. A shell session
+is never gated. A single call can opt in on its own with
+`allow_claude_nesting: true` (see [The live bridge](../mcp/live-bridge.md)).
 
 ```json
 "mcp": { "allow_claude_nesting": false }
 ```
+
+`attach`: whether a running TermHerd publishes its
+[live bridge](../mcp/live-bridge.md) for a client it did **not** launch — a
+script, an editor, or the very terminal you started TermHerd from.
+
+```json
+"mcp": { "attach": true }
+```
+
+| Value | Means |
+| --- | --- |
+| `false` | the default: nothing is published, and only sessions TermHerd spawned can reach the bridge |
+| `true` | `~/.termherd/bridge.json` carries `{ url, token }` for the running instance, readable only by you |
+| `"never"` | as `false`, **and** the `TERMHERD_MCP_ATTACH` override below cannot turn it on |
+
+`attach` is read **at launch only**: changing it while TermHerd runs takes
+effect at the next start. `TERMHERD_MCP_ATTACH=1` (or `0`) in TermHerd's own
+environment flips `true` and `false` for one launch — useful for a one-off
+automation run without editing the file. Against `"never"` it does nothing,
+and says so in the log at `info`.
+
+Publishing is off by default because of what it exposes: any process running as
+you can then read the token and drive the workspace, including `run_in_session`,
+which types into a terminal. See [Attaching from
+outside](../mcp/attach.md) for the whole picture and the `termherd mcp-config`
+subcommand that consumes the file.
 
 ### `open`
 
@@ -240,6 +269,10 @@ launch, so an agent may read them but never set them. The `close`, `sidebar`,
 `terminal.option_as_meta` blocks are file-only for now; `keys` is published
 as a read-only resource.
 
+`mcp` is file-only by design rather than by backlog: its keys govern who may
+reach the live bridge and what it may do there, and a surface able to widen
+its own reach is not a setting.
+
 A `set_option` write lands in `settings.json` and applies **as soon as it is
 written**, like any other edit to the file.
 
@@ -261,7 +294,7 @@ written**, like any other edit to the file.
   "record": { "fps": 10, "max_seconds": 20, "scale": 0.5 },
   "capture": { "redact": true },
   "open": { "command": "code -g {path}:{line}:{col}" },
-  "mcp": { "allow_claude_nesting": false },
+  "mcp": { "allow_claude_nesting": false, "attach": false },
   "keys": {
     "toggle-sidebar": "ctrl+alt+b",
     "focus-next": "ctrl+alt+right"

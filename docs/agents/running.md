@@ -10,6 +10,7 @@ those by running the app and reading its `tracing` output:
 ```bash
 # `tracing` is the only observation channel — there is no `println!`. Raise the
 # level with RUST_LOG (default is `info,…`, see `DEFAULT_FILTER` in main.rs).
+# It writes to STDERR, so redirect it when you pipe: `… 2>&1 | grep …`.
 RUST_LOG=info cargo run -p termherd-app
 
 # Add log lines at the seam you're verifying (info!/warn!, never println!), run,
@@ -91,6 +92,57 @@ edition 2024 and the workspace denies `unsafe_code`:
 env ZDOTDIR="$TMPDIR/termherd-shell-1" cargo test -p termherd-app \
   typing_exit_into_a_real_shell
 ```
+
+## Driving an isolated build from outside
+
+A dev build started beside the user's own termherd can be driven over its live
+bridge by anything that speaks HTTP — no Claude session needed. Give it a
+throwaway home and temp dir (so it neither takes the user's lock nor touches
+their settings), turn `mcp.attach` on in that home, and read the endpoint it
+publishes:
+
+```bash
+cargo build -p termherd-app
+home=$(mktemp -d)
+tmp=$(mktemp -d)
+mkdir -p "$home/.termherd"
+echo '{ "mcp": { "attach": true } }' > "$home/.termherd/settings.json"
+USERPROFILE="$home" TMPDIR="$tmp" target/debug/termherd \
+  > "$tmp/termherd.log" 2>&1 &
+
+# Published once the server is bound: { "url": …, "token": … }, mode 0600.
+until [ -s "$home/.termherd/bridge.json" ]; do sleep 0.2; done
+cat "$home/.termherd/bridge.json"
+```
+
+`TERMHERD_MCP_ATTACH=1` on the launch line does the same as the settings file
+for one launch, unless the file says `"never"`. With a `CARGO_TARGET_DIR`, the
+binary is under that directory instead of `target/`.
+
+The bridge speaks MCP's streamable HTTP in stateless mode: no
+`mcp-session-id` to carry, and each POST answers with one JSON body. Every
+call needs the bearer token and both `Accept` types; a wrong token gets `401`.
+
+```bash
+url=$(jq -r .url "$home/.termherd/bridge.json")
+token=$(jq -r .token "$home/.termherd/bridge.json")
+hdr=(-H "Authorization: Bearer $token" -H 'Content-Type: application/json'
+     -H 'Accept: application/json, text/event-stream')
+
+curl -s "${hdr[@]}" "$url" -d '{"jsonrpc":"2.0","id":1,"method":"initialize",
+  "params":{"protocolVersion":"2025-06-18","capabilities":{},
+  "clientInfo":{"name":"curl","version":"0"}}}'
+curl -s "${hdr[@]}" "$url" \
+  -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'   # 202
+curl -s "${hdr[@]}" "$url" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
+  "params":{"name":"snapshot","arguments":{}}}'
+```
+
+`target/debug/termherd mcp-config` (with the same `USERPROFILE`) prints the
+`mcpServers` snippet for that endpoint instead, after proving it answers — the
+form to hand a Claude session started outside termherd. A file left by a
+killed instance reads as stale there; the next launch over the same home
+clears it.
 
 ## Capturing state for the AI dev loop (#108)
 
