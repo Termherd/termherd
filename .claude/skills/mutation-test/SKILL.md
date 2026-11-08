@@ -11,9 +11,13 @@ with cargo mutants*).
 1. Mutate the diff, not whole files, into a private output directory:
 
    ```bash
-   git diff origin/main > "$TMPDIR/d.patch"
+   git diff "$(git merge-base origin/main HEAD)" > "$TMPDIR/d.patch"
    cargo mutants --in-diff "$TMPDIR/d.patch" --output "$TMPDIR/mutants-<topic>"
    ```
+
+   Diff from the merge base, not from `origin/main`: once `main` moves past
+   the branch point, a plain `git diff origin/main` carries `main`'s new
+   commits as deletions, and the run mutates lines the branch never touched.
 
    Do not pass `--timeout`, and keep fixtures small: one large frame turned
    an 8-minute run into 22.
