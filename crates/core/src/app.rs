@@ -220,7 +220,7 @@ impl App {
                 self.pending_paste = None;
                 Vec::new()
             }
-            Event::TerminalSubmit { session } => self.if_live(session, Effect::Submit { session }),
+            Event::TerminalSubmit { session } => self.if_live(session, Effect::submit(session)),
             Event::TerminalResized {
                 session,
                 cols,

@@ -716,8 +716,13 @@ enum Message {
         request: termherd_core::PathRequest,
         resolved: Option<termherd_core::ResolvedPath>,
     },
-    /// The pause before a submit's Enter has passed; press it now.
-    SubmitDue(termherd_core::SessionId),
+    /// The pause before the next of a paced run of writes has passed: write
+    /// `due` now, and pace `rest`.
+    PacedDue {
+        session: termherd_core::SessionId,
+        due: Vec<u8>,
+        rest: Vec<Vec<u8>>,
+    },
     /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
     /// runs off the UI thread, so this only spawns it.
@@ -1531,7 +1536,7 @@ impl Shell {
                     .apply(termherd_core::Event::PathResolved { request, resolved });
                 self.perform(effects)
             }
-            Message::SubmitDue(session) => self.press_enter(session),
+            Message::PacedDue { session, due, rest } => self.write_paced(session, due, rest),
             Message::CaptureScreenshot {
                 screenshot,
                 png_path,
@@ -2388,6 +2393,15 @@ mod key_routing {
         assert_eq!(pty.writes(), vec![b"ls\n".to_vec()], "the bytes were typed");
     }
 
+    /// The paced Enter of a submit, come due.
+    fn enter_due(session: termherd_core::SessionId) -> Message {
+        Message::PacedDue {
+            session,
+            due: b"\r".to_vec(),
+            rest: Vec::new(),
+        }
+    }
+
     #[test]
     fn submit_action_presses_enter_only_once_its_pause_is_due() {
         let (mut shell, pty) = shell_with_terminal();
@@ -2398,7 +2412,7 @@ mod key_routing {
         assert_eq!(outcome.error, None);
         assert!(pty.writes().is_empty(), "no Enter inside the pause");
 
-        let _ = shell.update(Message::SubmitDue(session));
+        let _ = shell.update(enter_due(session));
         assert_eq!(pty.writes_seen(), vec![(session, b"\r".to_vec())]);
     }
 
@@ -2418,15 +2432,15 @@ mod key_routing {
             session,
             clean: true,
         });
-        let _ = shell.update(Message::SubmitDue(session));
+        let _ = shell.update(enter_due(session));
         assert!(pty.writes().is_empty());
     }
 
     #[test]
-    fn the_enter_gap_waits_out_the_whole_pause() {
+    fn the_pace_gap_waits_out_the_whole_pause() {
         let start = std::time::Instant::now();
-        block_on(effects::enter_gap());
-        assert!(start.elapsed() >= effects::ENTER_GAP);
+        block_on(effects::pace_gap());
+        assert!(start.elapsed() >= effects::PACE_GAP);
     }
 
     /// Drive a future to completion on a throwaway runtime.
@@ -5937,7 +5951,7 @@ mod key_routing {
     }
 
     #[test]
-    fn an_armed_claude_command_types_nothing_until_enter_then_clears_and_submits() {
+    fn an_armed_claude_command_types_nothing_until_enter_then_clears_types_and_submits_apart() {
         let (mut shell, pty, session) = shell_with_idle_claude();
         let command = ClaudeCommand::rename("api work").expect("a name");
 
@@ -5960,16 +5974,30 @@ mod key_routing {
         );
         assert_eq!(
             pty.writes_seen(),
-            vec![(session, b"\x15/rename api work".to_vec())],
-            "the draft is cleared and the line typed, with no Enter in the burst"
+            vec![(session, b"\x15".to_vec())],
+            "only the draft is cleared at once: the line waits for its pause"
         );
         assert!(shell.keyboard_owner().is_none(), "and the prompt lets go");
 
-        let _ = shell.update(Message::SubmitDue(session));
+        let _ = shell.update(Message::PacedDue {
+            session,
+            due: b"/rename api work".to_vec(),
+            rest: vec![b"\r".to_vec()],
+        });
+        assert_eq!(
+            pty.writes_seen(),
+            vec![
+                (session, b"\x15".to_vec()),
+                (session, b"/rename api work".to_vec()),
+            ],
+            "the line goes in a write of its own once the pause is due, \
+             and Enter waits for the next"
+        );
+        let _ = shell.update(enter_due(session));
         assert_eq!(
             pty.writes_seen().last(),
             Some(&(session, b"\r".to_vec())),
-            "Enter follows on its own once the pause is due"
+            "Enter follows on its own after another pause"
         );
     }
 
@@ -6273,7 +6301,11 @@ mod key_routing {
         );
         assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
         let _ = shell.update(Message::ConfirmClaudeCommand);
-        assert_eq!(pty.writes()[0], b"\x15/desktop");
+        assert_eq!(
+            pty.writes(),
+            vec![b"\x15".to_vec()],
+            "the draft is cleared at once; the line follows after its pause"
+        );
 
         let (mut plain, _pty) = shell_with_terminal();
         let (refused, _task) = plain.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
@@ -9571,7 +9603,11 @@ mod key_routing {
             assert_eq!(shell.core.workspace.tabs[0].color, None, "no local copy");
 
             let _ = press_all(&mut shell, &["enter"]);
-            assert_eq!(pty.writes()[0], b"\x15/color cyan");
+            assert_eq!(
+                pty.writes(),
+                vec![b"\x15".to_vec()],
+                "the draft is cleared at once; the line follows after its pause"
+            );
         }
 
         #[test]

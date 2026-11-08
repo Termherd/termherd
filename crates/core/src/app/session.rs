@@ -1098,7 +1098,7 @@ mod tests {
         );
         let submit = app.apply(Event::TerminalSubmit { session: id });
         assert!(
-            matches!(submit.as_slice(), [Effect::Submit { session }] if *session == id),
+            matches!(submit.as_slice(), [Effect::Paced { session, writes }] if *session == id && *writes == [b"\r".to_vec()]),
             "{submit:?}"
         );
 

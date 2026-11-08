@@ -210,15 +210,16 @@ for (#436): the terminal thread paces screens (one per 8 ms) but sent a
 status the moment it decoded it, so the screen of the same bytes could
 follow. `report_status` now publishes any held screen first, and a chunk's
 status goes out only after the chunk is drawn. A long `claude_command` that
-Claude read as a paste (#439): every submit, the command's and
-`run_in_session`'s, is now `Effect::Submit`, whose Enter the shell's effect
-executor alone writes after `ENTER_GAP`. A status reading `idle` while Claude still
-works (#427): `prompt_in_session` no longer settles on the status from before
-its prompt (#435; a bare `wait_for_status` still needs `busy` first), and
-Claude's idle title must stand 150 ms (`pty::status::IDLE_HOLD`) before a
-busy session reads idle. And the copy chord overwriting a mouse-mode program's
-own clipboard write with termherd's last copy (#316): the shell keeps no copy
-cache any more, and asks the terminal whether it holds a selection at all.
+Claude read as a paste (#439): a control byte inside a paste burst is
+stripped and the line held for review, so the command writes Ctrl+U alone,
+then the line and Enter as an `Effect::Paced` run, each after `PACE_GAP`.
+A status reading `idle` while Claude still works (#427): `prompt_in_session` no
+longer settles on the status from before its prompt (#435; a bare
+`wait_for_status` still needs `busy` first), and Claude's idle title must stand
+150 ms (`pty::status::IDLE_HOLD`) before a busy session reads idle. And the copy
+chord overwriting a mouse-mode program's own clipboard write with termherd's
+last copy (#316): the shell keeps no copy cache any more, and asks the terminal
+whether it holds a selection at all.
 
 **`F-mcp-agent-loop` shipped in #196 (`prompt_in_session`).** It composes
 `run_in_session`, `wait_for_status`, and `read_terminal` into a single MCP round

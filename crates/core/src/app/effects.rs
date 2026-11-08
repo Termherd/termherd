@@ -6,6 +6,7 @@
 
 use std::collections::HashSet;
 
+use crate::claude_command::SUBMIT;
 use crate::metadata::Overlay;
 use crate::snapshot::WorkspaceSnapshot;
 use crate::workspace::SessionId;
@@ -28,10 +29,14 @@ pub enum Effect {
         text: String,
         bracketed: bool,
     },
-    /// Press Enter in a session, in a write of its own after a pause. Claude
-    /// Code reads a burst of about 64 bytes or more as a paste, where an Enter
-    /// arriving with the text is a line break, not a submit.
-    Submit { session: SessionId },
+    /// Write each of `writes` to a session in order, each in a write of its
+    /// own after a pause. Claude Code reads a burst of about 64 bytes or more
+    /// as a paste, where an Enter arriving with the text is a line break, not
+    /// a submit.
+    Paced {
+        session: SessionId,
+        writes: Vec<Vec<u8>>,
+    },
     /// Resize a session's PTY to the given cell geometry.
     Resize {
         session: SessionId,
@@ -113,4 +118,15 @@ pub enum Effect {
     /// Another tab is shown, or a tab gesture asked for one: the runtime
     /// settles the view on the tab now shown.
     TabShown,
+}
+
+impl Effect {
+    /// Press Enter in `session`, in a write of its own after a pause.
+    #[must_use]
+    pub fn submit(session: SessionId) -> Self {
+        Self::Paced {
+            session,
+            writes: vec![SUBMIT.to_vec()],
+        }
+    }
 }

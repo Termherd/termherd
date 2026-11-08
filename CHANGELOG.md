@@ -7,6 +7,13 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (a long Claude command submits on the first Enter)
+
+- A confirmed `/rename` long enough for Claude Code to read as a paste now
+  submits on its own, instead of waiting with "Removed 1 invisible character
+  · review and press Enter to send". TermHerd clears the prompt, types the
+  line and presses Enter as three separate writes (#439).
+
 ### Added (attach to the live bridge from outside)
 
 - A client TermHerd did not launch — a script, an editor, the terminal you
