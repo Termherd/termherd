@@ -38,8 +38,6 @@ themselves), `markdownlint` (the prose), `roadmap` (the generated
   1. **#51 / #61 / #62** — macOS Developer ID notarization, Homebrew cask, and
      Windows SignPath code signing in `package.yml` (all parked; Linux keyless
      Sigstore attestation shipped in #52).
-  2. **#274** — `README.md` and `CODING_STANDARDS.md` crate-count reconciliation
-     (the `docs/CI.md` `sign-release.yml` gap named there is closed by #393).
 - **Looks like a contradiction, is not:**
   - `portable` runs on `push`→`main` only when `cargo` files changed, while
     `cross-os (windows-latest)` runs on every `rust` push. That is intentional:
