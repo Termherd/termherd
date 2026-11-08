@@ -704,9 +704,9 @@ mod tests {
     /// shell's return to the front clears it — the seam a Claude pane's
     /// session file is found through. `sleep` stands in for `claude`: both are
     /// a foreground job the shell started. Windows has no foreground process
-    /// group, so there the job is read off the process tree below the shell,
-    /// and `ping` stands in: an external program, where a shell's own `sleep`
-    /// may run inside it and start no process at all.
+    /// group, so there only a `claude.exe` below the shell is reported, and a
+    /// copy of `PING.EXE` named so stands in: a reported pid can then be
+    /// nothing but the program this test typed.
     #[test]
     fn a_job_in_front_of_a_real_shell_is_reported_by_pid_then_cleared() {
         let (tx, rx) = mpsc::channel::<PtyEvent>();
@@ -715,13 +715,16 @@ mod tests {
         });
         let (_private, mgr) = manager(sink, Palette::default());
         let id = sid(5);
-        mgr.spawn(spec(id)).expect("spawn");
-        let job: &[u8] = if cfg!(windows) {
-            b"ping -n 3 127.0.0.1\r\n"
+        let stand_in = tempfile::tempdir().expect("stand-in dir");
+        let job = if cfg!(windows) {
+            let claude = stand_in.path().join("claude.exe");
+            std::fs::copy(r"C:\Windows\System32\PING.EXE", &claude).expect("copy ping");
+            format!("{} -n 4 127.0.0.1\r\n", claude.display())
         } else {
-            b"sleep 2\r\n"
+            "sleep 2\r\n".to_owned()
         };
-        mgr.write(id, job).expect("write");
+        mgr.spawn(spec(id)).expect("spawn");
+        mgr.write(id, job.as_bytes()).expect("write");
 
         let deadline = Instant::now() + Duration::from_secs(15);
         let mut reported = Vec::new();

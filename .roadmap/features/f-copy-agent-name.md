@@ -21,9 +21,9 @@ changes and when the pointer enters the tab. The tab menu entry shipped
 with #340.
 
 Windows shipped with #357. ConPTY reports no foreground process, so the Claude
-pid is found by walking the process tree below the pane's shell (the nearest
-`claude.exe`, else the shell's first child), and its start time is read as the
-`FILETIME` Claude stamps into `procStart`. Not shipped: a Claude started there
-through a wrapper script, which neither test finds. Nor does a build launched
+pid is found by walking the process tree below the pane's shell to the
+nearest `claude.exe`, and its start time is read as the `FILETIME` Claude
+stamps into `procStart`. Not shipped: a Claude that runs there under another
+image (an npm install runs it as `node.exe`). Nor does a build launched
 from inside a Claude session name anything, since its PTYs inherit that
 session's `CLAUDE*` environment (#356).

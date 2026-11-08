@@ -260,8 +260,8 @@ pub struct PaneSnapshot {
 pub struct ClaudeIdentity {
     /// The Claude process id — the job in front of the pane's shell. `None`
     /// for a job with no session file, which is no Claude this can vouch for,
-    /// and on Windows for a Claude neither running as `claude.exe` nor started
-    /// by the shell itself, the two ways the process tree below it is read.
+    /// and on Windows for a Claude not running as `claude.exe`, the image the
+    /// process tree below the shell is searched for.
     pub pid: Option<u32>,
     /// The name other Claude sessions address this one by, from its session
     /// file. `None` when the file names none.

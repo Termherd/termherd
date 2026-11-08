@@ -197,17 +197,19 @@ pub(crate) fn foreground_leader(_master: &dyn MasterPty) -> Option<i32> {
 /// The job in front of `shell` — `Some(None)` while the shell itself is —
 /// or `None` when the platform cannot read it. Unix reads it off the
 /// foreground process group ([`foreground_job`]). ConPTY has none, so there
-/// it is the nearest `claude.exe` below the shell, or else the shell's first
-/// child (`process_tree::job_under`).
+/// it is the nearest `claude.exe` below the shell
+/// (`process_tree::nearest_descendant`), and no other program: a child of
+/// the shell need not be in front of it (a GUI program, a background job, a
+/// launcher's inner shell), so only a Claude is worth naming.
 ///
-/// shortcut: the listing's parent pids are taken as they are, so a process
+/// shortcut: the listing's parent pids are taken as they are, so a Claude
 /// orphaned before the shell started, whose dead parent's pid the shell then
-/// reused, reads as the shell's child; comparing creation times would rule it
-/// out, if that ever shows up.
+/// reused, reads as the shell's; comparing creation times would rule it out,
+/// if that ever shows up.
 #[cfg(windows)]
 pub(crate) fn job_in_front(_leader: Option<i32>, shell: Option<u32>) -> Option<Option<u32>> {
     let shell = shell?;
-    Some(process_tree::job_under(
+    Some(process_tree::nearest_descendant(
         &win_process::processes()?,
         shell,
         "claude.exe",

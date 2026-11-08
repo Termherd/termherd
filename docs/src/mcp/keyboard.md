@@ -70,9 +70,9 @@ distinction useless.
 Each handler that can refuse this way says so at its own refusal site.
 
 On Windows, `copy-agent-name` finds a Claude by walking down from the pane's
-shell: the nearest `claude.exe`, or else the shell's first child. A Claude
-started any other way (through a wrapper script that runs `node`) is never
-named there, so that `no-context` cannot be created.
+shell to the nearest `claude.exe`. A Claude that runs under another image (an
+npm install runs it as `node.exe`) is never named there, so that `no-context`
+cannot be created.
 
 `copy` refuses on the terminal's own answer: it holds a selection or it does
 not, wherever that selection has scrolled to. An MCP drag in a `forwarded`

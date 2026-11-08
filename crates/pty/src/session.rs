@@ -130,6 +130,7 @@ fn current(palette: &SharedPalette) -> Palette {
 /// Slower on Windows, where a tick lists every process on the machine (a few
 /// milliseconds each) and drives no status, only the job in front, which
 /// changes when a program starts or exits.
+///
 /// shortcut: one listing per pane per tick; a listing shared by every pane
 /// would cut it to one per tick, if many panes ever make it show.
 const FOREGROUND_POLL: std::time::Duration = if cfg!(windows) {
@@ -408,7 +409,11 @@ pub(crate) fn spawn_watcher(
                     Err(_) => break,
                 };
                 let read = job_in_front(leader, shell);
-                job = next_job(job, read.flatten(), process_start);
+                // A reading that failed changes nothing: the job and its
+                // stamp stand until one succeeds.
+                if let Some(pid) = read {
+                    job = next_job(job, pid, process_start);
+                }
                 let reading = TermCmd::Foreground {
                     status: foreground_status(leader, shell),
                     job: read.map(|_| job.clone()),
@@ -430,9 +435,10 @@ pub(crate) fn spawn_watcher(
         })
 }
 
-/// The job now in front, given the one before it. `ps` runs once per new job
-/// rather than on every poll, and again while a stamp is missing, since a
-/// lookup can lose the race with a process that is only just starting.
+/// The job now in front, given the one before it. Its start is looked up
+/// (`process_start`) once per new job rather than on every poll, and again
+/// while a stamp is missing, since a lookup can lose the race with a process
+/// that is only just starting.
 fn next_job(
     before: Option<ForegroundJob>,
     pid: Option<u32>,

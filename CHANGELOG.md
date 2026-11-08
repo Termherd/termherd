@@ -13,8 +13,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   process tree below the pane's shell. `copy-agent-name` copies its agent
   name, the tab hover card shows its `Agent:` line, and `list_sessions` /
   `snapshot` report its `pid`, peer name and session id instead of `null`.
-  Closing a shell tab also asks first while any program runs in it, not only
-  a full-screen one (#357).
+  Closing a shell tab there also asks first while a Claude typed into it by
+  hand still runs (#357).
 
 ## [0.1.0-prerelease.6] - 2026-11-08
 

@@ -16,19 +16,6 @@ pub(crate) struct Process {
     pub(crate) name: String,
 }
 
-/// Each process's children, in listing order. A process naming itself as its
-/// parent is nobody's child.
-fn children(processes: &[Process]) -> HashMap<u32, Vec<&Process>> {
-    let mut children: HashMap<u32, Vec<&Process>> = HashMap::new();
-    for process in processes
-        .iter()
-        .filter(|process| process.pid != process.parent)
-    {
-        children.entry(process.parent).or_default().push(process);
-    }
-    children
-}
-
 /// The nearest descendant of `root` whose image name is `name` (compared
 /// without case, as Windows does), or `None` when there is none.
 ///
@@ -37,11 +24,15 @@ fn children(processes: &[Process]) -> HashMap<u32, Vec<&Process>> {
 /// in the listing does. A listing can hold a cycle — Windows reuses a dead
 /// parent's pid, so a child can name a younger process as its parent — and a
 /// process seen once is not walked again.
-fn nearest_descendant(
-    children: &HashMap<u32, Vec<&Process>>,
-    root: u32,
-    name: &str,
-) -> Option<u32> {
+pub(crate) fn nearest_descendant(processes: &[Process], root: u32, name: &str) -> Option<u32> {
+    // A process naming itself as its parent is nobody's child.
+    let mut children: HashMap<u32, Vec<&Process>> = HashMap::new();
+    for process in processes
+        .iter()
+        .filter(|process| process.pid != process.parent)
+    {
+        children.entry(process.parent).or_default().push(process);
+    }
     let mut seen = HashSet::from([root]);
     let mut queue = VecDeque::from([root]);
     while let Some(pid) = queue.pop_front() {
@@ -56,16 +47,6 @@ fn nearest_descendant(
         }
     }
     None
-}
-
-/// The job running in front of `shell`, as ConPTY lets it be read: the
-/// nearest descendant named `claude` — the pid its session file is named
-/// after — and otherwise the shell's first child, so a program that is not
-/// Claude still reads as running. `None` while the shell runs nothing.
-pub(crate) fn job_under(processes: &[Process], shell: u32, claude: &str) -> Option<u32> {
-    let children = children(processes);
-    nearest_descendant(&children, shell, claude)
-        .or_else(|| Some(children.get(&shell)?.first()?.pid))
 }
 
 #[cfg(test)]
@@ -83,7 +64,7 @@ mod tests {
     }
 
     fn claude_under_shell(processes: &[Process]) -> Option<u32> {
-        nearest_descendant(&children(processes), SHELL, "claude.exe")
+        nearest_descendant(processes, SHELL, "claude.exe")
     }
 
     #[test]
@@ -159,35 +140,6 @@ mod tests {
             process(703, 703, "claude.exe"),
         ];
         assert_eq!(claude_under_shell(&processes), None);
-    }
-
-    #[test]
-    fn a_job_under_the_shell_is_its_claude_when_one_runs() {
-        let processes = [
-            process(801, SHELL, "git.exe"),
-            process(802, SHELL, "cmd.exe"),
-            process(803, 802, "claude.exe"),
-        ];
-        assert_eq!(job_under(&processes, SHELL, "claude.exe"), Some(803));
-    }
-
-    #[test]
-    fn a_job_under_the_shell_is_its_first_child_when_no_claude_runs() {
-        let processes = [
-            process(SHELL, 1, "pwsh.exe"),
-            process(901, SHELL, "vim.exe"),
-            process(902, SHELL, "git.exe"),
-        ];
-        assert_eq!(job_under(&processes, SHELL, "claude.exe"), Some(901));
-    }
-
-    #[test]
-    fn a_shell_at_its_prompt_has_no_job() {
-        let processes = [
-            process(SHELL, 1, "pwsh.exe"),
-            process(SHELL, SHELL, "x.exe"),
-        ];
-        assert_eq!(job_under(&processes, SHELL, "claude.exe"), None);
     }
 
     #[test]

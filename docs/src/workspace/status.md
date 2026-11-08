@@ -114,14 +114,15 @@ Under the default, "runs a foreground process" means:
 | --- | --- |
 | Claude | it has not exited, an idle prompt included |
 | shell, macOS and Linux | it is `busy` or `attention`, or a program other than the shell has the terminal (`vim`, `less`, `htop`, a long `make`) |
-| shell, Windows | it is `busy` or `attention`, or a program is on the alternate screen (`vim`, `less`) |
+| shell, Windows | it is `busy` or `attention`, a Claude runs in it, or a program is on the alternate screen (`vim`, `less`) |
 
 On macOS and Linux TermHerd reads which process owns the terminal, so a
 program in front of the shell counts even when the status reads `idle`: after
 a `claude` typed by hand has exited, for instance, Claude's last title can
-leave the shell reading `idle` while `vim` runs. Windows has no such reading,
-so there only full-screen programs count beyond the status; a long command a
-shell without integration runs closes without asking.
+leave the shell reading `idle` while `vim` runs. Windows has no such reading:
+there TermHerd finds only a Claude below the shell, so beyond the status only
+a Claude and full-screen programs count; a long command a shell without
+integration runs closes without asking.
 
 Quitting names the cost: *"Quit TermHerd? 3 open session(s) will be
 force-stopped — any running work is lost."* Every non-exited session dies on

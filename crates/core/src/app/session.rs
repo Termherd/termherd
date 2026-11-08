@@ -179,16 +179,13 @@ impl LiveSession {
         }
     }
 
-    /// Whether a program other than the shell has the terminal. The PTY's
-    /// foreground process group answers that wherever it can be read; where
-    /// it cannot, a program on the alternate screen is the sign of
-    /// one — which catches an editor or a pager, not a long `make`.
+    /// Whether a program other than the shell has the terminal: a job the
+    /// adapter reports in front, or a program on the alternate screen. The
+    /// PTY's foreground process group names any job; ConPTY has none, and
+    /// there only a Claude is found below the shell, so the alternate screen
+    /// is what catches an editor or a pager — not a long `make`.
     fn runs_program_in_front(&self) -> bool {
-        if self.foreground_known {
-            self.foreground.is_some()
-        } else {
-            self.alt_screen
-        }
+        self.foreground.is_some() || self.alt_screen
     }
 }
 
@@ -1416,9 +1413,10 @@ mod tests {
             // in: a full-screen program is in front.
             (Pane::Shell, Idle, Unknown, true, true),
             (Pane::Shell, Starting, Unknown, true, true),
-            // Where it can, the read wins: the shell back in front is idle even
-            // under an alternate screen a crashed program left switched on.
-            (Pane::Shell, Idle, Shell, true, false),
+            // Where it can, the alternate screen still counts: ConPTY's reading
+            // names only a Claude, so a `vim` there shows by its screen alone.
+            // A crashed program that left it switched on asks once too many.
+            (Pane::Shell, Idle, Shell, true, true),
             // The terminal's own account of work still counts on its own.
             (Pane::Shell, Busy, Shell, false, true),
             (Pane::Shell, Attention, Unknown, false, true),
