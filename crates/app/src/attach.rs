@@ -530,6 +530,97 @@ mod tests {
         assert_eq!(read(&path).expect("read back"), sample());
     }
 
+    /// A file a crashed run left, sitting where this launch looks.
+    fn leftover(dir: &tempfile::TempDir) -> PathBuf {
+        let path = dir.path().join(BRIDGE_FILE);
+        publish(
+            &path,
+            &Published {
+                url: "http://127.0.0.1:1/mcp".into(),
+                token: "stale".into(),
+            },
+        )
+        .expect("plant the leftover");
+        path
+    }
+
+    /// The opt-out launch has no teardown of its own, so startup is the only
+    /// place the previous run's endpoint can stop being advertised.
+    #[test]
+    fn a_launch_that_opts_out_clears_the_last_runs_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = leftover(&dir);
+        for mode in [AttachMode::Off, AttachMode::Never] {
+            let published = reconcile(&path, mode, None, Some("http://127.0.0.1:2/mcp"), || {
+                "fresh".into()
+            });
+            assert_eq!(published, None, "{mode:?} publishes nothing");
+            assert!(!path.exists(), "{mode:?} leaves no endpoint on disk");
+        }
+    }
+
+    #[test]
+    fn a_launch_that_opts_in_replaces_the_file_with_its_own_endpoint() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = leftover(&dir);
+        let published = reconcile(
+            &path,
+            AttachMode::On,
+            None,
+            Some("http://127.0.0.1:52431/mcp"),
+            || "0123456789abcdef".into(),
+        );
+        assert_eq!(published.as_deref(), Some(path.as_path()));
+        assert_eq!(read(&path).expect("read back"), sample());
+    }
+
+    /// The environment override reaches the file, not only the verdict.
+    #[test]
+    fn the_override_publishes_for_a_launch_whose_setting_is_off() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(BRIDGE_FILE);
+        let published = reconcile(
+            &path,
+            AttachMode::Off,
+            Some("1"),
+            Some("http://127.0.0.1:52431/mcp"),
+            || "0123456789abcdef".into(),
+        );
+        assert_eq!(published.as_deref(), Some(path.as_path()));
+        assert_eq!(read(&path).expect("read back"), sample());
+    }
+
+    /// No bound server, nothing to advertise — and no token minted for it —
+    /// but the leftover still goes.
+    #[test]
+    fn an_opted_in_launch_without_a_server_clears_and_publishes_nothing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = leftover(&dir);
+        let published = reconcile(&path, AttachMode::On, None, None, || {
+            panic!("no token is minted for an endpoint that does not exist")
+        });
+        assert_eq!(published, None);
+        assert!(!path.exists(), "the stale endpoint is gone");
+    }
+
+    /// A publish that fails reports nothing to withdraw, so teardown does not
+    /// go looking for a file this run never wrote.
+    #[test]
+    fn a_publish_that_fails_reports_nothing_published() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let blocker = dir.path().join("not-a-dir");
+        std::fs::write(&blocker, "").expect("a file where the data dir should be");
+        let path = blocker.join(BRIDGE_FILE);
+        let published = reconcile(
+            &path,
+            AttachMode::On,
+            None,
+            Some("http://127.0.0.1:1/mcp"),
+            || "token".into(),
+        );
+        assert_eq!(published, None);
+    }
+
     #[test]
     fn withdraw_removes_the_file_and_tolerates_its_absence() {
         let dir = tempfile::tempdir().expect("temp dir");
