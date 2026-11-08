@@ -219,11 +219,10 @@ mod tests {
     #[test]
     fn a_linked_worktree_outside_the_scans_folders_asks_git_for_its_repo() {
         let (tmp, repo) = test_repo();
-        let elsewhere = tmp
-            .path()
-            .canonicalize()
-            .expect("canonical")
-            .join("elsewhere");
+        // Resolved as a shell reports it: on Windows without the verbatim
+        // `\\?\` prefix, which git cannot create directories under.
+        let elsewhere =
+            PathBuf::from(crate::shell::resolved(&tmp.path().to_string_lossy())).join("elsewhere");
         git(
             &repo,
             &[
@@ -237,7 +236,7 @@ mod tests {
         );
         let made = create(&elsewhere, "claude-00000003").expect("made");
         // git's answer, so the spelling with symlinks resolved.
-        let repo = repo.canonicalize().expect("canonical");
+        let repo = PathBuf::from(crate::shell::resolved(&repo.to_string_lossy()));
         assert_eq!(made, repo.join(".claude/worktrees/claude-00000003"));
     }
 

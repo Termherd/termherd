@@ -56,7 +56,7 @@ fn event_of(request: LinkRequest) -> Event {
 /// directory in: links followed, `..` gone. A path that does not resolve is
 /// kept as written. Windows resolves to a verbatim `\\?\C:\…` path, which no
 /// shell reports, so that prefix is dropped.
-pub(super) fn resolved(repo: &str) -> String {
+pub(crate) fn resolved(repo: &str) -> String {
     std::fs::canonicalize(repo)
         .ok()
         .and_then(|path| without_verbatim_prefix(&path.to_string_lossy()).map(str::to_owned))
