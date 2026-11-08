@@ -220,8 +220,8 @@ only comparing the two sides, so a wrong fixture fails on any platform.
 The same holds when both sides are one table read in two directions. The
 chord name table maps a name, the key iced reports and the terminal key, and
 the round trips read it name → iced key → name. Swap the iced keys of the
-`f5` and `f6` rows and every test in `crates/app` still passed (640 of them):
-each lookup lands on the other's row, and the two wrong turns cancel. Even the
+`f5` and `f6` rows and every test in `crates/app` still passed: each lookup
+lands on the other's row, and the two wrong turns cancel. Even the
 test spelling every chord's *bytes* could not fail, because a synthesised
 press reaches the bytes through the same swapped row; only a real F6 would
 have sent F5's sequence. A round trip proves the table agrees with itself,

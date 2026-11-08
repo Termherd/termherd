@@ -303,9 +303,7 @@ onto the terminal thread. Meta is `ESC` before every printable ASCII key and
 Space, Ctrl included, and on macOS Space follows the Option side like a
 letter. Three limits remain: Shift reaches a Meta letter but not a symbol,
 whose shifted face depends on the layout and keeps its text; Ctrl+symbol
-chords (#327); and Home/End at a stock macOS zsh prompt (#325). The chord
-name table now has a spelled-out test beside its round trips, which a swap of
-two rows' iced keys used to pass.
+chords (#327); and Home/End at a stock macOS zsh prompt (#325).
 
 <a id="f-close-confirm-policy"></a>
 

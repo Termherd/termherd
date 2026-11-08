@@ -393,22 +393,11 @@ mod tests {
 
     #[test]
     fn to_term_key_maps_characters_and_named_keys() {
-        // Characters carry their base char; the named keys the codec handles
-        // map to their `TermKey`.
+        // Characters carry their base char; every named key is spelled out in
+        // `SPELLED_NAMED_KEYS`.
         assert_eq!(
             to_term_key(&Key::Character("a".into())),
             Some(TermKey::Char('a'))
-        );
-        assert_eq!(to_term_key(&Key::Named(Named::Enter)), Some(TermKey::Enter));
-        assert_eq!(to_term_key(&Key::Named(Named::ArrowUp)), Some(TermKey::Up));
-        assert_eq!(
-            to_term_key(&Key::Named(Named::PageDown)),
-            Some(TermKey::PageDown)
-        );
-        assert_eq!(to_term_key(&Key::Named(Named::F2)), Some(TermKey::F2));
-        assert_eq!(
-            to_term_key(&Key::Named(Named::Insert)),
-            Some(TermKey::Insert)
         );
         // Keys with no terminal sequence reach no PTY.
         assert_eq!(to_term_key(&Key::Named(Named::CapsLock)), None);
@@ -683,7 +672,7 @@ mod tests {
     /// terminal key it must resolve to, spelled out. The round trips above read
     /// `NAMED_KEYS` in both directions, so two rows with swapped iced keys pass
     /// them; only a list written independently of the table can fail.
-    const SPELLED_NAMED_KEYS: [(Named, &str, TermKey); 27] = [
+    const SPELLED_NAMED_KEYS: &[(Named, &str, TermKey)] = &[
         (Named::Tab, "tab", TermKey::Tab),
         (Named::Enter, "enter", TermKey::Enter),
         (Named::Escape, "escape", TermKey::Escape),
@@ -715,7 +704,7 @@ mod tests {
 
     #[test]
     fn a_real_named_key_resolves_to_its_spelled_name_and_terminal_key() {
-        for (named, name, term) in SPELLED_NAMED_KEYS {
+        for &(named, name, term) in SPELLED_NAMED_KEYS {
             let key = Key::Named(named);
             assert_eq!(key_name(&key).as_deref(), Some(name), "{named:?}");
             assert_eq!(to_term_key(&key), Some(term), "{named:?}");
@@ -723,18 +712,12 @@ mod tests {
     }
 
     #[test]
-    fn the_spelled_list_covers_every_row_of_the_name_table() {
-        // Derived from the table the code reads, so a row added there without
-        // a spelled twin fails here rather than going unchecked.
-        for row in NAMED_KEYS {
-            assert!(
-                SPELLED_NAMED_KEYS
-                    .iter()
-                    .any(|(named, _, _)| *named == row.key),
-                "`{}` has no spelled-out row",
-                row.name
-            );
-        }
+    fn the_spelled_list_matches_the_name_table_row_for_row() {
+        // Derived from the table the code reads, so a row added or dropped
+        // there without its spelled twin fails here rather than going unchecked.
+        let table: Vec<Named> = NAMED_KEYS.iter().map(|row| row.key).collect();
+        let spelled: Vec<Named> = SPELLED_NAMED_KEYS.iter().map(|row| row.0).collect();
+        assert_eq!(spelled, table);
     }
 
     #[test]
