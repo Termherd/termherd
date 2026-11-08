@@ -679,6 +679,64 @@ mod tests {
         }
     }
 
+    /// Every named key as a real press reports it, with the chord name and the
+    /// terminal key it must resolve to, spelled out. The round trips above read
+    /// `NAMED_KEYS` in both directions, so two rows with swapped iced keys pass
+    /// them; only a list written independently of the table can fail.
+    const SPELLED_NAMED_KEYS: [(Named, &str, TermKey); 27] = [
+        (Named::Tab, "tab", TermKey::Tab),
+        (Named::Enter, "enter", TermKey::Enter),
+        (Named::Escape, "escape", TermKey::Escape),
+        (Named::ArrowUp, "up", TermKey::Up),
+        (Named::ArrowDown, "down", TermKey::Down),
+        (Named::ArrowLeft, "left", TermKey::Left),
+        (Named::ArrowRight, "right", TermKey::Right),
+        (Named::Home, "home", TermKey::Home),
+        (Named::End, "end", TermKey::End),
+        (Named::PageUp, "pageup", TermKey::PageUp),
+        (Named::PageDown, "pagedown", TermKey::PageDown),
+        (Named::Insert, "insert", TermKey::Insert),
+        (Named::Delete, "delete", TermKey::Delete),
+        (Named::Backspace, "backspace", TermKey::Backspace),
+        (Named::Space, "space", TermKey::Space),
+        (Named::F1, "f1", TermKey::F1),
+        (Named::F2, "f2", TermKey::F2),
+        (Named::F3, "f3", TermKey::F3),
+        (Named::F4, "f4", TermKey::F4),
+        (Named::F5, "f5", TermKey::F5),
+        (Named::F6, "f6", TermKey::F6),
+        (Named::F7, "f7", TermKey::F7),
+        (Named::F8, "f8", TermKey::F8),
+        (Named::F9, "f9", TermKey::F9),
+        (Named::F10, "f10", TermKey::F10),
+        (Named::F11, "f11", TermKey::F11),
+        (Named::F12, "f12", TermKey::F12),
+    ];
+
+    #[test]
+    fn a_real_named_key_resolves_to_its_spelled_name_and_terminal_key() {
+        for (named, name, term) in SPELLED_NAMED_KEYS {
+            let key = Key::Named(named);
+            assert_eq!(key_name(&key).as_deref(), Some(name), "{named:?}");
+            assert_eq!(to_term_key(&key), Some(term), "{named:?}");
+        }
+    }
+
+    #[test]
+    fn the_spelled_list_covers_every_row_of_the_name_table() {
+        // Derived from the table the code reads, so a row added there without
+        // a spelled twin fails here rather than going unchecked.
+        for row in NAMED_KEYS {
+            assert!(
+                SPELLED_NAMED_KEYS
+                    .iter()
+                    .any(|(named, _, _)| *named == row.key),
+                "`{}` has no spelled-out row",
+                row.name
+            );
+        }
+    }
+
     #[test]
     fn no_two_rows_share_a_name_or_a_key() {
         // Lookups take the first match, so a second row for the same name or

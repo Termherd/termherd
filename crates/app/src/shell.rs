@@ -3540,9 +3540,11 @@ mod key_routing {
         // What `run_in_session` cannot show: the bytes termherd itself sends for
         // a key, so an agent can audit the encoder on a live pane.
         //
-        // Every key is spelled with its bytes, because the round trip alone
-        // cannot see two rows of the name table swapped: `f11` naming F12 and
-        // `f12` naming F11 read back consistently, yet bind the wrong key.
+        // Every key is spelled with its bytes, which catches a row whose name
+        // and terminal key disagree. It cannot catch two rows whose iced keys
+        // are swapped: a synthesised press goes name → iced key → terminal key
+        // through that one table, so the swap cancels out. The name table's own
+        // spelled-out test in `shell::input` covers that column.
         for (spec, bytes) in [
             ("pageup", b"\x1b[5~".as_slice()),
             ("pagedown", b"\x1b[6~"),
@@ -3574,6 +3576,24 @@ mod key_routing {
             ("f12", b"\x1b[24~"),
         ] {
             let (mut shell, pty) = shell_with_terminal();
+            assert_eq!(press_chord(&mut shell, spec), PressStep::Typed, "{spec}");
+            assert_eq!(pty.writes(), vec![bytes.to_vec()], "{spec}");
+        }
+    }
+
+    #[test]
+    fn meta_chords_reach_the_terminal_as_escape_prefixed_bytes() {
+        // The chords the key encoder issue captured at the PTY with `dd | xxd`,
+        // plus Alt+Space, driven the way an agent drives them. A synthesised
+        // Alt has no side, so it is Meta under any setting but `none`.
+        for (spec, bytes) in [
+            ("alt+.", b"\x1b.".as_slice()),
+            ("alt+shift+b", b"\x1bB"),
+            ("ctrl+alt+b", b"\x1b\x02"),
+            ("alt+space", b"\x1b "),
+        ] {
+            let (mut shell, pty) = shell_with_terminal();
+            shell.option_as_meta = OptionAsMeta::Left;
             assert_eq!(press_chord(&mut shell, spec), PressStep::Typed, "{spec}");
             assert_eq!(pty.writes(), vec![bytes.to_vec()], "{spec}");
         }
