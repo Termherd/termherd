@@ -38,8 +38,6 @@ themselves), `markdownlint` (the prose), `roadmap` (the generated
   1. **#51 / #61 / #62** — macOS Developer ID notarization, Homebrew cask, and
      Windows SignPath code signing in `package.yml` (all parked; Linux keyless
      Sigstore attestation shipped in #52).
-  2. **#274** — `README.md` and `CODING_STANDARDS.md` crate-count reconciliation
-     (the `docs/CI.md` `sign-release.yml` gap named there is closed by #393).
 - **Looks like a contradiction, is not:**
   - `portable` runs on `push`→`main` only when `cargo` files changed, while
     `cross-os (windows-latest)` runs on every `rust` push. That is intentional:
@@ -197,8 +195,9 @@ protection, so the required-checks list stays stable as jobs come and go.
 `skipped` check — which is **not** `failure`/`cancelled`, so `ci-success` still
 goes green. A docs-only PR skips every Rust job; a pure-`.rs` change skips the
 dependency-metadata job (`cargo-checks`, gated on the narrower `cargo` filter:
-manifests, `Cargo.lock`, `rust-toolchain.toml`, `deny.toml`, the dep script, and
-the workflow files whose toolchain pins it checks). This is why the aggregator
+manifests, `Cargo.lock`, `rust-toolchain.toml`, `deny.toml`, the dep script,
+`AGENTS.md` whose crate list it checks, and the workflow files whose toolchain
+pins it checks). This is why the aggregator
 matters: because protection pins only `ci-success` (which always runs), we never
 rely on GitHub counting a skipped *required* check as a pass, and `cross-os` may
 stay a matrix without wedging PRs.
@@ -334,9 +333,13 @@ group keeps two merges from racing to publish.
 - **"Does the architecture still hold?"** → two fitness functions.
   `cargo-checks` runs `scripts/check-crate-deps.sh`: the hexagonal rule that
   adapters depend on `core`, never the reverse, checked against an allow-list of
-  internal edges (plus the toolchain lockstep check);
+  internal edges that must each be used, so the list stays the graph and not
+  an upper bound. It also fails when the `crates/<dir>` bullets under
+  `AGENTS.md`'s *Architecture* section and the workspace members disagree
+  (plus the toolchain lockstep check);
   `scripts/test-check-crate-deps.sh` then proves that check fails, rather than
-  reporting OK on 0 crates, when `jq` is missing or reads nothing.
+  reporting OK on 0 crates, when `jq` is missing or reads nothing, and that
+  an unused edge or a crate list off by one crate fails it too.
   `rustfmt & arch` guards
   the seams *inside* a crate: module boundaries
   (`scripts/check-module-boundaries.sh` — leaf modules stay leaves, renderers

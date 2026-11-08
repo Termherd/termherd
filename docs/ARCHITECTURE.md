@@ -337,14 +337,21 @@ TermHerd does **not** register as an IDE and Claude uses the real editor.
 
 ## 14. Build, release, signing, update
 
-- **`dist` (cargo-dist):** one release pipeline for all three platforms —
-  mac-ARM signed `.dmg`, Windows installer, Linux package (format OQ5) — on
-  GitHub Releases with self-update; the Rust-native analogue of
-  electron-builder + electron-updater.
-- **macOS:** hardened runtime + notarization, **no** JIT/unsigned-memory/
-  library-validation entitlements (Q9). **Windows:** Authenticode signing
-  (certificate sourcing OQ5). **Linux:** signed checksums. CI builds and
-  tests on a 3-OS matrix from M0.
+A tag push runs two pipelines onto one GitHub Release; `docs/CI.md` holds
+their job graphs.
+
+- **`dist` (cargo-dist), `release.yml`:** CLI archives and shell/PowerShell
+  installers for five targets. No updater is installed
+  (`install-updater = false`); self-update is `F-auto-update`, unbuilt.
+- **`cargo-packager`, `package.yml`:** the desktop installers — `.app` and
+  `.dmg` on macOS, `.deb` and AppImage on Linux, NSIS on Windows.
+- **Signing:** `sign-release.yml` publishes `SHA256SUMS` and a keyless
+  Sigstore provenance attestation over the Linux archives. The macOS and
+  Windows installers ship **unsigned** for now (certificate sourcing OQ5).
+  The target stays: macOS hardened runtime + notarization with **no**
+  JIT/unsigned-memory/library-validation entitlements (Q9), Windows code
+  signing.
+- CI builds and tests on a 3-OS matrix from M0.
 - Toolchain pinned via `rust-toolchain.toml`; local packaging steps and the
   architecture gates live in the `justfile` (not an `xtask`), mirroring
   `package.yml` and the matching `ci.yml` jobs.
