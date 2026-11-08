@@ -172,7 +172,15 @@ the second use case.
 Work in this repo is done almost entirely by agents, and agents never kept the
 per-cycle Red → Green → Refactor → Reflect loop. What works for them is
 **test first**: design the change, write the failing tests, implement, then
-clean up once over the whole diff. One issue runs through these steps:
+clean up once over the whole diff.
+
+> **Why not TDD.** Dropping the TDD loop is a pragmatic choice for agents, not
+> a verdict on TDD. Agents did not keep its per-cycle discipline, and test first
+> with one refactor at the end gave them better results. A human contributor
+> should still prefer TDD (Red → Green → Refactor, with a short Reflect after
+> each cycle): the small cycles are where it pays off for a person.
+
+One issue runs through these steps:
 
 ```text
    ┌──────────────┐
