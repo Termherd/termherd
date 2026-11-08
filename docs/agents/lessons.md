@@ -304,8 +304,14 @@ Its **input** is read on bytes too, and not as a shell reads it: `\n` is
 Ctrl+J, a line break in the prompt, and only `\r` is Enter. A burst of
 about 64 bytes or more is taken as a paste, inside which even `\r` is a
 line break, so Enter must arrive as a write of its own, after a gap
-(#426, fixed in #430). `claude_command` still writes its Enter with no gap
-(#439).
+(#426, fixed in #430). `claude_command` was the last caller writing its
+Enter with no gap (#439); #467 gave it one, and that was not enough. A
+**control byte** inside the burst is stripped as well: Claude Code shows
+`Removed 1 invisible character · review and press Enter to send` and holds
+the line, so the Enter after the gap only acknowledges the review. The
+command's Ctrl+U now goes alone, then the line and Enter as paced writes
+(#496). What settled it was sending the three byte sequences by hand over
+the attach bridge before changing any code.
 
 ## The book drifts from the binary
 
