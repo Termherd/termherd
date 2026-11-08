@@ -19,10 +19,10 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-15
             formats: app,dmg
           - target: x86_64-apple-darwin
-            runner: macos-14
+            runner: macos-15
             formats: app,dmg
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
