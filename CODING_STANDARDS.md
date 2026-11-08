@@ -381,8 +381,8 @@ Types:
 - `perf`: performance improvement
 
 The scope names where the change lands: a crate (`core`, `claude`, `pty`,
-`scan`, `mcp`, `app`), a module or surface (`tabs`, `keymap`, `instance`), or
-a doc area (`agents`, `standards`, `roadmap`, `ci`).
+`scan`, `mcp`, `private-fs`, `app`), a module or surface (`tabs`, `keymap`,
+`instance`), or a doc area (`agents`, `standards`, `roadmap`, `ci`).
 
 Breaking changes include `BREAKING CHANGE:` in the footer or `!` after the
 type. No AI signature, in commits or anywhere else — see the conventions in

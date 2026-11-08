@@ -135,8 +135,8 @@ issues #18–#29.
 | [F-i18n](#f-i18n) | feature | workspace | ☐ | Internationalization — parked; the English-first externalization shipped. |
 | [F-keymap-advanced](#f-keymap-advanced) | feature | keymap, terminal | ☐ | The keymap concerns from the gist that still need design. |
 | [F-mcp-self-diagnosis](#f-mcp-self-diagnosis) | feature | mcp | ☐ | Ship with the bridge what an agent now learns from this repo's docs. |
-| [F-search-ux](#f-search-ux) | feature | sidebar | ☐ | Search activation and scope; the one real gap was a match snippet. |
 | [F-favorites](#f-favorites) | feature | sidebar | ✅ | Favorites in the sidebar — one concept with the session star. |
+| [F-search-ux](#f-search-ux) | feature | sidebar | ✅ | Search activation and scope; the one real gap was a match snippet. |
 
 ## Unsure
 
@@ -1934,8 +1934,10 @@ Keymap concerns from the gist that need design, layered on the shipped
   keys on every layout (QWERTY/AZERTY/QWERTZ/…)
 - per-command keymap configuration (different bindings per running command)
   — **stays design-first** (feature-torture 🧬 `F-keymap-advanced.md`):
-  blocked on foreground-process detection (macOS `tcgetpgrp` vs Windows
-  ConPTY gap); file only once that's designed
+  was blocked on foreground-process detection. macOS and Linux read the PTY
+  foreground process group (#236); #143 added the alternate screen as the
+  Windows ConPTY fallback for the close confirmation, so a non-full-screen
+  command is still invisible there; file only once that's designed
 - ~~a configurable "bypass" key so a modifier passes through to the terminal
   instead of the app (cf. Ghostty `macos-option-as-alt`)~~ — **done** with
   #59: `terminal.option_as_meta` (`none` / `left` / `right` / `both`, default
@@ -1971,19 +1973,6 @@ bridge alone:
   its own loop only (#435). A wait for the next transition would make the
   rule unnecessary. Related open defect: #436.
 
-<a id="f-search-ux"></a>
-
-### F-search-ux
-
-Search activation and scope; the one real gap was a match snippet.
-
-Search activation + scope. **Designed (✂️ reshape, feature-torture
-`F-search-ux.md`)**: most of it already shipped — `Cmd+F` focuses search and
-`filter_projects` already searches content + titles across every project. The
-one real gap, a **match snippet**, graduated to #58. A flat relevance-ranked
-results view is explicitly *not* pursued (the grouped in-context filter is
-better UX)
-
 <a id="f-favorites"></a>
 
 ### F-favorites
@@ -2006,6 +1995,19 @@ sidebar; a repo row in the section would only duplicate the shipped 🤖/`$`
 launch buttons (#23) or navigate to an already-top group, and mixing
 non-resumable repos into a "resume a favourite session" list breaks its model.
 Favorites stays sessions-only
+
+<a id="f-search-ux"></a>
+
+### F-search-ux
+
+Search activation and scope; the one real gap was a match snippet.
+
+Search activation + scope. **Designed (✂️ reshape, feature-torture
+`F-search-ux.md`)**: most of it already shipped — `Cmd+F` focuses search and
+`filter_projects` already searches content + titles across every project. The
+one real gap, a **match snippet**, graduated to #58 and shipped in #103. A
+flat relevance-ranked results view is explicitly *not* pursued (the grouped
+in-context filter is better UX)
 
 <a id="f-file-diff-panel"></a>
 
