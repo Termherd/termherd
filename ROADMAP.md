@@ -1010,6 +1010,12 @@ shippable:
   without stealing the user's focus with OS tooling.
 - [ ] The docs editor (#485) — open, edit, save and read back a doc, none of
   which the bridge reaches today.
+- [ ] Double- and triple-click in a session (#492) — a `click_count` on
+  `mouse_in_session`, so a word or line selection can be reproduced. Extends
+  [F-mcp-pointer-terminal](#f-mcp-pointer-terminal).
+- [ ] The open overlay in the snapshot (#493) — name the menu or confirmation
+  holding the keyboard, so a dialog is asserted without a screenshot. Extends
+  [F-mcp-snapshot](#f-mcp-snapshot).
 
 <a id="f-mcp-ide-bridge"></a>
 
