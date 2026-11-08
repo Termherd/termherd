@@ -233,7 +233,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn a_control_byte_never_shares_a_write_with_text(name in "\\PC{1,120}") {
+        fn a_control_byte_never_shares_a_write_with_text(name in any::<String>()) {
             prop_assume!(ClaudeCommand::rename(&name).is_ok());
             let (session, effects) = rename_in_idle_claude(&name);
             for (_, bytes) in writes_of(&effects, session) {
@@ -246,7 +246,7 @@ mod tests {
         }
 
         #[test]
-        fn every_write_after_the_clear_is_paced(name in "\\PC{1,120}") {
+        fn every_write_after_the_clear_is_paced(name in any::<String>()) {
             prop_assume!(ClaudeCommand::rename(&name).is_ok());
             let (session, effects) = rename_in_idle_claude(&name);
             let writes = writes_of(&effects, session);
