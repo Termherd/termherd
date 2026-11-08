@@ -227,9 +227,9 @@ press reaches the bytes through the same swapped row; only a real F6 would
 have sent F5's sequence. A round trip proves the table agrees with itself,
 not with the keyboard. Each column a round trip crosses needs a list written
 independently of the table, plus a check derived from the table that the list
-covers every row. Found while reworking #321:
+matches it row for row. Found while reworking #321:
 `a_real_named_key_resolves_to_its_spelled_name_and_terminal_key` is that
-list, and the same swap now fails it alone.
+list, and the same swap now fails it and the row-for-row check.
 
 ## A test that claims to be exhaustive
 

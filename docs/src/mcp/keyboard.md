@@ -20,8 +20,8 @@ An arrow follows the cursor-key mode the program asked for, so `"up"` sends
 `ESC O A` in vim and `ESC [ A` at a shell prompt that leaves that mode off.
 `"alt+."` sends `ESC .`: off macOS Alt is always Meta, and on macOS a
 synthesised Alt has no side, so it is Meta unless `terminal.option_as_meta` is
-`"none"` or a real Option key the setting excludes is held. `run_in_session`
-writes the caller's bytes as they are and cannot show it.
+`"none"` or the user holds only the Option key the setting excludes.
+`run_in_session` writes the caller's bytes as they are and cannot show it.
 
 ## Why it is a real key event
 
