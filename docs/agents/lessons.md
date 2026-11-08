@@ -57,6 +57,19 @@ wire format, join by hand. And when `main` goes red on a Rust push, check
 whether the previous Rust push is the real author before reading the diff in
 front of you.
 
+`std::fs::canonicalize` is the same trap from the other side: on Windows it
+returns a verbatim `\\?\C:\…` path, a form only the Win32 API reads.
+A test fixture for #487 canonicalised its temp dir (to resolve macOS's `/var`
+symlink) and handed the result to `git worktree add`, which answered `could
+not create leading directories of '//?/C:/…'`. `main` stayed red on Windows
+from #487 through #496 (#499), because `cross-os` never runs on a pull
+request and `portable (windows)` skips `app`.
+Production never canonicalises on that path, so the fix was in the fixture:
+it now resolves through `shell::links::resolved`, which drops the prefix and
+is the one place that rule lives. In `crates/app`, a canonical path that
+leaves the process, to git, a shell or a file another tool reads, goes
+through it.
+
 ## No spawn_blocking inside an iced Task
 
 **Async work inside an `iced::Task` is not on tokio — `spawn_blocking` there
