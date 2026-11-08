@@ -25,6 +25,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::paths::DataDir;
+
 /// The file a running instance publishes itself into, under `~/.termherd`. One
 /// instance runs at a time (the single-instance lock), so "which instance?"
 /// needs no field in it.
@@ -142,10 +144,9 @@ pub(crate) struct Published {
     pub(crate) token: String,
 }
 
-/// `~/.termherd/bridge.json` — where a running instance publishes itself.
-/// `None` when there is no home directory, in which case nothing is published.
-pub(crate) fn bridge_path() -> Option<PathBuf> {
-    crate::paths::termherd_dir().map(|dir| dir.join(BRIDGE_FILE))
+/// `<data dir>/bridge.json` — where a running instance publishes itself.
+pub(crate) fn bridge_path(data: &DataDir) -> PathBuf {
+    data.file(BRIDGE_FILE)
 }
 
 /// Write the published endpoint, readable only by the current user. Overwrites
@@ -155,12 +156,8 @@ pub(crate) fn publish(path: &Path, published: &Published) -> std::io::Result<()>
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // Remove first, then create: the mode is only applied to a file this call
-    // creates, so writing over one an earlier version (or a laxer umask) left
-    // behind would keep that file's wider permissions.
-    withdraw(path)?;
     let json = serde_json::to_string(published)?;
-    termherd_pty::write_private(path, &json)
+    termherd_private_fs::write_file(path, json)
 }
 
 /// Remove the published file at teardown. A missing file is success: teardown
@@ -450,13 +447,33 @@ mod tests {
     /// depends on it. A silent move would break both.
     #[test]
     fn the_bridge_file_sits_in_the_app_data_dir() {
-        let path = bridge_path().expect("a home directory in the test environment");
-        assert!(path.is_absolute(), "got {}", path.display());
-        assert!(
-            path.ends_with(std::path::Path::new(".termherd").join(BRIDGE_FILE)),
-            "got {}",
-            path.display()
+        let data = DataDir::at("/home/u/.termherd");
+        assert_eq!(
+            bridge_path(&data),
+            Path::new("/home/u/.termherd").join("bridge.json")
         );
+    }
+
+    /// The file carries a bearer token that drives the workspace, so nobody but
+    /// the owner may read it — including when it replaces a file a laxer umask
+    /// or an older build left world-readable.
+    #[test]
+    fn the_published_file_is_owner_only_even_over_a_lax_leftover() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join(BRIDGE_FILE);
+        std::fs::write(&path, "{}").expect("plant a default-mode leftover");
+        publish(&path, &sample()).expect("publish");
+        assert!(termherd_private_fs::is_private(&path).expect("stat"));
+    }
+
+    /// The data dir does not exist on a first launch; publishing creates it
+    /// rather than failing.
+    #[test]
+    fn publishing_creates_a_missing_data_dir() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("fresh-home").join(BRIDGE_FILE);
+        publish(&path, &sample()).expect("publish");
+        assert_eq!(read(&path).expect("read back"), sample());
     }
 
     #[test]
@@ -602,7 +619,7 @@ mod tests {
     async fn a_live_endpoint_with_its_published_token_probes_clean() {
         let (bridge, _requests) = crate::shell::bridge::channel();
         let tokens = crate::mcp::Tokens::default();
-        let endpoint = crate::mcp::serve(bridge, tokens.clone())
+        let endpoint = crate::mcp::serve(bridge, tokens.clone(), None)
             .await
             .expect("bind the loopback server");
         let published = Published {
@@ -621,7 +638,7 @@ mod tests {
     #[tokio::test]
     async fn a_live_endpoint_refusing_the_token_is_unauthorized_not_stale() {
         let (bridge, _requests) = crate::shell::bridge::channel();
-        let endpoint = crate::mcp::serve(bridge, crate::mcp::Tokens::default())
+        let endpoint = crate::mcp::serve(bridge, crate::mcp::Tokens::default(), None)
             .await
             .expect("bind the loopback server");
         let published = Published {

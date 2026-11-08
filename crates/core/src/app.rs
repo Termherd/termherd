@@ -19,13 +19,18 @@ use crate::record::Recording;
 use crate::workspace::{SessionId, Workspace};
 
 mod capture;
+mod command;
 mod effects;
 mod events;
 mod hover;
 mod metadata;
 mod notify;
 mod open;
+mod paste;
+mod pointer;
 mod record;
+mod repo_link;
+mod retitle;
 mod session;
 mod settings;
 mod sidebar;
@@ -36,15 +41,26 @@ mod testsupport;
 
 use settings::FontState;
 
+pub use command::CommandRefusal;
 pub use effects::Effect;
 pub use events::Event;
 pub use hover::{
     HoverTarget, PathPurpose, PathRequest, PathRoots, ProbeKind, ResolvedPath, TargetProbe,
     TermHover,
 };
-pub use session::{Launch, LaunchSpec, LiveSession, McpConfig, SessionStatus, Sessions, SpawnSpec};
+pub use paste::{PendingPaste, line_count, paste_needs_confirmation};
+pub use pointer::{
+    MouseReporting, PointerButton, PointerEvent, PointerKind, PointerRoute, grid_line,
+    pointer_select,
+};
+pub use session::{
+    ClaudeLaunch, ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, Placement,
+    SessionStatus, Sessions, SpawnSpec,
+};
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};
 pub use sidebar::{Sidebar, SidebarFold};
+pub use snapshot::claude_identity;
+pub use tabs::ColorKeeper;
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -58,8 +74,9 @@ pub struct App {
     /// User overlay (star / archive / title) per Claude session id
     /// (`F-session-metadata`); persisted to `~/.termherd`.
     pub metadata: HashMap<String, SessionMeta>,
-    /// User overlay (star) per real project path (`F-favorites`, repo-level);
-    /// shares `~/.termherd/metadata.json` with [`Self::metadata`].
+    /// User overlay (star, and whether the repo was added by hand) per real
+    /// project path (`F-favorites` / `F-repo-add`, repo-level); shares
+    /// `~/.termherd/metadata.json` with [`Self::metadata`].
     pub repos: HashMap<String, RepoMeta>,
     /// Terminal font sizing: the configured base plus zoom steps. Private —
     /// the effective size is read through [`Self::font_size`]. See `FontState`.
@@ -82,6 +99,9 @@ pub struct App {
     /// arrives after the pointer has moved on is dropped rather than
     /// underlining a span the pointer has left.
     pending_path: Option<PathRequest>,
+    /// The paste held back for the user's confirmation. Private — read through
+    /// [`Self::pending_paste`], which drops one whose session is gone.
+    pending_paste: Option<PendingPaste>,
     /// Whether the OS says the window has focus, from
     /// [`Event::WindowFocusChanged`]. Starts `false` (unknown) so a session
     /// notification is forwarded to the OS until a real focus signal proves
@@ -150,13 +170,31 @@ impl App {
     }
 
     /// Apply an event, returning the effects the runtime must carry out.
-    /// **Pure**: no I/O, no clock, no panic. A flat dispatcher: each arm is a
-    /// one-line delegate to a domain helper, or an inline field update that
-    /// yields no effect.
+    /// **Pure**: no I/O, no clock, no panic. Ends with [`Effect::TabShown`]
+    /// when the tab shown before no longer is, whichever event moved it, and
+    /// on every tab gesture, which settles the view even on the tab it shows.
     pub fn apply(&mut self, event: Event) -> Vec<Effect> {
+        let shown = self.workspace.shown_session();
+        let gesture = matches!(
+            event,
+            Event::ActivateTab(_) | Event::ToggleParkTab(_) | Event::OpenRepo { .. }
+        );
+        let mut effects = self.dispatch(event);
+        if gesture || shown.is_some_and(|session| !self.workspace.shows(session)) {
+            effects.push(Effect::TabShown);
+        }
+        effects
+    }
+
+    /// A flat dispatcher: each arm is a one-line delegate to a domain helper,
+    /// or an inline field update that yields no effect. Its length grows with
+    /// the event catalogue, not with any one arm's logic.
+    #[allow(clippy::too_many_lines)]
+    fn dispatch(&mut self, event: Event) -> Vec<Effect> {
         match event {
             Event::ScanCompleted(records) => {
                 self.sidebar.projects = group_projects(records);
+                self.retitle_tabs();
                 Vec::new()
             }
             Event::SearchChanged(query) => {
@@ -171,6 +209,17 @@ impl App {
             Event::TerminalInput { session, bytes } => {
                 self.if_live(session, Effect::Write { session, bytes })
             }
+            Event::Paste {
+                session,
+                text,
+                bracketed,
+            } => self.paste(session, text, bracketed),
+            Event::ConfirmPaste => self.confirm_paste(),
+            Event::CancelPaste => {
+                self.pending_paste = None;
+                Vec::new()
+            }
+            Event::TerminalSubmit { session } => self.if_live(session, Effect::Submit { session }),
             Event::TerminalResized {
                 session,
                 cols,
@@ -187,50 +236,45 @@ impl App {
                 self.if_live(session, Effect::Scroll { session, target })
             }
             Event::Select { session, op } => self.if_live(session, Effect::Select { session, op }),
+            Event::TerminalPointer { session, pointer } => {
+                self.if_live(session, Effect::TerminalPointer { session, pointer })
+            }
             Event::CopyTerminalSelection { session } => {
                 self.if_live(session, Effect::CopyTerminalSelection { session })
             }
-            Event::StatusChanged { session, status } => {
-                if let Some(s) = self.sessions.get_mut(&session)
-                    && s.status != SessionStatus::Exited
-                {
-                    s.status = status;
-                }
-                Vec::new()
-            }
+            Event::StatusChanged { session, status } => self.status_changed(session, status),
             Event::PtyExited { session, clean } => self.pty_exited(session, clean),
             Event::SessionTitleChanged { session, title } => {
-                self.workspace.set_session_title(session, title);
+                self.workspace.set_live_title(session, title);
                 Vec::new()
             }
-            Event::SessionCwdChanged { session, cwd } => {
-                if let Some(s) = self.sessions.get_mut(&session) {
-                    s.cwd = Some(cwd);
-                }
-                Vec::new()
+            Event::SessionCwdChanged { session, cwd } => self.session_cwd_changed(session, cwd),
+            Event::ForegroundJobChanged { session, job } => {
+                self.foreground_job_changed(session, job)
             }
+            Event::AltScreenChanged { session, on } => self.alt_screen_changed(session, on),
+            Event::SessionFileRead { session, file } => self.session_file_read(session, file),
+            Event::SessionSpawned { session, at } => self.session_spawned(session, at),
             Event::ActivateTab(index) => {
                 self.workspace.activate(index);
                 Vec::new()
             }
             Event::CloseTab(index) => self.close_tab(index),
+            Event::ToggleParkTab(index) => self.toggle_park_tab(index),
             Event::MoveTab { from, to } => {
                 self.workspace.move_tab(from, to);
                 Vec::new()
             }
-            Event::ReopenClosedTab => self.reopen_closed_tab(),
-            Event::RenameTab { index, title } => {
-                self.workspace.rename_tab(index, &title);
-                Vec::new()
-            }
+            Event::ReopenClosedTab { fresh_claude_id } => self.reopen_closed_tab(fresh_claude_id),
+            Event::RenameTab { index, title } => self.rename_tab(index, &title),
+            Event::SetTabColor { index, color } => self.set_tab_color(index, color),
             Event::SplitFocused(dir) => self.split_focused(dir),
-            Event::CloseFocusedPane => match self.workspace.close_focused() {
-                Some(id) => {
-                    self.sessions.remove(&id);
-                    vec![Effect::Kill(id)]
-                }
-                None => Vec::new(),
-            },
+            Event::SetSplitRatio { tab, path, ratio } => self.set_split_ratio(tab, &path, ratio),
+            Event::ClosePane(session) => self.close_pane_of(session).unwrap_or_default(),
+            Event::CloseFocusedPane => self
+                .workspace
+                .close_focused()
+                .map_or_else(Vec::new, |id| self.release_closed_pane(id)),
             Event::FocusNextPane => {
                 self.workspace.focus_next();
                 Vec::new()
@@ -243,6 +287,7 @@ impl App {
                 self.workspace.focus_pane_of(session);
                 Vec::new()
             }
+            Event::OpenRepo { path, resolved } => self.open_repo(&path, resolved.as_deref()),
             Event::RevealPane(session) => {
                 self.workspace.reveal_pane_of(session);
                 Vec::new()
@@ -254,6 +299,7 @@ impl App {
             Event::MetadataLoaded(overlay) => {
                 self.metadata = overlay.sessions;
                 self.repos = overlay.repos;
+                self.retitle_tabs();
                 Vec::new()
             }
             Event::ToggleStar(session) => {
@@ -262,6 +308,8 @@ impl App {
             Event::ToggleRepoStar(path) => {
                 self.update_repo_meta(path, |meta| meta.starred = !meta.starred)
             }
+            Event::DeclareRepo(path) => self.update_repo_meta(path, |meta| meta.declared = true),
+            Event::ForgetRepo(path) => self.update_repo_meta(path, |meta| meta.declared = false),
             Event::ToggleArchive(session) => {
                 self.update_meta(session, |meta| meta.archived = !meta.archived)
             }
@@ -295,7 +343,29 @@ impl App {
                 self.window_focused = focused;
                 Vec::new()
             }
+            Event::SendClaudeCommand {
+                session,
+                command,
+                prompt,
+            } => self.send_claude_command(session, &command, &prompt),
         }
+    }
+
+    fn session_cwd_changed(&mut self, session: SessionId, cwd: String) -> Vec<Effect> {
+        if let Some(s) = self.sessions.get_mut(&session) {
+            s.cwd = Some(cwd);
+        }
+        Vec::new()
+    }
+
+    fn set_split_ratio(
+        &mut self,
+        tab: usize,
+        path: &[crate::workspace::Branch],
+        ratio: f32,
+    ) -> Vec<Effect> {
+        self.workspace.set_split_ratio(tab, path, ratio);
+        Vec::new()
     }
 
     /// Whether the OS reports the window focused, so the view can dim an
@@ -328,7 +398,6 @@ mod tests {
             Event::Zoom(Zoom::In),
             Event::ToggleExpanded("/p".into()),
             Event::ShowArchivedToggled(true),
-            Event::ActivateTab(0),
             Event::MoveTab { from: 0, to: 0 },
             Event::WindowFocusChanged(false),
             Event::StatusChanged {
@@ -343,6 +412,10 @@ mod tests {
                 index: 0,
                 title: "t".into(),
             },
+            Event::SetTabColor {
+                index: 0,
+                color: termherd_claude::color::ClaudeColor::Red,
+            },
         ];
         for event in effect_free {
             let label = format!("{event:?}");
@@ -351,5 +424,40 @@ mod tests {
                 "{label} must stay effect-free (the shell routes it through perform)"
             );
         }
+    }
+
+    fn shows_another_tab(effects: &[Effect]) -> bool {
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::TabShown))
+    }
+
+    #[test]
+    fn a_tab_gesture_reports_a_tab_shown_even_on_the_tab_already_shown() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        assert!(shows_another_tab(&app.apply(Event::ActivateTab(0))));
+        assert!(shows_another_tab(&app.apply(Event::ActivateTab(9))));
+        assert!(shows_another_tab(&app.apply(Event::ToggleParkTab(0))));
+    }
+
+    #[test]
+    fn any_event_that_moves_the_shown_tab_reports_it() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        launch(&mut app, "b");
+        launch(&mut app, "c");
+        app.apply(Event::ToggleParkTab(0));
+        // [b c | a], c shown: dragging c into the parked zone shows b.
+        let effects = app.apply(Event::MoveTab { from: 1, to: 2 });
+        assert!(shows_another_tab(&effects));
+    }
+
+    #[test]
+    fn an_event_that_leaves_the_shown_tab_reports_nothing() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        let effects = app.apply(Event::MoveTab { from: 0, to: 0 });
+        assert!(!shows_another_tab(&effects));
     }
 }

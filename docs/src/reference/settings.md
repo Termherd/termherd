@@ -5,7 +5,9 @@
 %USERPROFILE%\.termherd\settings.json         (Windows)
 ```
 
-There is **no in-app settings panel yet**: edit the file and restart.
+**Changes apply as soon as the file is saved** — no restart, no session
+lost. The [settings panel](../workspace/settings-panel.md) changes the
+appearance from inside the app and saves it here.
 
 The annotated template with every option, its default and its meaning is
 [`docs/settings.example.jsonc`](https://github.com/Termherd/termherd/blob/main/docs/settings.example.jsonc)
@@ -14,18 +16,42 @@ JSON**: no comments, no trailing commas.
 
 ## How it loads
 
-Read once at startup, and defensively:
+Read at startup, then again each time the file changes on disk — whoever
+wrote it: your editor, an MCP `set_option`, the settings panel. Defensively,
+both times:
 
 - Every field is optional. A missing file, a missing field, or a corrupt file
   falls back to built-in defaults — settings never block startup.
+- A file that is not valid JSON is **set aside** as `settings.json.corrupt-1`
+  (then `-2`, …) and the sidebar says so, so nothing TermHerd saves later can
+  overwrite what you wrote. Fix the copy and move it back. `metadata.json` is
+  protected the same way.
 - Out-of-range values **clamp** instead of failing the file.
 - One bad value — a typo'd colour, an unknown action name — **degrades alone**
   with a logged warning. The rest of the file still applies.
+- While the app runs, a file that does not parse — a save your editor has
+  only half written, a missing brace — **changes nothing**: the running
+  settings stay until the next valid save. Nothing falls back to defaults
+  mid-run, and nothing is set aside.
+
+What a live change reaches:
+
+| Setting | Applies to |
+| --- | --- |
+| `theme`, `terminal.colors` | the chrome and **every open terminal**, at once |
+| `keys`, `close`, `sidebar`, `open`, `mcp.allow_claude_nesting`, `capture`, `terminal.copy_on_select`, `terminal.paste_on_right_click`, `terminal.option_as_meta` | the next keypress, click or call |
+| `terminal.font_size` | every terminal, at once (your zoom steps are kept on top) |
+| `shell` | the **next session** you open — a running one keeps its program |
+| `record` | the **next recording** — one in progress keeps its budget |
+| `mcp.attach` | the **next launch** — the published endpoint is decided at startup |
+
+A program that read the terminal's colours when it started — Claude Code
+picks its light or dark look that way — keeps its choice until it restarts.
 
 Two neighbouring files are TermHerd's, not yours to edit: `window.json` (size
 and position — a position left off every connected monitor is dropped, so the
 window re-centers instead of opening out of reach) and `metadata.json` (stars,
-archives, custom titles).
+archives, custom titles, and the repositories you added by hand).
 
 ## Options
 
@@ -44,8 +70,25 @@ only when named explicitly. See [Status and attention](../workspace/status.md).
 
 ### `theme`
 
-`"dark"` (default) or `"light"`. GUI chrome only — sidebar, tab strip, buttons.
-The terminal grid keeps its own colours.
+GUI chrome only: sidebar, tab strip, buttons. `"dark"` by default; an unknown
+value falls back to it. A ✓ value also names a `terminal.colors.scheme`; give
+both keys the same one for a matching window. Both are set live from the
+[settings panel](../workspace/settings-panel.md).
+
+| `theme` values | Same-name `colors.scheme` |
+| --- | --- |
+| `dark`, `light` | — |
+| `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` | ✓ |
+| `dracula`, `nord` | ✓ |
+| `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha` | ✓ |
+| `tokyo-night`, `tokyo-night-storm`, `tokyo-night-light` | ✓ |
+| `kanagawa-wave`, `kanagawa-dragon` | ✓ |
+| `kanagawa-lotus`, `ferra` | — none published |
+| `moonfly`, `nightfly`, `oxocarbon` | ✓ |
+
+Status dots and `/color` marks are shaded per theme to stay legible, at 3:1
+or better. The active tab's dot is shaded against that tab's own fill, so it
+reads there too.
 
 ### `close`
 
@@ -61,6 +104,9 @@ Per-action close confirmation. Both keys default to `"confirmWhenActive"`.
 | `confirmWhenActive` | ask only while a session runs a foreground process |
 | `noConfirmation` | never ask |
 
+Unsaved changes in the doc editor make a quit ask under any `app` value: the
+policy covers the sessions a quit stops, not text it would lose.
+
 ### `terminal`
 
 ```json
@@ -68,6 +114,7 @@ Per-action close confirmation. Both keys default to `"confirmWhenActive"`.
   "font_size": 14,
   "copy_on_select": false,
   "paste_on_right_click": false,
+  "option_as_meta": "left",
   "colors": {
     "scheme": "solarized-dark",
     "foreground": "#839496",
@@ -83,7 +130,8 @@ Per-action close confirmation. Both keys default to `"confirmWhenActive"`.
 | `font_size` | `14` | pixels, clamped to 6–40. The zoom chords step from here at runtime without rewriting it. |
 | `copy_on_select` | `false` | a drag release or a double-click copies the selection outright, no chord needed |
 | `paste_on_right_click` | `false` | a right-click pastes into the pane under the pointer, not necessarily the focused one |
-| `colors.scheme` | built-in | `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |
+| `option_as_meta` | `"left"` | macOS only: which Option key is Meta — `"none"`, `"left"`, `"right"` or `"both"`; the other one types what the layout composes. Another value falls back to `"left"`. |
+| `colors.scheme` | built-in | every [`theme`](#theme) value marked ✓, e.g. `catppuccin-mocha` |
 | `colors.foreground` / `.background` / `.cursor` | from the scheme | `"#rrggbb"`; the `#` is optional |
 | `colors.palette` | from the scheme | the 16 ANSI colours — normal 0–7, then bright 8–15 |
 
@@ -109,6 +157,56 @@ Values clamp: fps 1–60, `max_seconds` 1–600, `scale` 0.1–1.0.
 ```json
 "record": { "fps": 8, "max_seconds": 30, "scale": 0.5 }
 ```
+
+### `capture`
+
+Whether a [state capture](../workspace/capture.md) masks the secrets its
+terminal text shows — access keys, API tokens, `Bearer` headers, private
+keys. On by default; a value that is not `true` or `false` keeps it on.
+Turn it off only to debug a capture that masked too much.
+
+```json
+"capture": { "redact": true }
+```
+
+### `mcp`
+
+Two keys, both off by default.
+
+`allow_claude_nesting`: whether the live bridge's `prompt_in_session` may
+prompt another **Claude** session — one agent driving another. A shell session
+is never gated. A single call can opt in on its own with
+`allow_claude_nesting: true` (see [The live bridge](../mcp/live-bridge.md)).
+
+```json
+"mcp": { "allow_claude_nesting": false }
+```
+
+`attach`: whether a running TermHerd publishes its
+[live bridge](../mcp/live-bridge.md) for a client it did **not** launch — a
+script, an editor, or the very terminal you started TermHerd from.
+
+```json
+"mcp": { "attach": true }
+```
+
+| Value | Means |
+| --- | --- |
+| `false` | the default: nothing is published, and only sessions TermHerd spawned can reach the bridge |
+| `true` | `~/.termherd/bridge.json` carries `{ url, token }` for the running instance, readable only by you |
+| `"never"` | as `false`, **and** the `TERMHERD_MCP_ATTACH` override below cannot turn it on |
+
+`attach` is read **at launch only**: changing it while TermHerd runs takes
+effect at the next start. `TERMHERD_MCP_ATTACH=1` (or `0`) in TermHerd's own
+environment flips `true` and `false` for one launch — useful for a one-off
+automation run without editing the file. Against `"never"` it does nothing,
+and says so in the log at `info`.
+
+Publishing is off by default because of what it exposes: any process running as
+you can then read the token and drive the workspace, including `run_in_session`,
+which types into a terminal. See [Attaching from
+outside](../mcp/attach.md) for the whole picture and the `termherd mcp-config`
+subcommand that consumes the file.
 
 ### `open`
 
@@ -140,32 +238,6 @@ would *run* rather than show (`.app`, `.exe`, `.desktop`) is neither underlined
 nor opened, because the handoff obeys the file association. An explicit editor
 consults no association, so those files open like any other.
 
-### `mcp`
-
-Whether a running TermHerd publishes its [live bridge](../mcp/live-bridge.md)
-for a client it did **not** launch — a script, an editor, or the very terminal
-you started TermHerd from.
-
-```json
-"mcp": { "attach": true }
-```
-
-| Value | Means |
-| --- | --- |
-| `false` | the default: nothing is published, and only sessions TermHerd spawned can reach the bridge |
-| `true` | `~/.termherd/bridge.json` carries `{ url, token }` for the running instance, readable only by you |
-| `"never"` | as `false`, **and** the `TERMHERD_MCP_ATTACH` override below cannot turn it on |
-
-`TERMHERD_MCP_ATTACH=1` (or `0`) in TermHerd's own environment flips `true` and
-`false` for one launch — useful for a one-off automation run without editing
-the file. Against `"never"` it does nothing, and says so in the log at `info`.
-
-Publishing is off by default because of what it exposes: any process running as
-you can then read the token and drive the workspace, including `run_in_session`,
-which types into a terminal. See [Attaching from
-outside](../mcp/attach.md) for the whole picture and the `termherd mcp-config`
-subcommand that consumes the file.
-
 ### `keys`
 
 Keyboard overrides — one chord or a list per action, **replacing** that
@@ -176,7 +248,7 @@ action's default. The full vocabulary and its defaults are in
 "keys": {
   "copy": "ctrl+y",
   "paste": ["ctrl+shift+v", "shift+insert"],
-  "activate-tab-1": "alt+1"
+  "activate-tab-1": "ctrl+1"
 }
 ```
 
@@ -189,16 +261,19 @@ or "switch me to a light theme" from any Claude session.
 The eight ids it covers today: `theme`, `shell.program`, `shell.args`,
 `terminal.colors.scheme`, `terminal.colors.foreground`,
 `terminal.colors.background`, `terminal.colors.cursor`,
-`terminal.colors.palette`. The `close`, `sidebar`, `record`, `open`, `keys`,
-`mcp`, `terminal.font_size`, `terminal.copy_on_select` and
-`terminal.paste_on_right_click` blocks are file-only for now; `keys` is
-published as a read-only resource.
+`terminal.colors.palette`. Two of them — `shell.program` and `shell.args` —
+are **read-only** over MCP: they name what TermHerd executes at the next
+launch, so an agent may read them but never set them. The `close`, `sidebar`,
+`record`, `capture`, `open`, `mcp`, `keys`, `terminal.font_size`,
+`terminal.copy_on_select`, `terminal.paste_on_right_click` and
+`terminal.option_as_meta` blocks are file-only for now; `keys` is published
+as a read-only resource.
 
 `mcp` is file-only by design rather than by backlog: a surface that could grant
 itself wider reach is not a setting, it is an escalation.
 
-A `set_option` write lands in `settings.json` and **applies on restart**, like
-any other edit to the file.
+A `set_option` write lands in `settings.json` and applies **as soon as it is
+written**, like any other edit to the file.
 
 ## A complete example
 
@@ -211,12 +286,14 @@ any other edit to the file.
     "font_size": 15,
     "copy_on_select": true,
     "paste_on_right_click": true,
+    "option_as_meta": "left",
     "colors": { "scheme": "gruvbox-dark" }
   },
   "sidebar": { "session_limit": 0 },
   "record": { "fps": 10, "max_seconds": 20, "scale": 0.5 },
+  "capture": { "redact": true },
   "open": { "command": "code -g {path}:{line}:{col}" },
-  "mcp": { "attach": false },
+  "mcp": { "allow_claude_nesting": false, "attach": false },
   "keys": {
     "toggle-sidebar": "ctrl+alt+b",
     "focus-next": "ctrl+alt+right"

@@ -12,6 +12,12 @@ overlays — rather than a terminal. Typing *into* a session stays
 Both take a list applied in order and return one `steps` entry per item, plus
 the resulting `focused_handle`.
 
+`press_keys` names keys as the
+[chord syntax](../reference/keyboard.md#chord-syntax) does. A chord bound to
+nothing reaches the focused terminal through TermHerd's own key encoder, so
+`"pageup"` or `"shift+f5"` there shows the bytes TermHerd sends for that key.
+`run_in_session` writes the caller's bytes as they are and cannot show it.
+
 ## Why it is a real key event
 
 A chord is dispatched as a **synthesised key event** fed to the app's key
@@ -22,11 +28,9 @@ they are *overlay* keys, bound to no action. Without them an agent that armed a
 close confirmation would have no way to answer it, and would park the app until
 a human intervened.
 
-The two are not equally complete, and the difference matters to a caller.
 **`escape` leaves every prompt** — that is what guarantees an agent can always
-back out. **`enter` confirms the confirmation prompts but commits neither
-rename**, because both commit through a widget callback no synthesised event
-reaches ([#246](https://github.com/Termherd/termherd/issues/246)).
+back out. **`enter` confirms confirmation prompts and commits both inline
+renames.** Menus and pickers handle it themselves, as described below.
 
 The corollary: **an open overlay consumes an MCP press exactly as it consumes a
 keypress.** The step reports which prompt ate it, so a caller learns why its
@@ -40,6 +44,7 @@ neither tool may reach a state the keyboard cannot.
 | `ran` | the ladder applied it | `action` — the name that ran |
 | `inert` | nothing happened | `reason` — see below |
 | `overlay` | an open prompt consumed it | which prompt |
+| `refused` | a prompt's confirmation typed nothing; it stays open | which prompt, and `refusal` — why |
 | `typed` | bound to nothing, so it reached the focused terminal | |
 | `unbound` | nothing claimed it | |
 
@@ -55,22 +60,67 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing yet (`open-new-session` is the one) | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, nothing to scroll, nothing selected to copy | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, colour or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to (or to colour) | **create it**, then retry |
 
-Seven handlers can refuse this way, and each says so at its own refusal site.
+Each handler that can refuse this way says so at its own refusal site.
+
+`copy-agent-name` is the one `no-context` nothing can create on Windows:
+ConPTY reports no foreground process, so no Claude there is ever named.
+
+`copy` refuses on the terminal's own answer: it holds a selection or it does
+not, wherever that selection has scrolled to. An MCP drag in a `forwarded`
+pane selects nothing (it carries no Shift, so it is the program's), so `copy`
+after it is `no-context` — and the program's own clipboard write (Claude Code
+copies a drag on release) is left alone. A human's Shift+drag there is a
+selection, and `copy` runs on it.
 
 ## Answering an overlay
 
-`escape` usually cancels; `enter` usually confirms. Three cautions:
+`escape` usually cancels; `enter` usually confirms. Six cautions:
 
 - On **`quit-confirm`**, `enter` quits the app — killing every session and the
-  connection you are speaking over.
-- **`session-rename`** (the sidebar's inline ✎ field) answers to neither
-  `enter` nor the rename in the doc pane: both commit through the widget's own
-  submit, which a synthesised key event never reaches. `escape` abandons it —
-  so you can always back out and start over — but committing a rename over MCP
-  is a missing capability, tracked as
-  [#246](https://github.com/Termherd/termherd/issues/246).
+  connection you are speaking over, and dropping a modified doc's edits.
+- **`session-rename`** (the sidebar's inline ✎ field) and **`tab-rename`** both
+  commit on `enter`; `escape` abandons either edit. MCP and the widget submit
+  use the same commit messages. When a rename targets a live Claude session,
+  committing may open `claude-command-confirm` for `/rename`.
+- **`tab-menu`** (opened by `open-tab-menu`, or a human's right-click on a
+  tab) answers `up`, `down` and `enter` itself, so unlike the renames it is
+  fully drivable: `enter` closes the menu and runs the selected entry exactly
+  as `run_action` would run that entry's action. The `enter` reports what
+  that action did — `ran` with its name, or `inert` with its reason — and
+  every other press while the menu is open reports `overlay: "tab-menu"`.
+  The entries and their order are on the
+  [tabs page](../workspace/tabs-and-splits.md#tabs). *Tab colour…* is
+  always listed, but disabled when no colour can be picked for the focused
+  pane (a busy Claude, a draft in its prompt, the prompt off screen): `enter`
+  on it runs nothing, leaves the menu open and reports `refused` with the
+  reason. *Copy agent name* is listed only when a named Claude is in front of
+  the pane; left out, it shifts every entry below it by one.
+  The menu closes if its pane loses focus, so a `focus_pane` call while it is
+  open dismisses it.
+- **`tab-color-picker`** (opened by `pick-tab-color`, or the tab menu's
+  colour entry) answers `up`, `down` and `enter` like the tab menu; its lines
+  are `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `pink`, `cyan`,
+  then *None*, and it opens on the colour the tab wears — on *None* when it
+  wears none, so an immediate `enter` leaves it uncoloured.
+  `enter` on a shell tab sets the colour and closes the list. On a Claude tab
+  it closes the list and opens `claude-command-confirm` for `/color <name>`,
+  so a second `enter` types it; if that Claude cannot take a command any more,
+  `enter` answers `refused` with the reason and the list stays open.
+- On **`claude-command-confirm`**, `enter` types the slash command the
+  prompt names into its Claude session — or answers `refused` with the reason,
+  leaving the prompt open, when Claude went busy or a draft appeared meanwhile;
+  see [`claude_command`](./live-bridge.md#a-claude-slash-command-confirmed).
+- **`paste-confirm`** opens when the `paste` action, or a right-click paste,
+  carries a line break into a terminal that did not turn bracketed paste on;
+  nothing is written until `enter` pastes the text unchanged, and `escape`
+  drops it. See
+  [the terminal page](../workspace/terminal.md#a-paste-that-would-run-line-by-line).
+- **`doc-editor`** with unsaved edits answers `escape` by opening
+  **`doc-discard-confirm`** rather than closing. There, `enter` discards the
+  edits and `escape` returns to `doc-editor` with them intact — so `escape`
+  alone never loses a modified doc, however many times it is pressed.
 - Every other overlay is exitable from the keyboard, and a test sweep derived
   from the overlay enumeration — not a hand-written list — is what keeps it
   that way. A new overlay added without an exit fails there.
@@ -82,18 +132,19 @@ anything applies. The error names the offender and the syntax. This is
 deliberate: a half-applied sequence is worse than none, because the caller
 cannot tell how far it got.
 
-The action catalogue is published by the [stdio server](./stdio.md) at
+The action catalogue — less the `activate-tab-N` family, which `run_action`
+accepts all the same — is published by the [stdio server](./stdio.md) at
 `termherd://keys/schema`; the live bridge serves tools only, so its `run_action`
 error message carries the syntax instead.
 
-## Example: verify a gesture end to end
+## Example: verify a keyboard gesture end to end
 
 ```text
-run_action(["split-vertical"])        → { steps: [{ outcome: "ran",
+run_action(["split-vertical"])        → { steps: [{ result: "ran",
                                                     action: "split-vertical" }],
                                           focused_handle: "4" }
 screenshot({ max_width: 900 })        → the pixels, to check the divider
-press_keys(["cmd+w"])                 → { steps: [{ outcome: "overlay",
-                                                    overlay: "close-confirm" }] }
+press_keys(["cmd+w"])                 → { steps: [{ result: "overlay",
+                                                    overlay: "tab-close-confirm" }] }
 press_keys(["escape"])                → cancelled
 ```

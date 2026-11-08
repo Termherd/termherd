@@ -4,8 +4,8 @@
 
 use std::sync::Arc;
 
-use termherd_core::SessionStatus;
 use termherd_core::workspace::SessionId;
+use termherd_core::{ForegroundJob, SessionStatus};
 
 use crate::grid::Screen;
 
@@ -27,6 +27,18 @@ pub enum PtyEvent {
     /// from the last one reported — so a `cd` stops being invisible to
     /// everything that reads a session's directory.
     Cwd { session: SessionId, cwd: String },
+    /// The job in front of the shell changed, or `None` while the shell is in
+    /// front. Sent on change only, from the same foreground poll that drives a
+    /// shell's status, and once at the first reading, so the runtime can tell
+    /// the shell in front from a platform that cannot say (ConPTY, which
+    /// never sends it).
+    ForegroundJob {
+        session: SessionId,
+        job: Option<ForegroundJob>,
+    },
+    /// The program in the terminal entered (`on`) or left the alternate
+    /// screen. Sent on change only.
+    AltScreen { session: SessionId, on: bool },
     /// An OSC 9 notification fired: Claude wants the user. Carries the
     /// raw payload text, forwarded to the OS notification centre on top of the
     /// in-app `Attention` status (which `Status` already conveys).

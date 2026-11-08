@@ -13,6 +13,7 @@ mod docs;
 mod image;
 mod instance;
 mod json_store;
+mod link_inbox;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mcp;
@@ -30,23 +31,57 @@ mod window_geometry;
 
 use std::sync::Arc;
 
-use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost, ScanError};
-use termherd_pty::{EventSink, PtyEvent, PtyManager, Shell};
+use termherd_core::ports::{PathResolver, ProjectScanner, ScanError};
+use termherd_pty::{EventSink, PrivateFiles, PtyEvent, PtyManager};
 use termherd_scan::FsScanner;
 use tracing::{info, warn};
 
 fn main() -> iced::Result {
     tracing_init::init_tracing();
 
+    let data_dir = paths::DataDir::user();
+
     // Answer a question about the *running* instance before touching anything
     // that would disturb it: the single-instance lock below exits(2) on a second
     // process, which is the wrong answer to `termherd mcp-config`.
     if cli::parse(std::env::args()) == cli::Command::McpConfig {
-        return report_mcp_config();
+        return report_mcp_config(data_dir.as_ref());
+    }
+
+    // A `termherd://` link on the command line goes to the inbox whichever
+    // instance reads it: this one at startup, or the one holding the lock.
+    let handed_over = link_inbox::url_argument(std::env::args())
+        .zip(data_dir.as_ref())
+        .is_some_and(|(url, data)| {
+            link_inbox::deposit(&link_inbox::inbox_dir(data), &url)
+                .inspect_err(|error| warn!(%error, "termherd link not handed over"))
+                .is_ok()
+        });
+
+    // A temp dir that does not exist breaks the single-instance lock and every
+    // session's private files without a word: create it, or say so.
+    let temp_dir = paths::TempDir::user();
+    match temp_dir.ensure() {
+        paths::TempDirState::Present => {}
+        paths::TempDirState::Created => {
+            warn!(path = %temp_dir.path().display(), "temp dir was missing; created it");
+        }
+        paths::TempDirState::Unusable(error) => warn!(
+            path = %temp_dir.path().display(), %error,
+            "temp dir is missing and cannot be created; the single-instance lock \
+             and sessions' private files will fail (check TMPDIR / TMP / TEMP)"
+        ),
     }
 
     // Hold the single-instance guard for the whole GUI lifetime.
-    let instance = instance::acquire_single_instance();
+    let instance = instance::acquire_single_instance(temp_dir.path(), handed_over);
+
+    // macOS hands a link to the running app as an Apple Event instead.
+    #[cfg(target_os = "macos")]
+    let _link_relay = data_dir
+        .as_ref()
+        .zip(objc2_foundation::MainThreadMarker::new())
+        .map(|(data, mtm)| macos::relay_links(mtm, link_inbox::inbox_dir(data)));
 
     info!(
         version = env!("CARGO_PKG_VERSION"),
@@ -68,21 +103,28 @@ fn main() -> iced::Result {
 
     // Thin user settings (FR10): the configured shell is injected into the PTY
     // host, the theme into the iced shell. A corrupt file falls back to
-    // defaults rather than blocking startup.
-    let settings = settings::Settings::load();
-    let shell = settings.shell.as_ref().map(|s| Shell {
-        program: s.program.clone(),
-        args: s.args.clone(),
-    });
+    // defaults rather than blocking startup — set aside, and reported in the
+    // sidebar, so the defaults never overwrite it.
+    let settings_file = data_dir.as_ref().map(settings::path);
+    let (settings, settings_problem) = settings_file
+        .as_deref()
+        .map(settings::Settings::load_checked)
+        .unwrap_or_default();
+    let shell = settings.shell_profile();
 
     // PTY output flows from the reader threads through this channel into the
     // iced subscription (M2). The manager is built here and injected as a
-    // `dyn PtyHost` — no global state (Q4).
+    // `dyn PtyHost` (and as the palette's live repaint) — no global state (Q4).
     let (tx, pty_rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
     let sink: EventSink = Arc::new(move |event| {
         let _ = tx.unbounded_send(event);
     });
-    let pty: Arc<dyn PtyHost> = Arc::new(PtyManager::new(sink, shell, settings.palette()));
+    let pty = Arc::new(PtyManager::new(
+        sink,
+        shell,
+        settings.palette(),
+        PrivateFiles::new(temp_dir.path().to_owned()),
+    ));
 
     // Async transport substrate (composition root only): a tokio runtime to host
     // future transport tasks, and the bridge channel that carries their requests
@@ -101,7 +143,11 @@ fn main() -> iced::Result {
     // launch and injects it into that session's `mcpServers` config.
     let mcp_tokens = mcp::Tokens::default();
     let mcp_endpoint = bridge_runtime.as_ref().and_then(|runtime| {
-        match runtime.block_on(mcp::serve(bridge_handle.clone(), mcp_tokens.clone())) {
+        match runtime.block_on(mcp::serve(
+            bridge_handle.clone(),
+            mcp_tokens.clone(),
+            settings_file.clone(),
+        )) {
             Ok(endpoint) => {
                 info!(url = %endpoint.url, "mcp live bridge listening");
                 Some(endpoint)
@@ -117,15 +163,44 @@ fn main() -> iced::Result {
     // asked for it. After the single-instance lock, so the file always describes
     // the instance that is actually running — and unconditionally, so a launch
     // that publishes nothing still clears the last one's file.
-    let published = publish_bridge(&settings, mcp_endpoint.as_ref(), &mcp_tokens);
+    let published = data_dir.as_ref().and_then(|data| {
+        publish_bridge(
+            &attach::bridge_path(data),
+            settings.mcp.attach,
+            std::env::var(attach::ATTACH_ENV).ok().as_deref(),
+            mcp_endpoint.as_ref(),
+            &mcp_tokens,
+        )
+    });
 
     let live_bridge = shell::LiveBridge {
         requests: bridge_requests,
         mcp_endpoint,
         mcp_tokens,
     };
-    let startup =
-        shell::Startup::from_settings(&settings, metadata_store::load(), collapsed_store::load());
+    let (metadata, metadata_problem) = data_dir
+        .as_ref()
+        .map(metadata_store::load)
+        .unwrap_or_default();
+    let startup = shell::Startup {
+        settings,
+        metadata,
+        collapsed: data_dir
+            .as_ref()
+            .map(collapsed_store::load)
+            .unwrap_or_default(),
+        load_problems: settings_problem
+            .into_iter()
+            .chain(metadata_problem)
+            .collect(),
+        data_dir,
+        settings_file,
+        fallback_cwd: paths::home_dir().map_or_else(
+            || ".".to_owned(),
+            |home| home.to_string_lossy().into_owned(),
+        ),
+        claude_dir: paths::ClaudeDir::user(),
+    };
     // Terminal path candidates are checked against the real filesystem — the
     // one thing that tells `src/main.rs` from prose like `and/or`.
     let path_resolver: Arc<dyn PathResolver> = Arc::new(termherd_scan::FsPathResolver::new());
@@ -173,17 +248,17 @@ fn main() -> iced::Result {
 /// The token is minted here and never revoked while the app runs: it is the
 /// instance's own, not a session's, so it outlives every session.
 fn publish_bridge(
-    settings: &settings::Settings,
+    path: &std::path::Path,
+    mode: attach::AttachMode,
+    env: Option<&str>,
     endpoint: Option<&mcp::Endpoint>,
     tokens: &mcp::Tokens,
 ) -> Option<std::path::PathBuf> {
-    let path = attach::bridge_path()?;
-    if let Err(error) = attach::withdraw(&path) {
+    if let Err(error) = attach::withdraw(path) {
         warn!(%error, path = %path.display(), "could not clear a leftover mcp bridge file");
     }
 
-    let env = std::env::var(attach::ATTACH_ENV).ok();
-    let verdict = attach::decide(settings.mcp.attach, env.as_deref());
+    let verdict = attach::decide(mode, env);
     if verdict.override_refused {
         info!(
             variable = attach::ATTACH_ENV,
@@ -200,10 +275,10 @@ fn publish_bridge(
         url: endpoint.url.clone(),
         token: tokens.issue(),
     };
-    match attach::publish(&path, &published) {
+    match attach::publish(path, &published) {
         Ok(()) => {
             info!(path = %path.display(), "mcp live bridge published for outside clients");
-            Some(path)
+            Some(path.to_owned())
         }
         Err(error) => {
             warn!(%error, "could not publish the mcp bridge; outside clients can't attach");
@@ -218,10 +293,17 @@ fn publish_bridge(
 /// Written straight to the streams rather than through `tracing`: this is a
 /// subcommand whose *product* is its stdout, and a log line is neither
 /// pipeable nor guaranteed to be enabled. Nothing else in the binary prints.
-fn report_mcp_config() -> iced::Result {
+fn report_mcp_config(data_dir: Option<&paths::DataDir>) -> iced::Result {
     use std::io::Write;
 
-    match cli::mcp_config() {
+    let Some(path) = data_dir.map(attach::bridge_path) else {
+        let _ = writeln!(
+            std::io::stderr(),
+            "termherd: no home directory, so no bridge file to read"
+        );
+        std::process::exit(1)
+    };
+    match cli::mcp_config(&path) {
         Ok(snippet) => {
             let mut out = std::io::stdout();
             let _ = writeln!(out, "{snippet}");
@@ -229,7 +311,11 @@ fn report_mcp_config() -> iced::Result {
             Ok(())
         }
         Err(error) => {
-            let _ = writeln!(std::io::stderr(), "termherd: {}", cli::explain(&error));
+            let _ = writeln!(
+                std::io::stderr(),
+                "termherd: {}",
+                cli::explain(&error, &path)
+            );
             std::process::exit(1)
         }
     }

@@ -143,8 +143,10 @@ Abbreviated acceptance criteria.
 ### Browser & search
 
 - FR1 — On launch, list every session under `~/.claude/projects`, grouped by
-  the real project path (derived from JSONL `cwd`, worktrees collapsed); no
-  duplicate-group bug (#41/#44 class), pinned by property tests.
+  the real project path (derived from JSONL `cwd`, worktrees collapsed), united
+  with the repositories declared by hand; both sides key by the same rule, which
+  is what preserves the no-duplicate-group clause. No duplicate-group bug
+  (#41/#44 class), pinned by property tests.
 - FR2 — Scanning is off the UI thread; live-updates on fs changes.
 - FR3 — Search over session content, case-insensitive, title-only toggle.
   v1: in-memory over scan digests (their indexed text is capped per
@@ -275,7 +277,7 @@ critical path.
 
 | Risk | Sev | Mitigation |
 | ---- | --- | ---------- |
-| **Terminal multiplexing** (tabs/splits/focus over N live PTYs) is the new hard core | High | Build the pane model as a pure tree in `core` (testable); render with `alacritty_terminal`; M3 is time-boxed and split-resize can ship before drag-resize |
+| **Terminal multiplexing** (tabs/splits/focus over N live PTYs) is the new hard core | High | The pure `core` pane tree and `alacritty_terminal` rendering are in place; fixed-ratio splits shipped before adjustable drag-resize, which now uses the same tree |
 | **Parity gap** — no daily driver until M3 | High | MVP ordering; run beside Electron (shared `~/.claude` reads) until M3 |
 | Native terminal widget cost | Med | `alacritty_terminal` does ANSI/grid; widget is render+input |
 | Scope creep from net-new features | Med | MoSCoW is the contract; Could/Unsure stay out of M0–M3 |

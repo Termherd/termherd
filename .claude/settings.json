@@ -1,0 +1,47 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo fmt *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo test *)",
+      "Bash(cargo nextest *)",
+      "Bash(cargo deny *)",
+      "Bash(cargo machete *)",
+      "Bash(cargo mutants *)",
+      "Bash(just check-deps)",
+      "Bash(just check-arch)",
+      "Bash(just test-hooks)",
+      "Bash(just roadmap)",
+      "Bash(just roadmap-check)",
+      "Bash(just docs)",
+      "Bash(markdownlint-cli2 *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr checks *)",
+      "Bash(gh issue view *)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hooks/no-ai-signature.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/hooks/lint-markdown.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

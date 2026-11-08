@@ -43,7 +43,7 @@ shippable:
   mutating tools, each over an existing `core::App` event.
 - [x] [F-mcp-terminal-sync](#f-mcp-terminal-sync) — The wait rung: block until
   a session's status settles, then read its text.
-- [ ] [F-mcp-agent-loop](#f-mcp-agent-loop) — The composed prompt→wait→read
+- [x] [F-mcp-agent-loop](#f-mcp-agent-loop) — The composed prompt→wait→read
   over any session, shell or Claude.
 - [x] [F-mcp-keys](#f-mcp-keys) — The keyboard rung: drive the app by key
   chords through the real keymap.
@@ -53,3 +53,9 @@ shippable:
   capture dump is now the MCP snapshot.
 - [x] [F-mcp-attach](#f-mcp-attach) — The attach rung: reach the live bridge
   from outside, not only from a session it spawned.
+- [x] [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) — The pointer rung,
+  terminal half: a mouse event inside a session. Unblocked #155, now fixed.
+- [ ] [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) — The pointer rung, chrome
+  half: click and drag termherd's own interface.
+- [x] [F-mcp-options-bridge](#f-mcp-options-bridge) — `list_options` and
+  `set_option` on the live bridge too, over the stdio slice's catalogue.

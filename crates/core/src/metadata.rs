@@ -15,6 +15,11 @@ pub struct SessionMeta {
     pub archived: bool,
     /// A user title that overrides the derived one.
     pub title: Option<String>,
+    /// The name Claude itself gave the session (its `/rename`) when
+    /// [`Self::title`] was set, `None` if it had none. The later naming wins:
+    /// while Claude's name is still this one, the user's title stands; once
+    /// Claude is renamed again, Claude's name does.
+    pub title_over: Option<String>,
 }
 
 impl SessionMeta {
@@ -33,14 +38,20 @@ impl SessionMeta {
 pub struct RepoMeta {
     /// Pinned to the top of the sidebar.
     pub starred: bool,
+    /// Added to the sidebar by hand (`F-repo-add`) rather than discovered by the
+    /// scan. Orthogonal to [`Self::starred`] — all four combinations mean
+    /// something — and it outlives the repo's first session.
+    pub declared: bool,
 }
 
 impl RepoMeta {
     /// True when nothing is set — such entries are dropped rather than persisted
-    /// as noise, mirroring [`SessionMeta::is_default`].
+    /// as noise, mirroring [`SessionMeta::is_default`]. A declaration counts:
+    /// were it left out here, declaring a repo would drop its own entry on the
+    /// very save meant to record it, and the repo would vanish at restart.
     #[must_use]
     pub fn is_default(&self) -> bool {
-        !self.starred
+        !self.starred && !self.declared
     }
 }
 

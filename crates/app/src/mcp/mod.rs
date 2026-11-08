@@ -6,20 +6,23 @@
 //! `core::App` over the timeout-bounded bridge — it never touches core directly.
 //!
 //! rmcp carries the wire protocol (JSON-RPC, the initialize handshake, tool
-//! listing/calls); this module owns only what rmcp leaves to the host: binding
-//! the loopback listener and gating every request on a **per-session bearer
-//! token**. rmcp's default Host validation already refuses non-loopback origins
-//! (DNS-rebinding defence); the token adds per-session authorization on top.
+//! listing/calls); this module owns what rmcp leaves to the host: binding the
+//! loopback listener and gating every request. The gate first refuses (403) a
+//! request whose `Host` or `Origin` names anything but this listener — a
+//! loopback literal on the bound port — which defeats DNS rebinding without
+//! relying on rmcp's defaults. It then requires a **per-session bearer token**
+//! (401), the per-session authorization on top.
 
 mod handler;
 
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::net::Ipv4Addr;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use bytes::Bytes;
-use http::header::AUTHORIZATION;
+use http::header::{AUTHORIZATION, HOST, ORIGIN};
 use http::{HeaderMap, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
@@ -83,38 +86,63 @@ pub(crate) struct Endpoint {
 /// Bind the loopback MCP server and start accepting connections on the current
 /// tokio runtime. Returns the [`Endpoint`] once the listener is bound (so the
 /// launch path can inject its url); the accept loop then runs until the runtime
-/// is dropped. Every request is gated by `tokens` before rmcp sees it.
-pub(crate) async fn serve(bridge: BridgeHandle, tokens: Tokens) -> std::io::Result<Endpoint> {
+/// is dropped. Every request is gated on its `Host`, its `Origin` and one of
+/// `tokens` before rmcp sees it.
+pub(crate) async fn serve(
+    bridge: BridgeHandle,
+    tokens: Tokens,
+    settings_file: Option<PathBuf>,
+) -> std::io::Result<Endpoint> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let addr = listener.local_addr()?;
     let endpoint = Endpoint {
         url: format!("http://{addr}{MCP_PATH}"),
     };
-    tokio::spawn(accept_loop(listener, bridge, tokens));
+    let service = Arc::new(build_service(bridge, settings_file));
+    let gate = Gate {
+        tokens,
+        port: addr.port(),
+    };
+    tokio::spawn(accept_loop(listener, service, gate));
     Ok(endpoint)
 }
 
 /// The rmcp request→response handler, rebuilt per session by the factory (a
-/// fresh [`TermherdMcp`] cloning the bridge). Stateless JSON responses: the
-/// tools are read-only and self-contained, so no SSE session bookkeeping.
-fn build_service(bridge: BridgeHandle) -> StreamableHttpService<TermherdMcp, LocalSessionManager> {
+/// fresh [`TermherdMcp`] cloning the bridge). Stateless JSON responses: each
+/// tool call is self-contained, so no SSE session bookkeeping.
+fn build_service(
+    bridge: BridgeHandle,
+    settings_file: Option<PathBuf>,
+) -> StreamableHttpService<TermherdMcp, LocalSessionManager> {
     // `StreamableHttpServerConfig` is `#[non_exhaustive]`; set fields on a
-    // default. Stateless request/response with a plain JSON body — the tools are
-    // read-only and self-contained, so no SSE session bookkeeping is needed.
+    // default. Stateless request/response with a plain JSON body: each call is
+    // self-contained, so no SSE session bookkeeping is needed. Many tools
+    // mutate the workspace, which is why every request is gated first.
     let mut config = StreamableHttpServerConfig::default();
     config.stateful_mode = false;
     config.json_response = true;
     StreamableHttpService::new(
-        move || Ok(TermherdMcp::new(bridge.clone())),
+        move || Ok(TermherdMcp::new(bridge.clone()).with_settings_file(settings_file.clone())),
         Arc::new(LocalSessionManager::default()),
         config,
     )
 }
 
+/// What every request must satisfy before rmcp sees it.
+#[derive(Clone)]
+struct Gate {
+    tokens: Tokens,
+    /// The loopback port the listener bound, the only one a request may name.
+    port: u16,
+}
+
 /// Accept loopback connections forever, serving each on its own task. One shared
-/// rmcp service backs every connection; the per-request token gate wraps it.
-async fn accept_loop(listener: TcpListener, bridge: BridgeHandle, tokens: Tokens) {
-    let service = Arc::new(build_service(bridge));
+/// rmcp service backs every connection; the per-request gate wraps it.
+async fn accept_loop(
+    listener: TcpListener,
+    service: Arc<StreamableHttpService<TermherdMcp, LocalSessionManager>>,
+    gate: Gate,
+) {
     loop {
         let stream = match listener.accept().await {
             Ok((stream, _peer)) => stream,
@@ -125,10 +153,9 @@ async fn accept_loop(listener: TcpListener, bridge: BridgeHandle, tokens: Tokens
         };
         let io = TokioIo::new(stream);
         let service = Arc::clone(&service);
-        let tokens = tokens.clone();
+        let gate = gate.clone();
         tokio::spawn(async move {
-            let handler =
-                service_fn(move |req| dispatch(req, Arc::clone(&service), tokens.clone()));
+            let handler = service_fn(move |req| dispatch(req, Arc::clone(&service), gate.clone()));
             if let Err(error) = http1::Builder::new().serve_connection(io, handler).await {
                 debug!(%error, "mcp server: connection closed with error");
             }
@@ -136,18 +163,59 @@ async fn accept_loop(listener: TcpListener, bridge: BridgeHandle, tokens: Tokens
     }
 }
 
-/// Gate one request on its bearer token, then hand it to rmcp. A missing or
-/// unknown token is a 401 before rmcp ever parses the body — the token is the
-/// only thing between a local process and the live bridge.
+/// Gate one request, then hand it to rmcp. A request that does not name this
+/// listener is a 403, and a missing or unknown token a 401, both before rmcp
+/// ever parses the body.
 async fn dispatch(
     req: Request<Incoming>,
     service: Arc<StreamableHttpService<TermherdMcp, LocalSessionManager>>,
-    tokens: Tokens,
+    gate: Gate,
 ) -> Result<Response<BoxBody<Bytes, Infallible>>, Infallible> {
-    if !authorized(req.headers(), &tokens) {
-        return Ok(unauthorized());
+    if !(host_allowed(req.headers(), gate.port) && origin_allowed(req.headers(), gate.port)) {
+        return Ok(bare(StatusCode::FORBIDDEN, b"forbidden"));
+    }
+    if !authorized(req.headers(), &gate.tokens) {
+        return Ok(bare(StatusCode::UNAUTHORIZED, b"unauthorized"));
     }
     Ok(service.handle(req).await)
+}
+
+/// The host names a request may use to reach the loopback listener.
+const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
+
+/// Whether `authority` (`host:port`) names this listener: a loopback literal,
+/// in any case, on exactly the bound port. The port is compared as text so
+/// `+8080` or `08080` cannot pass as `8080`.
+fn is_own_authority(authority: &str, port: u16) -> bool {
+    authority.rsplit_once(':').is_some_and(|(host, given)| {
+        given == port.to_string()
+            && LOOPBACK_HOSTS
+                .iter()
+                .any(|loopback| host.eq_ignore_ascii_case(loopback))
+    })
+}
+
+/// Whether the request carries exactly one `Host`, and it names this listener.
+/// A page that rebinds its own domain to 127.0.0.1 still sends that domain
+/// here, which is what this refuses.
+fn host_allowed(headers: &HeaderMap, port: u16) -> bool {
+    let mut hosts = headers.get_all(HOST).iter();
+    match (hosts.next(), hosts.next()) {
+        (Some(host), None) => host.to_str().is_ok_and(|host| is_own_authority(host, port)),
+        _ => false,
+    }
+}
+
+/// Whether every `Origin` is this listener's own `http://` origin. A client
+/// that is not a browser sends none, and passes.
+fn origin_allowed(headers: &HeaderMap, port: u16) -> bool {
+    headers.get_all(ORIGIN).iter().all(|origin| {
+        origin
+            .to_str()
+            .ok()
+            .and_then(|origin| origin.strip_prefix("http://"))
+            .is_some_and(|authority| is_own_authority(authority, port))
+    })
 }
 
 /// Whether the headers carry an `Authorization: Bearer <token>` the server
@@ -168,11 +236,11 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
         .filter(|token| !token.is_empty())
 }
 
-/// A bare `401 Unauthorized`, built without a fallible builder so it never
+/// A refusal with a fixed body, built without a fallible builder so it never
 /// panics and never needs an `unwrap`.
-fn unauthorized() -> Response<BoxBody<Bytes, Infallible>> {
-    let mut response = Response::new(Full::new(Bytes::from_static(b"unauthorized")).boxed());
-    *response.status_mut() = StatusCode::UNAUTHORIZED;
+fn bare(status: StatusCode, body: &'static [u8]) -> Response<BoxBody<Bytes, Infallible>> {
+    let mut response = Response::new(Full::new(Bytes::from_static(body)).boxed());
+    *response.status_mut() = status;
     response
 }
 
@@ -242,16 +310,12 @@ mod tests {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let (bridge, _requests) = crate::shell::bridge::channel();
-        let endpoint = serve(bridge, Tokens::default())
+        let endpoint = serve(bridge, Tokens::default(), None)
             .await
             .expect("bind the loopback server");
-        let authority = endpoint
-            .url
-            .strip_prefix("http://")
-            .and_then(|rest| rest.split('/').next())
-            .expect("an http authority in the endpoint url");
+        let authority = authority(&endpoint);
 
-        let mut stream = tokio::net::TcpStream::connect(authority)
+        let mut stream = tokio::net::TcpStream::connect(&authority)
             .await
             .expect("connect to the loopback server");
         let request = format!(
@@ -276,13 +340,24 @@ mod tests {
     /// returning `(status_line, body)`. Crafts the bytes by hand so the test
     /// needs no MCP client crate.
     async fn round_trip(authority: &str, headers: &str, body: &str) -> (String, String) {
+        round_trip_with_host(authority, authority, headers, body).await
+    }
+
+    /// [`round_trip`] with the `Host` header set to `host` rather than the
+    /// authority actually connected to, as a DNS-rebinding page would send.
+    async fn round_trip_with_host(
+        authority: &str,
+        host: &str,
+        headers: &str,
+        body: &str,
+    ) -> (String, String) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let mut stream = tokio::net::TcpStream::connect(authority)
             .await
             .expect("connect to the loopback server");
         let request = format!(
-            "POST {MCP_PATH} HTTP/1.1\r\nHost: {authority}\r\n{headers}\
+            "POST {MCP_PATH} HTTP/1.1\r\nHost: {host}\r\n{headers}\
              Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
@@ -310,20 +385,18 @@ mod tests {
             .to_owned()
     }
 
+    /// The body of an MCP `initialize` request.
+    const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}"#;
+
     #[tokio::test]
     async fn a_valid_token_completes_the_mcp_initialize_handshake() {
         let (bridge, _requests) = crate::shell::bridge::channel();
         let tokens = Tokens::default();
-        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
+        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
         let token = tokens.issue();
-        let authority = authority(&endpoint);
 
-        let headers = format!(
-            "Authorization: Bearer {token}\r\nContent-Type: application/json\r\n\
-             Accept: application/json, text/event-stream\r\n"
-        );
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"0"}}}"#;
-        let (status, body) = round_trip(&authority, &headers, body).await;
+        let (status, body) =
+            round_trip(&authority(&endpoint), &call_headers(&token), INITIALIZE).await;
 
         assert!(
             status.contains("200"),
@@ -347,7 +420,7 @@ mod tests {
     async fn the_screenshot_tool_is_advertised_alongside_the_text_reads() {
         let (bridge, _requests) = crate::shell::bridge::channel();
         let tokens = Tokens::default();
-        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
+        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
         let token = tokens.issue();
 
         let (status, body) = round_trip(
@@ -383,7 +456,7 @@ mod tests {
             }),
         );
         let tokens = Tokens::default();
-        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
+        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
         let token = tokens.issue();
 
         let (status, body) = round_trip(
@@ -408,7 +481,7 @@ mod tests {
     async fn the_keyboard_tools_are_advertised_with_the_rest() {
         let (bridge, _requests) = crate::shell::bridge::channel();
         let tokens = Tokens::default();
-        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
+        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
         let token = tokens.issue();
 
         let (status, body) = round_trip(
@@ -448,7 +521,7 @@ mod tests {
             }),
         );
         let tokens = Tokens::default();
-        let endpoint = serve(bridge, tokens.clone()).await.expect("bind");
+        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
         let token = tokens.issue();
 
         let (status, body) = round_trip(
@@ -476,6 +549,169 @@ mod tests {
             Request::Press(presses) => assert_eq!(presses.len(), 2, "got: {presses:?}"),
             other => panic!("expected a press request, got {other:?}"),
         }
+    }
+
+    const PORT: u16 = 49_152;
+
+    fn headers_with(entries: &[(http::header::HeaderName, &str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (name, value) in entries {
+            headers.append(name.clone(), value.parse().expect("a valid header value"));
+        }
+        headers
+    }
+
+    #[test]
+    fn own_authority_is_a_loopback_literal_on_the_bound_port() {
+        for authority in [
+            "127.0.0.1:49152",
+            "localhost:49152",
+            "[::1]:49152",
+            "LOCALHOST:49152",
+        ] {
+            assert!(is_own_authority(authority, PORT), "{authority} is ours");
+        }
+        for authority in [
+            "127.0.0.1:49153",
+            "127.0.0.1",
+            "localhost",
+            "[::1]",
+            "evil.example:49152",
+            "127.0.0.1.evil.example:49152",
+            "127.0.0.1:+49152",
+            "127.0.0.1:049152",
+            "",
+        ] {
+            assert!(
+                !is_own_authority(authority, PORT),
+                "{authority} is not ours"
+            );
+        }
+    }
+
+    #[test]
+    fn host_allowed_needs_exactly_one_own_host_header() {
+        assert!(host_allowed(
+            &headers_with(&[(HOST, "127.0.0.1:49152")]),
+            PORT
+        ));
+        assert!(
+            !host_allowed(&HeaderMap::new(), PORT),
+            "a request without Host is refused"
+        );
+        assert!(
+            !host_allowed(&headers_with(&[(HOST, "evil.example:49152")]), PORT),
+            "a rebinding page's Host is refused"
+        );
+        assert!(
+            !host_allowed(
+                &headers_with(&[(HOST, "127.0.0.1:49152"), (HOST, "evil.example")]),
+                PORT
+            ),
+            "two Host headers are refused, whichever one a parser would read"
+        );
+    }
+
+    #[test]
+    fn origin_allowed_when_absent_or_our_own_http_origin() {
+        assert!(
+            origin_allowed(&HeaderMap::new(), PORT),
+            "a non-browser client sends no Origin"
+        );
+        assert!(origin_allowed(
+            &headers_with(&[(ORIGIN, "http://127.0.0.1:49152")]),
+            PORT
+        ));
+        for origin in [
+            "null",
+            "https://127.0.0.1:49152",
+            "http://evil.example",
+            "http://127.0.0.1:49153",
+        ] {
+            assert!(
+                !origin_allowed(&headers_with(&[(ORIGIN, origin)]), PORT),
+                "Origin {origin} is refused"
+            );
+        }
+        assert!(
+            !origin_allowed(
+                &headers_with(&[
+                    (ORIGIN, "http://127.0.0.1:49152"),
+                    (ORIGIN, "http://evil.example")
+                ]),
+                PORT
+            ),
+            "every Origin header must be ours"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_forged_host_is_refused_before_the_token_is_looked_at() {
+        let (bridge, _requests) = crate::shell::bridge::channel();
+        let endpoint = serve(bridge, Tokens::default(), None).await.expect("bind");
+        let headers = "Content-Type: application/json\r\n\
+                       Accept: application/json, text/event-stream\r\n";
+
+        let (status, _) =
+            round_trip_with_host(&authority(&endpoint), "evil.example", headers, INITIALIZE).await;
+
+        assert!(
+            status.contains("403"),
+            "termherd refuses the Host itself, not rmcp after the token, got: {status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_forged_host_is_refused_even_with_a_valid_token() {
+        let (bridge, _requests) = crate::shell::bridge::channel();
+        let tokens = Tokens::default();
+        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
+        let token = tokens.issue();
+
+        let (status, _) = round_trip_with_host(
+            &authority(&endpoint),
+            "evil.example",
+            &call_headers(&token),
+            INITIALIZE,
+        )
+        .await;
+
+        assert!(status.contains("403"), "got status: {status}");
+    }
+
+    #[tokio::test]
+    async fn a_foreign_origin_is_refused_even_with_a_valid_token() {
+        let (bridge, _requests) = crate::shell::bridge::channel();
+        let tokens = Tokens::default();
+        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
+        let token = tokens.issue();
+        let headers = format!("{}Origin: http://evil.example\r\n", call_headers(&token));
+
+        let (status, _) = round_trip(&authority(&endpoint), &headers, INITIALIZE).await;
+
+        assert!(
+            status.contains("403"),
+            "rmcp checks no Origin by default; termherd does, got: {status}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_localhost_host_with_its_own_origin_still_initializes() {
+        let (bridge, _requests) = crate::shell::bridge::channel();
+        let tokens = Tokens::default();
+        let endpoint = serve(bridge, tokens.clone(), None).await.expect("bind");
+        let token = tokens.issue();
+        let authority = authority(&endpoint);
+        let port = authority
+            .rsplit_once(':')
+            .map(|(_, port)| port)
+            .expect("a port");
+        let host = format!("localhost:{port}");
+        let headers = format!("{}Origin: http://{host}\r\n", call_headers(&token));
+
+        let (status, _) = round_trip_with_host(&authority, &host, &headers, INITIALIZE).await;
+
+        assert!(status.contains("200"), "got status: {status}");
     }
 
     #[test]

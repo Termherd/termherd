@@ -1,6 +1,6 @@
 [package]
 name = "termherd-app"
-version = "0.1.0-prerelease.4"
+version = "0.1.0-prerelease.5"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,6 +16,8 @@ path = "src/main.rs"
 # via dist (GitHub Releases) — opt it in explicitly.
 [package.metadata.dist]
 dist = true
+# The licences of the embedded colour schemes travel with the binary.
+include = ["../../THIRD_PARTY_NOTICES.md"]
 
 # Desktop installer bundles (cargo-packager). `dist` (above) ships the bare
 # binary + curl|sh / powershell installers for CLI-style installs; this
@@ -35,6 +37,8 @@ and search, on macOS, Windows and Linux."""
 homepage = "https://github.com/Termherd/termherd"
 authors = ["TermHerd contributors"]
 license-file = "../../LICENSE"
+# The licences of the embedded colour schemes travel with the bundle.
+resources = ["../../THIRD_PARTY_NOTICES.md"]
 icons = [
     "icons/icon.icns",
     "icons/icon.ico",
@@ -44,6 +48,12 @@ icons = [
     "icons/256x256.png",
     "icons/512x512.png",
 ]
+
+# Register `termherd://` with the OS: `CFBundleURLTypes` in the `.app`, an
+# `x-scheme-handler` MIME type in the `.deb`, a URL protocol key in the NSIS
+# installer. The AppImage registers nothing: it installs nothing.
+[[package.metadata.packager.deep-link-protocols]]
+schemes = ["termherd"]
 
 [package.metadata.packager.macos]
 minimum-system-version = "10.15"
@@ -57,6 +67,8 @@ termherd-core = { path = "../core" }
 termherd-claude = { path = "../claude" }
 termherd-scan = { path = "../scan" }
 termherd-pty = { path = "../pty" }
+termherd-mcp = { path = "../mcp" }
+termherd-private-fs = { path = "../private-fs" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 single-instance = "0.3"
@@ -115,6 +127,20 @@ uuid = { version = "1", features = ["v4"] }
 # tool encodes its PNG bytes with it. Already in the tree via rmcp's own wire
 # codec; declared here because this crate calls it directly.
 base64 = "0.22"
+# Native folder picker for "add a repo to the sidebar". `xdg-portal` instead of
+# the default `gtk3` backend so a Linux build needs no GTK development
+# libraries — the portal is what a sandboxed desktop offers anyway. Its async
+# dialog owns the main-thread hop macOS and Windows need, and carries no async
+# runtime of its own, which is what lets it be polled by an `iced::Task`.
+#
+# `wayland` is listed explicitly because `default-features = false` drops it
+# too: without it the portal cannot be handed a parent surface, and the dialog
+# opens unparented — floating free of the window that asked for it, and not
+# modal to it.
+rfd = { version = "0.17.2", default-features = false, features = [
+    "wayland",
+    "xdg-portal",
+] }
 
 [dev-dependencies]
 # Temp dirs for the atomic-write round-trip tests.
@@ -123,18 +149,31 @@ tempfile = "3"
 proptest = "1"
 
 # AppKit menu surgery to route Cmd+Q through the iced runtime instead of
-# AppKit's `terminate:`. Pinned to the exact objc2 versions winit 0.30 already
+# AppKit's `terminate:`, to replay Character Viewer text winit drops as an
+# input-method commit, and to answer the `GetURL` Apple Event a
+# `termherd://` link arrives as. Pinned to the exact objc2 versions winit 0.30 already
 # builds, so this adds no duplicate native crates to the tree.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5.2"
 objc2-app-kit = { version = "0.2.2", features = [
     "NSApplication",
+    "NSEvent",
     "NSMenu",
     "NSMenuItem",
     "NSResponder",
     "NSWindow",
 ] }
-objc2-foundation = { version = "0.2.2", features = ["NSArray"] }
+objc2-foundation = { version = "0.2.2", features = [
+    "NSAppleEventDescriptor",
+    "NSAppleEventManager",
+    "NSArray",
+    "NSNotification",
+] }
+# Already in the tree as notify-rust's macOS backend. Called directly for the
+# one thing notify-rust 4.18 cannot ask it: to block until a notification is
+# clicked. Its `wait_for_response` sends with no button and no `wait_for_click`,
+# which the backend reads as "nothing to wait for", so a click never arrived.
+mac-notification-sys = "0.6"
 
 # Monitor geometry for the off-screen window guard. Limited to non-Linux: the
 # Linux backend hard-links libxcb, which cuts against the project's

@@ -22,35 +22,44 @@ use iced::futures::channel::mpsc::UnboundedReceiver;
 use iced::widget::text_editor;
 use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost};
-use termherd_core::workspace::SessionId;
+use termherd_core::workspace::{SessionId, Tab};
 use termherd_core::{
-    ConfigInput, Keymap, Launch, Overlay, ScrollTarget, SelectOp, SessionRecord, SessionStatus,
+    ClaudeLaunch, ConfigInput, Keymap, Launch, Overlay, PointerEvent, ScrollTarget, SelectOp,
+    SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
 use crate::docs::DocEntry;
 use crate::record_config::RecordConfig;
-use crate::settings::{ClipboardGestures, CloseSettings, ThemeChoice};
+use crate::settings::{ClipboardGestures, CloseSettings, OptionAsMeta, ThemeChoice};
 use crate::window_config::WindowConfig;
 
+mod appearance;
 pub(crate) mod bridge;
+mod claude_command;
+mod color_picker;
 mod docs;
 mod effects;
 mod geometry;
 mod ime;
 mod input;
 mod launch;
+mod links;
+mod live_settings;
+mod notify_click;
 mod orchestrate;
 mod record;
+mod repos;
 mod routing;
 mod serve;
 mod session_ops;
 mod streams;
+mod tab_menu;
 mod terminal;
 mod view;
 
 pub(crate) use bridge::{Requests as BridgeRequests, channel as bridge_channel};
-use docs::{DocFeedback, OpenDoc};
+use docs::{DocDiscard, DocVersion, OpenDoc};
 
 /// The live-bridge runtime wiring handed to the shell, grouped so the
 /// constructor stays within argument bounds. Carries the subscription source
@@ -63,9 +72,9 @@ pub(crate) struct LiveBridge {
     pub(crate) mcp_endpoint: Option<crate::mcp::Endpoint>,
     pub(crate) mcp_tokens: crate::mcp::Tokens,
 }
-use input::event_modifiers;
+use input::{AltSides, event_modifiers};
 use record::RecordState;
-use streams::{PtyOutput, pty_stream, watch_stream};
+use streams::{PtyOutput, RESCAN_INTERVAL, pty_stream, rescan_tick_stream, watch_stream};
 
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
@@ -79,70 +88,40 @@ fn tab_rename_id() -> widget::Id {
     widget::Id::new("termherd-tab-rename")
 }
 
-/// The user's home directory, the fallback cwd for "new shell here" when no
-/// session is open to inherit one from. Falls back to "." if neither
-/// `USERPROFILE` (Windows) nor `HOME` (Unix) is set, so a launch always has a
-/// directory to start in.
-fn home_dir() -> String {
-    crate::paths::home_dir()
-        .map(|h| h.to_string_lossy().into_owned())
-        .unwrap_or_else(|| ".".to_string())
-}
-
 /// Resolved user configuration handed to the shell at startup: the theme,
 /// keymap and metadata overlay built from `settings.json` / `metadata.json`.
 /// Bundled so the composition root passes one value, not a long argument list.
+#[derive(Clone)]
 pub struct Startup {
-    pub theme: ThemeChoice,
-    pub keymap: Keymap,
+    /// The parsed `settings.json`, adopted through the same path a live
+    /// reload takes, so a setting cannot apply at startup and not on reload.
+    pub settings: crate::settings::Settings,
     pub metadata: Overlay,
     /// Folded project paths restored from disk.
     pub collapsed: HashSet<String>,
-    /// GIF screencast budget from settings.
-    pub record: RecordConfig,
-    /// Sidebar session limit from settings; `0` shows every session.
-    pub session_limit: usize,
-    /// Terminal base font size from settings.
-    pub font_size: f32,
-    /// Close-confirmation policy for tab close and app quit.
-    pub close: CloseSettings,
-    /// Which mouse gestures reach the clipboard.
-    pub gestures: ClipboardGestures,
-    /// The editor command from settings, or `None` for the OS default handler.
-    pub open: Option<termherd_core::OpenCommand>,
-    /// Adapter-owned config bits for the MCP `snapshot` tool's config section
-    /// (the live font size is stamped by `core`, not carried here).
-    pub config: ConfigInput,
+    /// Config files that existed but could not be used at startup, shown in
+    /// the sidebar until dismissed.
+    pub load_problems: Vec<crate::json_store::LoadProblem>,
+    /// Where state is read and written. `None`: nothing is persisted.
+    pub data_dir: Option<crate::paths::DataDir>,
+    /// The `settings.json` `main()` also hands the MCP server: resolved once,
+    /// so the agent never writes a file the app does not watch.
+    pub settings_file: Option<PathBuf>,
+    /// Where a launch with no context starts.
+    pub fallback_cwd: String,
+    pub claude_dir: Option<crate::paths::ClaudeDir>,
 }
 
-impl Startup {
-    /// Bundle the sanitised settings with the other persisted state, so the
-    /// composition root passes one value instead of fanning fields by hand.
-    #[must_use]
-    pub fn from_settings(
-        settings: &crate::settings::Settings,
-        metadata: Overlay,
-        collapsed: HashSet<String>,
-    ) -> Self {
-        let record = settings.record_config();
-        Self {
-            theme: settings.theme,
-            keymap: settings.keymap(),
-            metadata,
-            collapsed,
-            session_limit: settings.session_limit(),
-            font_size: settings.font_size(),
-            close: settings.close,
-            gestures: settings.clipboard_gestures(),
-            open: settings.open_command(),
-            config: ConfigInput {
-                terminal_scheme: settings.terminal.colors.scheme.clone(),
-                record_fps: record.fps,
-                record_scale: record.scale,
-                keymap_overrides: settings.keys.len(),
-            },
-            record,
-        }
+/// The settings the MCP `snapshot` tool reports that `core` cannot read —
+/// built in one place for startup and for a live reload, so the two cannot
+/// report different things.
+fn config_input(settings: &crate::settings::Settings) -> ConfigInput {
+    let record = settings.record_config();
+    ConfigInput {
+        terminal_scheme: settings.terminal.colors.scheme.clone(),
+        record_fps: record.fps,
+        record_scale: record.scale,
+        keymap_overrides: settings.keys.len(),
     }
 }
 
@@ -150,7 +129,7 @@ pub fn run(
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
     path_resolver: Arc<dyn PathResolver>,
-    pty: Arc<dyn PtyHost>,
+    pty: Arc<termherd_pty::PtyManager>,
     pty_rx: UnboundedReceiver<PtyEvent>,
     live_bridge: LiveBridge,
     startup: Startup,
@@ -158,8 +137,12 @@ pub fn run(
     // Restore the saved bounds, but discard a position that now lands off every
     // connected monitor (e.g. a second screen that has since been unplugged), so
     // the window can't open out of reach.
-    let config =
-        WindowConfig::load().with_onscreen_position(&crate::window_geometry::current_screens());
+    let config = startup
+        .data_dir
+        .as_ref()
+        .map_or_else(WindowConfig::default, WindowConfig::load)
+        .with_onscreen_position(&crate::window_geometry::current_screens());
+    let settings_file = startup.settings_file.clone();
     let position = match (config.x, config.y) {
         (Some(x), Some(y)) => window::Position::Specific(Point::new(x, y)),
         _ => window::Position::Centered,
@@ -175,21 +158,13 @@ pub fn run(
                     path_resolver: path_resolver.clone(),
                     pty: pty.clone(),
                     pty_output: pty_output.clone(),
+                    settings: Arc::new(live_settings::LiveSettings {
+                        pty: pty.clone(),
+                        file: settings_file.clone(),
+                    }),
                 },
                 live_bridge.clone(),
-                Startup {
-                    theme: startup.theme,
-                    keymap: startup.keymap.clone(),
-                    metadata: startup.metadata.clone(),
-                    collapsed: startup.collapsed.clone(),
-                    record: startup.record,
-                    session_limit: startup.session_limit,
-                    font_size: startup.font_size,
-                    close: startup.close,
-                    gestures: startup.gestures,
-                    open: startup.open.clone(),
-                    config: startup.config.clone(),
-                },
+                startup.clone(),
             );
             let initial_scan = shell.rescan();
             (shell, initial_scan)
@@ -243,6 +218,18 @@ struct Shell {
     bounds: WindowConfig,
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
+    /// Where the shell persists the user's state. `None`: nothing is written.
+    data_dir: Option<crate::paths::DataDir>,
+    /// The `settings.json` the live-reload watch follows; resolved once.
+    settings_file: Option<PathBuf>,
+    /// Where captures and screencasts land: one dir, so the latest is the
+    /// highest-named file in it.
+    captures: Option<PathBuf>,
+    /// Whether a capture masks the secrets its terminal text shows
+    /// (`capture.redact`).
+    redact_captures: bool,
+    fallback_cwd: String,
+    claude_dir: Option<crate::paths::ClaudeDir>,
     scan_error: Option<String>,
     /// Checks whether a path-shaped run of terminal text names a real file.
     /// The one thing that tells `src/main.rs` from `and/or`.
@@ -254,6 +241,10 @@ struct Shell {
     /// Drains async-bridge transport requests into the subscription (taken
     /// once), so an off-thread caller can read `core` state and get a reply.
     bridge_requests: BridgeRequests,
+    /// Where a clicked desktop notification sends its session, and the source
+    /// the subscription drains it from (taken once).
+    notification_clicks: notify_click::NotificationClicks,
+    notification_clicked: notify_click::ClickSource,
     /// The loopback MCP server's endpoint, if it bound. A Claude launch injects
     /// this url (plus a fresh token) into its `mcpServers` config. `None` when
     /// the substrate runtime or the listener failed — the browser still runs.
@@ -275,10 +266,15 @@ struct Shell {
     waiters: Vec<serve::StatusWaiter>,
     /// Current keyboard target.
     focus: Focus,
-    /// Last non-empty terminal selection, for the keyboard copy shortcut (FR4).
-    selection: Option<String>,
-    /// GUI chrome theme (FR10).
-    theme: Theme,
+    /// The appearance the settings panel edits: the chrome theme, read every
+    /// frame by [`Shell::theme`], and the terminal colours.
+    appearance: appearance::Appearance,
+    /// Whether the settings panel is open.
+    settings_open: bool,
+    /// Config files that could not be used, until the user dismisses them.
+    load_problems: Vec<crate::json_store::LoadProblem>,
+    /// See [`Ports::settings`].
+    settings_sink: Arc<dyn live_settings::SettingsSink>,
     /// Configurable shortcut bindings (FR9).
     keymap: Keymap,
     /// In-progress inline rename: `(session id, edit buffer)` (F-session-metadata).
@@ -290,6 +286,14 @@ struct Shell {
     /// than a positional index, so a reorder or a sibling close can't retarget
     /// the pending edit at the wrong tab.
     tab_rename: Option<(SessionId, String)>,
+    /// The open tab context menu, if any. It holds no tab of its own: it is
+    /// always the focused tab's, because every entry acts on focus.
+    tab_menu: Option<tab_menu::TabMenu>,
+    /// The open tab colour picker, if any — the focused tab's, like the menu.
+    color_picker: Option<color_picker::ColorPicker>,
+    /// Set only while an MCP call is being served, so a prompt armed then is
+    /// marked as one the user has not read (see `for_a_remote_caller`).
+    serving_remote_caller: bool,
     /// Browsable plan / memory docs (F-plans-memory), refreshed on scan.
     docs: Vec<DocEntry>,
     /// Whether a scan is currently in flight. At most one runs at a time;
@@ -301,6 +305,12 @@ struct Shell {
     rescan_pending: bool,
     /// The doc currently open in the main pane for viewing/editing, if any.
     open_doc: Option<OpenDoc>,
+    /// A discard of the open doc's unsaved edits awaiting confirmation.
+    discarding_doc: Option<DocDiscard>,
+    /// Edits made to any doc this run; each edit takes the next number. Kept
+    /// across docs, so a save of a closed buffer can never name an edit of a
+    /// later one at the same path.
+    doc_edits: u64,
     /// A close awaiting confirmation: the tab index to kill, or `None`.
     /// Killing a session is destructive, so the close button arms this and a
     /// confirmation bar must be accepted before the PTY is actually killed —
@@ -322,6 +332,14 @@ struct Shell {
     /// process (TerminateProcess / SIGKILL, no graceful shutdown), so a quit
     /// with sessions still running arms this modal first.
     closing_window: Option<window::Id>,
+    /// A Claude slash command awaiting confirmation, and the session it is for.
+    /// The prompt names the exact line, so nothing is typed into Claude that
+    /// the user has not read first.
+    claude_command: Option<claude_command::PendingCommand>,
+    /// A one-line notice of something the user asked for that did not happen —
+    /// a rename Claude could not take — shown under the tab strip until
+    /// dismissed or replaced. Not a prompt: it holds no keyboard.
+    notice: Option<String>,
     /// Whether Ctrl (or Cmd) is currently held — the link-open modifier.
     /// Tracked from keyboard events and handed to the terminal canvas so it can
     /// highlight a hovered link and open it on click.
@@ -329,10 +347,16 @@ struct Shell {
     /// Whether Shift is currently held, handed to the terminal canvas so a
     /// Shift+click extends the existing selection instead of restarting it.
     shift_modifier: bool,
+    /// Which Alt keys are held, for `option_as_meta`.
+    alt_sides: AltSides,
+    /// Which Option key sends Meta, resolved for this platform.
+    option_as_meta: OptionAsMeta,
     /// An in-progress tab drag (FR5 reorder): the tab being dragged and
     /// the slot the pointer is currently over. `None` when no drag is active.
     /// Transient pointer state only — the tab order itself lives in `core`.
     tab_drag: Option<TabDrag>,
+    split_drag: Option<SplitDrag>,
+    cursor_position: Point,
     /// Set once the quit path has asked the iced runtime to terminate.
     /// The observable proof that quitting reached `iced::exit` — closing the
     /// only window is *not* enough on macOS (winit cancels the OS terminate and
@@ -352,21 +376,128 @@ struct TabDrag {
     over: usize,
 }
 
+/// The tabs the shell's index-keyed state names, each with the session of its
+/// first pane, so the index can be found again once `core` reorders the strip:
+/// parking, unparking and opening before the parked group all shift tabs.
+struct TabAnchors {
+    closing: Option<(usize, SessionId)>,
+    drag: Option<(TabDrag, SessionId, SessionId)>,
+    split: Option<(usize, SessionId)>,
+}
+
+impl TabAnchors {
+    fn of(shell: &Shell) -> Self {
+        let workspace = &shell.core.workspace;
+        let session_at = |index: usize| workspace.tabs.get(index).map(Tab::first_session);
+        Self {
+            closing: shell
+                .closing
+                .and_then(|index| Some((index, session_at(index)?))),
+            drag: shell
+                .tab_drag
+                .and_then(|drag| Some((drag, session_at(drag.from)?, session_at(drag.over)?))),
+            split: shell
+                .split_drag
+                .as_ref()
+                .and_then(|drag| Some((drag.tab, session_at(drag.tab)?))),
+        }
+    }
+
+    /// Point the state the message left untouched back at its tabs. A tab no
+    /// longer found is left to the message, which already dealt with its close.
+    fn follow(self, shell: &mut Shell) {
+        let workspace = &shell.core.workspace;
+        if let Some((index, session)) = self.closing
+            && shell.closing == Some(index)
+            && let Some(now) = workspace.tab_of(session)
+        {
+            shell.closing = Some(now);
+        }
+        if let Some((drag, from, over)) = self.drag
+            && shell.tab_drag == Some(drag)
+            && let (Some(from), Some(over)) = (workspace.tab_of(from), workspace.tab_of(over))
+        {
+            shell.tab_drag = Some(TabDrag { from, over });
+        }
+        if let Some((index, session)) = self.split
+            && let Some(drag) = shell.split_drag.as_mut()
+            && drag.tab == index
+            && let Some(now) = workspace.tab_of(session)
+        {
+            drag.tab = now;
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SplitDrag {
+    tab: usize,
+    path: Vec<termherd_core::workspace::Branch>,
+    dir: termherd_core::workspace::SplitDir,
+    ratio: f32,
+    start: Point,
+    extent: f32,
+}
+
+/// Ends a tab drag on a left release anywhere in the window, not only over
+/// the strip: the pointer routinely overshoots it. Captured events count too,
+/// since the terminal canvas captures the releases that land on it. A lifted
+/// finger counts as a release, as it does for the chip that started the drag.
+fn tab_drag_release(
+    event: iced::Event,
+    _status: iced::event::Status,
+    _window: window::Id,
+) -> Option<Message> {
+    matches!(
+        event,
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+            iced::mouse::Button::Left
+        )) | iced::Event::Touch(iced::touch::Event::FingerLifted { .. })
+    )
+    .then_some(Message::TabDragEnd)
+}
+
+fn split_drag_event(
+    event: iced::Event,
+    _status: iced::event::Status,
+    _window: window::Id,
+) -> Option<Message> {
+    match event {
+        iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) => {
+            Some(Message::SplitDragMove(position))
+        }
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+            Some(Message::SplitDragEnd)
+        }
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone)]
 enum Message {
     Window(window::Id, window::Event),
     ScanCompleted(Result<Vec<SessionRecord>, String>),
     /// The fs watcher saw the projects tree change (FR2).
     ProjectsChanged,
+    /// The periodic fallback rescan is due, whatever the watcher saw.
+    RescanTick,
     /// A background plan/memory docs rediscovery finished (F-plans-memory).
     DocsDiscovered(Vec<DocEntry>),
     /// Unfold (or refold) a project's truncated session tail.
     ToggleExpanded(String),
     SearchChanged(String),
     SearchTitlesOnly(bool),
-    /// Open a fresh shell in the given project directory (FR4a, `$` button).
+    /// Ask the OS for a folder to add to the sidebar (`F-repo-add`, `+` button).
+    PickRepoFolder,
+    /// A folder reached the app — from the picker or from a window file-drop.
+    /// The two gestures converge here so one path is normalised and tested.
+    /// `None` is a cancelled dialog.
+    RepoPicked(Option<PathBuf>),
+    /// Drop a hand-added repo's declaration (`F-repo-add`).
+    ForgetRepo(String),
+    /// Open a fresh shell in the given project directory (FR4a, `❯` button).
     LaunchProject(String),
-    /// Start a fresh Claude session in the given project directory (FR4a, 🤖
+    /// Start a fresh Claude session in the given project directory (FR4a, `✳`
     /// button) — distinct from resuming an existing one.
     LaunchClaude(String),
     /// Resume a Claude session in its project directory (FR4).
@@ -394,11 +525,23 @@ enum Message {
         session: SessionId,
         cwd: String,
     },
+    /// The job in front of a session's shell changed (its pid, or none).
+    PtyForegroundJob {
+        session: SessionId,
+        job: Option<termherd_core::ForegroundJob>,
+    },
+    /// A session's program entered or left the alternate screen.
+    PtyAltScreen {
+        session: SessionId,
+        on: bool,
+    },
     /// A session fired an OSC 9 notification; forward it to the OS.
     PtyNotify {
         session: SessionId,
         body: String,
     },
+    /// The user clicked the desktop notification `SessionId` posted.
+    NotificationClicked(SessionId),
     /// A session's process exited; `clean` mirrors [`PtyEvent::Exited`].
     PtyExited {
         session: SessionId,
@@ -414,6 +557,15 @@ enum Message {
     /// and gives the keyboard to the terminal. A lone terminal is the one-leaf
     /// case, focused the same way.
     FocusPane(SessionId),
+    /// Begin a split-handle drag; global mouse events track it through release.
+    SplitDragStart {
+        tab: usize,
+        path: Vec<termherd_core::workspace::Branch>,
+        dir: termherd_core::workspace::SplitDir,
+        ratio: f32,
+    },
+    SplitDragMove(Point),
+    SplitDragEnd,
     /// The mouse wheel turned over a terminal: the session under the pointer
     /// (not necessarily the focused one — splits), the pointer cell, and a line
     /// delta, so a mouse-mode app gets the wheel as input and a plain shell gets
@@ -423,6 +575,13 @@ enum Message {
         col: u16,
         row: u16,
         lines: i32,
+    },
+    /// A bare pointer event over a terminal whose child reads the mouse: the
+    /// session under the pointer and the cell, for the terminal thread to
+    /// forward as mouse input (FR4). Selection gestures take [`Self::Select`].
+    TermPointer {
+        session: SessionId,
+        pointer: PointerEvent,
     },
     /// Change a terminal's grid-anchored selection — press, drag, or clear — so
     /// the highlight follows the text through scroll (FR4).
@@ -458,6 +617,10 @@ enum Message {
         session: SessionId,
         content: Option<String>,
     },
+    /// Write the paste held for confirmation (FR4).
+    ConfirmPaste,
+    /// Drop the paste held for confirmation without writing it.
+    CancelPaste,
     /// Ask to close the tab at this index — arms the confirmation bar.
     RequestCloseTab(usize),
     /// Confirm the pending close, killing the tab's session(s) (FR5).
@@ -468,23 +631,33 @@ enum Message {
     TabDragStart(usize),
     /// During a drag, the pointer entered the tab at this index.
     TabDragOver(usize),
-    /// The drag's pointer was released: commit the reorder, else it was a
-    /// plain click that activates the pressed tab.
+    /// The drag's pointer was released anywhere in the window: commit the
+    /// reorder at the last slot hovered, else it was a plain click that
+    /// activates the pressed tab.
     TabDragEnd,
-    /// The drag left the tab strip without a drop — abandon it.
-    TabDragCancel,
-    /// Begin renaming a tab inline (double-click its chip), seeded with the
-    /// title currently shown.
-    StartTabRename {
-        index: usize,
-        current: String,
-    },
+    /// Begin renaming the tab at this index inline (double-click its chip),
+    /// seeded with the title currently shown.
+    StartTabRename(usize),
     /// The inline tab-rename field's text changed.
     TabRenameInput(String),
     /// Commit the tab rename (Enter, or a blur onto another interaction).
     CommitTabRename,
     /// Abandon the tab rename (Escape), keeping the previous display title.
     CancelTabRename,
+    /// Right-click on the tab at this index: focus it, then open its menu.
+    OpenTabMenu(usize),
+    /// The pointer entered the menu entry at this position.
+    HoverTabMenuEntry(usize),
+    /// Run the menu entry at this position (a click on it).
+    RunTabMenuEntry(usize),
+    /// Close the menu without running anything (a click off it).
+    CloseTabMenu,
+    /// The pointer entered the colour picker's line at this position.
+    HoverColorPickerEntry(usize),
+    /// Pick the colour at this position (a click on it).
+    PickColorPickerEntry(usize),
+    /// Close the colour picker without picking (a click off it).
+    CloseColorPicker,
     /// Confirm quitting TermHerd, closing the window (and hard-killing every
     /// live session). Reached only after the quit modal is accepted.
     ConfirmCloseWindow,
@@ -504,12 +677,32 @@ enum Message {
     ConfirmArchive,
     /// Dismiss the archive confirmation without archiving.
     CancelArchive,
+    /// Type the armed Claude slash command into its session.
+    ConfirmClaudeCommand,
+    /// Dismiss the Claude command confirmation without typing anything.
+    CancelClaudeCommand,
+    /// Hide the notice under the tab strip.
+    DismissNotice,
     /// Show or hide archived sessions in the browser (F-session-metadata).
     ShowArchived(bool),
     /// Fold or unfold a project's session list in the sidebar, by path.
     ToggleCollapsed(String),
     /// Collapse or restore the whole session-browser sidebar.
     ToggleSidebar,
+    /// Open the settings panel, or close it when open.
+    ToggleSettings,
+    /// Hide the notice about config files that could not be used.
+    DismissLoadProblems,
+    /// `settings.json` changed on disk: reload and apply it.
+    SettingsFileChanged,
+    /// A `termherd://` link may be waiting in the inbox: open what it names.
+    LinkInboxChanged,
+    /// Close the settings panel (its close button, the scrim, Escape).
+    CloseSettings,
+    /// Apply and persist a GUI chrome theme picked in the settings panel.
+    PickTheme(ThemeChoice),
+    /// Apply and persist a terminal scheme picked in the settings panel.
+    PickScheme(appearance::SchemeChoice),
     /// Begin renaming a session inline, seeded with its current title.
     StartRename {
         session: String,
@@ -538,10 +731,19 @@ enum Message {
     DocEdit(text_editor::Action),
     /// Save the open doc to disk (Save button or the save chord).
     SaveDoc,
-    /// A save finished: the file's new mtime, or why it was refused.
-    DocSaved(Result<SystemTime, crate::docs::SaveError>),
+    /// A save finished: which buffer state it wrote, and the file's new mtime
+    /// or why it was refused.
+    DocSaved {
+        version: DocVersion,
+        result: Result<SystemTime, crate::docs::SaveError>,
+    },
     /// Close the doc viewer, returning to the terminal.
     CloseDoc,
+    /// Discard the open doc's unsaved edits and finish the armed close or
+    /// replace.
+    ConfirmDocDiscard,
+    /// Keep editing: dismiss the discard confirmation.
+    CancelDocDiscard,
     /// The clickable target now under the pointer in a terminal, or `None` when
     /// the pointer left every one. The canvas finds it; `core` owns it.
     TermTarget {
@@ -559,6 +761,8 @@ enum Message {
         request: termherd_core::PathRequest,
         resolved: Option<termherd_core::ResolvedPath>,
     },
+    /// The pause before a submit's Enter has passed; press it now.
+    SubmitDue(termherd_core::SessionId),
     /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
     /// runs off the UI thread, so this only spawns it.
@@ -606,15 +810,18 @@ impl Message {
                 | Self::LaunchSession { .. }
                 | Self::FocusSearch
                 | Self::FocusPane(_)
+                | Self::NotificationClicked(_)
                 | Self::TermScroll { .. }
                 | Self::Paste(_)
                 | Self::RequestPaste { .. }
                 | Self::TabDragStart(_)
-                | Self::TabDragEnd
+                | Self::OpenTabMenu(_)
                 | Self::RequestCloseTab(_)
                 | Self::CloseTab(_)
                 | Self::ToggleStar(_)
                 | Self::ToggleRepoStar(_)
+                | Self::PickRepoFolder
+                | Self::ForgetRepo(_)
                 | Self::ToggleArchive(_)
                 | Self::RequestArchive(_)
                 | Self::ToggleCollapsed(_)
@@ -657,6 +864,9 @@ pub(crate) struct Ports {
     pub(crate) path_resolver: Arc<dyn PathResolver>,
     pub(crate) pty: Arc<dyn PtyHost>,
     pub(crate) pty_output: PtyOutput,
+    /// Where a setting goes beyond the shell: the live terminal palette, the
+    /// next session's shell, and `settings.json`.
+    pub(crate) settings: Arc<dyn live_settings::SettingsSink>,
 }
 
 impl Shell {
@@ -667,64 +877,88 @@ impl Shell {
             path_resolver,
             pty,
             pty_output,
+            settings: settings_sink,
         } = ports;
         let LiveBridge {
             requests: bridge_requests,
             mcp_endpoint,
             mcp_tokens,
         } = live_bridge;
+        let (notification_clicks, notification_clicked) = notify_click::channel();
+        let settings_file = startup.settings_file;
+        let captures = startup.data_dir.as_ref().map(crate::capture::captures_dir);
         let mut core = termherd_core::App::new();
         core.apply(termherd_core::Event::MetadataLoaded(startup.metadata));
         core.apply(termherd_core::Event::CollapsedLoaded(startup.collapsed));
-        core.apply(termherd_core::Event::SessionLimitLoaded(
-            startup.session_limit,
-        ));
-        core.apply(termherd_core::Event::FontSizeLoaded(startup.font_size));
-        core.apply(termherd_core::Event::OpenCommandLoaded(startup.open));
-        Self {
+        // Every settings-derived field starts at its default and is then
+        // adopted from the file below, exactly as a reload adopts it.
+        let mut shell = Self {
             core,
             bounds,
             scanner,
             watch_root,
+            settings_file,
             scan_error: None,
             path_resolver,
             pty,
             pty_output,
             bridge_requests,
+            notification_clicks,
+            notification_clicked,
             mcp_endpoint,
             mcp_tokens,
             mcp_session_tokens: HashMap::new(),
             screens: HashMap::new(),
             waiters: Vec::new(),
             focus: Focus::Search,
-            selection: None,
-            theme: startup.theme.to_iced(),
-            keymap: startup.keymap,
+            appearance: appearance::Appearance::default(),
+            settings_open: false,
+            load_problems: startup.load_problems,
+            settings_sink,
+            keymap: Keymap::defaults(),
             renaming: None,
             tab_rename: None,
+            tab_menu: None,
+            color_picker: None,
+            serving_remote_caller: false,
             // Populated by the first scan's `refresh_docs` — `discover` does
             // blocking fs I/O, which must stay off the UI thread.
             docs: Vec::new(),
             scan_in_flight: false,
             rescan_pending: false,
             open_doc: None,
+            discarding_doc: None,
+            doc_edits: 0,
             closing: None,
-            close_confirm: startup.close,
-            gestures: startup.gestures,
+            close_confirm: CloseSettings::default(),
+            gestures: ClipboardGestures::default(),
             archiving: None,
+            claude_command: None,
+            notice: None,
             closing_window: None,
             link_modifier: false,
             shift_modifier: false,
+            alt_sides: AltSides::default(),
+            option_as_meta: OptionAsMeta::default(),
             tab_drag: None,
+            split_drag: None,
+            cursor_position: Point::new(0.0, 0.0),
             exiting: false,
-            record: RecordState::new(startup.record),
-            config: startup.config,
-        }
+            record: RecordState::new(RecordConfig::default()),
+            config: config_input(&crate::settings::Settings::default()),
+            data_dir: startup.data_dir,
+            fallback_cwd: startup.fallback_cwd,
+            claude_dir: startup.claude_dir,
+            captures,
+            redact_captures: true,
+        };
+        shell.adopt_settings(&startup.settings);
+        shell
     }
 
     /// The GUI chrome theme (FR10); the terminal grid keeps its own colours.
     fn theme(&self) -> Theme {
-        self.theme.clone()
+        self.appearance.theme.to_iced()
     }
 
     /// Run one scan off the UI thread (FR2) and feed the result back. At most
@@ -745,6 +979,17 @@ impl Shell {
         )
     }
 
+    /// The periodic fallback rescan. Skipped while a scan is in flight, and
+    /// never queued behind it as a watch change is: that scan already brings
+    /// what this tick would.
+    fn rescan_tick(&mut self) -> Task<Message> {
+        if self.scan_in_flight {
+            Task::none()
+        } else {
+            self.rescan()
+        }
+    }
+
     /// A scan settled (success or failure): clear the in-flight flag and, if
     /// changes arrived while it ran, start the single follow-up scan they
     /// coalesced into.
@@ -763,27 +1008,43 @@ impl Shell {
     /// unplugged network mount, a removed directory) that stat can block for
     /// tens of seconds, so it must never run on the UI thread.
     fn refresh_docs(&self) -> Task<Message> {
-        let paths: Vec<String> = self
-            .core
-            .sidebar
-            .projects
-            .iter()
-            .map(|g| g.path.clone())
-            .collect();
+        let paths = self.doc_project_paths();
+        let claude = self.claude_dir.clone();
         Task::perform(
-            async move { crate::docs::discover(&paths) },
+            async move { crate::docs::discover(claude.as_ref(), &paths) },
             Message::DocsDiscovered,
         )
     }
 
-    // The iced `update` is a flat `match` over every `Message` variant — the
-    // app's central event dispatcher, whose arms delegate to the domain modules
-    // (launch, session_ops, effects, geometry, routing, …). The length here is
-    // breadth (one arm per message), not nested complexity, and splitting the
-    // dispatch itself would only scatter it — the allow is by design, not a
-    // deferred cleanup.
-    #[allow(clippy::too_many_lines)]
+    /// The repos whose `CLAUDE.md` the doc list offers: every repo the sidebar
+    /// shows, a declaration with no session yet included.
+    fn doc_project_paths(&self) -> Vec<String> {
+        self.core
+            .repo_paths()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The iced `update`: every message goes through [`Self::dispatch`]. The
+    /// tab indices the shell holds then follow their tabs through any reorder
+    /// the message caused.
     fn update(&mut self, message: Message) -> Task<Message> {
+        let anchors = TabAnchors::of(self);
+        let task = self.dispatch(message);
+        anchors.follow(self);
+        task
+    }
+
+    // A flat `match` over every `Message` variant — the app's central event
+    // dispatcher, whose arms delegate to the domain modules (launch,
+    // session_ops, effects, geometry, routing, …). The length here is breadth
+    // (one arm per message), not nested complexity, and splitting the dispatch
+    // itself would only scatter it — the allow is by design, not a deferred
+    // cleanup.
+    #[allow(clippy::too_many_lines)]
+    fn dispatch(&mut self, message: Message) -> Task<Message> {
+        self.drop_stale_lists();
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
         // is open discards it — the blur-cancels-edit convention. Only genuine
         // user interactions dismiss it; background traffic (PTY output,
@@ -840,6 +1101,7 @@ impl Shell {
                 tracing::debug!("projects tree changed; rescanning");
                 self.rescan()
             }
+            Message::RescanTick => self.rescan_tick(),
             Message::SearchChanged(query) => {
                 let effects = self.core.apply(termherd_core::Event::SearchChanged(query));
                 self.perform(effects)
@@ -851,22 +1113,21 @@ impl Shell {
                 self.perform(effects)
             }
             Message::LaunchProject(cwd) => self.launch(cwd, Launch::Shell),
-            Message::LaunchClaude(cwd) => self.launch(cwd, Launch::Claude { resume: None }),
+            Message::LaunchClaude(cwd) => {
+                self.launch(cwd, Launch::Claude(ClaudeLaunch::Fresh(None)))
+            }
             Message::LaunchSession { cwd, resume } => {
                 // Re-clicking a session already open in TermHerd re-focuses its
                 // tab instead of spawning a second terminal for the same Claude
-                // session (FR4).
+                // session (FR4). A re-key rewrites the session file under the
+                // same pid, which no job change announces, so read them first.
+                self.refresh_session_files();
                 if let Some(session) = self.core.open_session_for(&resume)
                     && let Some(index) = self.core.workspace.tab_of(session)
                 {
                     return self.activate_tab(index);
                 }
-                self.launch(
-                    cwd,
-                    Launch::Claude {
-                        resume: Some(resume),
-                    },
-                )
+                self.launch(cwd, Launch::Claude(ClaudeLaunch::Resume(resume)))
             }
             Message::PtyOutput { session, screen } => {
                 self.screens.insert(session, screen);
@@ -891,6 +1152,19 @@ impl Shell {
                     .apply(termherd_core::Event::SessionCwdChanged { session, cwd });
                 self.perform(effects)
             }
+            Message::PtyForegroundJob { session, job } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::ForegroundJobChanged { session, job });
+                self.refresh_session_file(session);
+                self.perform(effects)
+            }
+            Message::PtyAltScreen { session, on } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::AltScreenChanged { session, on });
+                self.perform(effects)
+            }
             Message::PtyNotify { session, body } => {
                 // Unlike status/title, this yields an `Effect::Notify` that the
                 // shell must perform — hand it to the OS notification centre.
@@ -899,8 +1173,9 @@ impl Shell {
                     .apply(termherd_core::Event::SessionNotified { session, body });
                 self.perform(effects)
             }
+            Message::NotificationClicked(session) => self.on_notification_clicked(session),
             Message::PtyExited { session, clean } => {
-                let tabs_before = self.core.workspace.tabs.len();
+                let vanishing = self.vanishing_pane(session);
                 let effects = self
                     .core
                     .apply(termherd_core::Event::PtyExited { session, clean });
@@ -912,16 +1187,9 @@ impl Shell {
                     // No auto-close: the dead terminal stays on screen.
                     Task::none()
                 } else {
-                    // The pane auto-closed on its clean shell exit — mirror
-                    // `close_tab`'s shell-side hygiene for the vanished session.
-                    self.screens.remove(&session);
-                    if self.core.workspace.tabs.len() != tabs_before {
-                        // Tab indices shifted under any pending close
-                        // confirmation; dropping the prompt is the safe
-                        // reaction (the user can re-request).
-                        self.closing = None;
-                    }
-                    Task::batch([self.perform(effects), self.resize_panes()])
+                    // The pane auto-closed on its clean shell exit.
+                    let kill = self.perform(effects);
+                    Task::batch([kill, self.after_pane_vanished(vanishing)])
                 }
             }
             Message::Key(event) => {
@@ -931,12 +1199,56 @@ impl Shell {
                 let modifiers = event_modifiers(&event);
                 self.link_modifier = modifiers.control() || modifiers.logo();
                 self.shift_modifier = modifiers.shift();
+                self.alt_sides.track(&event);
+                if self.enter_too_soon(&event, Instant::now()) {
+                    return Task::none();
+                }
                 // A real keypress has no one to report to; the verdict exists
                 // for the MCP press tool, which answers a caller.
                 self.on_key(event).1
             }
             Message::ImeCommit(text) => self.on_ime_commit(text),
             Message::FocusPane(session) => self.focus_pane(session),
+            Message::SplitDragStart {
+                tab,
+                path,
+                dir,
+                ratio,
+            } => {
+                if tab == self.core.workspace.active
+                    && let Some(extent) = self.split_extent(tab, &path).filter(|n| *n > 0.0)
+                {
+                    self.split_drag = Some(SplitDrag {
+                        tab,
+                        path,
+                        dir,
+                        ratio,
+                        start: self.cursor_position,
+                        extent,
+                    });
+                }
+                Task::none()
+            }
+            Message::SplitDragMove(position) => {
+                self.cursor_position = position;
+                let Some(drag) = self.split_drag.as_ref() else {
+                    return Task::none();
+                };
+                let delta = match drag.dir {
+                    termherd_core::workspace::SplitDir::Vertical => position.x - drag.start.x,
+                    termherd_core::workspace::SplitDir::Horizontal => position.y - drag.start.y,
+                };
+                let effects = self.core.apply(termherd_core::Event::SetSplitRatio {
+                    tab: drag.tab,
+                    path: drag.path.clone(),
+                    ratio: drag.ratio + delta / drag.extent,
+                });
+                self.perform(effects)
+            }
+            Message::SplitDragEnd => match self.split_drag.take() {
+                Some(drag) => self.resize_tab(drag.tab),
+                None => Task::none(),
+            },
             Message::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
@@ -947,6 +1259,12 @@ impl Shell {
                 row,
                 lines,
             } => self.scroll_session(session, ScrollTarget::Wheel { col, row, lines }),
+            Message::TermPointer { session, pointer } => {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::TerminalPointer { session, pointer });
+                self.perform(effects)
+            }
             Message::Select { session, op } => {
                 let effects = self
                     .core
@@ -961,7 +1279,6 @@ impl Shell {
                 if text.is_empty() {
                     select
                 } else {
-                    self.selection = Some(text.clone());
                     Task::batch([select, iced::clipboard::write(text)])
                 }
             }
@@ -975,7 +1292,6 @@ impl Shell {
                 if text.is_empty() {
                     Task::none()
                 } else {
-                    self.selection = Some(text.clone());
                     iced::clipboard::write(text)
                 }
             }
@@ -1001,6 +1317,14 @@ impl Shell {
                 Task::batch([focus, read])
             }
             Message::PasteInto { session, content } => self.paste_into(session, content),
+            Message::ConfirmPaste => {
+                let effects = self.core.apply(termherd_core::Event::ConfirmPaste);
+                self.perform(effects)
+            }
+            Message::CancelPaste => {
+                let effects = self.core.apply(termherd_core::Event::CancelPaste);
+                self.perform(effects)
+            }
             Message::RequestCloseTab(index) => self.request_close(index).unwrap_or_else(Task::none),
             Message::CloseTab(index) => self.close_tab(index),
             Message::CancelClose => {
@@ -1022,6 +1346,9 @@ impl Shell {
                 {
                     drag.over = index;
                 }
+                // The pointer entering a chip is also the hover that opens its
+                // card: Claude may have written or renamed its file since.
+                self.refresh_tab_session_files(index);
                 Task::none()
             }
             Message::TabDragEnd => match self.tab_drag.take() {
@@ -1036,25 +1363,8 @@ impl Shell {
                 Some(TabDrag { from, .. }) => self.activate_tab(from),
                 None => Task::none(),
             },
-            Message::TabDragCancel => {
-                self.tab_drag = None;
-                Task::none()
-            }
-            Message::StartTabRename { index, current } => {
-                // Anchor on the tab's first session so the edit survives a
-                // reorder; every tab hosts at least one, so this is `Some` for a
-                // valid index.
-                if let Some(anchor) = self
-                    .core
-                    .workspace
-                    .tabs
-                    .get(index)
-                    .and_then(|tab| tab.sessions().first().copied())
-                {
-                    self.tab_rename = Some((anchor, current));
-                    return operate(focusable::focus(tab_rename_id()));
-                }
-                Task::none()
+            Message::StartTabRename(index) => {
+                self.start_tab_rename(index).unwrap_or_else(Task::none)
             }
             Message::TabRenameInput(value) => {
                 if let Some((_, buffer)) = &mut self.tab_rename {
@@ -1064,6 +1374,25 @@ impl Shell {
             }
             Message::CommitTabRename => {
                 self.commit_tab_rename();
+                Task::none()
+            }
+            Message::OpenTabMenu(index) => self.open_tab_menu_at(index),
+            Message::HoverTabMenuEntry(position) => {
+                self.select_tab_menu_entry(position);
+                Task::none()
+            }
+            Message::RunTabMenuEntry(position) => self.run_tab_menu_entry(position).1,
+            Message::CloseTabMenu => {
+                self.tab_menu = None;
+                Task::none()
+            }
+            Message::HoverColorPickerEntry(position) => {
+                self.select_color(position);
+                Task::none()
+            }
+            Message::PickColorPickerEntry(position) => self.pick_color(position).1,
+            Message::CloseColorPicker => {
+                self.color_picker = None;
                 Task::none()
             }
             Message::CancelTabRename => {
@@ -1089,6 +1418,17 @@ impl Shell {
                 let effects = self.core.apply(termherd_core::Event::ToggleRepoStar(path));
                 self.perform(effects)
             }
+            Message::PickRepoFolder => Task::perform(
+                // `rfd`'s async dialog owns the main-thread hop the platform
+                // needs; the future itself carries no runtime, which is what
+                // lets it run on the `futures` pool `Task::perform` polls.
+                rfd::AsyncFileDialog::new().pick_folder(),
+                |handle| Message::RepoPicked(handle.map(|h| h.path().to_owned())),
+            ),
+            Message::RepoPicked(path) => {
+                self.declare_repo(path.as_deref(), repos::RepoGesture::Picker)
+            }
+            Message::ForgetRepo(path) => self.forget_repo_key(&path, repos::RepoGesture::Button),
             Message::ToggleArchive(session) => {
                 let effects = self
                     .core
@@ -1115,6 +1455,14 @@ impl Shell {
                 self.archiving = None;
                 Task::none()
             }
+            Message::ConfirmClaudeCommand => self
+                .confirm_claude_command()
+                .unwrap_or_else(|_| Task::none()),
+            Message::CancelClaudeCommand => self.cancel_claude_command(),
+            Message::DismissNotice => {
+                self.notice = None;
+                Task::none()
+            }
             Message::ShowArchived(show) => {
                 let effects = self
                     .core
@@ -1130,6 +1478,28 @@ impl Shell {
                 self.perform(effects)
             }
             Message::ToggleSidebar => self.toggle_sidebar(),
+            Message::SettingsFileChanged => self.reload_settings(),
+            Message::LinkInboxChanged => self.drain_link_inbox(),
+            Message::DismissLoadProblems => {
+                self.load_problems.clear();
+                Task::none()
+            }
+            Message::ToggleSettings => {
+                self.settings_open = !self.settings_open;
+                Task::none()
+            }
+            Message::CloseSettings => {
+                self.settings_open = false;
+                Task::none()
+            }
+            Message::PickTheme(theme) => {
+                self.pick_theme(theme);
+                Task::none()
+            }
+            Message::PickScheme(scheme) => {
+                self.pick_scheme(scheme);
+                Task::none()
+            }
             Message::StartRename { session, current } => {
                 self.renaming = Some((session, current));
                 operate(focusable::focus(rename_id()))
@@ -1142,6 +1512,10 @@ impl Shell {
             }
             Message::CommitRename => match self.renaming.take() {
                 Some((session, title)) => {
+                    if let Some((live, current)) = self.open_claude_to_rename(&session, &title) {
+                        self.rename_through_claude(live, &title, &current);
+                        return Task::none();
+                    }
                     let effects = self
                         .core
                         .apply(termherd_core::Event::RenameSession { session, title });
@@ -1153,72 +1527,22 @@ impl Shell {
                 self.renaming = None;
                 Task::none()
             }
-            Message::OpenDoc { label, path } => {
-                let read_path = path.clone();
-                Task::perform(
-                    async move {
-                        let content = crate::docs::read(&read_path)
-                            .unwrap_or_else(crate::strings::doc_read_failed);
-                        let mtime = crate::docs::mtime(&read_path).ok();
-                        (content, mtime)
-                    },
-                    move |(content, mtime)| Message::DocLoaded {
-                        label: label.clone(),
-                        path: path.clone(),
-                        content,
-                        mtime,
-                    },
-                )
-            }
+            Message::OpenDoc { label, path } => self.request_doc(label, path),
             Message::DocLoaded {
                 label,
                 path,
                 content,
                 mtime,
             } => {
-                let writable = crate::docs::is_writable(&path);
-                self.open_doc = Some(OpenDoc {
-                    label,
-                    path,
-                    content: text_editor::Content::with_text(&content),
-                    loaded_mtime: mtime,
-                    writable,
-                    dirty: false,
-                    feedback: None,
-                });
-                Task::none()
+                let doc = OpenDoc::loaded(label, path, &content, mtime, self.claude_dir.as_ref());
+                self.show_doc(doc)
             }
-            Message::DocEdit(action) => {
-                if let Some(doc) = &mut self.open_doc {
-                    let edits = action.is_edit();
-                    doc.content.perform(action);
-                    if edits {
-                        doc.dirty = true;
-                        doc.feedback = None;
-                    }
-                }
-                Task::none()
-            }
+            Message::DocEdit(action) => self.edit_doc(action),
             Message::SaveDoc => self.save_open_doc(),
-            Message::DocSaved(result) => {
-                if let Some(doc) = &mut self.open_doc {
-                    match result {
-                        Ok(new_mtime) => {
-                            doc.loaded_mtime = Some(new_mtime);
-                            doc.dirty = false;
-                            doc.feedback = Some(DocFeedback::Saved);
-                        }
-                        Err(error) => {
-                            doc.feedback = Some(DocFeedback::Error(error.to_string()));
-                        }
-                    }
-                }
-                Task::none()
-            }
-            Message::CloseDoc => {
-                self.open_doc = None;
-                Task::none()
-            }
+            Message::DocSaved { version, result } => self.on_doc_saved(version, result),
+            Message::CloseDoc => self.close_doc(),
+            Message::ConfirmDocDiscard => self.confirm_doc_discard(),
+            Message::CancelDocDiscard => self.cancel_doc_discard(),
             Message::TermTarget { session, probe } => {
                 let effects = self
                     .core
@@ -1237,6 +1561,7 @@ impl Shell {
                     .apply(termherd_core::Event::PathResolved { request, resolved });
                 self.perform(effects)
             }
+            Message::SubmitDue(session) => self.press_enter(session),
             Message::CaptureScreenshot {
                 screenshot,
                 png_path,
@@ -1269,34 +1594,81 @@ impl Shell {
         }
     }
 
+    /// The peer name of the Claude in front of the focused pane, its session
+    /// file read afresh.
+    pub(crate) fn focused_agent_name(&mut self) -> Option<String> {
+        let session = self.core.workspace.focused_session()?;
+        self.refresh_session_file(session);
+        self.core.peer_name(session)
+    }
+
+    /// Re-read the session file of every live pane.
+    fn refresh_session_files(&mut self) {
+        let sessions: Vec<SessionId> = self.core.sessions.values().map(|s| s.id).collect();
+        for session in sessions {
+            self.refresh_session_file(session);
+        }
+    }
+
+    /// Re-read the session file of every pane in the tab at `index`.
+    fn refresh_tab_session_files(&mut self, index: usize) {
+        let sessions = self
+            .core
+            .workspace
+            .tabs
+            .get(index)
+            .map(|tab| tab.sessions())
+            .unwrap_or_default();
+        for session in sessions {
+            self.refresh_session_file(session);
+        }
+    }
+
+    /// Re-read Claude's session file for the job in front of `session` into
+    /// `core`'s cache, which the hover card reads without touching the disk.
+    fn refresh_session_file(&mut self, session: SessionId) {
+        let file = self
+            .core
+            .sessions
+            .get(&session)
+            .and_then(|live| live.foreground.as_ref())
+            .and_then(|job| self.session_file(job.pid));
+        let effects = self
+            .core
+            .apply(termherd_core::Event::SessionFileRead { session, file });
+        // Callers here hold no `Task` to carry an effect out with, so an effect
+        // this event starts emitting must fail the tests rather than vanish.
+        debug_assert!(
+            effects.is_empty(),
+            "SessionFileRead now emits effects: route them through `perform`"
+        );
+    }
+
     /// Put the terminal selection on the clipboard (FR4). `None` when there is
     /// nothing selected: a caller told the copy ran would follow with a paste and
-    /// paste whatever was on the clipboard before.
+    /// paste whatever was on the clipboard before. (A selection of blank cells
+    /// still runs and copies an empty string — the screen flag cannot see the
+    /// text, only that a selection is there.)
     ///
-    /// A **visible** selection outranks [`Self::selection`], which is a cache of
-    /// the last text copied, not of the last text selected. With copy-on-select
-    /// off, nothing but a copy fills that cache — so trusting it first would put
-    /// the previously copied text on the clipboard while a fresh highlight sits
-    /// on screen, silently copying the wrong thing. The terminal reads its own
-    /// live selection and answers out of band, which refills the cache on the
-    /// way. The cache still serves the case the screen cannot: a selection
-    /// scrolled out of the viewport carries no spans to see.
+    /// The terminal owns the selection, so it answers both questions: whether
+    /// one exists (`has_selection`, true even when it scrolled out of view and
+    /// shows no spans) and what it says (read live, out of band, so a fast drag
+    /// copies exactly what was dragged). The shell keeps no copy of either — a
+    /// cache of the last text copied once stood in for the scrolled-out case,
+    /// and in a pane whose program owns the mouse, where only a Shift-drag
+    /// selects, it overwrote the program's own clipboard write on every
+    /// unshifted chord.
     fn copy_selection(&mut self) -> Option<Task<Message>> {
-        if let Some(session) = self.core.workspace.focused_session()
-            && self
-                .screens
-                .get(&session)
-                .is_some_and(|screen| !screen.selection.is_empty())
-        {
-            let effects = self
-                .core
-                .apply(termherd_core::Event::CopyTerminalSelection { session });
-            return Some(self.perform(effects));
-        }
-        match &self.selection {
-            Some(sel) if !sel.is_empty() => Some(iced::clipboard::write(sel.clone())),
-            _ => None,
-        }
+        let session = self.core.workspace.focused_session()?;
+        self.screens
+            .get(&session)
+            .is_some_and(|screen| screen.has_selection)
+            .then(|| {
+                let effects = self
+                    .core
+                    .apply(termherd_core::Event::CopyTerminalSelection { session });
+                self.perform(effects)
+            })
     }
 
     /// Move pane focus to `session` and give the keyboard to its terminal —
@@ -1307,25 +1679,39 @@ impl Shell {
         self.perform(effects)
     }
 
-    /// Write clipboard `content` into `session` as terminal input, bracketed
-    /// when that session asked for it. The one paste seam: the keyboard chord
-    /// arrives here with the focused session, a right-click with the one under
-    /// the pointer, so neither can grow its own idea of how a paste is framed.
-    /// Empty (or absent) content writes nothing — a paste of nothing must not
-    /// send the bracket markers on their own.
+    /// Paste clipboard `content` into `session`, bracketed when that session
+    /// asked for it. The one paste seam: the keyboard chord arrives here with
+    /// the focused session, a right-click with the one under the pointer, so
+    /// neither can grow its own idea of how a paste is framed, nor a way past
+    /// the confirmation `core` holds a line-by-line paste behind. Empty (or
+    /// absent) content writes nothing — a paste of nothing must not send the
+    /// bracket markers on their own.
     fn paste_into(&mut self, session: SessionId, content: Option<String>) -> Task<Message> {
-        let Some(text) = content.filter(|t| !t.is_empty()) else {
+        let Some(text) = content else {
             return Task::none();
         };
         let bracketed = self
             .screens
             .get(&session)
             .is_some_and(|screen| screen.bracketed_paste);
-        let effects = self.core.apply(termherd_core::Event::TerminalInput {
+        let effects = self.core.apply(termherd_core::Event::Paste {
             session,
-            bytes: termherd_pty::paste_bytes(&text, bracketed),
+            text,
+            bracketed,
         });
         self.perform(effects)
+    }
+
+    /// Open the inline rename of the tab at `index`, seeded with its shown
+    /// title so the edit starts from the name it replaces. `None` when there is
+    /// no such tab.
+    ///
+    /// The edit anchors on the tab's first session rather than its index, so
+    /// it survives a reorder while open.
+    fn start_tab_rename(&mut self, index: usize) -> Option<Task<Message>> {
+        let tab = self.core.workspace.tabs.get(index)?;
+        self.tab_rename = Some((tab.first_session(), tab.display_title().to_owned()));
+        Some(operate(focusable::focus(tab_rename_id())))
     }
 
     /// Apply the pending tab rename to the core and clear the edit. The core's
@@ -1344,10 +1730,37 @@ impl Shell {
         let Some(index) = self.core.workspace.tab_of(anchor) else {
             return;
         };
+        if let Some((session, current)) = self.claude_named_tab(index) {
+            self.rename_through_claude(session, &title, &current);
+            return;
+        }
         let effects = self
             .core
             .apply(termherd_core::Event::RenameTab { index, title });
         debug_assert!(effects.is_empty());
+    }
+
+    /// The first pane of the tab at `index` and the name the tab shows, when
+    /// renaming that tab is Claude's to do — see
+    /// [`termherd_core::App::tab_names_through_claude`].
+    fn claude_named_tab(&self, index: usize) -> Option<(SessionId, String)> {
+        let session = self.core.tab_claude_namer(index)?;
+        let tab = self.core.workspace.tabs.get(index)?;
+        Some((session, tab.display_title().to_owned()))
+    }
+
+    /// The open tab a sidebar rename of conversation `claude_id` is asked of
+    /// Claude through, as [`Self::claude_named_tab`] answers it. A blank
+    /// rename stays local whatever is open: it only clears the name termherd
+    /// keeps, which is not Claude's to give back.
+    fn open_claude_to_rename(&self, claude_id: &str, title: &str) -> Option<(SessionId, String)> {
+        if title.trim().is_empty() {
+            return None;
+        }
+        let live = self.core.open_session_for(claude_id)?;
+        let index = self.core.workspace.tab_of(live)?;
+        self.claude_named_tab(index)
+            .filter(|(session, _)| *session == live)
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -1357,11 +1770,32 @@ impl Shell {
         ];
         if let Some(root) = &self.watch_root {
             subs.push(Subscription::run_with(root.clone(), watch_stream));
+            subs.push(Subscription::run_with(RESCAN_INTERVAL, rescan_tick_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
+        // Always live, not only during a drag: iced broadcasts a batch's events
+        // to the subscriptions that exist *before* the batch's messages run, so
+        // one started by `TabDragStart` would miss a release in the same batch
+        // (a quick click) and leave the drag armed for the next click anywhere.
+        // A release with no drag in flight is a no-op.
+        subs.push(iced::event::listen_with(tab_drag_release));
+        subs.push(iced::event::listen_with(split_drag_event));
+        if let Some(file) = &self.settings_file {
+            subs.push(Subscription::run_with(
+                file.clone(),
+                live_settings::settings_watch_stream,
+            ));
+        }
+        if let Some(inbox) = self.data_dir.as_ref().map(crate::link_inbox::inbox_dir) {
+            subs.push(Subscription::run_with(inbox, links::inbox_watch_stream));
+        }
         subs.push(Subscription::run_with(
             self.bridge_requests.clone(),
             bridge::request_stream,
+        ));
+        subs.push(Subscription::run_with(
+            self.notification_clicked.clone(),
+            notify_click::click_stream,
         ));
         // The screencast is driven by the window's present clock while recording:
         // `window::frames()` yields one tick per present (self-sustaining,
@@ -1383,12 +1817,15 @@ impl Shell {
 mod key_routing {
     use super::routing::KeyboardOwner;
     use super::*;
-    use crate::settings::ConfirmClose;
+    use crate::settings::{ColorSettings, ConfirmClose};
     use iced::keyboard::key::{Named, NativeCode, Physical};
     use iced::keyboard::{Key, Location, Modifiers};
     use std::sync::Mutex as StdMutex;
     use termherd_core::ports::{PtyError, ScanError};
-    use termherd_core::{Action, SelectSide, SnapshotFilter, SpawnSpec};
+    use termherd_core::{
+        Action, CommandRefusal, PointerEvent, PointerKind, PointerRoute, SelectSide, SessionKind,
+        SnapshotFilter, SpawnSpec,
+    };
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
     #[derive(Default)]
@@ -1400,6 +1837,7 @@ mod key_routing {
         resizes: StdMutex<Vec<(u16, u16)>>,
         scrolls: StdMutex<Vec<ScrollTarget>>,
         selects: StdMutex<Vec<SelectOp>>,
+        pointers: StdMutex<Vec<(SessionId, PointerEvent)>>,
         copies: StdMutex<usize>,
     }
 
@@ -1435,6 +1873,9 @@ mod key_routing {
         fn copy_count(&self) -> usize {
             *self.copies.lock().expect("copies lock")
         }
+        fn pointers(&self) -> Vec<(SessionId, PointerEvent)> {
+            self.pointers.lock().expect("pointers lock").clone()
+        }
     }
 
     impl PtyHost for RecordingPty {
@@ -1468,6 +1909,13 @@ mod key_routing {
             self.selects.lock().expect("selects lock").push(op);
             Ok(())
         }
+        fn pointer(&self, session: SessionId, pointer: PointerEvent) -> Result<(), PtyError> {
+            self.pointers
+                .lock()
+                .expect("pointers lock")
+                .push((session, pointer));
+            Ok(())
+        }
         fn copy_selection(&self, _: SessionId) -> Result<(), PtyError> {
             *self.copies.lock().expect("copies lock") += 1;
             Ok(())
@@ -1488,28 +1936,14 @@ mod key_routing {
     /// The default startup payload the test shells boot with.
     fn test_startup() -> Startup {
         Startup {
-            theme: ThemeChoice::default(),
-            keymap: Keymap::defaults(),
+            settings: crate::settings::Settings::default(),
             metadata: Overlay::default(),
             collapsed: HashSet::new(),
-            record: RecordConfig::default(),
-            session_limit: 0,
-            font_size: 14.0,
-            close: CloseSettings::default(),
-            gestures: ClipboardGestures::default(),
-            open: None,
-            config: test_config_input(),
-        }
-    }
-
-    /// A neutral config input for test shells — the snapshot tool's config
-    /// section is exercised in the `core` builder tests, not here.
-    fn test_config_input() -> ConfigInput {
-        ConfigInput {
-            terminal_scheme: None,
-            record_fps: 8,
-            record_scale: 0.5,
-            keymap_overrides: 0,
+            load_problems: Vec::new(),
+            data_dir: None,
+            settings_file: None,
+            fallback_cwd: "/injected/home".to_owned(),
+            claude_dir: None,
         }
     }
 
@@ -1537,17 +1971,23 @@ mod key_routing {
             path_resolver: Arc::new(termherd_scan::FsPathResolver::new()),
             pty,
             pty_output: PtyOutput::new(rx),
+            settings: Arc::new(()),
         }
     }
 
     /// A `Shell` over the given PTY host, with no terminal open yet.
     fn shell_over(pty: Arc<dyn PtyHost>) -> Shell {
+        shell_over_with(pty, test_startup())
+    }
+
+    /// [`shell_over`], starting from `startup`.
+    fn shell_over_with(pty: Arc<dyn PtyHost>, startup: Startup) -> Shell {
         let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
         Shell::new(
             WindowConfig::default(),
             test_ports(pty, rx),
             test_live_bridge(),
-            test_startup(),
+            startup,
         )
     }
 
@@ -1565,7 +2005,10 @@ mod key_routing {
             WindowConfig::default(),
             test_ports(Arc::new(RecordingPty::default()), rx),
             test_live_bridge(),
-            Startup::from_settings(&settings, Overlay::default(), HashSet::new()),
+            Startup {
+                settings,
+                ..test_startup()
+            },
         );
 
         let request = termherd_core::PathRequest {
@@ -1611,6 +2054,249 @@ mod key_routing {
         (shell, pty)
     }
 
+    #[test]
+    fn every_spawned_pane_is_stamped_with_the_shells_clock() {
+        let before = SystemTime::now();
+        let (mut shell, _pty) = shell_with_terminal();
+        let first = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.run_action(Action::SplitVertical);
+        let second = shell.core.workspace.focused_session().expect("focused");
+        assert_ne!(first, second, "the split focuses its new pane");
+        let after = SystemTime::now();
+        for session in [first, second] {
+            let stamped = shell.core.running_since(session).expect("stamped");
+            assert!(before <= stamped && stamped <= after, "{session:?}");
+        }
+    }
+
+    /// The id a fresh Claude launch was minted, when `launch` is one and the id
+    /// is a UUID — the shape `--session-id` takes.
+    fn minted_fresh_claude(launch: Option<&Launch>) -> Option<&str> {
+        match launch {
+            Some(Launch::Claude(ClaudeLaunch::Fresh(Some(id))))
+                if termherd_claude::session_id::is_uuid(id) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        }
+    }
+
+    const STARTED: &str = "Wed Oct  7 06:48:07 2026";
+
+    fn write_session_file(claude: &std::path::Path, pid: u32, name: &str) {
+        let sessions = claude.join("sessions");
+        std::fs::create_dir_all(&sessions).expect("mkdir sessions");
+        std::fs::write(
+            sessions.join(format!("{pid}.json")),
+            format!(r#"{{"pid":{pid},"name":"{name}","procStart":"{STARTED}"}}"#),
+        )
+        .expect("write session file");
+    }
+
+    /// One shell tab, focused; `pid`, when given, reported in front of it.
+    fn shell_reading_sessions_from(
+        claude: &std::path::Path,
+        pid: Option<u32>,
+    ) -> (Shell, SessionId) {
+        std::fs::create_dir_all(claude.join("sessions")).expect("mkdir sessions");
+        let mut shell = shell_over_with(
+            Arc::new(RecordingPty::default()),
+            Startup {
+                claude_dir: Some(crate::paths::ClaudeDir::at(claude)),
+                ..test_startup()
+            },
+        );
+        let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
+        let session = shell.core.workspace.focused_session().expect("focused");
+        if let Some(pid) = pid {
+            let _ = shell.update(Message::PtyForegroundJob {
+                session,
+                job: Some(termherd_core::ForegroundJob {
+                    pid,
+                    started: Some(STARTED.to_owned()),
+                }),
+            });
+        }
+        (shell, session)
+    }
+
+    #[test]
+    fn a_sidebar_click_on_a_re_keyed_session_focuses_its_tab_instead_of_resuming_it() {
+        // `/clear` rewrites the session file under the same pid, so no job
+        // change announces it: the click itself must read the file again.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+        std::fs::write(
+            dir.path().join("sessions").join("4399.json"),
+            format!(r#"{{"pid":4399,"sessionId":"re-keyed","procStart":"{STARTED}"}}"#),
+        )
+        .expect("write session file");
+        let _ = shell.launch("/tmp/other".to_string(), Launch::Shell);
+        assert_eq!(shell.core.workspace.active, 1);
+
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "re-keyed".to_string(),
+        });
+        assert_eq!(shell.core.workspace.tabs.len(), 2, "no duplicate resume");
+        assert_eq!(
+            shell.core.workspace.active, 0,
+            "the hosting tab came forward"
+        );
+    }
+
+    #[test]
+    fn copy_agent_name_runs_with_the_focused_claudes_name_and_refuses_without() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+
+        let (none, _task) = shell.perform_presses(vec![Press::Command(Action::CopyAgentName)]);
+        assert_eq!(
+            none.steps,
+            vec![inert("copy-agent-name", "no-context")],
+            "a job with no session file is no Claude to name"
+        );
+        assert_eq!(shell.focused_agent_name(), None);
+
+        write_session_file(dir.path(), 4399, "termherd-b0");
+        assert_eq!(shell.focused_agent_name().as_deref(), Some("termherd-b0"));
+        let (ran, _task) = shell.perform_presses(vec![Press::Command(Action::CopyAgentName)]);
+        assert_eq!(
+            ran.steps,
+            vec![PressStep::Ran("copy-agent-name".to_owned())]
+        );
+    }
+
+    #[test]
+    fn copy_agent_name_reads_the_file_afresh() {
+        // Claude rewrites its name in place, so a cached one may be stale.
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_session_file(dir.path(), 4399, "termherd-b0");
+        let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+        write_session_file(dir.path(), 4399, "knowledge-hub-35");
+
+        assert_eq!(
+            shell.focused_agent_name().as_deref(),
+            Some("knowledge-hub-35")
+        );
+    }
+
+    #[test]
+    fn a_new_job_in_front_is_named_from_its_session_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_session_file(dir.path(), 4399, "termherd-b0");
+        let (shell, session) = shell_reading_sessions_from(dir.path(), Some(4399));
+
+        assert_eq!(
+            shell.core.peer_name(session).as_deref(),
+            Some("termherd-b0")
+        );
+    }
+
+    #[test]
+    fn hovering_a_tab_rereads_its_session_file() {
+        // The file appears after the job does: Claude writes it once started.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut shell, session) = shell_reading_sessions_from(dir.path(), Some(4399));
+        write_session_file(dir.path(), 4399, "termherd-b0");
+        assert_eq!(shell.core.peer_name(session), None, "not read yet");
+
+        let _ = shell.update(Message::TabDragOver(0));
+        assert_eq!(
+            shell.core.peer_name(session).as_deref(),
+            Some("termherd-b0")
+        );
+        assert!(shell.tab_drag.is_none(), "a hover starts no drag");
+    }
+
+    #[test]
+    fn hovering_a_split_tab_rereads_every_pane_and_copy_names_the_focused_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (mut shell, first) = shell_reading_sessions_from(dir.path(), Some(4399));
+        let _ = shell.run_action(Action::SplitVertical);
+        let second = shell.core.workspace.focused_session().expect("focused");
+        assert_ne!(first, second, "the split focused a new pane");
+        let _ = shell.update(Message::PtyForegroundJob {
+            session: second,
+            job: Some(termherd_core::ForegroundJob {
+                pid: 4400,
+                started: Some(STARTED.to_owned()),
+            }),
+        });
+        write_session_file(dir.path(), 4399, "termherd-b0");
+        write_session_file(dir.path(), 4400, "knowledge-hub-35");
+
+        let _ = shell.update(Message::TabDragOver(0));
+        assert_eq!(shell.core.peer_name(first).as_deref(), Some("termherd-b0"));
+        assert_eq!(
+            shell.core.peer_name(second).as_deref(),
+            Some("knowledge-hub-35")
+        );
+        assert_eq!(
+            shell.focused_agent_name().as_deref(),
+            Some("knowledge-hub-35")
+        );
+    }
+
+    #[test]
+    fn the_session_files_of_the_panes_reach_list_sessions_and_a_tabs_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sessions = dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions).expect("mkdir sessions");
+        std::fs::write(
+            sessions.join("4399.json"),
+            r#"{"pid":4399,"name":"proj-35","sessionId":"7eff","procStart":"Wed Oct  7 06:48:07 2026"}"#,
+        )
+        .expect("write session file");
+        let mut shell = shell_over_with(
+            Arc::new(RecordingPty::default()),
+            Startup {
+                claude_dir: Some(crate::paths::ClaudeDir::at(dir.path())),
+                ..test_startup()
+            },
+        );
+        let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyForegroundJob {
+            session,
+            job: Some(termherd_core::ForegroundJob {
+                pid: 4399,
+                started: Some("Wed Oct  7 06:48:07 2026".to_owned()),
+            }),
+        });
+
+        let listed = shell.snapshot_inputs(&BridgeRequest::ListSessions);
+        assert_eq!(
+            listed
+                .session_files
+                .get(&4399)
+                .and_then(|file| file.name.as_deref()),
+            Some("proj-35")
+        );
+        let tabs = SnapshotFilter {
+            sections: vec![termherd_core::Section::Tabs],
+            ..SnapshotFilter::default()
+        };
+        assert!(
+            shell
+                .snapshot_inputs_for(&tabs)
+                .session_files
+                .contains_key(&4399)
+        );
+        let config_only = SnapshotFilter {
+            sections: vec![termherd_core::Section::Config],
+            ..SnapshotFilter::default()
+        };
+        assert!(
+            shell
+                .snapshot_inputs_for(&config_only)
+                .session_files
+                .is_empty(),
+            "a snapshot with no panes reads no files"
+        );
+    }
+
     /// A shell whose one terminal is actively working, so a close request arms
     /// the confirmation bar rather than closing outright — the setup for tests
     /// about the confirmation machinery itself, now that an idle shell
@@ -1628,7 +2314,7 @@ mod key_routing {
     #[test]
     fn snapshot_inputs_gather_config_when_asked_and_scope_terminal_text() {
         use super::bridge::Request;
-        use termherd_core::{Section, SnapshotFilter, TerminalScope};
+        use termherd_core::{SnapshotFilter, TerminalScope};
 
         let (mut shell, _pty) = shell_with_terminal();
         let session = shell.core.workspace.focused_session().expect("focused");
@@ -1637,7 +2323,7 @@ mod key_routing {
 
         // Config section on, and the focused handle's terminal text requested.
         let inputs = shell.snapshot_inputs(&Request::Snapshot(SnapshotFilter {
-            sections: vec![Section::Config],
+            sections: vec![termherd_core::Section::Config],
             terminals: TerminalScope::Only(vec![handle]),
             text_lines: 40,
         }));
@@ -1652,7 +2338,7 @@ mod key_routing {
 
         // Config section off and no terminal scope: nothing gathered.
         let bare = shell.snapshot_inputs(&Request::Snapshot(SnapshotFilter {
-            sections: vec![Section::Tabs],
+            sections: vec![termherd_core::Section::Tabs],
             terminals: TerminalScope::None,
             text_lines: 40,
         }));
@@ -1666,9 +2352,9 @@ mod key_routing {
     // pin the shell-side seam: handle resolution, the applied mutation, and
     // the reported resulting focus.
 
-    // `Action`/`SessionKind` already name the `termherd_core` types in this
-    // module, so the bridge's carry a `Bridge` prefix here.
-    use super::bridge::{Action as BridgeAction, SessionKind as BridgeKind};
+    // `Action` already names the `termherd_core` type in this module, so the
+    // bridge's carries a `Bridge` prefix here.
+    use super::bridge::Action as BridgeAction;
     use termherd_core::workspace::SplitDir;
 
     /// The focused session's handle string, or `None` when nothing is focused.
@@ -1686,7 +2372,8 @@ mod key_routing {
         let mut shell = shell_over(pty.clone());
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: Some("/tmp/x".into()),
-            kind: BridgeKind::Shell,
+            kind: SessionKind::Shell,
+            placement: termherd_core::Placement::Foreground,
         });
         assert_eq!(outcome.error, None, "opening a session never rejects");
         assert_eq!(
@@ -1705,14 +2392,17 @@ mod key_routing {
         let mut shell = shell_over(pty.clone());
         let (outcome, _task) = shell.perform_action(BridgeAction::Open {
             project: None,
-            kind: BridgeKind::Claude,
+            kind: SessionKind::Claude,
+            placement: termherd_core::Placement::Foreground,
         });
         assert_eq!(outcome.error, None);
-        assert_eq!(
-            pty.launches(),
-            vec![Launch::Claude { resume: None }],
+        let launches = pty.launches();
+        assert_eq!(launches.len(), 1);
+        assert!(
+            minted_fresh_claude(launches.first()).is_some(),
             "a fresh Claude session, no project → home dir"
         );
+        assert_eq!(focused_cwd(&shell).as_deref(), Some("/injected/home"));
     }
 
     #[test]
@@ -1725,6 +2415,55 @@ mod key_routing {
         });
         assert_eq!(outcome.error, None);
         assert_eq!(pty.writes(), vec![b"ls\n".to_vec()], "the bytes were typed");
+    }
+
+    #[test]
+    fn submit_action_presses_enter_only_once_its_pause_is_due() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Submit {
+            session: session.0.get(),
+        });
+        assert_eq!(outcome.error, None);
+        assert!(pty.writes().is_empty(), "no Enter inside the pause");
+
+        let _ = shell.update(Message::SubmitDue(session));
+        assert_eq!(pty.writes_seen(), vec![(session, b"\r".to_vec())]);
+    }
+
+    #[test]
+    fn submit_action_rejects_an_unknown_handle() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Submit { session: 999 });
+        assert!(outcome.error.is_some_and(|e| e.contains("999")));
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn a_submit_due_after_its_session_exited_writes_nothing() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.core.apply(termherd_core::Event::PtyExited {
+            session,
+            clean: true,
+        });
+        let _ = shell.update(Message::SubmitDue(session));
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn the_enter_gap_waits_out_the_whole_pause() {
+        let start = std::time::Instant::now();
+        block_on(effects::enter_gap());
+        assert!(start.elapsed() >= effects::ENTER_GAP);
+    }
+
+    /// Drive a future to completion on a throwaway runtime.
+    fn block_on(future: impl std::future::Future<Output = ()>) {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime")
+            .block_on(future);
     }
 
     #[test]
@@ -1748,6 +2487,167 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Focus { session: 999 });
         assert!(outcome.error.is_some(), "an unknown handle is rejected");
         assert_eq!(focused(&shell), before, "focus is untouched");
+    }
+
+    /// The focused session's handle as an external caller spells it.
+    fn focused_handle(shell: &Shell) -> u64 {
+        focused(shell).expect("focused").parse().expect("numeric")
+    }
+
+    /// A shell with one focused terminal whose last render is `text` on one
+    /// row — the geometry a pointer is bounded by.
+    fn shell_showing(text: &str) -> (Shell, Arc<RecordingPty>, u64) {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of(text));
+        let handle = focused_handle(&shell);
+        (shell, pty, handle)
+    }
+
+    #[test]
+    fn pointer_action_rejects_an_unknown_handle_without_forwarding() {
+        let (mut shell, pty, _) = shell_showing("$ cargo test");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: 999,
+            pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+        });
+        assert!(
+            outcome.error.as_deref().is_some_and(|e| e.contains("999")),
+            "an unknown handle is rejected, naming it: {outcome:?}"
+        );
+        assert!(pty.pointers().is_empty(), "nothing reached any PTY");
+    }
+
+    #[test]
+    fn pointer_action_rejects_a_cell_outside_the_pane_naming_the_geometry() {
+        // "$ cargo test" is 12 columns on 1 row: col 12 and row 1 are both out.
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        for (col, row) in [(12, 0), (0, 1), (40, 40)] {
+            let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+                session: handle,
+                pointer: PointerEvent::left(PointerKind::Press, col, row),
+            });
+            let error = outcome
+                .error
+                .unwrap_or_else(|| panic!("({col},{row}) must be rejected"));
+            assert!(
+                error.contains("12x1"),
+                "the rejection names the pane's geometry so the caller can retry \
+                 inside it: {error}"
+            );
+        }
+        assert!(
+            pty.pointers().is_empty(),
+            "an out-of-range event never applies"
+        );
+    }
+
+    #[test]
+    fn pointer_action_rejects_a_session_that_has_not_rendered_yet() {
+        // No screen inserted: the session is live but nothing has been drawn,
+        // so there is no geometry to bound the cell by.
+        let (mut shell, pty) = shell_with_terminal();
+        let handle = focused_handle(&shell);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+        });
+        assert!(
+            outcome.error.is_some(),
+            "no geometry, no pointer: {outcome:?}"
+        );
+        assert!(pty.pointers().is_empty());
+    }
+
+    #[test]
+    fn pointer_action_forwards_an_in_bounds_press_and_reports_a_selection() {
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        let pointer = PointerEvent::left(PointerKind::Press, 11, 0);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer,
+        });
+        assert_eq!(outcome.error, None, "the last cell is inside the pane");
+        assert_eq!(outcome.pointer(), Some(PointerRoute::Select));
+        assert_eq!(outcome.focused, focused(&shell));
+        let session = shell.core.workspace.focused_session().expect("focused");
+        assert_eq!(
+            pty.pointers(),
+            vec![(session, pointer)],
+            "exactly the one event reached the terminal, as sent"
+        );
+    }
+
+    #[test]
+    fn pointer_action_reports_a_move_as_ignored_but_still_hands_it_over() {
+        // A move drives no local selection, so the caller learns nothing
+        // happened — yet the terminal still receives every event.
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: PointerEvent::left(PointerKind::Move, 3, 0),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.pointer(), Some(PointerRoute::Nothing));
+        assert_eq!(pty.pointers().len(), 1);
+    }
+
+    /// An exited session keeps its last screen — a crash message is what it
+    /// shows — so the bounds check passes; the answer must still not claim a
+    /// terminal selected or forwarded anything.
+    #[test]
+    fn pointer_action_rejects_a_session_that_has_exited() {
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+        });
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("exited")),
+            "an exited session is rejected, saying why: {outcome:?}"
+        );
+        assert_eq!(outcome.pointer(), None, "no outcome is claimed");
+        assert!(pty.pointers().is_empty(), "nothing reached a PTY");
+    }
+
+    /// The screen's `mouse_reporting` is what the shell reads to answer: under
+    /// it a press is the child's, a motion its mode does not cover is nothing,
+    /// and neither drives the local selection.
+    #[test]
+    fn pointer_action_reports_forwarded_when_the_child_reads_the_mouse() {
+        use termherd_core::MouseReporting;
+        let (mut shell, pty, handle) = shell_showing("$ vim");
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell
+            .screens
+            .get_mut(&session)
+            .expect("the fixture rendered a screen")
+            .mouse_reporting = Some(MouseReporting::Click);
+        for (kind, expected) in [
+            (PointerKind::Press, PointerRoute::Forward),
+            (PointerKind::Release, PointerRoute::Forward),
+            (PointerKind::Drag, PointerRoute::Nothing),
+        ] {
+            let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+                session: handle,
+                pointer: PointerEvent::left(kind, 2, 0),
+            });
+            assert_eq!(outcome.error, None, "{kind:?}");
+            assert_eq!(outcome.pointer(), Some(expected), "{kind:?}");
+        }
+        assert_eq!(
+            pty.pointers().len(),
+            3,
+            "every event still reaches the terminal, which decides on its live mode"
+        );
     }
 
     #[test]
@@ -1839,11 +2739,197 @@ mod key_routing {
         assert!(outcome.error.is_some(), "a missing tab is rejected");
     }
 
+    /// A scanned session record in `project`, for the sidebar-membership tests.
+    fn scan_record(id: &str, project: &str) -> SessionRecord {
+        SessionRecord {
+            session_id: id.to_owned(),
+            project_path: project.to_owned(),
+            digest: termherd_claude::digest::SessionDigest {
+                summary: "hello".to_owned(),
+                message_count: 1,
+                ..termherd_claude::digest::SessionDigest::default()
+            },
+            modified: None,
+        }
+    }
+
+    #[test]
+    fn add_repo_answers_with_the_key_it_kept() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("proj");
+        std::fs::create_dir_all(repo.join("crates")).unwrap();
+        std::fs::create_dir(repo.join(".git")).unwrap();
+
+        // A worktree: the one case where the key differs from what was passed,
+        // because the scan collapses it too. The rule itself is `scan`'s and is
+        // tested against the walk there; this asserts the answer carries it.
+        let worktree = repo.join(".worktrees").join("feat");
+        std::fs::create_dir_all(&worktree).unwrap();
+        let (outcome, _task) = shell.perform_action(BridgeAction::DeclareRepo {
+            path: worktree.display().to_string(),
+        });
+        assert_eq!(outcome.error, None);
+        let answer = outcome.repo().expect("a repo action answers about the row");
+        let expected = repo.display().to_string();
+        assert_eq!(
+            answer.path, expected,
+            "the answer is the key to address the row with, not what was passed"
+        );
+        assert!(answer.declared && answer.visible);
+        assert_eq!(answer.session_count, 0);
+        assert!(shell.core.is_repo_declared(&expected));
+
+        // A subdirectory is *not* climbed: the scan keys a session started
+        // there at that subdirectory, so the declaration must match it.
+        let sub = repo.join("crates");
+        let (outcome, _task) = shell.perform_action(BridgeAction::DeclareRepo {
+            path: sub.display().to_string(),
+        });
+        assert_eq!(
+            outcome.repo().expect("an answer").path,
+            sub.display().to_string()
+        );
+    }
+
+    #[test]
+    fn add_repo_rejects_a_path_that_does_not_exist() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::DeclareRepo {
+            path: "/definitely/not/here".into(),
+        });
+        assert!(outcome.error.is_some(), "nothing to launch from, so refuse");
+        assert!(outcome.repo().is_none(), "and nothing was applied");
+    }
+
+    #[test]
+    fn forget_repo_reports_whether_the_row_survived_its_sessions() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(tmp.path())
+            .unwrap()
+            .display()
+            .to_string();
+
+        let path = repo.clone();
+        let _ = shell.perform_action(BridgeAction::DeclareRepo { path: path.clone() });
+        // No sessions: forgetting takes the row with it.
+        let (outcome, _task) =
+            shell.perform_action(BridgeAction::ForgetRepo { path: path.clone() });
+        let answer = outcome.repo().expect("a repo action answers about the row");
+        assert!(!answer.declared && !answer.visible);
+
+        // Same repo, now with a scanned session: the row lives on without the
+        // declaration, and the answer says so rather than implying a removal.
+        let _ = shell.perform_action(BridgeAction::DeclareRepo { path: path.clone() });
+        shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(vec![scan_record(
+                "s1", &repo,
+            )]));
+        let (outcome, _task) = shell.perform_action(BridgeAction::ForgetRepo { path });
+        let answer = outcome.repo().expect("a repo action answers about the row");
+        assert!(!answer.declared, "the declaration is gone");
+        assert!(answer.visible, "but the scan still reports the project");
+        assert_eq!(answer.session_count, 1);
+    }
+
+    #[test]
+    fn a_repo_answer_reports_membership_not_what_the_search_box_shows() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(tmp.path())
+            .unwrap()
+            .display()
+            .to_string();
+        // A search the user left in the box, matching nothing about this repo.
+        shell
+            .core
+            .apply(termherd_core::Event::SearchChanged("zzz-no-match".into()));
+
+        let (outcome, _task) =
+            shell.perform_action(BridgeAction::DeclareRepo { path: repo.clone() });
+        let answer = outcome.repo().expect("a repo action answers about the row");
+        assert!(
+            answer.visible,
+            "the row is in the sidebar; a filter hiding it is not a failed add"
+        );
+        assert!(answer.declared);
+
+        // And with sessions, the count is the row's own — not the filtered one.
+        shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(vec![scan_record(
+                "s1", &repo,
+            )]));
+        let (outcome, _task) = shell.perform_action(BridgeAction::DeclareRepo { path: repo });
+        let answer = outcome.repo().expect("an answer");
+        assert_eq!(answer.session_count, 1, "the search does not decount it");
+    }
+
+    #[test]
+    fn declaring_or_forgetting_a_repo_rediscovers_the_docs() {
+        // A declared repo with no session holds a `CLAUDE.md` the scan never
+        // reports, so waiting for the next scan would leave it unlisted.
+        let (mut shell, _pty) = shell_with_terminal();
+        let task = shell.declare_repo_key("/declared", repos::RepoGesture::Mcp);
+        assert!(task.units() > 0, "declaring refreshes the doc list");
+        let task = shell.forget_repo_key("/declared", repos::RepoGesture::Mcp);
+        assert!(task.units() > 0, "forgetting drops its CLAUDE.md again");
+    }
+
+    #[test]
+    fn a_declared_repo_without_sessions_offers_its_claude_md() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::write(repo.join("CLAUDE.md"), "# memory").unwrap();
+        let _ = shell.declare_repo_key(&repo.display().to_string(), repos::RepoGesture::Mcp);
+
+        let docs = crate::docs::discover(None, &shell.doc_project_paths());
+        assert_eq!(
+            docs.iter().map(|d| d.path.clone()).collect::<Vec<_>>(),
+            vec![repo.join("CLAUDE.md")]
+        );
+    }
+
+    #[test]
+    fn forgetting_a_deleted_worktree_removes_the_row_it_was_filed_under() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        let repo = root.join("proj");
+        // The worktree layout `collapse_worktree` recognises textually.
+        let worktree = repo.join(".worktrees").join("feature");
+        std::fs::create_dir_all(&worktree).unwrap();
+
+        let key = repo.display().to_string();
+        let _ = shell.perform_action(BridgeAction::DeclareRepo {
+            path: worktree.display().to_string(),
+        });
+        assert!(shell.core.is_repo_declared(&key));
+
+        // The worktree is deleted before the caller gets round to forgetting it,
+        // so the path can no longer be normalised against the disk.
+        std::fs::remove_dir_all(repo.join(".worktrees")).unwrap();
+        let (outcome, _task) = shell.perform_action(BridgeAction::ForgetRepo {
+            path: worktree.display().to_string(),
+        });
+        assert!(
+            !shell.core.is_repo_declared(&key),
+            "the textual half of the rule still applies, so the row goes"
+        );
+        assert!(!outcome.repo().expect("an answer").declared);
+    }
+
     #[test]
     fn close_action_closes_a_lone_pane_tab_and_kills_its_pty() {
         let (mut shell, pty) = shell_with_terminal();
         assert_eq!(shell.core.workspace.tabs.len(), 1);
-        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: None });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: None,
+            background: false,
+        });
         assert_eq!(outcome.error, None);
         assert!(
             shell.core.workspace.tabs.is_empty(),
@@ -1875,7 +2961,10 @@ mod key_routing {
         // resolves; the close must land on *that* pane, not on the active tab's
         // focused one.
         let (mut shell, _pty, first) = shell_with_two_tabs();
-        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: Some(first) });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: false,
+        });
         assert_eq!(outcome.error, None);
         let live: Vec<u64> = shell
             .core
@@ -1890,6 +2979,285 @@ mod key_routing {
             "the targeted pane is gone; surviving panes: {live:?}"
         );
         assert_eq!(live.len(), 1, "the other tab must not have been closed");
+    }
+
+    /// The handle an open answered with, as its outcome names it.
+    fn opened(outcome: &super::bridge::ActionOutcome) -> Option<String> {
+        match &outcome.detail {
+            Some(super::bridge::ActionDetail::Opened(handle)) => handle.clone(),
+            other => panic!("an open answers with the opened handle, got {other:?}"),
+        }
+    }
+
+    fn open_in_background(shell: &mut Shell) -> super::bridge::ActionOutcome {
+        shell
+            .perform_action(BridgeAction::Open {
+                project: Some("/tmp/worker".into()),
+                kind: SessionKind::Shell,
+                placement: termherd_core::Placement::Background,
+            })
+            .0
+    }
+
+    #[test]
+    fn a_background_open_appends_a_tab_and_leaves_the_user_where_they_were() {
+        let (mut shell, pty) = shell_with_terminal();
+        let before = focused(&shell);
+        // The user is typing a search with a close prompt up: neither is the
+        // agent's to take away.
+        shell.focus = Focus::Search;
+        shell.closing = Some(0);
+        let outcome = open_in_background(&mut shell);
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.focused, before, "focus is reported unchanged");
+        assert_eq!(focused(&shell), before);
+        assert_eq!(
+            shell.core.workspace.active, 0,
+            "the user's tab stays active"
+        );
+        assert_eq!(shell.core.workspace.tabs.len(), 2, "a tab was appended");
+        let worker = shell.core.workspace.tabs[1].sessions()[0].0.get();
+        assert_eq!(opened(&outcome), Some(worker.to_string()));
+        assert_eq!(pty.spawn_count(), 2, "the worker's PTY was spawned");
+        assert_eq!(shell.focus, Focus::Search, "keyboard owner untouched");
+        assert_eq!(shell.closing, Some(0), "the user's prompt survives");
+    }
+
+    #[test]
+    fn a_foreground_open_names_the_session_it_opened_too() {
+        let pty = Arc::new(RecordingPty::default());
+        let mut shell = shell_over(pty);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Open {
+            project: None,
+            kind: SessionKind::Shell,
+            placement: termherd_core::Placement::Foreground,
+        });
+        assert!(opened(&outcome).is_some());
+        assert_eq!(opened(&outcome), outcome.focused, "it is the focused one");
+    }
+
+    #[test]
+    fn a_background_open_sizes_its_pty_to_the_tab_area_at_once() {
+        // Not the default grid until someone happens to look at the tab: a
+        // Claude started there draws its first screen for the real size.
+        let (mut shell, pty) = shell_with_terminal();
+        let shown = *pty.resizes().last().expect("the first tab was sized");
+        let resized = pty.resizes().len();
+        open_in_background(&mut shell);
+        assert_eq!(
+            pty.resizes()[resized..],
+            [shown],
+            "one resize, to the lone-pane size every tab is drawn at"
+        );
+    }
+
+    #[test]
+    fn a_background_close_reaches_another_tab_without_moving_focus() {
+        let (mut shell, pty, first) = shell_with_two_tabs();
+        let before = focused(&shell);
+        let id = SessionId(std::num::NonZeroU64::new(first).expect("non-zero"));
+        shell.screens.insert(id, screen_of("prompt"));
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: true,
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.focused, before, "focus is reported unchanged");
+        assert_eq!(focused(&shell), before, "the user's pane keeps focus");
+        assert_eq!(shell.core.workspace.tabs.len(), 1);
+        assert_eq!(pty.kill_count(), 1, "the target's PTY was killed");
+        assert!(!shell.screens.contains_key(&id), "its screen is forgotten");
+    }
+
+    fn close_in_background(shell: &mut Shell, pane: u64) {
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(pane),
+            background: true,
+        });
+        assert_eq!(outcome.error, None);
+    }
+
+    #[test]
+    fn a_background_close_keeps_a_close_prompt_on_the_tab_it_named() {
+        // The prompt names the user's tab, at 1; closing tab 0 shifts it to 0.
+        // Dropping it would send the user's Enter to the terminal instead.
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let user_tab = shell.core.workspace.tabs[1].sessions()[0];
+        shell.closing = Some(1);
+        close_in_background(&mut shell, first);
+        assert_eq!(shell.closing, Some(0));
+        assert_eq!(shell.core.workspace.tab_of(user_tab), Some(0));
+    }
+
+    #[test]
+    fn a_background_close_of_the_prompted_tab_drops_its_prompt() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        shell.closing = Some(0);
+        close_in_background(&mut shell, first);
+        assert_eq!(shell.closing, None, "the tab it named is gone");
+    }
+
+    #[test]
+    fn a_background_close_elsewhere_leaves_the_tab_menu_open() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let _ = shell.update(Message::OpenTabMenu(1));
+        close_in_background(&mut shell, first);
+        assert!(
+            shell.live_tab_menu().is_some(),
+            "its pane still holds focus"
+        );
+    }
+
+    #[test]
+    fn a_background_close_of_the_menu_pane_forgets_the_menu() {
+        let (mut shell, _pty, _first) = shell_with_two_tabs();
+        let _ = shell.update(Message::OpenTabMenu(1));
+        let anchor = shell.core.workspace.tabs[1].first_session();
+        close_in_background(&mut shell, anchor.0.get());
+        assert_eq!(shell.tab_menu, None, "forgotten, not merely hidden");
+    }
+
+    /// Open the colour list over the focused tab, as the keyboard does.
+    fn open_color_picker(shell: &mut Shell) {
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("pick-tab-color".to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_background_close_elsewhere_leaves_the_colour_picker_open() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        open_color_picker(&mut shell);
+        close_in_background(&mut shell, first);
+        assert!(
+            shell.live_color_picker().is_some(),
+            "its pane still holds focus"
+        );
+    }
+
+    #[test]
+    fn a_background_close_of_the_picker_pane_forgets_the_picker() {
+        let (mut shell, _pty, _first) = shell_with_two_tabs();
+        open_color_picker(&mut shell);
+        let anchor = shell.core.workspace.tabs[1].first_session();
+        close_in_background(&mut shell, anchor.0.get());
+        assert!(shell.color_picker.is_none(), "forgotten, not merely hidden");
+    }
+
+    #[test]
+    fn a_background_close_shifts_a_tab_drag_with_the_strip() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        shell.tab_drag = Some(TabDrag { from: 1, over: 1 });
+        close_in_background(&mut shell, first);
+        assert_eq!(
+            shell.tab_drag,
+            Some(TabDrag { from: 0, over: 0 }),
+            "the release still lands on the tab that was pressed"
+        );
+    }
+
+    /// Two tabs with the first split in two; the second is active. Returns
+    /// the shell, its PTY double, and the split's two sessions.
+    fn shell_with_a_split_behind() -> (Shell, Arc<RecordingPty>, SessionId, SessionId) {
+        let (mut shell, pty, first) = shell_with_two_tabs();
+        let _ = shell.core.apply(termherd_core::Event::ActivateTab(0));
+        let effects = shell
+            .core
+            .apply(termherd_core::Event::SplitFocused(SplitDir::Vertical));
+        let _ = shell.perform(effects);
+        let _ = shell.core.apply(termherd_core::Event::ActivateTab(1));
+        let left = SessionId(std::num::NonZeroU64::new(first).expect("non-zero"));
+        let right = shell.core.workspace.tabs[0].sessions()[1];
+        (shell, pty, left, right)
+    }
+
+    #[test]
+    fn a_background_close_in_a_split_behind_grows_the_sibling_to_the_tab() {
+        // Left at half width, the survivor would answer `read_terminal` and
+        // `mouse_in_session` for a grid it is no longer drawn at.
+        let (mut shell, pty, _left, right) = shell_with_a_split_behind();
+        let lone = pty.resizes()[0];
+        let resized = pty.resizes().len();
+        close_in_background(&mut shell, right.0.get());
+        assert_eq!(
+            pty.resizes()[resized..],
+            [lone],
+            "the surviving sibling grows to the tab; the user's tab is untouched"
+        );
+    }
+
+    #[test]
+    fn a_background_close_moves_a_pending_tab_rename_to_the_surviving_pane() {
+        let (mut shell, _pty, left, right) = shell_with_a_split_behind();
+        shell.tab_rename = Some((left, "Pinned".into()));
+        close_in_background(&mut shell, left.0.get());
+        assert_eq!(shell.tab_rename, Some((right, "Pinned".into())));
+    }
+
+    #[test]
+    fn a_background_close_drops_a_claude_command_armed_for_the_closed_pane() {
+        // Left armed, the prompt would hold the keyboard for a session that is
+        // gone, and every Enter would only report it unknown.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        close_in_background(&mut shell, session.0.get());
+        assert!(shell.claude_command.is_none());
+        assert_eq!(shell.keyboard_owner(), None);
+        assert!(pty.writes().is_empty(), "nothing was typed on the way out");
+    }
+
+    #[test]
+    fn a_background_close_needs_a_pane_and_touches_nothing_without_one() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: None,
+            background: true,
+        });
+        assert!(
+            outcome.error.as_deref().is_some_and(|e| e.contains("pane")),
+            "rejected, naming the missing argument: {outcome:?}"
+        );
+        assert_eq!(shell.core.workspace.tabs.len(), 1);
+        assert_eq!(pty.kill_count(), 0);
+    }
+
+    #[test]
+    fn a_background_close_rejects_a_handle_no_pane_hosts() {
+        let (mut shell, pty) = shell_with_terminal();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(999),
+            background: true,
+        });
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some("no open pane hosts handle 999")
+        );
+        assert_eq!(pty.kill_count(), 0);
+    }
+
+    #[test]
+    fn a_pointer_reaches_a_background_tab_that_was_never_drawn() {
+        // Screens are filled by the PTY's output, not by drawing: a worker
+        // nobody has looked at is still bounded, and so still reachable.
+        let (mut shell, pty) = shell_with_terminal();
+        let outcome = open_in_background(&mut shell);
+        let worker: u64 = opened(&outcome)
+            .expect("a handle")
+            .parse()
+            .expect("numeric");
+        let session = SessionId(std::num::NonZeroU64::new(worker).expect("non-zero"));
+        let _ = shell.update(Message::PtyOutput {
+            session,
+            screen: screen_of("prompt"),
+        });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: worker,
+            pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(pty.pointers().len(), 1, "the press reached the worker");
     }
 
     #[test]
@@ -1927,17 +3295,141 @@ mod key_routing {
     }
 
     #[test]
+    fn a_rescan_tick_starts_a_scan_when_none_is_in_flight() {
+        let mut shell = shell_over(Arc::new(RecordingPty::default()));
+        let _ = shell.update(Message::RescanTick);
+        assert!(shell.scan_in_flight);
+    }
+
+    #[test]
+    fn a_rescan_tick_during_a_scan_neither_overlaps_it_nor_queues_a_follow_up() {
+        let mut shell = shell_over(Arc::new(RecordingPty::default()));
+        let _ = shell.rescan();
+        let _ = shell.update(Message::RescanTick);
+        assert!(shell.scan_in_flight);
+        assert!(!shell.rescan_pending, "the tick queued a follow-up");
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(!shell.scan_in_flight, "a follow-up scan started");
+    }
+
+    #[test]
+    fn a_projects_change_during_a_scan_queues_exactly_one_follow_up() {
+        let mut shell = shell_over(Arc::new(RecordingPty::default()));
+        let _ = shell.rescan();
+        let _ = shell.update(Message::ProjectsChanged);
+        let _ = shell.update(Message::ProjectsChanged);
+        assert!(shell.rescan_pending);
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(shell.scan_in_flight, "the follow-up scan started");
+        assert!(!shell.rescan_pending);
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(!shell.scan_in_flight, "a second follow-up started");
+    }
+
+    #[test]
+    fn the_rescan_tick_stream_keeps_ticking() {
+        let mut stream = Box::pin(streams::rescan_tick_stream(
+            &std::time::Duration::from_millis(10),
+        ));
+        for _ in 0..3 {
+            let message =
+                iced::futures::executor::block_on(iced::futures::StreamExt::next(&mut stream));
+            assert!(matches!(message, Some(Message::RescanTick)), "{message:?}");
+        }
+    }
+
+    #[test]
+    fn a_clicked_notification_reveals_its_background_tab() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        shell.focus = Focus::Search;
+        let session = session_id(first);
+
+        // The whole seam the OS thread uses: a slot reserved by the effect
+        // executor, clicked, drained by the subscription, then dispatched.
+        match shell.notification_clicks.posting(session) {
+            notify_click::Posting::Wait(slot) => slot.clicked(),
+            _ => panic!("a fresh shell has a free waiter"),
+        }
+        let mut stream = Box::pin(notify_click::click_stream(&shell.notification_clicked));
+        let message =
+            iced::futures::executor::block_on(iced::futures::StreamExt::next(&mut stream))
+                .expect("the click arrives");
+        let _ = shell.update(message);
+
+        assert_eq!(shell.core.workspace.active, 0, "its tab was activated");
+        assert_eq!(focused(&shell), Some(first.to_string()));
+        assert_eq!(shell.focus, Focus::Terminal, "the terminal has the keys");
+    }
+
+    #[test]
+    fn a_click_on_a_closed_sessions_notification_changes_nothing() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: false,
+        });
+        assert_eq!(outcome.error, None);
+        shell.focus = Focus::Search;
+        let (tabs, active, before) = (
+            shell.core.workspace.tabs.len(),
+            shell.core.workspace.active,
+            focused(&shell),
+        );
+
+        let session = session_id(first);
+        let _ = shell.update(Message::NotificationClicked(session));
+
+        assert_eq!(shell.core.workspace.tabs.len(), tabs);
+        assert_eq!(shell.core.workspace.active, active);
+        assert_eq!(focused(&shell), before);
+        assert_eq!(shell.focus, Focus::Search, "keyboard focus is untouched");
+    }
+
+    #[test]
+    fn a_notification_click_reveals_past_a_rename_but_not_past_a_prompt() {
+        for owner in KeyboardOwner::ALL {
+            let (mut shell, _pty, first) = shell_with_two_tabs();
+            arm_overlay(&mut shell, owner);
+            assert_eq!(shell.keyboard_owner(), Some(owner), "{owner:?} armed");
+
+            let session = session_id(first);
+            let _ = shell.update(Message::NotificationClicked(session));
+
+            // A rename is dismissed by any click elsewhere, this one included,
+            // so nothing is left editing a tab the click may switch away from.
+            // A prompt keeps the screen it is about.
+            let renames = matches!(
+                owner,
+                KeyboardOwner::TabRename | KeyboardOwner::SessionRename
+            );
+            if renames {
+                assert_eq!(shell.keyboard_owner(), None, "{owner:?} was dismissed");
+                assert_eq!(shell.core.workspace.active, 0, "{owner:?}: revealed");
+            } else {
+                assert_eq!(shell.keyboard_owner(), Some(owner), "{owner:?} stays open");
+                assert_eq!(shell.core.workspace.active, 1, "{owner:?}: not revealed");
+            }
+        }
+    }
+
+    #[test]
     fn focus_relative_actions_reject_a_handle_whose_pane_is_gone() {
         // A stale handle — the agent read it, then the pane closed. Rejecting
         // beats silently acting on whatever holds focus now, which is how a
         // close request would destroy the wrong terminal.
         let (mut shell, pty, first) = shell_with_two_tabs();
-        let (outcome, _task) = shell.perform_action(BridgeAction::Close { pane: Some(first) });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Close {
+            pane: Some(first),
+            background: false,
+        });
         assert_eq!(outcome.error, None, "the first close lands");
         let handle = first;
 
         for action in [
-            BridgeAction::Close { pane: Some(handle) },
+            BridgeAction::Close {
+                pane: Some(handle),
+                background: false,
+            },
             BridgeAction::Split {
                 pane: Some(handle),
                 dir: SplitDir::Vertical,
@@ -1984,15 +3476,13 @@ mod key_routing {
         outcome.steps
     }
 
-    /// The platform's primary-modifier spec, so these tests read the same
-    /// bindings the running app does on macOS and elsewhere.
-    fn mod_spec(rest: &str) -> String {
-        let primary = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
-        format!("{primary}+{rest}")
+    /// The first default chord of `action` on this platform.
+    fn default_spec(action: &str) -> String {
+        termherd_core::action_catalog(termherd_core::Platform::current())
+            .into_iter()
+            .find(|binding| binding.name == action)
+            .and_then(|binding| binding.default_chords.into_iter().next())
+            .expect("the action has a default chord")
     }
 
     #[test]
@@ -2002,7 +3492,7 @@ mod key_routing {
         // caller can tell "it worked" from "it hit something else".
         let (mut shell, _pty) = shell_with_terminal();
         let panes_before = shell.core.workspace.tabs[0].sessions().len();
-        let step = press_chord(&mut shell, &mod_spec("d"));
+        let step = press_chord(&mut shell, &default_spec("split-vertical"));
         assert_eq!(step, PressStep::Ran("split-vertical".to_owned()));
         assert_eq!(
             shell.core.workspace.tabs[0].sessions().len(),
@@ -2039,10 +3529,54 @@ mod key_routing {
 
     #[test]
     fn a_chord_naming_an_unreachable_key_is_reported_unbound() {
-        // `f2` is a key no event carries, so no real press could resolve it
+        // `f13` is a key no event carries, so no real press could resolve it
         // either. It must report, not vanish.
         let (mut shell, _pty) = shell_with_terminal();
-        assert_eq!(press_chord(&mut shell, "f2"), PressStep::Unbound);
+        assert_eq!(press_chord(&mut shell, "f13"), PressStep::Unbound);
+    }
+
+    #[test]
+    fn an_unbound_named_key_reaches_the_terminal_through_termherds_encoder() {
+        // What `run_in_session` cannot show: the bytes termherd itself sends for
+        // a key, so an agent can audit the encoder on a live pane.
+        //
+        // Every key is spelled with its bytes, because the round trip alone
+        // cannot see two rows of the name table swapped: `f11` naming F12 and
+        // `f12` naming F11 read back consistently, yet bind the wrong key.
+        for (spec, bytes) in [
+            ("pageup", b"\x1b[5~".as_slice()),
+            ("pagedown", b"\x1b[6~"),
+            ("shift+delete", b"\x1b[3;2~"),
+            ("insert", b"\x1b[2~"),
+            ("space", b" "),
+            ("backspace", b"\x7f"),
+            ("ctrl+space", b"\x00"),
+            ("tab", b"\t"),
+            ("enter", b"\r"),
+            ("escape", b"\x1b"),
+            ("up", b"\x1b[A"),
+            ("down", b"\x1b[B"),
+            ("right", b"\x1b[C"),
+            ("left", b"\x1b[D"),
+            ("home", b"\x1b[H"),
+            ("end", b"\x1b[F"),
+            ("f1", b"\x1bOP"),
+            ("f2", b"\x1bOQ"),
+            ("f3", b"\x1bOR"),
+            ("f4", b"\x1bOS"),
+            ("f5", b"\x1b[15~"),
+            ("f6", b"\x1b[17~"),
+            ("f7", b"\x1b[18~"),
+            ("f8", b"\x1b[19~"),
+            ("f9", b"\x1b[20~"),
+            ("f10", b"\x1b[21~"),
+            ("f11", b"\x1b[23~"),
+            ("f12", b"\x1b[24~"),
+        ] {
+            let (mut shell, pty) = shell_with_terminal();
+            assert_eq!(press_chord(&mut shell, spec), PressStep::Typed, "{spec}");
+            assert_eq!(pty.writes(), vec![bytes.to_vec()], "{spec}");
+        }
     }
 
     #[test]
@@ -2050,7 +3584,13 @@ mod key_routing {
         // Each press lands before the next, so a sequence composes — two splits
         // leave three panes, not two.
         let (mut shell, _pty) = shell_with_terminal();
-        let steps = press_all(&mut shell, &[&mod_spec("d"), &mod_spec("d")]);
+        let steps = press_all(
+            &mut shell,
+            &[
+                &default_spec("split-vertical"),
+                &default_spec("split-vertical"),
+            ],
+        );
         assert_eq!(
             steps,
             vec![
@@ -2067,7 +3607,7 @@ mod key_routing {
         // focuses the new pane, and that is the handle the caller gets back.
         let (mut shell, _pty) = shell_with_terminal();
         let presses = vec![Press::Chord(
-            KeyChord::parse(&mod_spec("d")).expect("chord parses"),
+            KeyChord::parse(&default_spec("split-vertical")).expect("chord parses"),
         )];
         let (outcome, _task) = shell.perform_presses(presses);
         assert_eq!(outcome.focused, focused(&shell));
@@ -2083,12 +3623,12 @@ mod key_routing {
         // a caller learns why its chord did nothing instead of guessing.
         let (mut shell, pty) = busy_shell_with_terminal();
         assert_eq!(
-            press_chord(&mut shell, &mod_spec("w")),
+            press_chord(&mut shell, &default_spec("close-focused")),
             PressStep::Ran("close-focused".to_owned())
         );
         assert!(shell.closing.is_some(), "a busy session arms the prompt");
         assert_eq!(
-            press_chord(&mut shell, &mod_spec("d")),
+            press_chord(&mut shell, &default_spec("split-vertical")),
             PressStep::Overlay("tab-close-confirm".to_owned()),
             "the prompt owns the keyboard, so the split never happens"
         );
@@ -2104,7 +3644,7 @@ mod key_routing {
         // the app parked until a human intervened. Through the real ladder it
         // dismisses the prompt, so the loop closes.
         let (mut shell, pty) = busy_shell_with_terminal();
-        let _ = press_chord(&mut shell, &mod_spec("w"));
+        let _ = press_chord(&mut shell, &default_spec("close-focused"));
         assert_eq!(
             press_chord(&mut shell, "escape"),
             PressStep::Overlay("tab-close-confirm".to_owned())
@@ -2113,7 +3653,7 @@ mod key_routing {
         assert_eq!(pty.kill_count(), 0, "dismissing kills nothing");
         // With the prompt gone the app takes chords again.
         assert_eq!(
-            press_chord(&mut shell, &mod_spec("d")),
+            press_chord(&mut shell, &default_spec("split-vertical")),
             PressStep::Ran("split-vertical".to_owned())
         );
     }
@@ -2123,9 +3663,47 @@ mod key_routing {
         // The affirmative half: an agent can carry the close it asked for
         // through to the kill, without a human answering the prompt.
         let (mut shell, pty) = busy_shell_with_terminal();
-        let _ = press_chord(&mut shell, &mod_spec("w"));
+        let _ = press_chord(&mut shell, &default_spec("close-focused"));
         let _ = press_chord(&mut shell, "enter");
         assert_eq!(pty.kill_count(), 1, "enter must confirm the close");
+    }
+
+    #[test]
+    fn toggle_park_tab_parks_the_active_tab_and_focuses_an_unparked_one() {
+        let (mut shell, _pty, first) = shell_with_two_tabs();
+        let second = shell.core.workspace.tabs[1].first_session();
+
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::TogglePark)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("toggle-park-tab".to_owned())]
+        );
+        let workspace = &shell.core.workspace;
+        assert!(workspace.tabs[1].is_parked());
+        assert_eq!(workspace.tabs[1].first_session(), second);
+        assert_eq!(
+            workspace.focused_session().map(|s| s.0.get()),
+            Some(first),
+            "the unparked tab takes over"
+        );
+    }
+
+    #[test]
+    fn a_user_bound_chord_parks_the_tab_through_the_live_keymap() {
+        let (mut shell, _pty, _first) = shell_with_two_tabs();
+        let chord = "ctrl+alt+shift+p";
+        let mut keymap = Keymap::defaults();
+        keymap.set(
+            Action::TogglePark,
+            [KeyChord::parse(chord).expect("a test chord parses")],
+        );
+        shell.keymap = keymap;
+
+        assert_eq!(
+            press_chord(&mut shell, chord),
+            PressStep::Ran("toggle-park-tab".to_owned())
+        );
+        assert!(shell.core.workspace.tabs[1].is_parked());
     }
 
     #[test]
@@ -2212,6 +3790,18 @@ mod key_routing {
             // Told `ran`, an agent would follow with `paste` and paste whatever
             // was on the clipboard before.
             (Action::Copy, "copy"),
+            // No pane, so no Claude whose name could be copied.
+            (Action::CopyAgentName, "copy-agent-name"),
+            // No tab, so no title to edit.
+            (Action::RenameTab, "rename-tab"),
+            // No tab, so no menu of one.
+            (Action::OpenTabMenu, "open-tab-menu"),
+            // No pane, so no idle Claude to type `/desktop` into.
+            (Action::SendToDesktop, "send-to-desktop"),
+            // No tab, so nothing to colour.
+            (Action::PickTabColor, "pick-tab-color"),
+            // No tab, so nothing to park.
+            (Action::TogglePark, "toggle-park-tab"),
         ] {
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
@@ -2223,15 +3813,57 @@ mod key_routing {
     }
 
     #[test]
+    fn the_rename_tab_chord_opens_the_focused_tabs_rename_seeded_with_its_title() {
+        let mut shell = shell_with_three_tabs();
+        let _ = shell.activate_tab(1);
+        let shown = shell.core.workspace.tabs[1].display_title().to_owned();
+
+        let step = press_chord(&mut shell, &default_spec("rename-tab"));
+
+        assert_eq!(step, PressStep::Ran("rename-tab".to_owned()));
+        let (anchor, buffer) = shell.tab_rename.clone().expect("renaming");
+        assert_eq!(
+            shell.core.workspace.tab_of(anchor),
+            Some(1),
+            "the focused tab"
+        );
+        assert_eq!(buffer, shown, "the field opens on the name it replaces");
+    }
+
+    #[test]
+    fn a_rename_opened_by_the_action_owns_the_keyboard_until_escape() {
+        // The sequence an agent runs: open the rename, find a second press
+        // answered by the field rather than by the keymap, then leave it.
+        let mut shell = shell_with_three_tabs();
+
+        let (outcome, _task) = shell.perform_presses(vec![
+            Press::Command(Action::RenameTab),
+            Press::Command(Action::RenameTab),
+        ]);
+        assert_eq!(
+            outcome.steps,
+            vec![
+                PressStep::Ran("rename-tab".to_owned()),
+                PressStep::Overlay("tab-rename".to_owned()),
+            ]
+        );
+
+        assert_eq!(
+            press_chord(&mut shell, "escape"),
+            PressStep::Overlay("tab-rename".to_owned())
+        );
+        assert!(shell.tab_rename.is_none(), "escape leaves the field");
+    }
+
+    #[test]
     fn copy_runs_only_with_something_selected() {
-        // Three states, because the negative case alone leaves the guard
+        // Both states, because the negative case alone leaves the guard
         // untested: mutation testing survived `copy_selection` always refusing
-        // *and* both settings of `!sel.is_empty()` until the positive case and
-        // the empty-string case were pinned alongside it.
-        //
-        // The clipboard write itself is an iced task and not observable here, so
-        // the verdict is the assertion — which is exactly what a caller reads.
-        let (mut shell, _pty) = shell_with_terminal();
+        // until the positive case was pinned alongside it. The terminal is the
+        // one source of "is anything selected", so the screen's own flag is
+        // what flips the verdict — no shell-side text does.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
 
         let (nothing, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
         assert_eq!(
@@ -2239,22 +3871,22 @@ mod key_routing {
             vec![inert("copy", "no-context")],
             "no selection at all"
         );
+        assert_eq!(pty.copy_count(), 0);
 
-        shell.selection = Some(String::new());
-        let (empty, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
-        assert_eq!(
-            empty.steps,
-            vec![inert("copy", "no-context")],
-            "an empty selection is nothing to copy either"
+        shell.screens.insert(
+            session,
+            Screen {
+                has_selection: true,
+                ..screen_of("cargo test")
+            },
         );
-
-        shell.selection = Some("cargo test".to_owned());
         let (text, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
         assert_eq!(
             text.steps,
             vec![PressStep::Ran("copy".to_owned())],
-            "real text on the clipboard is a copy that ran"
+            "a selection the terminal holds is a copy that ran"
         );
+        assert_eq!(pty.copy_count(), 1, "and it was asked of the terminal");
     }
 
     #[test]
@@ -2454,11 +4086,6 @@ mod key_routing {
             }],
             "the word range is applied to the terminal selection"
         );
-        assert_eq!(
-            shell.selection.as_deref(),
-            Some("src/main.rs"),
-            "the word is remembered as the last copy"
-        );
     }
 
     #[test]
@@ -2510,6 +4137,7 @@ mod key_routing {
         let session = shell.core.workspace.focused_session().expect("focused");
         let mut screen = screen_of("cargo test");
         screen.selection = vec![(0, 0, 4)];
+        screen.has_selection = true;
         shell.screens.insert(session, screen);
         (shell, pty, session)
     }
@@ -2534,17 +4162,52 @@ mod key_routing {
     }
 
     #[test]
-    fn the_copy_chord_prefers_the_live_selection_to_the_last_copied_text() {
-        // The cache holds what was last *copied*, not what is selected now.
-        // Reading it first would put stale text on the clipboard while a fresh
-        // highlight sits on screen — a silent wrong answer, the worst kind.
-        let (mut shell, pty, _session) = shell_with_a_visible_selection();
-        shell.selection = Some("an earlier copy".to_owned());
-        let _ = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+    fn the_copy_chord_is_inert_with_nothing_selected_even_after_an_earlier_copy() {
+        // The case a mouse-mode pane produces on every unshifted drag: the
+        // program took the gesture and put the dragged text on the clipboard
+        // itself, and the terminal holds no selection. The chord must then do
+        // nothing at all — an earlier copy elsewhere is not "something to copy"
+        // now, and writing it would overwrite the program's copy with stale
+        // text. Only the absence of a selection matters, so no mouse mode is set.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::CopySelection("an earlier copy".to_owned()));
+        shell.screens.insert(session, screen_of("claude"));
+        let (verdict, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(
+            verdict.steps,
+            vec![PressStep::Inert {
+                action: "copy".to_owned(),
+                reason: "no-context",
+            }],
+            "nothing is selected, so there is nothing to copy"
+        );
+        assert_eq!(pty.copy_count(), 0, "no copy was asked of the terminal");
+    }
+
+    #[test]
+    fn the_copy_chord_reads_a_selection_that_scrolled_out_of_view() {
+        // The terminal's selection survives a scroll into history, where the
+        // viewport shows no highlight of it. The chord still copies it — the
+        // one case the visible spans cannot answer, which the screen reports
+        // in its own right rather than through a cache of an earlier copy.
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(
+            session,
+            Screen {
+                has_selection: true,
+                scrolled: true,
+                display_offset: 40,
+                ..screen_of("cargo test")
+            },
+        );
+        let (verdict, _task) = shell.perform_presses(vec![Press::Command(Action::Copy)]);
+        assert_eq!(verdict.steps, vec![PressStep::Ran("copy".to_owned())]);
         assert_eq!(
             pty.copy_count(),
             1,
-            "the live selection wins over the cache"
+            "the chord asks the terminal for the selection it still holds"
         );
     }
 
@@ -2643,6 +4306,95 @@ mod key_routing {
         assert!(pty.writes().is_empty());
     }
 
+    /// A shell split in two, focus on the new pane: the pane returned is the
+    /// one a right-click points at while it is not focused.
+    fn shell_with_an_unfocused_pane() -> (Shell, Arc<RecordingPty>, SessionId) {
+        let (mut shell, pty) = shell_with_terminal();
+        let pointed = shell.core.workspace.focused_session().expect("focused");
+        let (split, _task) = shell.perform_action(BridgeAction::Split {
+            pane: None,
+            dir: SplitDir::Vertical,
+        });
+        assert_eq!(split.error, None);
+        assert_ne!(shell.core.workspace.focused_session(), Some(pointed));
+        (shell, pty, pointed)
+    }
+
+    #[test]
+    fn a_multi_line_paste_into_an_unbracketed_pane_waits_for_enter() {
+        let (mut shell, pty, pointed) = shell_with_an_unfocused_pane();
+        let text = "echo safe\r\n rm -rf ~\n";
+        let _ = shell.update(Message::PasteInto {
+            session: pointed,
+            content: Some(text.to_string()),
+        });
+        assert!(pty.writes().is_empty(), "nothing runs before the answer");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Paste));
+        assert!(matches!(
+            shell.active_confirmation(),
+            Some((_, Message::CancelPaste))
+        ));
+
+        let _ = press_chord(&mut shell, "x");
+        assert!(pty.writes().is_empty(), "the prompt keeps the keyboard");
+
+        let _ = press_chord(&mut shell, "enter");
+        assert_eq!(
+            pty.writes_seen(),
+            vec![(pointed, termherd_pty::paste_bytes(text, false))],
+            "enter writes exactly what the paste would have, where it pointed"
+        );
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    #[test]
+    fn escape_drops_a_held_paste_without_writing_it() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Paste));
+        let _ = press_chord(&mut shell, "escape");
+        assert_eq!(shell.keyboard_owner(), None);
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn the_paste_buttons_answer_the_prompt() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        let _ = shell.update(Message::CancelPaste);
+        assert!(pty.writes().is_empty());
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        let _ = shell.update(Message::ConfirmPaste);
+        assert_eq!(
+            pty.writes_seen(),
+            vec![(session, termherd_pty::paste_bytes("a\nb", false))]
+        );
+    }
+
+    #[test]
+    fn a_multi_line_paste_into_a_bracketed_pane_is_written_at_once() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let mut screen = screen_of("$ ");
+        screen.bracketed_paste = true;
+        shell.screens.insert(session, screen);
+        let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+        assert_eq!(shell.keyboard_owner(), None);
+        assert_eq!(pty.writes(), vec![termherd_pty::paste_bytes("a\nb", true)]);
+    }
+
+    #[test]
+    fn the_paste_prompt_names_its_pane_and_lines() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.update(Message::Paste(Some("one\ntwo\nthree".to_string())));
+        let title = shell.core.workspace.tabs[0].display_title().to_owned();
+        assert_eq!(
+            shell.paste_prompt().as_deref(),
+            Some(crate::strings::paste_prompt(3, &title).as_str())
+        );
+    }
+
     #[test]
     fn the_claude_button_launches_a_fresh_claude_session() {
         let (mut shell, pty) = shell_with_terminal();
@@ -2650,29 +4402,75 @@ mod key_routing {
         let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
         let launches = pty.launches();
         assert_eq!(launches.len(), before + 1, "one new spawn");
-        assert_eq!(
-            launches.last(),
-            Some(&Launch::Claude { resume: None }),
+        assert!(
+            minted_fresh_claude(launches.last()).is_some(),
             "the bot button starts a fresh Claude session — never a shell, never a resume"
         );
     }
 
     #[test]
-    fn launch_buttons_title_tabs_by_kind() {
-        // The initial tab label distinguishes a shell ($) from a Claude (🤖)
-        // tab for the same repo; OSC retitling takes over later.
-        let (mut shell, _pty) = shell_with_terminal();
-        let _ = shell.update(Message::LaunchProject("/tmp/faceto".to_string()));
-        let shell_tab = shell.core.workspace.focused_session().expect("focused");
+    fn a_fresh_claude_tab_knows_the_id_it_was_launched_under() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let launches = pty.launches();
+        let first = minted_fresh_claude(launches.get(1)).expect("a minted id");
+        let second = minted_fresh_claude(launches.get(2)).expect("a minted id");
+        assert_ne!(first, second, "every fresh launch gets its own id");
+        assert_eq!(shell.core.tab_claude_session_id(1), Some(first));
+        assert_eq!(shell.core.tab_claude_session_id(2), Some(second));
+    }
+
+    #[test]
+    fn a_resume_and_a_shell_are_launched_without_a_minted_id() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchSession {
+            cwd: "/tmp/project".to_string(),
+            resume: "abc-123".to_string(),
+        });
         assert_eq!(
-            shell.core.workspace.session_title(shell_tab),
-            Some("faceto $")
+            pty.launches(),
+            vec![
+                Launch::Shell,
+                Launch::Claude(ClaudeLaunch::Resume("abc-123".to_string()))
+            ]
+        );
+    }
+
+    #[test]
+    fn reopening_a_fresh_claude_tab_mints_it_a_new_id() {
+        let (mut shell, pty) = shell_with_terminal();
+        let _ = shell.update(Message::LaunchClaude("/tmp/project".to_string()));
+        let closed = shell.core.tab_claude_session_id(1).map(str::to_owned);
+        let _ = shell.update(Message::CloseTab(1));
+        let _ = shell.reopen_closed_tab().expect("a tab to reopen");
+        let launches = pty.launches();
+        let reopened = minted_fresh_claude(launches.last()).expect("a minted id");
+        assert_ne!(Some(reopened), closed.as_deref());
+        assert_eq!(shell.core.tab_claude_session_id(1), Some(reopened));
+    }
+
+    #[test]
+    fn launch_buttons_title_tabs_by_project_and_tell_their_kind_apart() {
+        // The kind is the chip's icon, read from the launch; the title is the
+        // project alone, so a rename opens on a clean name.
+        let (mut shell, _pty) = shell_with_terminal();
+        let active_tab = |shell: &Shell| {
+            let active = shell.core.workspace.active;
+            (
+                shell.core.workspace.tabs[active].display_title().to_owned(),
+                shell.core.tab_kind(active),
+            )
+        };
+        let _ = shell.update(Message::LaunchProject("/tmp/faceto".to_string()));
+        assert_eq!(
+            active_tab(&shell),
+            ("faceto".to_owned(), Some(SessionKind::Shell))
         );
         let _ = shell.update(Message::LaunchClaude("/tmp/faceto".to_string()));
-        let claude_tab = shell.core.workspace.focused_session().expect("focused");
         assert_eq!(
-            shell.core.workspace.session_title(claude_tab),
-            Some("faceto 🤖")
+            active_tab(&shell),
+            ("faceto".to_owned(), Some(SessionKind::Claude))
         );
     }
 
@@ -2685,11 +4483,8 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: summary.to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
                 custom_title: custom.map(str::to_string),
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
@@ -2712,11 +4507,7 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "shared title".to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
@@ -2772,7 +4563,7 @@ mod key_routing {
         // has something session-specific to say, and the decoder discards that
         // as naming the program rather than the session — so the live-title
         // override never fires here, and the tab must take the session's name
-        // from the scanned digest instead of the generic `project 🤖` label.
+        // from the scanned digest instead of the generic `project` label.
         let (mut shell, _pty) = shell_with_terminal();
         browse_named(
             &mut shell,
@@ -2789,7 +4580,7 @@ mod key_routing {
         assert_eq!(
             shell.core.workspace.session_title(tab),
             Some("Fix the login bug"),
-            "a resumed tab shows the session name, not the kind label"
+            "a resumed tab shows the session name, not the project label"
         );
     }
 
@@ -2845,9 +4636,9 @@ mod key_routing {
     }
 
     #[test]
-    fn resuming_a_session_with_a_blank_name_keeps_the_kind_label() {
+    fn resuming_a_session_with_a_blank_name_keeps_the_project_label() {
         // A scanned record whose digest yields an empty title must not blank the
-        // tab — fall back to the kind label.
+        // tab — fall back to the project label.
         let (mut shell, _pty) = shell_with_terminal();
         browse_named(&mut shell, "sess", "/tmp/project", "", None);
         let _ = shell.update(Message::LaunchSession {
@@ -2855,13 +4646,13 @@ mod key_routing {
             resume: "sess".to_string(),
         });
         let tab = shell.core.workspace.focused_session().expect("focused");
-        assert_eq!(shell.core.workspace.session_title(tab), Some("project 🤖"));
+        assert_eq!(shell.core.workspace.session_title(tab), Some("project"));
     }
 
     #[test]
-    fn resuming_an_unknown_session_keeps_the_kind_label() {
+    fn resuming_an_unknown_session_keeps_the_project_label() {
         // No scanned record (a session the last scan missed) → the tab keeps the
-        // cwd-derived kind label rather than an empty or wrong name. Green today;
+        // cwd-derived project label rather than an empty or wrong name. Green today;
         // guards the fix's fallback so it never regresses.
         let (mut shell, _pty) = shell_with_terminal();
         let _ = shell.update(Message::LaunchSession {
@@ -2869,7 +4660,7 @@ mod key_routing {
             resume: "missing".to_string(),
         });
         let tab = shell.core.workspace.focused_session().expect("focused");
-        assert_eq!(shell.core.workspace.session_title(tab), Some("ghost 🤖"));
+        assert_eq!(shell.core.workspace.session_title(tab), Some("ghost"));
     }
 
     #[test]
@@ -2919,6 +4710,75 @@ mod key_routing {
         // A modified key with no binding still falls through to its bytes.
         let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::SHIFT, None));
         assert_eq!(pty.writes(), vec![b"a".to_vec(), b"\n".to_vec()]);
+    }
+
+    /// Set directly, not from settings, so the test reads the same on every OS.
+    fn shell_holding_alt(side: Location) -> (Shell, Arc<RecordingPty>) {
+        let (mut shell, pty) = shell_with_terminal();
+        shell.option_as_meta = OptionAsMeta::Left;
+        let _ = shell.update(Message::Key(input::alt_events::alt_down(side)));
+        (shell, pty)
+    }
+
+    #[test]
+    fn the_composing_option_key_types_the_layout_glyph() {
+        // French AZERTY: ⌥⇧L is `|`, which iced reports as key `l` + text `|`.
+        let (mut shell, pty) = shell_holding_alt(Location::Right);
+        let _ = shell.on_key(press(
+            Key::Character("l".into()),
+            Modifiers::ALT | Modifiers::SHIFT,
+            Some("|"),
+        ));
+        assert_eq!(pty.writes(), vec![b"|".to_vec()]);
+    }
+
+    #[test]
+    fn the_meta_option_key_still_sends_escape_and_the_letter() {
+        let (mut shell, pty) = shell_holding_alt(Location::Left);
+        let _ = shell.on_key(press(Key::Character("b".into()), Modifiers::ALT, Some("∫")));
+        assert_eq!(pty.writes(), vec![b"\x1bb".to_vec()]);
+    }
+
+    #[test]
+    fn option_enter_keeps_its_newline_on_the_composing_side() {
+        let (mut shell, pty) = shell_holding_alt(Location::Right);
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::ALT, None));
+        assert_eq!(pty.writes(), vec![b"\x1b\r".to_vec()]);
+    }
+
+    #[test]
+    fn option_space_types_a_plain_space_on_the_composing_side() {
+        let (mut shell, pty) = shell_holding_alt(Location::Right);
+        let _ = shell.on_key(press(
+            Key::Named(Named::Space),
+            Modifiers::ALT,
+            Some("\u{a0}"),
+        ));
+        assert_eq!(pty.writes(), vec![b" ".to_vec()]);
+    }
+
+    #[test]
+    fn option_space_is_meta_on_the_meta_side() {
+        let (mut shell, pty) = shell_holding_alt(Location::Left);
+        let _ = shell.on_key(press(
+            Key::Named(Named::Space),
+            Modifiers::ALT,
+            Some("\u{a0}"),
+        ));
+        assert_eq!(pty.writes(), vec![b"\x1b ".to_vec()]);
+    }
+
+    #[test]
+    fn an_arrow_follows_the_cursor_mode_of_the_focused_screen() {
+        let (mut shell, pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let up = || press(Key::Named(Named::ArrowUp), Modifiers::default(), None);
+        let _ = shell.on_key(up());
+        let mut screen = screen_of("$ ");
+        screen.cursor_keys = termherd_pty::CursorKeys::Application;
+        shell.screens.insert(session, screen);
+        let _ = shell.on_key(up());
+        assert_eq!(pty.writes(), vec![b"\x1b[A".to_vec(), b"\x1bOA".to_vec()]);
     }
 
     #[test]
@@ -2977,17 +4837,73 @@ mod key_routing {
             })
             .collect();
         Screen {
-            cols: line.len() as u16,
-            rows: 1,
             lines: vec![line],
-            cursor: None,
-            scrolled: false,
-            display_offset: 0,
-            bracketed_paste: false,
-            selection: Vec::new(),
-            default_bg: [0x11, 0x13, 0x18],
-            cursor_color: [0xd0, 0xd0, 0xd0],
+            ..Screen::blank(text.chars().count() as u16, 1)
         }
+    }
+
+    /// The text of the one JSON dump a capture of `screen` writes, with the
+    /// shell's capture redaction set to `redact`.
+    fn dumped_text(screen: &str, redact: bool) -> String {
+        let (mut shell, _pty) = shell_with_terminal();
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell.screens.insert(session, screen_of(screen));
+        shell.redact_captures = redact;
+        let dump = shell
+            .core
+            .build_capture(&shell.snapshot_inputs_for(&SnapshotFilter::capture()));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _ = shell.perform_capture(dir.path(), dump);
+        let written = std::fs::read_dir(dir.path())
+            .expect("captures dir exists")
+            .filter_map(Result::ok)
+            .find(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .expect("a dump was written");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(written.path()).expect("read"))
+                .expect("valid json");
+        json["terminals"][session.0.get().to_string()]
+            .as_str()
+            .expect("the focused terminal's text")
+            .to_owned()
+    }
+
+    #[test]
+    fn a_capture_prunes_the_oldest_once_the_dir_is_full() {
+        let (shell, _pty) = shell_with_terminal();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oldest = dir.path().join("capture-19700101-000000-000.json");
+        for n in 0..crate::capture::KEPT_CAPTURES {
+            let name = format!("capture-19700101-000000-{n:03}.json");
+            std::fs::write(dir.path().join(name), "{}").expect("an old capture");
+        }
+        let foreign = dir.path().join("notes.md");
+        std::fs::write(&foreign, "mine").expect("a file of the user's");
+
+        let dump = shell
+            .core
+            .build_capture(&shell.snapshot_inputs_for(&SnapshotFilter::capture()));
+        let _ = shell.perform_capture(dir.path(), dump);
+
+        let dumps = std::fs::read_dir(dir.path())
+            .expect("captures dir")
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .count();
+        assert_eq!(dumps, crate::capture::KEPT_CAPTURES);
+        assert!(!oldest.exists(), "the oldest capture made room");
+        assert!(foreign.exists(), "a file termherd did not write stays");
+    }
+
+    #[test]
+    fn a_capture_masks_the_secrets_on_screen_unless_told_not_to() {
+        let screen = "$ echo ghp_1234567890abcdefghijABCDEFGHIJ123456";
+
+        let masked = dumped_text(screen, true);
+        assert!(masked.starts_with("$ echo [redacted]"), "{masked:?}");
+
+        let verbatim = dumped_text(screen, false);
+        assert!(verbatim.starts_with(screen), "{verbatim:?}");
     }
 
     #[test]
@@ -3022,7 +4938,7 @@ mod key_routing {
                 .expect("valid json");
         assert_eq!(json["focus"]["tab"], 0);
         assert_eq!(json["focus"]["session"], session.0.get().to_string());
-        assert_eq!(json["tabs"][0]["title"], "project $");
+        assert_eq!(json["tabs"][0]["title"], "project");
         assert_eq!(
             json["tabs"][0]["panes"][0]["handle"],
             session.0.get().to_string()
@@ -3046,6 +4962,56 @@ mod key_routing {
         shell.renaming = Some(("sid".to_string(), "café".to_string()));
         let _ = shell.update(Message::ImeCommit("é".to_string()));
         assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn either_rename_leaves_an_input_method_commit_for_its_field() {
+        // The view enables the terminal's IME area with `accepts_terminal_input`.
+        let emoji = iced::Event::InputMethod(iced::advanced::input_method::Event::Commit(
+            "🚀".to_string(),
+        ));
+        let (mut shell, _pty) = shell_with_terminal();
+        let taken = |shell: &Shell| ime::terminal_commit(shell.accepts_terminal_input(), &emoji);
+        assert_eq!(taken(&shell), Some("🚀"));
+
+        let _ = shell.update(Message::StartTabRename(0));
+        assert!(shell.tab_rename.is_some());
+        assert_eq!(taken(&shell), None, "a tab rename owns the commit");
+        let _ = shell.update(Message::CancelTabRename);
+
+        let _ = shell.update(Message::StartRename {
+            session: "sid".to_string(),
+            current: "build".to_string(),
+        });
+        assert_eq!(taken(&shell), None, "a session rename owns the commit");
+
+        let _ = shell.update(Message::CancelRename);
+        assert_eq!(taken(&shell), Some("🚀"));
+    }
+
+    #[test]
+    fn a_rename_started_mid_composition_drops_the_preedit() {
+        use iced::advanced::input_method;
+        let (mut shell, _pty) = shell_with_terminal();
+        let mut composition = ime::Composition::default();
+        let dead_key =
+            iced::Event::InputMethod(input_method::Event::Preedit("^".to_string(), Some(1..1)));
+        composition.follow(shell.accepts_terminal_input(), &dead_key);
+        assert!(composition.preedit(iced::Pixels(14.0)).is_some());
+
+        let _ = shell.update(Message::StartTabRename(0));
+        let redraw = iced::Event::Window(iced::window::Event::RedrawRequested(Instant::now()));
+        composition.follow(shell.accepts_terminal_input(), &redraw);
+        assert_eq!(composition.preedit(iced::Pixels(14.0)), None);
+    }
+
+    #[test]
+    fn an_emoji_typed_into_the_tab_rename_becomes_the_title() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.update(Message::StartTabRename(0));
+        let _ = shell.update(Message::TabRenameInput("Build 🚀".to_string()));
+        let _ = shell.update(Message::CommitTabRename);
+        assert_eq!(shell.core.workspace.tabs[0].display_title(), "Build 🚀");
     }
 
     #[test]
@@ -3160,6 +5126,23 @@ mod key_routing {
         );
     }
 
+    #[test]
+    fn a_shell_on_the_alternate_screen_confirms_its_close_until_it_leaves() {
+        // No foreground reading ever arrives, as on ConPTY: the alternate
+        // screen is then what says a program (an editor, a pager) is in front.
+        let (mut shell, _pty) = shell_with_terminal();
+        shell.close_confirm.tab = ConfirmClose::ConfirmWhenActive;
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let flip = |on| streams::pty_message(PtyEvent::AltScreen { session, on });
+        let _ = shell.update(flip(true));
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert_eq!(shell.closing, Some(0), "a full-screen program confirms");
+        let _ = shell.update(Message::CancelClose);
+        let _ = shell.update(flip(false));
+        let _ = shell.update(Message::RequestCloseTab(0));
+        assert!(shell.closing.is_none(), "back at the prompt it does not");
+    }
+
     /// The first session id hosted by each tab, in tab order — a stable handle
     /// to assert reordering against.
     fn tab_order(shell: &Shell) -> Vec<SessionId> {
@@ -3168,7 +5151,7 @@ mod key_routing {
             .workspace
             .tabs
             .iter()
-            .map(|t| t.sessions()[0])
+            .map(Tab::first_session)
             .collect()
     }
 
@@ -3179,6 +5162,153 @@ mod key_routing {
         let _ = shell.launch("/tmp/c".to_string(), Launch::Shell);
         assert_eq!(shell.core.workspace.tabs.len(), 3);
         shell
+    }
+
+    /// Three tabs, every one parked, in launch order, with the last one active
+    /// — the one state in which the active tab is parked.
+    fn shell_with_three_parked_tabs() -> (Shell, [SessionId; 3]) {
+        let mut shell = shell_with_three_tabs();
+        let ids = [0, 1, 2].map(|index| shell.core.workspace.tabs[index].first_session());
+        for index in [2, 1, 0] {
+            let _ = shell.core.apply(termherd_core::Event::ToggleParkTab(index));
+        }
+        shell.core.workspace.active = 2;
+        assert_eq!(tab_order(&shell), ids, "precondition: launch order");
+        assert_eq!(
+            shell.core.workspace.first_parked(),
+            0,
+            "precondition: all parked"
+        );
+        (shell, ids)
+    }
+
+    fn attention(shell: &mut Shell, session: SessionId) {
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: termherd_core::SessionStatus::Attention,
+        });
+    }
+
+    #[test]
+    fn an_armed_close_follows_its_tab_when_attention_reorders_the_strip() {
+        let (mut shell, [_, _, last]) = shell_with_three_parked_tabs();
+        shell.closing = Some(2);
+
+        attention(&mut shell, last);
+
+        let moved_to = shell.core.workspace.tab_of(last);
+        assert_eq!(moved_to, Some(0), "precondition: unparked to the front");
+        assert_eq!(shell.closing, moved_to, "the prompt still names its tab");
+    }
+
+    #[test]
+    fn attention_that_changes_the_active_tab_resets_the_prompts_and_the_keys() {
+        let (mut shell, [_, middle, _]) = shell_with_three_parked_tabs();
+        shell.closing = Some(2);
+        shell.focus = Focus::Search;
+
+        attention(&mut shell, middle);
+
+        assert_eq!(
+            shell.core.workspace.focused_session(),
+            Some(middle),
+            "precondition: the only unparked tab is now active"
+        );
+        assert_eq!(
+            shell.closing, None,
+            "the prompt named a tab no longer shown"
+        );
+        assert_eq!(shell.focus, Focus::Terminal);
+    }
+
+    #[test]
+    fn dragging_the_shown_tab_into_the_parked_zone_settles_on_the_tab_now_shown() {
+        let mut shell = shell_with_three_tabs();
+        let _ = shell.core.apply(termherd_core::Event::ToggleParkTab(0));
+        // [b c | a], c shown.
+        let b = shell.core.workspace.tabs[0].first_session();
+        assert_eq!(shell.core.workspace.active, 1, "precondition: c shown");
+        shell.focus = Focus::Search;
+
+        let _ = shell.update(Message::TabDragStart(1));
+        let _ = shell.update(Message::TabDragOver(2));
+        let _ = shell.update(Message::TabDragEnd);
+
+        assert_eq!(shell.core.workspace.focused_session(), Some(b));
+        assert_eq!(
+            shell.focus,
+            Focus::Terminal,
+            "the keys follow the tab shown"
+        );
+    }
+
+    #[test]
+    fn a_split_drag_keeps_its_tab_when_attention_reorders_the_strip() {
+        let (mut shell, [_, _, last]) = shell_with_three_parked_tabs();
+        shell.split_drag = Some(SplitDrag {
+            tab: 2,
+            path: Vec::new(),
+            dir: termherd_core::workspace::SplitDir::Vertical,
+            ratio: 0.5,
+            start: Point::new(0.0, 0.0),
+            extent: 100.0,
+        });
+
+        attention(&mut shell, last);
+
+        let drag = shell.split_drag.as_ref().expect("the drag survives");
+        assert_eq!(Some(drag.tab), shell.core.workspace.tab_of(last));
+    }
+
+    #[test]
+    fn a_tab_drag_keeps_its_tabs_when_attention_reorders_the_strip() {
+        let mut shell = shell_with_three_tabs();
+        let _ = shell.launch("/tmp/d".to_string(), Launch::Shell);
+        // [a | b c d]: three parked tabs behind the first.
+        for _ in 0..3 {
+            let _ = shell.core.apply(termherd_core::Event::ToggleParkTab(1));
+        }
+        assert_eq!(shell.core.workspace.first_parked(), 1, "precondition");
+        let carried = shell.core.workspace.tabs[3].first_session();
+        let over = shell.core.workspace.tabs[2].first_session();
+        let _ = shell.update(Message::TabDragStart(3));
+        let _ = shell.update(Message::TabDragOver(2));
+
+        attention(&mut shell, over);
+
+        let drag = shell.tab_drag.expect("the drag survives");
+        assert_eq!(Some(drag.from), shell.core.workspace.tab_of(carried));
+        assert_eq!(Some(drag.over), shell.core.workspace.tab_of(over));
+    }
+
+    #[test]
+    fn split_drag_updates_the_core_ratio_and_ends_on_release() {
+        let mut shell = shell_with_three_tabs();
+        let tab = shell.core.workspace.active;
+        let _ = shell.run_action(Action::SplitVertical);
+        let start = Point::new(20.0, 30.0);
+        let extent = shell.split_extent(tab, &[]).expect("root split extent");
+        shell.cursor_position = start;
+
+        let _ = shell.update(Message::SplitDragStart {
+            tab,
+            path: Vec::new(),
+            dir: termherd_core::workspace::SplitDir::Vertical,
+            ratio: 0.5,
+        });
+        let _ = shell.update(Message::SplitDragMove(Point::new(
+            start.x + extent * 0.2,
+            start.y,
+        )));
+
+        let termherd_core::workspace::Pane::Split { ratio, .. } =
+            &shell.core.workspace.tabs[tab].root
+        else {
+            panic!("expected a split tab");
+        };
+        assert!((*ratio - 0.7).abs() < 0.001);
+        let _ = shell.update(Message::SplitDragEnd);
+        assert!(shell.split_drag.is_none());
     }
 
     #[test]
@@ -3224,17 +5354,11 @@ mod key_routing {
         let mut shell = shell_with_three_tabs();
         let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived.clone(),
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         // The edit anchors on tab 1's session, so it resolves back to index 1.
-        let anchor = shell
-            .tab_rename
-            .as_ref()
-            .map(|(a, _)| *a)
-            .expect("renaming");
+        let (anchor, seed) = shell.tab_rename.clone().expect("renaming");
         assert_eq!(shell.core.workspace.tab_of(anchor), Some(1));
+        assert_eq!(seed, derived, "the field opens on the name it replaces");
 
         let _ = shell.update(Message::TabRenameInput("My work".to_string()));
         let _ = shell.update(Message::CommitTabRename);
@@ -3248,10 +5372,7 @@ mod key_routing {
         let mut shell = shell_with_three_tabs();
         let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived.clone(),
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         let _ = shell.update(Message::TabRenameInput("half-typed".to_string()));
         let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
 
@@ -3299,9 +5420,47 @@ mod key_routing {
         );
         assert!(shell.keyboard_owner().is_none(), "and then lets go");
         assert_eq!(
-            press_chord(&mut shell, &mod_spec("d")),
+            press_chord(&mut shell, &default_spec("split-vertical")),
             PressStep::Ran("split-vertical".to_owned()),
             "the surface takes chords again"
+        );
+    }
+
+    #[test]
+    fn enter_commits_a_tab_rename_through_the_keyboard_router() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let _ = shell.update(Message::StartTabRename(0));
+        let _ = shell.update(Message::TabRenameInput("new title".to_owned()));
+
+        assert_eq!(
+            press_chord(&mut shell, "enter"),
+            PressStep::Overlay("tab-rename".to_owned())
+        );
+        assert!(shell.keyboard_owner().is_none());
+        assert_eq!(shell.core.workspace.tabs[0].display_title(), "new title");
+    }
+
+    #[test]
+    fn enter_commits_a_session_rename_through_the_keyboard_router() {
+        let (mut shell, _pty) = empty_shell();
+        let _ = shell.update(Message::StartRename {
+            session: OPEN_ID.to_owned(),
+            current: "old title".to_owned(),
+        });
+        let _ = shell.update(Message::RenameInput("new title".to_owned()));
+
+        assert_eq!(
+            press_chord(&mut shell, "enter"),
+            PressStep::Overlay("session-rename".to_owned())
+        );
+        assert!(shell.keyboard_owner().is_none());
+        assert_eq!(
+            shell
+                .core
+                .metadata
+                .get(OPEN_ID)
+                .and_then(|meta| meta.title.as_deref()),
+            Some("new title")
         );
     }
 
@@ -3315,10 +5474,12 @@ mod key_routing {
         // the first: a sweep that names one offender reads as "and the rest are
         // fine", which is the assumption that let this one through.
         //
-        // What it does *not* claim: that leaving is harmless. It asserts the
-        // owner let go, not what letting go cost — the doc editor satisfies it
-        // while discarding unsaved edits. A rung whose exit destroys state
-        // needs its own test saying so; this one only rules out the parking.
+        // "Left" means the ladder emptied, with one named hand-off: the discard
+        // prompt's escape goes back to the editor it sits over, since leaving
+        // it any further would throw away the edits it exists to protect. What
+        // it does *not* claim: that leaving is harmless. A rung whose exit
+        // destroys state needs its own test saying so; this one only rules out
+        // the parking.
         let mut swallowed = Vec::new();
         for owner in KeyboardOwner::ALL {
             let (mut shell, _pty) = shell_with_terminal();
@@ -3332,7 +5493,10 @@ mod key_routing {
 
             let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
 
-            if shell.keyboard_owner().is_some() {
+            let after = shell.keyboard_owner();
+            let handed_back =
+                (owner, after) == (KeyboardOwner::DocDiscard, Some(KeyboardOwner::Doc));
+            if after.is_some() && !handed_back {
                 swallowed.push(owner.label());
             }
         }
@@ -3373,11 +5537,766 @@ mod key_routing {
     ///
     /// The `match` is what makes the sweep above honest: a new `KeyboardOwner`
     /// variant fails to compile here rather than quietly escaping it.
+    /// Records what the settings panel sent beyond the shell.
+    #[derive(Default)]
+    struct RecordingAppearance {
+        repainted: std::sync::Mutex<Vec<termherd_pty::Palette>>,
+        persisted: std::sync::Mutex<Vec<crate::settings::AppearanceChange>>,
+        shells: std::sync::Mutex<Vec<Option<String>>>,
+    }
+
+    impl live_settings::SettingsSink for RecordingAppearance {
+        fn repaint(&self, palette: termherd_pty::Palette) {
+            self.repainted.lock().expect("lock").push(palette);
+        }
+
+        fn set_shell(&self, shell: Option<termherd_pty::Shell>) {
+            self.shells
+                .lock()
+                .expect("lock")
+                .push(shell.map(|s| s.program));
+        }
+
+        fn persist(&self, change: &crate::settings::AppearanceChange) {
+            self.persisted.lock().expect("lock").push(change.clone());
+        }
+    }
+
+    fn shell_with_appearance(colors: ColorSettings) -> (Shell, Arc<RecordingAppearance>) {
+        let sink = Arc::new(RecordingAppearance::default());
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let mut ports = test_ports(Arc::new(RecordingPty::default()), rx);
+        ports.settings = sink.clone();
+        let mut startup = test_startup();
+        startup.settings.terminal.colors = colors;
+        let shell = Shell::new(WindowConfig::default(), ports, test_live_bridge(), startup);
+        (shell, sink)
+    }
+
+    #[test]
+    fn a_reloaded_file_applies_every_live_setting() {
+        let (mut shell, sink) = shell_with_appearance(ColorSettings::default());
+        let settings: crate::settings::Settings = serde_json::from_str(
+            r#"{
+                "theme": "gruvbox-light",
+                "shell": { "program": "fish" },
+                "keys": { "toggle-sidebar": "ctrl+alt+b" },
+                "close": { "tab": "noConfirmation" },
+                "sidebar": { "session_limit": 2 },
+                "terminal": {
+                    "font_size": 20,
+                    "copy_on_select": true,
+                    "colors": { "scheme": "gruvbox-light" }
+                },
+                "record": { "fps": 12 }
+            }"#,
+        )
+        .expect("valid settings");
+
+        let _ = shell.apply_settings(&settings);
+
+        assert_eq!(shell.theme(), iced::Theme::GruvboxLight);
+        assert_eq!(
+            *sink.repainted.lock().expect("lock"),
+            [termherd_pty::Palette::named("gruvbox-light").expect("known scheme")]
+        );
+        assert_eq!(
+            *sink.shells.lock().expect("lock"),
+            [Some("fish".to_string())]
+        );
+        assert_eq!(
+            shell
+                .keymap
+                .lookup(&KeyChord::parse("ctrl+alt+b").expect("a test chord parses")),
+            Some(termherd_core::Action::ToggleSidebar)
+        );
+        assert_eq!(
+            shell.close_confirm.tab,
+            crate::settings::ConfirmClose::NoConfirmation
+        );
+        assert!(shell.gestures.copy_on_select);
+        assert_eq!(shell.core.sidebar.session_limit, 2);
+        assert!((shell.core.font_size() - 20.0).abs() < f32::EPSILON);
+        assert_eq!(
+            shell.config.terminal_scheme.as_deref(),
+            Some("gruvbox-light")
+        );
+        assert_eq!(shell.config.record_fps, 12);
+        assert!(
+            sink.persisted.lock().expect("lock").is_empty(),
+            "a reload reads the file; writing it back would loop"
+        );
+    }
+
+    #[test]
+    fn reapplying_the_settings_in_force_does_not_repaint() {
+        // The settings panel's own write comes back through the watch: it must
+        // be a no-op, not a second recolour of every terminal.
+        let (mut shell, sink) = shell_with_appearance(ColorSettings::default());
+        let _ = shell.update(Message::PickScheme(appearance::SchemeChoice(Some(
+            ThemeChoice::SolarizedDark,
+        ))));
+        let echoed: crate::settings::Settings =
+            serde_json::from_str(r#"{ "terminal": { "colors": { "scheme": "solarized-dark" } } }"#)
+                .expect("valid settings");
+
+        let _ = shell.apply_settings(&echoed);
+
+        assert_eq!(
+            sink.repainted.lock().expect("lock").len(),
+            1,
+            "only the pick repainted"
+        );
+    }
+
+    #[test]
+    fn a_startup_load_problem_is_kept_until_dismissed() {
+        let problem = crate::json_store::LoadProblem {
+            file: "settings.json".to_string(),
+            kept_as: Some(PathBuf::from("/home/u/.termherd/settings.json.corrupt-1")),
+        };
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let mut shell = Shell::new(
+            WindowConfig::default(),
+            test_ports(Arc::new(RecordingPty::default()), rx),
+            test_live_bridge(),
+            Startup {
+                load_problems: vec![problem.clone()],
+                ..test_startup()
+            },
+        );
+        assert_eq!(shell.load_problems, [problem]);
+        let _ = shell.update(Message::DismissLoadProblems);
+        assert!(shell.load_problems.is_empty());
+    }
+
+    #[test]
+    fn the_settings_chord_opens_the_panel_and_escape_closes_it() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let chord = press(Key::Character(",".into()), Modifiers::COMMAND, Some(","));
+        let (verdict, _) = shell.on_key(chord);
+        assert_eq!(
+            verdict,
+            routing::KeyVerdict::Ran("open-settings".to_string())
+        );
+        assert!(shell.settings_open);
+
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+        assert!(!shell.settings_open);
+    }
+
+    #[test]
+    fn picking_a_theme_restyles_the_chrome_and_saves_it_without_recolouring() {
+        let (mut shell, sink) = shell_with_appearance(ColorSettings::default());
+        let _ = shell.update(Message::PickTheme(ThemeChoice::SolarizedLight));
+        assert_eq!(shell.theme(), iced::Theme::SolarizedLight);
+        assert_eq!(
+            *sink.persisted.lock().expect("lock"),
+            [crate::settings::AppearanceChange::Theme(
+                ThemeChoice::SolarizedLight
+            )]
+        );
+        assert!(sink.repainted.lock().expect("lock").is_empty());
+    }
+
+    #[test]
+    fn picking_a_scheme_recolours_with_the_overrides_kept_and_saves_it() {
+        // An explicit cursor override must survive a scheme picked live, as it
+        // does one read from the file at startup.
+        let colors: ColorSettings =
+            serde_json::from_str(r##"{ "cursor": "#ff0000" }"##).expect("valid colours");
+        let (mut shell, sink) = shell_with_appearance(colors);
+        let _ = shell.update(Message::PickScheme(appearance::SchemeChoice(Some(
+            ThemeChoice::GruvboxLight,
+        ))));
+
+        let expected = termherd_pty::Palette {
+            cursor: [0xff, 0, 0],
+            ..termherd_pty::Palette::named("gruvbox-light").expect("known scheme")
+        };
+        assert_eq!(*sink.repainted.lock().expect("lock"), [expected]);
+        assert_eq!(
+            *sink.persisted.lock().expect("lock"),
+            [crate::settings::AppearanceChange::Scheme(Some(
+                "gruvbox-light".to_string()
+            ))]
+        );
+        assert_eq!(
+            shell.config.terminal_scheme.as_deref(),
+            Some("gruvbox-light"),
+            "the snapshot reports the scheme in force, not the startup one"
+        );
+    }
+
+    // ---- Claude slash commands, behind a confirmation ---------------------
+
+    use termherd_core::{ClaudeColor, ClaudeCommand};
+
+    const RULE: &str = "──────────";
+
+    /// A screen of `rows`, as a terminal would report it.
+    fn screen_rows(rows: &[&str]) -> Screen {
+        let width = rows
+            .iter()
+            .map(|row| row.chars().count())
+            .max()
+            .unwrap_or(1);
+        let mut screen = Screen::blank(width as u16, rows.len() as u16);
+        for (line, row) in screen.lines.iter_mut().zip(rows) {
+            for (cell, c) in line.iter_mut().zip(row.chars()) {
+                cell.c = c;
+            }
+        }
+        screen
+    }
+
+    /// Claude's input box as it draws it with nothing typed: the hint shows.
+    fn empty_prompt() -> Screen {
+        screen_rows(&["", RULE, "❯ Try \"fix lint errors\"", RULE, "  status"])
+    }
+
+    /// A shell with one Claude tab open, focused and idle at an empty prompt.
+    fn shell_with_idle_claude() -> (Shell, Arc<RecordingPty>, SessionId) {
+        let (mut shell, pty) = empty_shell();
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(ClaudeLaunch::Fresh(None)),
+        );
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Idle,
+        });
+        shell.screens.insert(session, empty_prompt());
+        (shell, pty, session)
+    }
+
+    #[test]
+    fn a_draft_in_claudes_prompt_refuses_the_command_and_names_the_draft() {
+        // Ctrl+U clears one line; a draft of two would be submitted with the
+        // command as a prompt to the model. So a draft refuses outright.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        shell.screens.insert(
+            session,
+            screen_rows(&[RULE, "❯ fix the\\", "  login bug", RULE]),
+        );
+        let outcome = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some(
+                r#"Claude's prompt holds a draft ("fix the\\\nlogin bug"); clear or send it first"#
+            )
+        );
+        assert!(shell.keyboard_owner().is_none());
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn a_menu_over_claudes_prompt_refuses_the_command() {
+        // Idle, but a picker has the keyboard: Enter would pick an entry.
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        shell.screens.insert(
+            session,
+            screen_rows(&["Select model", "❯ 1. Default", "  2. Opus"]),
+        );
+        let outcome = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("Claude's input prompt is not on screen")),
+            "{:?}",
+            outcome.error
+        );
+
+        shell.screens.insert(
+            session,
+            Screen {
+                scrolled: true,
+                ..empty_prompt()
+            },
+        );
+        let scrolled = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert!(scrolled.error.is_some(), "a view scrolled off the prompt");
+    }
+
+    #[test]
+    fn a_draft_typed_while_the_prompt_was_up_keeps_it_open_and_says_why() {
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        shell
+            .screens
+            .insert(session, screen_rows(&[RULE, "❯ half typed", RULE]));
+
+        let steps = press_all(&mut shell, &["enter"]);
+        assert_eq!(
+            steps,
+            vec![PressStep::Refused {
+                overlay: "claude-command-confirm".to_owned(),
+                reason: "Claude's prompt holds a draft (\"half typed\"); clear or send it first"
+                    .to_owned(),
+            }],
+            "a caller is told nothing was typed, not that the prompt took the key"
+        );
+        assert!(pty.writes().is_empty());
+        assert_eq!(
+            shell.keyboard_owner(),
+            Some(KeyboardOwner::ClaudeCommand),
+            "the prompt stays, showing the refusal"
+        );
+        assert!(
+            shell
+                .claude_command
+                .as_ref()
+                .is_some_and(|pending| pending.refused.is_some())
+        );
+
+        shell.screens.insert(session, empty_prompt());
+        let _ = press_all(&mut shell, &["enter"]);
+        assert_eq!(
+            pty.writes().len(),
+            1,
+            "once the draft is gone, enter types it"
+        );
+    }
+
+    #[test]
+    fn a_physical_enter_right_after_a_remote_arm_is_ignored() {
+        // The user may be typing elsewhere when an agent arms the prompt; the
+        // Enter ending their own line must not confirm what they never read.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+
+        let _ = shell.update(Message::Key(enter.clone()));
+        assert!(pty.writes().is_empty(), "swallowed during the grace");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+
+        if let Some(pending) = shell.claude_command.as_mut() {
+            pending.enter_ignored_until = Some(Instant::now() - std::time::Duration::from_secs(1));
+        }
+        let _ = shell.update(Message::Key(enter));
+        assert_eq!(pty.writes().len(), 1, "after it, enter confirms");
+    }
+
+    #[test]
+    fn a_physical_enter_right_after_a_remote_rename_is_ignored() {
+        // The rename tool arms the same prompt as `claude_command` and owes the
+        // user the same moment to read it.
+        let (mut shell, pty, _session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
+        assert_eq!(outcome.error, None);
+        let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+        let _ = shell.update(Message::Key(enter));
+        assert!(pty.writes().is_empty(), "swallowed during the grace");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+    }
+
+    #[test]
+    fn only_a_remote_arm_holds_enter_back_and_never_escape() {
+        let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+        let escape = press(Key::Named(Named::Escape), Modifiers::default(), None);
+
+        let (mut local, _pty, _session) = shell_with_idle_claude();
+        let _ = local.dispatch_action(Action::SendToDesktop);
+        assert!(
+            !local.enter_too_soon(&enter, Instant::now()),
+            "the user read it"
+        );
+
+        let (mut pressed, _pty, _session) = shell_with_idle_claude();
+        let _ = pressed.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert!(
+            pressed.enter_too_soon(&enter, Instant::now()),
+            "an agent's press arms it as remotely as the tool does"
+        );
+
+        let (mut remote, _pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut remote, session, ClaudeCommand::Desktop);
+        assert!(remote.enter_too_soon(&enter, Instant::now()));
+        assert!(!remote.enter_too_soon(&escape, Instant::now()));
+    }
+
+    /// Arm `command` for `session` the way the MCP tool does.
+    fn arm_over_bridge(
+        shell: &mut Shell,
+        session: SessionId,
+        command: ClaudeCommand,
+    ) -> super::bridge::ActionOutcome {
+        shell
+            .perform_action(BridgeAction::ClaudeCommand {
+                session: session.0.get(),
+                command,
+            })
+            .0
+    }
+
+    #[test]
+    fn an_armed_claude_command_types_nothing_until_enter_then_clears_and_submits() {
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let command = ClaudeCommand::rename("api work").expect("a name");
+
+        let outcome = arm_over_bridge(&mut shell, session, command);
+        assert_eq!(outcome.error, None);
+        assert_eq!(
+            outcome.detail,
+            Some(super::bridge::ActionDetail::ClaudeCommand {
+                line: "/rename api work".to_owned(),
+                overlay: "claude-command-confirm",
+            }),
+            "the caller is told the exact line and the prompt holding the keyboard"
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+        assert!(pty.writes().is_empty(), "arming types nothing");
+
+        assert_eq!(
+            press_chord(&mut shell, "enter"),
+            PressStep::Overlay("claude-command-confirm".to_owned())
+        );
+        assert_eq!(
+            pty.writes_seen(),
+            vec![(session, b"\x15/rename api work".to_vec())],
+            "the draft is cleared and the line typed, with no Enter in the burst"
+        );
+        assert!(shell.keyboard_owner().is_none(), "and the prompt lets go");
+
+        let _ = shell.update(Message::SubmitDue(session));
+        assert_eq!(
+            pty.writes_seen().last(),
+            Some(&(session, b"\r".to_vec())),
+            "Enter follows on its own once the pause is due"
+        );
+    }
+
+    #[test]
+    fn escape_drops_an_armed_claude_command_without_typing_it() {
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+
+        let _ = press_chord(&mut shell, "escape");
+        assert!(shell.keyboard_owner().is_none());
+        let _ = press_chord(&mut shell, "enter");
+        assert!(
+            pty.writes().iter().all(|bytes| !bytes.starts_with(b"\x15")),
+            "a later enter reaches the terminal, never the dropped command"
+        );
+    }
+
+    #[test]
+    fn a_claude_command_is_refused_for_a_claude_not_idle_or_a_shell() {
+        let (mut shell, pty, claude) = shell_with_idle_claude();
+        let _ = shell.update(Message::PtyStatus {
+            session: claude,
+            status: SessionStatus::Busy,
+        });
+        let busy = arm_over_bridge(&mut shell, claude, ClaudeCommand::Desktop);
+        assert_eq!(
+            busy.error.as_deref(),
+            Some("the session is busy, not idle at its prompt")
+        );
+
+        let _ = shell.launch("/tmp/project".to_string(), Launch::Shell);
+        let plain = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session: plain,
+            status: SessionStatus::Idle,
+        });
+        let shell_refusal = arm_over_bridge(&mut shell, plain, ClaudeCommand::Desktop);
+        assert_eq!(
+            shell_refusal.error.as_deref(),
+            Some("the session is not a Claude session")
+        );
+
+        let unknown = shell
+            .perform_action(BridgeAction::ClaudeCommand {
+                session: 999,
+                command: ClaudeCommand::Desktop,
+            })
+            .0;
+        assert!(unknown.error.is_some(), "an unknown handle is refused");
+
+        assert!(shell.keyboard_owner().is_none(), "no refusal arms a prompt");
+        assert!(pty.writes().is_empty());
+    }
+
+    #[test]
+    fn a_command_confirmed_after_claude_turned_busy_is_not_typed() {
+        // The prompt can sit open while Claude starts work; typing then would
+        // queue the line behind it, so the confirmation asks again.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Color(ClaudeColor::Red));
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+
+        let _ = shell.update(Message::ConfirmClaudeCommand);
+        assert!(pty.writes().is_empty());
+        assert_eq!(
+            shell
+                .claude_command
+                .as_ref()
+                .and_then(|p| p.refused.clone()),
+            Some(CommandRefusal::NotIdle(SessionStatus::Busy)),
+            "the prompt stays open and says why"
+        );
+    }
+
+    #[test]
+    fn a_claude_command_is_not_armed_over_another_open_prompt() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        shell.archiving = Some("sess".to_string());
+
+        let outcome = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert_eq!(
+            outcome.error.as_deref(),
+            Some("another prompt is open (archive-confirm); answer it first")
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Archive));
+    }
+
+    // ---- Renaming a Claude session asks Claude ----------------------------
+
+    /// The command armed for confirmation, if any.
+    fn armed(shell: &Shell) -> Option<&ClaudeCommand> {
+        shell
+            .claude_command
+            .as_ref()
+            .map(|pending| &pending.command)
+    }
+
+    /// Double-click the tab at `index`, type `name`, and press Enter.
+    fn rename_tab_by_hand(shell: &mut Shell, index: usize, name: &str) {
+        let _ = shell.update(Message::StartTabRename(index));
+        let _ = shell.update(Message::TabRenameInput(name.to_owned()));
+        let _ = shell.update(Message::CommitTabRename);
+    }
+
+    #[test]
+    fn renaming_a_claude_tab_arms_rename_instead_of_a_local_name() {
+        let (mut shell, pty, _session) = shell_with_idle_claude();
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+        assert_eq!(shell.notice, None);
+        assert!(pty.writes().is_empty(), "nothing typed before the confirm");
+    }
+
+    #[test]
+    fn the_rename_tab_action_on_a_claude_tab_asks_claude_too() {
+        // The keyboard opens the double-click's field, so its commit takes the
+        // same road: a Claude tab is renamed by Claude, not overridden here.
+        let (mut shell, _pty, _session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::RenameTab)]);
+        assert_eq!(outcome.steps, vec![PressStep::Ran("rename-tab".to_owned())]);
+        let _ = shell.update(Message::TabRenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitTabRename);
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+    }
+
+    #[test]
+    fn the_tab_menu_rename_on_a_claude_tab_asks_claude_too() {
+        let (mut shell, _pty, _session) = shell_with_idle_claude();
+        let _ = shell.update(Message::OpenTabMenu(0));
+        assert_eq!(
+            press_chord(&mut shell, "enter"),
+            PressStep::Ran("rename-tab".to_owned())
+        );
+        let _ = shell.update(Message::TabRenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitTabRename);
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+    }
+
+    #[test]
+    fn a_claude_tab_rename_claude_cannot_take_is_reported_not_dropped() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(armed(&shell), None);
+        let notice = shell.notice.clone().expect("the refusal is shown");
+        assert!(notice.contains("busy"), "it says why: {notice}");
+        assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
+
+        let _ = shell.update(Message::DismissNotice);
+        assert_eq!(shell.notice, None);
+    }
+
+    #[test]
+    fn a_claude_tab_rename_over_a_draft_is_reported_with_the_draft() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        shell
+            .screens
+            .insert(session, screen_rows(&[RULE, "❯ half a thought", RULE]));
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(armed(&shell), None);
+        let notice = shell.notice.clone().expect("the refusal is shown");
+        assert!(
+            notice.contains("half a thought"),
+            "it names the draft: {notice}"
+        );
+    }
+
+    #[test]
+    fn a_claude_tab_rename_to_its_current_name_or_to_nothing_arms_nothing() {
+        let (mut shell, _pty, _session) = shell_with_idle_claude();
+        let current = shell.core.workspace.tabs[0].display_title().to_owned();
+        rename_tab_by_hand(&mut shell, 0, &format!("  {current} "));
+        assert_eq!(armed(&shell), None);
+        rename_tab_by_hand(&mut shell, 0, "   ");
+        assert_eq!(armed(&shell), None);
+        assert_eq!(shell.notice, None, "neither is a refusal");
+    }
+
+    const OPEN_ID: &str = "0b6a3c1e-1111-4222-8333-444455556666";
+
+    /// A shell with one idle Claude tab resuming conversation [`OPEN_ID`].
+    fn shell_with_idle_resumed_claude() -> (Shell, SessionId) {
+        let (mut shell, _pty) = empty_shell();
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(termherd_core::ClaudeLaunch::Resume(OPEN_ID.into())),
+        );
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Idle,
+        });
+        shell.screens.insert(session, empty_prompt());
+        (shell, session)
+    }
+
+    #[test]
+    fn renaming_an_open_claude_session_from_the_sidebar_arms_rename() {
+        let (mut shell, _session) = shell_with_idle_resumed_claude();
+        let _ = shell.update(Message::StartRename {
+            session: OPEN_ID.to_owned(),
+            current: "old".to_owned(),
+        });
+        let _ = shell.update(Message::RenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitRename);
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(
+            shell.core.metadata.get(OPEN_ID),
+            None,
+            "no local name is kept for it"
+        );
+    }
+
+    #[test]
+    fn renaming_a_closed_session_from_the_sidebar_stays_local() {
+        let (mut shell, _pty) = empty_shell();
+        let _ = shell.update(Message::StartRename {
+            session: OPEN_ID.to_owned(),
+            current: "old".to_owned(),
+        });
+        let _ = shell.update(Message::RenameInput("api work".to_owned()));
+        let _ = shell.update(Message::CommitRename);
+
+        assert_eq!(armed(&shell), None);
+        assert_eq!(
+            shell
+                .core
+                .metadata
+                .get(OPEN_ID)
+                .and_then(|meta| meta.title.as_deref()),
+            Some("api work")
+        );
+    }
+
+    #[test]
+    fn the_rename_action_on_a_claude_tab_arms_rename_and_says_so() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
+        assert_eq!(outcome.error, None);
+        assert_eq!(
+            outcome.detail,
+            Some(super::bridge::ActionDetail::ClaudeCommand {
+                line: "/rename api work".to_owned(),
+                overlay: "claude-command-confirm",
+            })
+        );
+
+        let _ = shell.update(Message::CancelClaudeCommand);
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        let (busy, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
+        assert_eq!(
+            busy.error.as_deref(),
+            Some("the session is busy, not idle at its prompt")
+        );
+    }
+
+    #[test]
+    fn send_to_desktop_arms_the_prompt_for_the_focused_claude_only() {
+        let (mut shell, pty, _session) = shell_with_idle_claude();
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("send-to-desktop".to_owned())]
+        );
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+        let _ = shell.update(Message::ConfirmClaudeCommand);
+        assert_eq!(pty.writes()[0], b"\x15/desktop");
+
+        let (mut plain, _pty) = shell_with_terminal();
+        let (refused, _task) = plain.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+        assert_eq!(
+            refused.steps,
+            vec![inert("send-to-desktop", "no-context")],
+            "a focused shell has no Claude to send"
+        );
+        assert!(plain.keyboard_owner().is_none());
+    }
+
+    #[test]
+    fn an_armed_claude_command_shows_its_own_modal() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
+        assert!(matches!(
+            shell.active_confirmation(),
+            Some((_, Message::CancelClaudeCommand))
+        ));
+    }
+
     fn arm_overlay(shell: &mut Shell, owner: KeyboardOwner) {
         match owner {
             KeyboardOwner::TabRename => {
-                let current = shell.core.workspace.tabs[0].display_title().to_owned();
-                let _ = shell.update(Message::StartTabRename { index: 0, current });
+                let _ = shell.update(Message::StartTabRename(0));
             }
             KeyboardOwner::SessionRename => {
                 let _ = shell.update(Message::StartRename {
@@ -3388,26 +6307,86 @@ mod key_routing {
             KeyboardOwner::Quit => shell.closing_window = Some(window::Id::unique()),
             KeyboardOwner::TabClose(index) => shell.closing = Some(index),
             KeyboardOwner::Archive => shell.archiving = Some("sess".to_string()),
-            KeyboardOwner::Doc => {
-                let _ = shell.update(Message::DocLoaded {
-                    label: "CLAUDE.md".to_string(),
-                    path: PathBuf::from("/nowhere/CLAUDE.md"),
-                    content: "notes".to_string(),
-                    mtime: None,
+            KeyboardOwner::Paste => {
+                let _ = shell.update(Message::Paste(Some("a\nb".to_string())));
+            }
+            KeyboardOwner::TabMenu => {
+                // Over the active tab: a right-click focuses its tab first, so a
+                // menu on another one would move focus before the sweep looks.
+                let active = shell.core.workspace.active;
+                let _ = shell.update(Message::OpenTabMenu(active));
+            }
+            KeyboardOwner::ClaudeCommand => {
+                let session = shell.core.workspace.focused_session().expect("focused");
+                shell.claude_command = Some(claude_command::PendingCommand {
+                    session,
+                    command: termherd_core::ClaudeCommand::Desktop,
+                    enter_ignored_until: None,
+                    refused: None,
                 });
             }
+            KeyboardOwner::ColorPicker => {
+                let (outcome, _task) =
+                    shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+                assert_eq!(
+                    outcome.steps,
+                    vec![PressStep::Ran("pick-tab-color".to_owned())]
+                );
+            }
+            KeyboardOwner::Settings => {
+                let _ = shell.update(Message::ToggleSettings);
+            }
+            KeyboardOwner::DocDiscard => {
+                modified_doc(shell, "CLAUDE.md");
+                let _ = shell.update(Message::CloseDoc);
+            }
+            KeyboardOwner::Doc => load_doc(shell, "CLAUDE.md", "notes"),
         }
+    }
+
+    /// Shared by `load_doc` and `click_doc`, so a click and the read that
+    /// answers it name the same file.
+    fn doc_path(name: &str) -> PathBuf {
+        PathBuf::from("/nowhere").join(name)
+    }
+
+    fn load_doc(shell: &mut Shell, name: &str, content: &str) {
+        let _ = shell.update(Message::DocLoaded {
+            label: name.to_string(),
+            path: doc_path(name),
+            content: content.to_string(),
+            mtime: None,
+        });
+    }
+
+    #[test]
+    fn the_doc_write_scope_is_measured_against_the_injected_claude_dir() {
+        let claude = PathBuf::from("/injected/.claude");
+        let mut shell = shell_over_with(
+            Arc::new(RecordingPty::default()),
+            Startup {
+                claude_dir: Some(crate::paths::ClaudeDir::at(&claude)),
+                ..test_startup()
+            },
+        );
+        // Writable anywhere else; a transcript dir here.
+        let path = claude.join("projects").join("-repo").join("CLAUDE.md");
+
+        let _ = shell.update(Message::DocLoaded {
+            label: "CLAUDE.md".to_string(),
+            path,
+            content: String::new(),
+            mtime: None,
+        });
+
+        assert!(!shell.open_doc.as_ref().expect("doc open").writable);
     }
 
     #[test]
     fn pressing_another_tab_commits_the_rename_but_the_double_clicks_own_drag_does_not() {
         let mut shell = shell_with_three_tabs();
-        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived,
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         let _ = shell.update(Message::TabRenameInput("Renamed".to_string()));
 
         // The double-click that opened the edit still emits TabDragStart(1) /
@@ -3431,10 +6410,7 @@ mod key_routing {
         let mut shell = shell_with_three_tabs();
         let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived.clone(),
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         let _ = shell.update(Message::TabRenameInput("   ".to_string()));
         let _ = shell.update(Message::CommitTabRename);
 
@@ -3448,14 +6424,10 @@ mod key_routing {
     #[test]
     fn committing_an_unchanged_tab_name_leaves_the_title_dynamic() {
         let mut shell = shell_with_three_tabs();
-        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
         // Open the editor (seeded with the shown title) and commit without
         // editing — an accidental double-click + Enter.
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived,
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         let _ = shell.update(Message::CommitTabRename);
 
         // No override is stored, so the tab keeps tracking its derived title
@@ -3469,12 +6441,8 @@ mod key_routing {
     #[test]
     fn a_genuine_interaction_elsewhere_commits_a_pending_tab_rename() {
         let mut shell = shell_with_three_tabs();
-        let derived = shell.core.workspace.tabs[1].display_title().to_owned();
 
-        let _ = shell.update(Message::StartTabRename {
-            index: 1,
-            current: derived,
-        });
+        let _ = shell.update(Message::StartTabRename(1));
         let _ = shell.update(Message::TabRenameInput("Renamed".to_string()));
 
         // Starring a sidebar session is a real blur — it dismisses a session
@@ -3488,11 +6456,7 @@ mod key_routing {
     #[test]
     fn a_pending_tab_rename_follows_its_tab_across_a_reorder() {
         let mut shell = shell_with_three_tabs();
-        let derived = shell.core.workspace.tabs[2].display_title().to_owned();
-        let _ = shell.update(Message::StartTabRename {
-            index: 2,
-            current: derived,
-        });
+        let _ = shell.update(Message::StartTabRename(2));
         let _ = shell.update(Message::TabRenameInput("Pinned".to_string()));
         let anchor = shell
             .tab_rename
@@ -3549,23 +6513,154 @@ mod key_routing {
         assert!(shell.tab_drag.is_none());
     }
 
+    fn left_release() -> iced::Event {
+        iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+            iced::mouse::Button::Left,
+        ))
+    }
+
+    /// What the window-wide listener hands the shell for `event`, run through
+    /// `update` the way the subscription would.
+    fn deliver_window_event(shell: &mut Shell, event: iced::Event) {
+        if let Some(message) =
+            tab_drag_release(event, iced::event::Status::Captured, window::Id::unique())
+        {
+            let _ = shell.update(message);
+        }
+    }
+
     #[test]
-    fn leaving_the_strip_abandons_a_drag() {
+    fn tab_drag_release_maps_only_a_release() {
+        use iced::event::Status;
+        use iced::mouse::{Button, Event as Mouse};
+        // A move ending the drag would drop the tab on the first pixel of
+        // travel; the press is the one that started it. A lifted finger ends a
+        // drag a finger started, since the chip's press handler accepts one.
+        let cases = [
+            (left_release(), Status::Captured, true),
+            (left_release(), Status::Ignored, true),
+            (
+                iced::Event::Touch(iced::touch::Event::FingerLifted {
+                    id: iced::touch::Finger(0),
+                    position: iced::Point::ORIGIN,
+                }),
+                Status::Captured,
+                true,
+            ),
+            (
+                iced::Event::Mouse(Mouse::CursorMoved {
+                    position: iced::Point::ORIGIN,
+                }),
+                Status::Ignored,
+                false,
+            ),
+            (
+                iced::Event::Mouse(Mouse::ButtonPressed(Button::Left)),
+                Status::Captured,
+                false,
+            ),
+        ];
+        for (event, status, ends) in cases {
+            let message = tab_drag_release(event.clone(), status, window::Id::unique());
+            let ok = if ends {
+                matches!(message, Some(Message::TabDragEnd))
+            } else {
+                message.is_none()
+            };
+            assert!(ok, "{event:?} ({status:?}) → {message:?}");
+        }
+    }
+
+    #[test]
+    fn split_drag_listener_tracks_cursor_and_ends_on_left_release() {
+        let point = Point::new(24.0, 48.0);
+        assert!(matches!(
+            split_drag_event(
+                iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: point }),
+                iced::event::Status::Captured,
+                window::Id::unique(),
+            ),
+            Some(Message::SplitDragMove(position)) if position == point
+        ));
+        assert!(matches!(
+            split_drag_event(
+                left_release(),
+                iced::event::Status::Captured,
+                window::Id::unique(),
+            ),
+            Some(Message::SplitDragEnd)
+        ));
+    }
+
+    #[test]
+    fn a_release_with_no_tab_drag_leaves_everything_alone() {
+        // The window-wide listener hears every left release, including the
+        // click that places the caret in a sidebar rename field.
+        let mut shell = shell_with_three_tabs();
+        let before = tab_order(&shell);
+        let active_before = shell.core.workspace.active;
+        shell.renaming = Some(("sid".to_string(), "typing".to_string()));
+        deliver_window_event(&mut shell, left_release());
+        assert_eq!(
+            shell.renaming.as_ref().map(|(_, b)| b.as_str()),
+            Some("typing"),
+            "the session rename survives"
+        );
+        assert_eq!(tab_order(&shell), before);
+        assert_eq!(shell.core.workspace.active, active_before);
+    }
+
+    #[test]
+    fn a_release_off_the_strip_drops_the_tab_at_the_last_slot() {
+        let mut shell = shell_with_three_tabs();
+        let before = tab_order(&shell);
+        let _ = shell.update(Message::TabDragStart(0));
+        let _ = shell.update(Message::TabDragOver(2));
+        // The pointer has left the strip; the release lands on the terminal.
+        deliver_window_event(&mut shell, left_release());
+        assert_eq!(tab_order(&shell), vec![before[1], before[2], before[0]]);
+        assert!(shell.tab_drag.is_none(), "the drag is over");
+    }
+
+    #[test]
+    fn losing_window_focus_abandons_a_drag() {
         let mut shell = shell_with_three_tabs();
         let before = tab_order(&shell);
         let active_before = shell.core.workspace.active;
         let _ = shell.update(Message::TabDragStart(0));
         let _ = shell.update(Message::TabDragOver(2));
-        let _ = shell.update(Message::TabDragCancel);
-        // A release that arrives after the cancel finds no drag and does nothing.
-        let _ = shell.update(Message::TabDragEnd);
-        assert_eq!(
-            tab_order(&shell),
-            before,
-            "an abandoned drag changes nothing"
-        );
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::Unfocused,
+        ));
+        assert!(shell.tab_drag.is_none(), "focus loss ends the drag");
+        // The release the window could not see must not commit later.
+        deliver_window_event(&mut shell, left_release());
+        assert_eq!(tab_order(&shell), before, "nothing moved");
         assert_eq!(shell.core.workspace.active, active_before);
-        assert!(shell.tab_drag.is_none());
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(64))]
+        #[test]
+        fn a_release_moves_the_tab_once_to_the_last_slot_hovered(
+            from in 0usize..3,
+            hovered in proptest::collection::vec(0usize..3, 0..6),
+        ) {
+            let mut shell = shell_with_three_tabs();
+            let mut expected = tab_order(&shell);
+            let _ = shell.update(Message::TabDragStart(from));
+            for &slot in &hovered {
+                let _ = shell.update(Message::TabDragOver(slot));
+            }
+            deliver_window_event(&mut shell, left_release());
+
+            let to = hovered.last().copied().unwrap_or(from);
+            let carried = expected.remove(from);
+            expected.insert(to, carried);
+            proptest::prop_assert_eq!(tab_order(&shell), expected);
+            proptest::prop_assert!(shell.tab_drag.is_none());
+        }
     }
 
     #[test]
@@ -3632,7 +6727,10 @@ mod key_routing {
         // A Claude session is a running foreground process even when idle, so
         // its tab must always confirm before closing.
         let (mut shell, pty) = shell_with_terminal();
-        let _ = shell.launch("/tmp/claude".to_string(), Launch::Claude { resume: None });
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(ClaudeLaunch::Fresh(None)),
+        );
         let claude_tab = shell.core.workspace.active;
         let _ = shell.update(Message::RequestCloseTab(claude_tab));
         assert_eq!(shell.closing, Some(claude_tab), "a Claude tab confirms");
@@ -3895,7 +6993,7 @@ mod key_routing {
             url: "http://127.0.0.1:9/mcp".into(),
         });
         let session = session_id(1);
-        let mut spec = bare_spawn(session, Launch::Claude { resume: None });
+        let mut spec = bare_spawn(session, Launch::Claude(ClaudeLaunch::Fresh(None)));
 
         shell.attach_mcp(&mut spec);
 
@@ -3923,8 +7021,8 @@ mod key_routing {
         shell.mcp_endpoint = Some(crate::mcp::Endpoint {
             url: "http://127.0.0.1:9/mcp".into(),
         });
-        let mut first = bare_spawn(session_id(1), Launch::Claude { resume: None });
-        let mut second = bare_spawn(session_id(2), Launch::Claude { resume: None });
+        let mut first = bare_spawn(session_id(1), Launch::Claude(ClaudeLaunch::Fresh(None)));
+        let mut second = bare_spawn(session_id(2), Launch::Claude(ClaudeLaunch::Fresh(None)));
         shell.attach_mcp(&mut first);
         shell.attach_mcp(&mut second);
         assert_ne!(
@@ -3950,7 +7048,7 @@ mod key_routing {
         // The server failed to bind (or no runtime): `mcp_endpoint` is `None`, so
         // even a Claude launch goes out without the bridge rather than panicking.
         let (mut shell, _pty) = empty_shell();
-        let mut spec = bare_spawn(session_id(1), Launch::Claude { resume: None });
+        let mut spec = bare_spawn(session_id(1), Launch::Claude(ClaudeLaunch::Fresh(None)));
         shell.attach_mcp(&mut spec);
         assert!(spec.mcp.is_none(), "no endpoint → no injection");
     }
@@ -3975,8 +7073,8 @@ mod key_routing {
         assert_eq!(pty.launches().last(), Some(&Launch::Shell));
         assert_eq!(
             focused_cwd(&shell).as_deref(),
-            Some(home_dir().as_str()),
-            "the empty-workspace shell lands in the home directory"
+            Some("/injected/home"),
+            "the empty-workspace shell lands in the injected home directory"
         );
     }
 
@@ -3988,10 +7086,7 @@ mod key_routing {
         let before = pty.spawn_count();
         let _ = shell.run_action(Action::NewClaudeSessionHere);
         assert_eq!(pty.spawn_count(), before + 1);
-        assert_eq!(
-            pty.launches().last(),
-            Some(&Launch::Claude { resume: None })
-        );
+        assert!(minted_fresh_claude(pty.launches().last()).is_some());
         assert_eq!(focused_cwd(&shell).as_deref(), Some("/tmp/project"));
     }
 
@@ -4031,23 +7126,21 @@ mod key_routing {
     fn command_chords_fire_without_terminal_focus() {
         // the chord dispatch runs before the terminal-focus guard, so the
         // very first shell can be opened by keyboard from the empty, search-
-        // focused workspace. mod+T = Cmd+T on macOS, Ctrl+T elsewhere.
-        let primary = if cfg!(target_os = "macos") {
-            Modifiers::LOGO
-        } else {
-            Modifiers::CTRL
-        };
+        // focused workspace. The chord is the keymap's own default, pressed
+        // as a real key event.
+        let chord = KeyChord::parse(&default_spec("new-shell-here")).expect("chord parses");
+        let event = super::input::event_of(&chord).expect("a letter chord synthesises");
         let (mut shell, pty) = empty_shell();
         assert_eq!(
             shell.focus,
             Focus::Search,
             "an empty workspace starts on search"
         );
-        let _ = shell.on_key(press(Key::Character("t".into()), primary, Some("t")));
+        let _ = shell.on_key(event);
         assert_eq!(
             pty.spawn_count(),
             1,
-            "mod+T opened a shell despite no terminal focus"
+            "the new-shell chord opened a shell despite no terminal focus"
         );
         assert_eq!(pty.launches().last(), Some(&Launch::Shell));
     }
@@ -4102,6 +7195,7 @@ mod key_routing {
         use std::time::{Duration, Instant};
 
         let _serialised = one_real_pty_at_a_time();
+        let private = tempfile::tempdir().expect("tempdir");
 
         let (tx, rx) = mpsc::channel::<PtyEvent>();
         let sink: termherd_pty::EventSink = Arc::new(move |ev| {
@@ -4111,13 +7205,16 @@ mod key_routing {
             sink,
             None,
             termherd_pty::Palette::default(),
+            termherd_pty::PrivateFiles::new(private.path()),
         ));
         let mut shell = shell_over(pty.clone());
         let cwd = std::env::temp_dir().to_string_lossy().into_owned();
         let _ = shell.launch(cwd, Launch::Shell);
         let session = shell.core.workspace.focused_session().expect("focused");
 
-        pty.write(session, b"exit\r\n").expect("type exit");
+        // A bare `exit` returns the last command's status: macOS bash under an
+        // empty home exits unclean, and an unclean exit keeps the tab open.
+        pty.write(session, b"exit 0\r\n").expect("type exit");
 
         // Pump the adapter's events through the real update loop until the
         // auto-close lands (or the deadline proves it never does).
@@ -4170,6 +7267,7 @@ mod key_routing {
             return;
         }
         let _serialised = one_real_pty_at_a_time();
+        let private = tempfile::tempdir().expect("tempdir");
 
         let (tx, rx) = mpsc::channel::<PtyEvent>();
         let sink: termherd_pty::EventSink = Arc::new(move |ev| {
@@ -4182,6 +7280,7 @@ mod key_routing {
                 args: Vec::new(),
             }),
             termherd_pty::Palette::default(),
+            termherd_pty::PrivateFiles::new(private.path()),
         ));
         let mut shell = shell_over(pty.clone());
         // Named for this process: two concurrent runs must not race over one
@@ -4313,10 +7412,7 @@ mod key_routing {
             "precondition: nothing live"
         );
 
-        let _ = shell.update(Message::Window(
-            window::Id::unique(),
-            window::Event::CloseRequested,
-        ));
+        request_quit_from_the_window(&mut shell);
         assert!(
             shell.exiting,
             "a quit with no live sessions must terminate the runtime, not just the window"
@@ -4339,10 +7435,7 @@ mod key_routing {
             "precondition: a session is running"
         );
 
-        let _ = shell.update(Message::Window(
-            window::Id::unique(),
-            window::Event::CloseRequested,
-        ));
+        request_quit_from_the_window(&mut shell);
         assert!(
             shell.quit_pending(),
             "a running session arms the quit modal"
@@ -4369,10 +7462,7 @@ mod key_routing {
             1,
             "…but it is still a live session"
         );
-        let _ = shell.update(Message::Window(
-            window::Id::unique(),
-            window::Event::CloseRequested,
-        ));
+        request_quit_from_the_window(&mut shell);
         assert!(shell.exiting, "an all-idle app quits without a prompt");
         assert!(!shell.quit_pending(), "no modal when nothing is running");
     }
@@ -4391,10 +7481,7 @@ mod key_routing {
             0,
             "precondition: nothing live"
         );
-        let _ = shell.update(Message::Window(
-            window::Id::unique(),
-            window::Event::CloseRequested,
-        ));
+        request_quit_from_the_window(&mut shell);
         assert!(
             shell.quit_pending(),
             "alwaysConfirm prompts even with nothing to hard-kill"
@@ -4412,10 +7499,7 @@ mod key_routing {
             shell.core.any_running_process(),
             "precondition: a session is running"
         );
-        let _ = shell.update(Message::Window(
-            window::Id::unique(),
-            window::Event::CloseRequested,
-        ));
+        request_quit_from_the_window(&mut shell);
         assert!(shell.exiting, "noConfirmation quits without a modal");
         assert!(!shell.quit_pending());
     }
@@ -4485,17 +7569,480 @@ mod key_routing {
             digest: termherd_claude::digest::SessionDigest {
                 summary: "a session".to_string(),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
         };
         let _ = shell
             .core
             .apply(termherd_core::Event::ScanCompleted(vec![record]));
+    }
+
+    fn type_into_doc(shell: &mut Shell, c: char) {
+        let _ = shell.update(Message::DocEdit(text_editor::Action::Edit(
+            text_editor::Edit::Insert(c),
+        )));
+    }
+
+    /// The open doc's label and buffer, for asserting nothing was lost.
+    fn open_doc_state(shell: &Shell) -> Option<(String, String)> {
+        shell
+            .open_doc
+            .as_ref()
+            .map(|doc| (doc.label.clone(), doc.content.text()))
+    }
+
+    /// A doc with unsaved edits, and its state right after the edit.
+    fn modified_doc(shell: &mut Shell, name: &str) -> (String, String) {
+        load_doc(shell, name, "notes");
+        type_into_doc(shell, 'x');
+        open_doc_state(shell).expect("doc open")
+    }
+
+    #[test]
+    fn closing_an_unmodified_doc_asks_nothing() {
+        let (mut shell, _pty) = shell_with_terminal();
+        load_doc(&mut shell, "CLAUDE.md", "notes");
+
+        let _ = shell.update(Message::CloseDoc);
+
+        assert!(shell.open_doc.is_none());
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    #[test]
+    fn a_doc_saved_since_its_last_edit_closes_without_asking() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let saving = open_version(&shell);
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+        assert_eq!(
+            doc_save_state(&shell),
+            (false, Some(Ok(())), Some(SystemTime::UNIX_EPOCH)),
+            "clean, saved, re-based"
+        );
+
+        let _ = shell.update(Message::CloseDoc);
+
+        assert!(shell.open_doc.is_none());
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    /// The buffer state a save started now would write.
+    fn open_version(shell: &Shell) -> DocVersion {
+        shell.open_doc.as_ref().expect("doc open").version()
+    }
+
+    /// The open doc's modified mark, save feedback (`Ok` for saved, `Err` for
+    /// an error) and concurrency baseline.
+    fn doc_save_state(shell: &Shell) -> (bool, Option<Result<(), ()>>, Option<SystemTime>) {
+        let doc = shell.open_doc.as_ref().expect("doc open");
+        let feedback = doc.feedback.as_ref().map(|f| match f {
+            docs::DocFeedback::Saved => Ok(()),
+            docs::DocFeedback::Error(_) => Err(()),
+        });
+        (doc.dirty, feedback, doc.loaded_mtime)
+    }
+
+    /// Let the open doc's edits go through the discard prompt, as a user would.
+    fn discard_open_doc(shell: &mut Shell) {
+        let _ = shell.update(Message::CloseDoc);
+        let _ = shell.update(Message::ConfirmDocDiscard);
+        assert!(shell.open_doc.is_none());
+    }
+
+    #[test]
+    fn a_save_answer_for_another_doc_leaves_the_open_one_untouched() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "a.md");
+        let saving_a = open_version(&shell);
+        discard_open_doc(&mut shell);
+        modified_doc(&mut shell, "b.md");
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving_a,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+
+        assert_eq!(
+            doc_save_state(&shell),
+            (true, None, None),
+            "b.md keeps its modified mark and its own baseline"
+        );
+    }
+
+    #[test]
+    fn an_edit_made_while_saving_keeps_the_doc_modified() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let saving = open_version(&shell);
+        type_into_doc(&mut shell, 'y');
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+
+        assert_eq!(
+            doc_save_state(&shell),
+            (true, None, Some(SystemTime::UNIX_EPOCH)),
+            "the 'y' was never written, yet the file now holds the save"
+        );
+        let _ = shell.update(Message::CloseDoc);
+        assert!(shell.open_doc.is_some(), "closing still asks");
+    }
+
+    #[test]
+    fn a_save_of_a_closed_buffer_does_not_clean_its_reopened_successor() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let saving = open_version(&shell);
+        discard_open_doc(&mut shell);
+        // Reopened and edited exactly as often: a per-buffer edit count would
+        // read the same here and take the old save for this one.
+        modified_doc(&mut shell, "CLAUDE.md");
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Ok(SystemTime::UNIX_EPOCH),
+        });
+
+        assert!(doc_save_state(&shell).0, "the new edit was never written");
+    }
+
+    #[test]
+    fn a_refused_save_shows_its_error_even_after_more_edits() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let saving = open_version(&shell);
+        type_into_doc(&mut shell, 'y');
+
+        let _ = shell.update(Message::DocSaved {
+            version: saving,
+            result: Err(crate::docs::SaveError::OutOfScope),
+        });
+
+        assert_eq!(doc_save_state(&shell), (true, Some(Err(())), None));
+    }
+
+    #[test]
+    fn closing_a_modified_doc_asks_first_and_keeps_the_edits() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "CLAUDE.md");
+
+        let _ = shell.update(Message::CloseDoc);
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::DocDiscard));
+        assert!(matches!(
+            shell.active_confirmation(),
+            Some((_, Message::CancelDocDiscard))
+        ));
+    }
+
+    #[test]
+    fn escape_on_a_modified_doc_asks_first_and_keeps_the_edits() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "CLAUDE.md");
+
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::DocDiscard));
+    }
+
+    #[test]
+    fn confirming_the_discard_closes_the_doc() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "CLAUDE.md");
+        let _ = shell.update(Message::CloseDoc);
+
+        let _ = shell.update(Message::ConfirmDocDiscard);
+
+        assert!(shell.open_doc.is_none());
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    #[test]
+    fn cancelling_the_discard_returns_to_the_modified_doc() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "CLAUDE.md");
+        let _ = shell.update(Message::CloseDoc);
+
+        let _ = shell.update(Message::CancelDocDiscard);
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert!(shell.open_doc.as_ref().is_some_and(|doc| doc.dirty));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Doc));
+    }
+
+    #[test]
+    fn the_discard_confirmation_answers_escape_and_enter_from_the_keyboard() {
+        // Escape keeps editing, so a second reflex escape is what discards —
+        // never the first one.
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "CLAUDE.md");
+        let _ = shell.update(Message::CloseDoc);
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Doc));
+
+        let _ = shell.update(Message::CloseDoc);
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::default(), None));
+        assert!(shell.open_doc.is_none());
+        assert_eq!(shell.keyboard_owner(), None);
+    }
+
+    /// A sidebar click on a doc. The read it may start is not polled here; a
+    /// test that needs the answer delivers it with `load_doc`.
+    fn click_doc(shell: &mut Shell, name: &str) {
+        let _ = shell.update(Message::OpenDoc {
+            label: name.to_string(),
+            path: doc_path(name),
+        });
+    }
+
+    #[test]
+    fn clicking_another_doc_over_a_modified_one_asks_first() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "a.md");
+
+        click_doc(&mut shell, "b.md");
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::DocDiscard));
+    }
+
+    #[test]
+    fn confirming_the_other_doc_drops_the_edits_and_lets_its_read_land() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "a.md");
+        click_doc(&mut shell, "b.md");
+
+        let _ = shell.update(Message::ConfirmDocDiscard);
+        assert!(shell.open_doc.is_none(), "a.md's edits are let go");
+        assert_eq!(shell.keyboard_owner(), None);
+
+        load_doc(&mut shell, "b.md", "other");
+        let doc = shell.open_doc.as_ref().expect("b.md open");
+        assert_eq!(doc.label, "b.md");
+        assert!(doc.content.text().starts_with("other"));
+        assert!(!doc.dirty);
+    }
+
+    #[test]
+    fn cancelling_the_other_doc_keeps_the_modified_one() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "a.md");
+        click_doc(&mut shell, "b.md");
+
+        let _ = shell.update(Message::CancelDocDiscard);
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Doc));
+    }
+
+    #[test]
+    fn opening_another_doc_over_an_unmodified_one_replaces_it_at_once() {
+        let (mut shell, _pty) = shell_with_terminal();
+        load_doc(&mut shell, "a.md", "notes");
+
+        click_doc(&mut shell, "b.md");
+        assert_eq!(
+            shell.keyboard_owner(),
+            Some(KeyboardOwner::Doc),
+            "no prompt"
+        );
+        load_doc(&mut shell, "b.md", "other");
+
+        let doc = shell.open_doc.as_ref().expect("b.md open");
+        assert_eq!(doc.label, "b.md");
+    }
+
+    #[test]
+    fn a_read_answering_after_edits_were_typed_neither_takes_them_nor_asks() {
+        // Clicked while clean, edited while the read was in flight: a prompt
+        // raised now would land mid-typing, where the next Enter meant as a
+        // newline would answer it. The answer is dropped instead.
+        let (mut shell, _pty) = shell_with_terminal();
+        load_doc(&mut shell, "a.md", "notes");
+        click_doc(&mut shell, "b.md");
+        type_into_doc(&mut shell, 'x');
+        let edited = open_doc_state(&shell);
+
+        load_doc(&mut shell, "b.md", "other");
+
+        assert_eq!(open_doc_state(&shell), edited);
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Doc));
+    }
+
+    #[test]
+    fn keys_reaching_the_editor_under_the_discard_prompt_change_nothing() {
+        // The modal blocks only the mouse, so a focused editor still hears the
+        // keyboard: the Enter that confirms must not also edit.
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "a.md");
+        let _ = shell.update(Message::CloseDoc);
+        assert!(!shell.doc_accepts_edits());
+
+        type_into_doc(&mut shell, 'y');
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        let _ = shell.update(Message::CancelDocDiscard);
+        assert!(shell.doc_accepts_edits());
+    }
+
+    #[test]
+    fn no_overlay_over_an_open_doc_lets_its_keys_edit_the_doc() {
+        // Every modal blocks only the mouse, not just the discard prompt: the
+        // editor takes input only while it owns the keyboard. Driven off
+        // `KeyboardOwner::ALL`, so a new rung is covered without being listed.
+        let mut edited_under = Vec::new();
+        for owner in KeyboardOwner::ALL {
+            if owner == KeyboardOwner::Doc {
+                continue;
+            }
+            // Armed before the doc opens: an overlay armed through a keypress
+            // would otherwise have its key eaten by the open editor's rung.
+            let (mut shell, _pty) = shell_with_terminal();
+            arm_overlay(&mut shell, owner);
+            if shell.open_doc.is_none() {
+                load_doc(&mut shell, "CLAUDE.md", "notes");
+            }
+            assert_eq!(shell.keyboard_owner(), Some(owner), "{owner:?} armed");
+            let before = open_doc_state(&shell);
+
+            type_into_doc(&mut shell, 'y');
+
+            if open_doc_state(&shell) != before {
+                edited_under.push(owner.label());
+            }
+        }
+        assert!(
+            edited_under.is_empty(),
+            "the doc took keys typed under these overlays: {edited_under:?}"
+        );
+    }
+
+    fn request_quit_from_the_window(shell: &mut Shell) {
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::CloseRequested,
+        ));
+    }
+
+    #[test]
+    fn a_modified_doc_holds_up_the_quit_of_an_idle_app() {
+        let (mut shell, _pty) = shell_with_terminal();
+        assert!(!shell.core.any_running_process(), "precondition: idle");
+        modified_doc(&mut shell, "notes.md");
+
+        request_quit_from_the_window(&mut shell);
+
+        assert!(shell.quit_pending(), "unsaved edits arm the quit prompt");
+        assert!(!shell.exiting, "nothing is lost before the user answers");
+    }
+
+    #[test]
+    fn a_modified_doc_holds_up_the_quit_even_under_no_confirmation() {
+        let (mut shell, _pty) = shell_with_terminal();
+        shell.close_confirm.app = ConfirmClose::NoConfirmation;
+        modified_doc(&mut shell, "notes.md");
+
+        request_quit_from_the_window(&mut shell);
+
+        assert!(shell.quit_pending());
+        assert!(!shell.exiting);
+    }
+
+    #[test]
+    fn an_unmodified_doc_lets_an_idle_app_quit_at_once() {
+        let (mut shell, _pty) = shell_with_terminal();
+        load_doc(&mut shell, "notes.md", "notes");
+
+        request_quit_from_the_window(&mut shell);
+
+        assert!(shell.exiting);
+        assert!(!shell.quit_pending());
+    }
+
+    #[test]
+    fn the_quit_prompt_keeps_the_sessions_beside_the_modified_doc() {
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        modified_doc(&mut shell, "notes.md");
+
+        request_quit_from_the_window(&mut shell);
+
+        let prompt = shell.quit_prompt();
+        assert!(prompt.contains("“notes.md”"), "{prompt}");
+        assert!(prompt.contains("1 open session(s)"), "{prompt}");
+    }
+
+    #[test]
+    fn the_quit_prompt_names_no_doc_when_none_is_modified() {
+        let (mut shell, _pty) = busy_shell_with_terminal();
+        load_doc(&mut shell, "notes.md", "notes");
+
+        request_quit_from_the_window(&mut shell);
+
+        let prompt = shell.quit_prompt();
+        assert!(!prompt.contains("notes.md"), "{prompt}");
+    }
+
+    #[test]
+    fn cancelling_the_quit_keeps_the_doc_edits() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "notes.md");
+        request_quit_from_the_window(&mut shell);
+
+        let _ = shell.update(Message::CancelCloseWindow);
+
+        assert!(!shell.exiting);
+        assert_eq!(open_doc_state(&shell), Some(edited));
+        assert!(
+            shell.doc_accepts_edits(),
+            "the editor has the keyboard back"
+        );
+    }
+
+    #[test]
+    fn keys_under_the_quit_prompt_leave_the_modified_doc_alone() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "notes.md");
+        request_quit_from_the_window(&mut shell);
+
+        type_into_doc(&mut shell, 'y');
+
+        assert_eq!(open_doc_state(&shell), Some(edited));
+    }
+
+    #[test]
+    fn enter_on_the_quit_prompt_quits_over_the_modified_doc() {
+        let (mut shell, _pty) = shell_with_terminal();
+        modified_doc(&mut shell, "notes.md");
+        request_quit_from_the_window(&mut shell);
+
+        let _ = shell.on_key(press(Key::Named(Named::Enter), Modifiers::default(), None));
+
+        assert!(shell.exiting, "the prompt was the warning; Enter quits");
+    }
+
+    #[test]
+    fn escape_on_a_quit_over_the_discard_prompt_returns_to_that_prompt() {
+        let (mut shell, _pty) = shell_with_terminal();
+        let edited = modified_doc(&mut shell, "notes.md");
+        let _ = shell.update(Message::CloseDoc);
+        request_quit_from_the_window(&mut shell);
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::Quit));
+
+        let _ = shell.on_key(press(Key::Named(Named::Escape), Modifiers::default(), None));
+
+        assert!(!shell.exiting);
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::DocDiscard));
+        assert_eq!(open_doc_state(&shell), Some(edited));
     }
 
     #[test]
@@ -4591,16 +8138,12 @@ mod key_routing {
         let (mut shell, pty) = shell_with_terminal();
         let _ = shell.launch(
             "/tmp/project".to_string(),
-            Launch::Claude {
-                resume: Some("sess".to_string()),
-            },
+            Launch::Claude(ClaudeLaunch::Resume("sess".to_string())),
         );
         let sess_tab = shell.core.workspace.active;
         let _ = shell.launch(
             "/tmp/other".to_string(),
-            Launch::Claude {
-                resume: Some("other".to_string()),
-            },
+            Launch::Claude(ClaudeLaunch::Resume("other".to_string())),
         );
         assert_ne!(
             shell.core.workspace.active, sess_tab,
@@ -4636,6 +8179,112 @@ mod key_routing {
         assert!(shell.core.is_collapsed("/tmp/project"));
         let _ = shell.update(Message::ToggleCollapsed("/tmp/project".into()));
         assert!(!shell.core.is_collapsed("/tmp/project"));
+    }
+
+    /// A shell persisting under `dir`, the way `main()` wires the user's own.
+    fn shell_persisting_under(dir: &crate::paths::DataDir) -> Shell {
+        shell_over_with(
+            Arc::new(RecordingPty::default()),
+            Startup {
+                data_dir: Some(dir.clone()),
+                settings_file: Some(crate::settings::path(dir)),
+                ..test_startup()
+            },
+        )
+    }
+
+    #[test]
+    fn a_star_is_saved_under_the_data_dir_and_read_back_by_the_startup_load() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        browse_one(&mut shell, "sess");
+
+        let _ = shell.update(Message::ToggleStar("sess".into()));
+
+        let (overlay, problem) = crate::metadata_store::load(&dir);
+        assert_eq!(problem, None);
+        assert!(overlay.sessions["sess"].starred);
+    }
+
+    #[test]
+    fn a_fold_is_saved_under_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        browse_one(&mut shell, "sess");
+
+        let _ = shell.update(Message::ToggleCollapsed("/tmp/project".into()));
+
+        assert!(crate::collapsed_store::load(&dir).contains("/tmp/project"));
+    }
+
+    #[test]
+    fn a_settings_change_on_disk_is_reloaded_from_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        std::fs::write(crate::settings::path(&dir), r#"{ "theme": "light" }"#).expect("write");
+
+        let _ = shell.update(Message::SettingsFileChanged);
+
+        assert_eq!(
+            shell.appearance.theme,
+            crate::settings::ThemeChoice::Light,
+            "the watched file is the one the reload reads"
+        );
+    }
+
+    #[test]
+    fn turning_capture_redaction_off_on_disk_reaches_the_capture() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        assert!(shell.redact_captures, "on by default");
+        std::fs::write(
+            crate::settings::path(&dir),
+            r#"{ "capture": { "redact": false } }"#,
+        )
+        .expect("write");
+
+        let _ = shell.update(Message::SettingsFileChanged);
+
+        assert!(!shell.redact_captures);
+    }
+
+    #[test]
+    fn a_capture_writes_its_dump_under_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut shell = shell_persisting_under(&crate::paths::DataDir::at(tmp.path()));
+
+        let _ = shell.run_action(Action::Capture);
+
+        let dumps: Vec<_> = std::fs::read_dir(tmp.path().join("captures"))
+            .expect("the captures dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        assert_eq!(dumps.len(), 1, "one JSON dump: {dumps:?}");
+        assert!(
+            termherd_private_fs::is_private(&tmp.path().join("captures")).expect("stat"),
+            "the captures dir is reachable by others"
+        );
+    }
+
+    #[test]
+    fn closing_the_window_saves_its_bounds_under_the_data_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = crate::paths::DataDir::at(tmp.path());
+        let mut shell = shell_persisting_under(&dir);
+        let _ = shell.update(Message::Window(
+            window::Id::unique(),
+            window::Event::Resized(Size::new(900.0, 600.0)),
+        ));
+
+        request_quit_from_the_window(&mut shell);
+
+        let saved = WindowConfig::load(&dir);
+        assert_eq!((saved.width, saved.height), (900.0, 600.0));
     }
 
     #[test]
@@ -5075,5 +8724,910 @@ mod key_routing {
             read.error.is_some(),
             "an unknown handle is an error, not empty text"
         );
+    }
+
+    mod tab_menu {
+        use super::*;
+        use crate::shell::tab_menu::{ENTRIES, Offers, TabMenu, lines, step};
+
+        /// Move the open menu's selection onto `action` with arrow presses, as
+        /// a caller with no pointer would.
+        fn select(shell: &mut Shell, action: Action) -> Vec<PressStep> {
+            let at = position_of(shell, action);
+            press_all(shell, &vec!["down"; at])
+        }
+
+        fn listed(shell: &Shell) -> Vec<Action> {
+            shell
+                .live_tab_menu()
+                .expect("a menu is open")
+                .lines()
+                .map(|line| line.entry.action)
+                .collect()
+        }
+
+        fn position_of(shell: &Shell, action: Action) -> usize {
+            listed(shell)
+                .iter()
+                .position(|listed| *listed == action)
+                .expect("the menu lists the entry")
+        }
+
+        fn menu_steps(count: usize) -> Vec<PressStep> {
+            vec![PressStep::Overlay("tab-menu".to_owned()); count]
+        }
+
+        fn selected(shell: &Shell) -> Option<usize> {
+            shell.live_tab_menu().map(TabMenu::selected)
+        }
+
+        #[test]
+        fn the_open_tab_menu_chord_opens_the_menu_of_the_focused_tab() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.activate_tab(1);
+
+            let step = press_chord(&mut shell, &default_spec("open-tab-menu"));
+
+            assert_eq!(step, PressStep::Ran("open-tab-menu".to_owned()));
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+            assert_eq!(shell.core.workspace.active, 1, "the menu acts on focus");
+        }
+
+        #[test]
+        fn right_clicking_a_tab_focuses_it_before_opening_its_menu() {
+            // Every entry acts on the focused tab, so a menu opened over a tab
+            // that is not focused would run its entries somewhere else.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.activate_tab(0);
+
+            let _ = shell.update(Message::OpenTabMenu(2));
+
+            assert_eq!(shell.core.workspace.active, 2);
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+        }
+
+        #[test]
+        fn enter_runs_the_selected_entry_through_the_chords_own_dispatch() {
+            // Rename is the entry whose effect is easiest to read back: the
+            // field it opens takes the keyboard the menu let go of.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(1));
+            let shown = shell.core.workspace.tabs[1].display_title().to_owned();
+
+            let moves = select(&mut shell, Action::RenameTab);
+            let enter = press_chord(&mut shell, "enter");
+
+            assert_eq!(moves, menu_steps(moves.len()), "the arrows are the menu's");
+            assert_eq!(
+                enter,
+                PressStep::Ran("rename-tab".to_owned()),
+                "enter answers with the entry it ran"
+            );
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabRename));
+            let (anchor, buffer) = shell.tab_rename.clone().expect("renaming");
+            assert_eq!(shell.core.workspace.tab_of(anchor), Some(1));
+            assert_eq!(buffer, shown);
+        }
+
+        #[test]
+        fn an_entry_that_opens_a_tab_runs_from_the_menu() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            let _ = select(&mut shell, Action::NewShellHere);
+            let _ = press_all(&mut shell, &["enter"]);
+
+            assert_eq!(shell.core.workspace.tabs.len(), 4);
+            assert!(shell.keyboard_owner().is_none(), "the menu closed");
+        }
+
+        #[test]
+        fn clicking_an_entry_runs_it_and_closes_the_menu() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let at = position_of(&shell, Action::SplitVertical);
+
+            let _ = shell.update(Message::RunTabMenuEntry(at));
+
+            assert!(shell.tab_menu.is_none());
+            assert_eq!(shell.core.workspace.tabs[0].sessions().len(), 2, "split");
+        }
+
+        #[test]
+        fn an_entry_that_refuses_reports_its_refusal_through_enter() {
+            // A caller must learn that the entry it picked did nothing; a bare
+            // `overlay` would read as success.
+            // The Claude exits while its menu is open, taking its name along.
+            let dir = tempfile::tempdir().expect("tempdir");
+            write_session_file(dir.path(), 4399, "termherd-b0");
+            let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let _ = select(&mut shell, Action::CopyAgentName);
+            std::fs::remove_file(dir.path().join("sessions").join("4399.json")).expect("remove");
+
+            let enter = press_chord(&mut shell, "enter");
+
+            assert_eq!(enter, inert("copy-agent-name", "no-context"));
+            assert!(shell.keyboard_owner().is_none(), "the menu closed");
+        }
+
+        #[test]
+        fn a_position_past_the_list_runs_nothing_and_closes_the_menu() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            let _ = shell.update(Message::RunTabMenuEntry(ENTRIES.len()));
+
+            assert!(shell.tab_menu.is_none());
+            assert_eq!(shell.core.workspace.tabs.len(), 3);
+            assert!(shell.tab_rename.is_none());
+        }
+
+        #[test]
+        fn the_pointer_moves_the_selection_the_keys_move() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            let _ = shell.update(Message::HoverTabMenuEntry(2));
+            let _ = press_all(&mut shell, &["up"]);
+
+            assert_eq!(selected(&shell), Some(1));
+        }
+
+        #[test]
+        fn a_click_off_the_menu_closes_it_without_running_anything() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+
+            let _ = shell.update(Message::CloseTabMenu);
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.workspace.tabs.len(), 3);
+        }
+
+        #[test]
+        fn the_arrows_wrap_at_both_ends() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let len = listed(&shell).len();
+
+            let _ = press_all(&mut shell, &["up"]);
+            assert_eq!(selected(&shell), Some(len - 1));
+            let _ = press_all(&mut shell, &["down"]);
+            assert_eq!(selected(&shell), Some(0));
+        }
+
+        #[test]
+        fn a_key_the_menu_does_not_use_reaches_neither_the_keymap_nor_the_pane() {
+            let (mut shell, pty) = shell_with_terminal();
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            let steps = press_all(&mut shell, &["x", &default_spec("split-vertical")]);
+
+            assert_eq!(steps, menu_steps(2));
+            assert!(pty.writes().is_empty(), "nothing typed beneath the menu");
+            assert_eq!(shell.core.workspace.tabs[0].sessions().len(), 1, "no split");
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+        }
+
+        #[test]
+        fn run_action_and_press_keys_drive_the_menu_end_to_end() {
+            // The sequence an agent runs with no pointer: open it by name, find a
+            // second open answered by the menu, move, and leave with escape.
+            let mut shell = shell_with_three_tabs();
+            let chord = |spec| Press::Chord(KeyChord::parse(spec).expect("parses"));
+
+            let (outcome, _task) = shell.perform_presses(vec![
+                Press::Command(Action::OpenTabMenu),
+                Press::Command(Action::OpenTabMenu),
+                chord("down"),
+                chord("up"),
+                chord("escape"),
+            ]);
+
+            let mut expected = vec![PressStep::Ran("open-tab-menu".to_owned())];
+            expected.extend(menu_steps(4));
+            assert_eq!(outcome.steps, expected);
+            assert!(shell.keyboard_owner().is_none(), "escape left the menu");
+        }
+
+        #[test]
+        fn right_clicking_another_tab_commits_a_pending_tab_rename() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::StartTabRename(1));
+            let _ = shell.update(Message::TabRenameInput("Renamed".to_string()));
+
+            let _ = shell.update(Message::OpenTabMenu(2));
+
+            assert!(shell.tab_rename.is_none());
+            assert_eq!(shell.core.workspace.tabs[1].display_title(), "Renamed");
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+        }
+
+        #[test]
+        fn copy_agent_name_is_offered_exactly_when_the_action_would_find_a_name() {
+            // The same reading the action makes — a Claude job in front of the
+            // pane with a session file — whatever the pane was launched as:
+            // this pane is a shell.
+            let dir = tempfile::tempdir().expect("tempdir");
+            let (mut shell, _session) = shell_reading_sessions_from(dir.path(), Some(4399));
+            let offered = |shell: &Shell| listed(shell).contains(&Action::CopyAgentName);
+
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert!(!offered(&shell), "no session file, no name to copy");
+            let _ = shell.update(Message::CloseTabMenu);
+
+            write_session_file(dir.path(), 4399, "termherd-b0");
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert!(offered(&shell), "a named Claude in front of a shell pane");
+        }
+
+        #[test]
+        fn park_tab_is_not_offered_on_a_parked_tab() {
+            // Only reachable with every tab parked: the menu then opens over a
+            // parked tab, and its action would unpark it.
+            let (mut shell, _) = shell_with_three_parked_tabs();
+            let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::OpenTabMenu)]);
+            assert_eq!(
+                outcome.steps,
+                vec![PressStep::Ran("open-tab-menu".to_owned())]
+            );
+            assert!(!listed(&shell).contains(&Action::TogglePark));
+        }
+
+        #[test]
+        fn park_tab_is_offered_on_an_unparked_tab_and_parks_the_tab_the_menu_opened_on() {
+            let mut shell = shell_with_three_tabs();
+            let anchor = shell.core.workspace.tabs[0].first_session();
+
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let at = position_of(&shell, Action::TogglePark);
+            let _ = shell.update(Message::RunTabMenuEntry(at));
+
+            let index = shell.core.workspace.tab_of(anchor).expect("still open");
+            assert!(shell.core.workspace.tabs[index].is_parked());
+        }
+
+        const BUSY: CommandRefusal = CommandRefusal::NotIdle(SessionStatus::Busy);
+
+        fn nothing() -> Offers {
+            Offers {
+                agent_named: false,
+                color_refusal: Some(BUSY),
+                unparked: false,
+            }
+        }
+
+        /// The entries that `offers` adds over a pane that allows nothing.
+        fn added_by(offers: &Offers) -> Vec<Action> {
+            let bare = nothing();
+            let bare: Vec<Action> = lines(&bare).map(|line| line.entry.action).collect();
+            lines(offers)
+                .map(|line| line.entry.action)
+                .filter(|action| !bare.contains(action))
+                .collect()
+        }
+
+        /// The entries `offers` lists disabled, with the refusal each shows.
+        fn disabled(offers: &Offers) -> Vec<(Action, CommandRefusal)> {
+            lines(offers)
+                .filter_map(|line| Some((line.entry.action, line.refusal?.clone())))
+                .collect()
+        }
+
+        #[test]
+        fn each_entry_that_depends_on_the_pane_depends_on_its_own_condition() {
+            let everything = Offers {
+                agent_named: true,
+                color_refusal: None,
+                unparked: true,
+            };
+            assert_eq!(lines(&everything).count(), ENTRIES.len());
+            assert_eq!(disabled(&everything), vec![]);
+            let named = Offers {
+                agent_named: true,
+                ..nothing()
+            };
+            assert_eq!(added_by(&named), vec![Action::CopyAgentName]);
+            let unparked = Offers {
+                unparked: true,
+                ..nothing()
+            };
+            assert_eq!(added_by(&unparked), vec![Action::TogglePark]);
+        }
+
+        #[test]
+        fn tab_colour_is_listed_on_every_tab_and_disabled_with_the_refusal_alone() {
+            // Hidden, an entry that is unavailable right now reads as missing.
+            let refused = nothing();
+            assert!(lines(&refused).any(|line| line.entry.action == Action::PickTabColor));
+            assert_eq!(disabled(&refused), vec![(Action::PickTabColor, BUSY)]);
+            let pickable = Offers {
+                color_refusal: None,
+                ..nothing()
+            };
+            assert_eq!(disabled(&pickable), vec![]);
+            assert_eq!(added_by(&pickable), vec![]);
+        }
+
+        /// The open menu's colour entry: its position, and its refusal.
+        fn colour_line(shell: &Shell) -> (usize, Option<CommandRefusal>) {
+            shell
+                .live_tab_menu()
+                .expect("a menu is open")
+                .lines()
+                .enumerate()
+                .find(|(_, line)| line.entry.action == Action::PickTabColor)
+                .map(|(at, line)| (at, line.refusal.cloned()))
+                .expect("tab colour is listed")
+        }
+
+        #[test]
+        fn an_idle_claude_and_a_shell_list_tab_colour_enabled() {
+            let (mut claude, _pty, _session) = shell_with_idle_claude();
+            let _ = claude.update(Message::OpenTabMenu(0));
+            assert_eq!(colour_line(&claude).1, None);
+
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            assert_eq!(colour_line(&shell).1, None);
+        }
+
+        #[test]
+        fn a_draft_in_claudes_prompt_disables_tab_colour_and_names_the_draft() {
+            let (mut shell, _pty, session) = shell_with_idle_claude();
+            shell
+                .screens
+                .insert(session, screen_rows(&[RULE, "❯ half typed", RULE]));
+
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            assert_eq!(
+                colour_line(&shell).1,
+                Some(CommandRefusal::DraftPresent("half typed".to_owned()))
+            );
+            assert!(
+                shell.tab_menu_card().is_some(),
+                "drawn, disabled line and all"
+            );
+        }
+
+        #[test]
+        fn a_view_scrolled_off_claudes_prompt_disables_tab_colour() {
+            let (mut shell, _pty, session) = shell_with_idle_claude();
+            shell.screens.insert(
+                session,
+                Screen {
+                    scrolled: true,
+                    ..empty_prompt()
+                },
+            );
+
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            assert_eq!(
+                colour_line(&shell).1,
+                Some(CommandRefusal::PromptNotVisible)
+            );
+        }
+
+        /// A Claude whose prompt holds a draft, its tab menu open.
+        fn menu_over_a_draft() -> (Shell, Arc<RecordingPty>) {
+            let (mut shell, pty, session) = shell_with_idle_claude();
+            shell
+                .screens
+                .insert(session, screen_rows(&[RULE, "❯ half typed", RULE]));
+            let _ = shell.update(Message::OpenTabMenu(0));
+            (shell, pty)
+        }
+
+        #[test]
+        fn enter_on_a_disabled_entry_refuses_with_its_reason_and_keeps_the_menu() {
+            let (mut shell, pty) = menu_over_a_draft();
+            let (at, refusal) = colour_line(&shell);
+            let refusal = refusal.expect("disabled");
+
+            let _ = select(&mut shell, Action::PickTabColor);
+            let enter = press_chord(&mut shell, "enter");
+
+            assert_eq!(
+                enter,
+                PressStep::Refused {
+                    overlay: "tab-menu".to_owned(),
+                    reason: refusal.to_string(),
+                }
+            );
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+            assert_eq!(selected(&shell), Some(at), "the selection stays put");
+            assert!(shell.color_picker.is_none(), "no picker opened");
+            assert!(pty.writes().is_empty());
+        }
+
+        #[test]
+        fn a_click_on_a_disabled_entry_runs_nothing_and_keeps_the_menu() {
+            let (mut shell, _pty) = menu_over_a_draft();
+            let (at, _) = colour_line(&shell);
+
+            let _ = shell.update(Message::RunTabMenuEntry(at));
+
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::TabMenu));
+            assert!(shell.color_picker.is_none(), "no picker opened");
+        }
+
+        #[test]
+        fn the_menu_closes_when_its_pane_loses_focus() {
+            // An MCP caller can move focus under an open menu; its entries
+            // would otherwise run on a tab the menu was never opened for.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+
+            let _ = shell.activate_tab(2);
+
+            assert!(shell.keyboard_owner().is_none());
+            assert!(shell.tab_menu_card().is_none(), "nor is it drawn");
+            let _ = shell.update(Message::RunTabMenuEntry(0));
+            assert!(shell.tab_rename.is_none(), "a stale click runs nothing");
+        }
+
+        #[test]
+        fn a_menu_that_lost_its_pane_stays_closed_when_focus_comes_back() {
+            // Nobody reopened it: returning to the pane must not hand the
+            // keyboard back to a menu that was already left behind.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let _ = shell.activate_tab(2);
+
+            let (outcome, _task) =
+                shell.perform_presses(vec![Press::Command(Action::ActivateTab(0))]);
+
+            assert_eq!(
+                outcome.steps,
+                vec![PressStep::Ran("activate-tab-1".to_owned())]
+            );
+            assert_eq!(shell.core.workspace.active, 0);
+            assert!(shell.keyboard_owner().is_none());
+        }
+
+        #[test]
+        fn the_menu_closes_when_its_tab_closes() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.update(Message::OpenTabMenu(2));
+
+            let _ = shell.close_tab(2);
+
+            assert!(shell.keyboard_owner().is_none());
+        }
+
+        #[test]
+        fn a_right_click_on_a_tab_that_is_gone_opens_nothing() {
+            // The tab closed between the render and the click.
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.activate_tab(1);
+
+            let _ = shell.update(Message::OpenTabMenu(3));
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.workspace.active, 1);
+        }
+
+        #[test]
+        fn every_entry_is_a_named_keymap_action_other_than_the_menu_itself() {
+            // An entry is a keymap action so a chord, `run_action` and the menu
+            // reach one behaviour; a name is what makes it reachable by the
+            // other two.
+            assert!(!ENTRIES.is_empty(), "a sweep over nothing proves nothing");
+            for entry in ENTRIES {
+                assert!(
+                    entry.action.config_name().is_some(),
+                    "{:?} has no keymap name",
+                    entry.action
+                );
+                assert_ne!(entry.action, Action::OpenTabMenu);
+            }
+        }
+
+        proptest::proptest! {
+            #[test]
+            fn the_selection_never_leaves_the_entries(
+                moves in proptest::collection::vec(proptest::bool::ANY, 0..40),
+                len in 1usize..12,
+            ) {
+                let mut selected = 0;
+                for down in moves {
+                    selected = step(selected, len, down);
+                    proptest::prop_assert!(selected < len);
+                }
+            }
+        }
+
+        #[test]
+        fn no_tab_is_offered_an_empty_menu() {
+            // The precondition `step` relies on: it never wraps a list of none.
+            assert!(lines(&nothing()).count() > 0);
+        }
+    }
+
+    mod color_picker {
+        use super::*;
+        use crate::shell::color_picker::ColorPicker;
+        use crate::shell::routing::KeyVerdict;
+
+        fn picker_steps(count: usize) -> Vec<PressStep> {
+            vec![PressStep::Overlay("tab-color-picker".to_owned()); count]
+        }
+
+        /// Open the focused tab's picker by name and move onto `color`, then
+        /// pick it, as an agent with no pointer would.
+        fn pick_by_keys(shell: &mut Shell, color: ClaudeColor) -> Vec<PressStep> {
+            let _ = shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+            let from = shell.live_color_picker().map_or(0, ColorPicker::selected);
+            let palette = ClaudeColor::ALL;
+            let at = palette
+                .iter()
+                .position(|listed| *listed == color)
+                .expect("in the palette");
+            let moves = (at + palette.len() - from) % palette.len();
+            let mut presses = Vec::new();
+            presses.extend(
+                std::iter::repeat_n("down", moves)
+                    .chain(["enter"])
+                    .map(|spec| Press::Chord(KeyChord::parse(spec).expect("parses"))),
+            );
+            shell.perform_presses(presses).0.steps
+        }
+
+        #[test]
+        fn the_picker_offers_the_palette_of_color_in_its_order() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+            let picker = shell.live_color_picker().expect("open");
+            assert_eq!(
+                ClaudeColor::ALL[picker.selected()],
+                ClaudeColor::Default,
+                "an uncoloured tab opens on None, so Enter changes nothing"
+            );
+        }
+
+        #[test]
+        fn a_colour_picked_for_a_shell_tab_is_stored_on_it_and_types_nothing() {
+            let (mut shell, pty) = shell_with_terminal();
+
+            let steps = pick_by_keys(&mut shell, ClaudeColor::Green);
+
+            assert_eq!(steps, picker_steps(steps.len()));
+            assert_eq!(shell.core.tab_color(0), Some(ClaudeColor::Green));
+            assert!(shell.keyboard_owner().is_none(), "the picker closed");
+            assert!(pty.writes().is_empty(), "a shell is told nothing");
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Default);
+            assert_eq!(shell.core.tab_color(0), None, "\"none\" clears it");
+        }
+
+        #[test]
+        fn a_colour_picked_for_a_claude_tab_asks_claude_through_the_confirmation() {
+            let (mut shell, pty, session) = shell_with_idle_claude();
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Cyan);
+
+            assert_eq!(
+                shell
+                    .claude_command
+                    .as_ref()
+                    .map(|p| (p.session, p.command.clone())),
+                Some((session, ClaudeCommand::Color(ClaudeColor::Cyan)))
+            );
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+            assert!(
+                pty.writes().is_empty(),
+                "nothing typed before the confirmation"
+            );
+            assert_eq!(shell.core.workspace.tabs[0].color, None, "no local copy");
+
+            let _ = press_all(&mut shell, &["enter"]);
+            assert_eq!(pty.writes()[0], b"\x15/color cyan");
+        }
+
+        #[test]
+        fn an_agents_pick_holds_back_a_physical_enter_on_the_confirmation() {
+            let (mut shell, _pty, _session) = shell_with_idle_claude();
+            let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Red);
+
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+            assert!(shell.enter_too_soon(&enter, Instant::now()));
+        }
+
+        #[test]
+        fn a_busy_claude_is_offered_no_picker_from_the_keymap_and_a_disabled_menu_entry() {
+            // The line would queue behind its work.
+            let (mut shell, _pty, session) = shell_with_idle_claude();
+            let _ = shell.update(Message::PtyStatus {
+                session,
+                status: SessionStatus::Busy,
+            });
+
+            let (outcome, _task) =
+                shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+
+            assert_eq!(outcome.steps, vec![inert("pick-tab-color", "no-context")]);
+            assert!(shell.keyboard_owner().is_none());
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let colour = shell
+                .live_tab_menu()
+                .expect("open")
+                .lines()
+                .find(|line| line.entry.action == Action::PickTabColor)
+                .map(|line| line.refusal.cloned());
+            assert_eq!(
+                colour,
+                Some(Some(CommandRefusal::NotIdle(SessionStatus::Busy))),
+                "the menu lists the entry, disabled with why, rather than hide it"
+            );
+        }
+
+        #[test]
+        fn a_claude_tab_whose_claude_exited_is_coloured_as_a_shell_not_typed_into() {
+            // Its shell idles at a prompt and Claude's last frame is still on
+            // screen, reading as an empty prompt: only the foreground says
+            // Claude has gone, and `/color` must not reach zsh.
+            let (mut shell, pty, session) = shell_with_idle_claude();
+            let job = |pid| termherd_core::ForegroundJob { pid, started: None };
+            let _ = shell
+                .core
+                .apply(termherd_core::Event::ForegroundJobChanged {
+                    session,
+                    job: Some(job(42)),
+                });
+            let _ = shell
+                .core
+                .apply(termherd_core::Event::ForegroundJobChanged { session, job: None });
+
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Orange);
+
+            assert!(shell.claude_command.is_none(), "no command armed");
+            assert!(pty.writes().is_empty(), "nothing typed into the shell");
+            assert_eq!(shell.core.tab_color(0), Some(ClaudeColor::Orange));
+        }
+
+        #[test]
+        fn a_claude_that_went_busy_under_the_picker_refuses_the_pick_and_keeps_it_open() {
+            let (mut shell, pty, session) = shell_with_idle_claude();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+            let _ = shell.update(Message::PtyStatus {
+                session,
+                status: SessionStatus::Busy,
+            });
+
+            let steps = press_all(&mut shell, &["enter"]);
+
+            assert_eq!(
+                steps,
+                vec![PressStep::Refused {
+                    overlay: "tab-color-picker".to_owned(),
+                    reason: "the session is busy, not idle at its prompt".to_owned(),
+                }]
+            );
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ColorPicker));
+            assert!(shell.claude_command.is_none());
+            assert!(pty.writes().is_empty());
+            assert!(
+                shell
+                    .live_color_picker()
+                    .is_some_and(|p| p.refused().is_some()),
+                "the picker says why"
+            );
+        }
+
+        #[test]
+        fn the_tab_menu_leads_to_the_picker() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let at = shell
+                .live_tab_menu()
+                .expect("open")
+                .lines()
+                .position(|line| line.entry.action == Action::PickTabColor)
+                .expect("listed");
+
+            let (verdict, _task) = shell.run_tab_menu_entry(at);
+
+            assert_eq!(verdict, Some(KeyVerdict::Ran("pick-tab-color".to_owned())));
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ColorPicker));
+        }
+
+        #[test]
+        fn a_click_picks_the_colour_under_it_and_hovering_selects_it() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.update(Message::HoverColorPickerEntry(3));
+            assert_eq!(
+                shell.live_color_picker().map(ColorPicker::selected),
+                Some(3)
+            );
+            let _ = shell.update(Message::PickColorPickerEntry(1));
+
+            assert_eq!(shell.core.tab_color(0), Some(ClaudeColor::ALL[1]));
+            assert!(shell.keyboard_owner().is_none());
+        }
+
+        #[test]
+        fn a_position_past_the_palette_picks_nothing_and_closes_the_picker() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.update(Message::PickColorPickerEntry(ClaudeColor::ALL.len()));
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.tab_color(0), None);
+        }
+
+        #[test]
+        fn a_click_off_the_picker_closes_it_without_picking() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.update(Message::CloseColorPicker);
+
+            assert!(shell.keyboard_owner().is_none());
+            assert_eq!(shell.core.tab_color(0), None);
+        }
+
+        #[test]
+        fn the_picker_closes_when_its_pane_loses_focus() {
+            let mut shell = shell_with_three_tabs();
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            let _ = shell.activate_tab(0);
+            assert!(shell.keyboard_owner().is_none());
+            let _ = shell.update(Message::PickColorPickerEntry(0));
+            assert!(
+                (0..3).all(|index| shell.core.tab_color(index).is_none()),
+                "a stale click colours nothing"
+            );
+
+            let _ = shell.activate_tab(2);
+            assert!(shell.keyboard_owner().is_none(), "nor does it come back");
+        }
+
+        #[test]
+        fn the_picker_draws_and_opens_on_the_colour_in_force() {
+            let (mut shell, _pty) = shell_with_terminal();
+            let _ = pick_by_keys(&mut shell, ClaudeColor::Blue);
+            let _ = shell.dispatch_action(Action::PickTabColor);
+
+            assert!(shell.color_picker_card().is_some());
+            assert_eq!(
+                shell.live_color_picker().map(ColorPicker::selected),
+                Some(1),
+                "it opens on the colour the tab wears"
+            );
+        }
+    }
+
+    mod link_inbox {
+        use super::*;
+        use crate::link_inbox::{deposit, inbox_dir};
+        use crate::paths::DataDir;
+
+        /// A shell whose data dir is a fresh temp dir, so its inbox is its own.
+        fn shell_with_inbox() -> (Shell, Arc<RecordingPty>, tempfile::TempDir) {
+            let root = tempfile::tempdir().expect("tempdir");
+            let pty = Arc::new(RecordingPty::default());
+            let startup = Startup {
+                data_dir: Some(DataDir::at(root.path())),
+                ..test_startup()
+            };
+            (shell_over_with(pty.clone(), startup), pty, root)
+        }
+
+        fn drop_link(root: &tempfile::TempDir, url: &str) {
+            deposit(&inbox_dir(&DataDir::at(root.path())), url).expect("deposit");
+        }
+
+        #[test]
+        fn a_link_into_an_empty_workspace_opens_a_shell_with_the_keys_on_it() {
+            let (mut shell, pty, root) = shell_with_inbox();
+            shell.focus = Focus::Search;
+            drop_link(&root, "termherd://open?repo=/work/repo");
+
+            let _ = shell.update(Message::LinkInboxChanged);
+
+            assert_eq!(pty.spawn_count(), 1);
+            assert!(matches!(pty.launches()[..], [Launch::Shell]));
+            let focused = shell
+                .core
+                .workspace
+                .focused_session()
+                .expect("a tab opened");
+            assert_eq!(
+                shell
+                    .core
+                    .sessions
+                    .get(&focused)
+                    .and_then(|s| s.cwd.as_deref()),
+                Some("/work/repo")
+            );
+            assert_eq!(
+                shell.focus,
+                Focus::Terminal,
+                "the keys follow the tab shown"
+            );
+        }
+
+        #[test]
+        fn a_link_to_an_open_repo_brings_its_tab_forward() {
+            let (mut shell, pty, root) = shell_with_inbox();
+            let _ = shell.launch("/work/repo".to_owned(), Launch::Shell);
+            let repo = shell.core.workspace.focused_session().expect("focused");
+            let _ = shell.launch("/work/other".to_owned(), Launch::Shell);
+            shell.focus = Focus::Search;
+            drop_link(&root, "termherd://open?repo=/work/repo");
+
+            let _ = shell.update(Message::LinkInboxChanged);
+
+            assert_eq!(pty.spawn_count(), 2, "nothing new is spawned");
+            assert_eq!(shell.core.workspace.focused_session(), Some(repo));
+            assert_eq!(shell.focus, Focus::Terminal);
+        }
+
+        #[test]
+        fn a_link_spelling_the_repo_another_way_finds_its_tab() {
+            // A shell reports the path it resolved: `/tmp` reads back as
+            // `/private/tmp` on macOS, and `..` never survives.
+            let (mut shell, pty, root) = shell_with_inbox();
+            let repo = root.path().join("repo");
+            std::fs::create_dir(&repo).expect("mkdir");
+            let resolved = super::links::resolved(&repo.to_string_lossy());
+            let _ = shell.launch(resolved, Launch::Shell);
+            let tab = shell.core.workspace.focused_session().expect("focused");
+            let _ = shell.launch("/work/other".to_owned(), Launch::Shell);
+            let detour = repo.join("..").join("repo");
+            drop_link(
+                &root,
+                &format!("termherd://open?repo={}", detour.to_string_lossy()),
+            );
+
+            let _ = shell.update(Message::LinkInboxChanged);
+
+            assert_eq!(pty.spawn_count(), 2, "nothing new is spawned");
+            assert_eq!(shell.core.workspace.focused_session(), Some(tab));
+        }
+
+        #[test]
+        fn a_tab_opened_under_the_spelling_the_link_uses_is_found() {
+            // A tab opened from the sidebar keeps the path it was given until
+            // its shell reports one, and a Claude pane never does.
+            let (mut shell, pty, root) = shell_with_inbox();
+            let repo = root.path().join("repo");
+            std::fs::create_dir(&repo).expect("mkdir");
+            let detour = repo.join("..").join("repo").to_string_lossy().into_owned();
+            let _ = shell.launch(detour.clone(), Launch::Shell);
+            let tab = shell.core.workspace.focused_session().expect("focused");
+            let _ = shell.launch("/work/other".to_owned(), Launch::Shell);
+            drop_link(&root, &format!("termherd://open?repo={detour}"));
+
+            let _ = shell.update(Message::LinkInboxChanged);
+
+            assert_eq!(pty.spawn_count(), 2, "nothing new is spawned");
+            assert_eq!(shell.core.workspace.focused_session(), Some(tab));
+        }
+
+        #[test]
+        fn a_refused_link_opens_nothing_and_leaves_the_inbox_empty() {
+            let (mut shell, pty, root) = shell_with_inbox();
+            drop_link(&root, "termherd://open?repo=/r&run=rm");
+
+            let _ = shell.update(Message::LinkInboxChanged);
+
+            assert_eq!(pty.spawn_count(), 0);
+            assert!(pty.writes().is_empty(), "a link never types into a session");
+            assert!(
+                crate::link_inbox::drain(&inbox_dir(&DataDir::at(root.path()))).is_empty(),
+                "a refused link is not read again"
+            );
+        }
     }
 }

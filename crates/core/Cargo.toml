@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 termherd-claude = { path = "../claude" }
 thiserror = "2"
+# Cut a typed name on a grapheme boundary, never inside an accent or a flag.
+unicode-segmentation = "1"
 
 [dev-dependencies]
 # Property-based tests for the number-row tab bindings (issue #26).

@@ -4,9 +4,13 @@
 //! JSONL digest parsing, transition signals, OSC decoding. Everything here is
 //! deterministic and property-testable.
 
+pub mod color;
 pub mod derive;
 pub mod digest;
 pub mod jsonl;
 pub mod mcp;
 pub mod osc;
 pub mod path;
+pub mod prompt;
+pub mod session_file;
+pub mod session_id;

@@ -7,6 +7,527 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (attach to the live bridge from outside)
+
+- A client TermHerd did not launch — a script, an editor, the terminal you
+  started TermHerd from — can now reach the live MCP bridge. Opt in with
+  `"mcp": { "attach": true }` in `settings.json` (or
+  `TERMHERD_MCP_ATTACH=1` for one launch); the running instance then
+  publishes its endpoint to an owner-only `~/.termherd/bridge.json`, and
+  `termherd mcp-config` prints the `mcpServers` snippet for it after
+  checking it still answers. `"never"` refuses the exposure even against
+  the environment variable. Off by default, since the bridge can type into
+  a terminal. TermHerd's log now goes to stderr (#267).
+
+### Fixed (the sidebar no longer goes stale)
+
+- Session colours, titles and new sessions reach the sidebar even when the
+  filesystem watch stays silent, as macOS FSEvents can: the sidebar rescans
+  on its own every ten seconds, skipped while a scan is already running. A
+  session writing its transcript non-stop refreshes it at least every two
+  seconds instead of waiting for a pause, and a watcher error is now logged
+  instead of dropped (#377).
+
+### Changed (tab jumps leave Ctrl+digit to the shell on Windows and Linux)
+
+- On Windows and Linux, jumping to tab 1–9 is now `Alt+1` … `Alt+9`, as in
+  GNOME Terminal and Konsole, instead of `Ctrl+1` … `Ctrl+9`, which reach the
+  program in the pane again. macOS keeps `Cmd+1` … `Cmd+9`. To keep the old
+  chords, set `"activate-tab-1": "ctrl+1"` and so on in the `keys` section
+  of `settings.json`. A test now holds every Windows and Linux default off
+  the bare `Ctrl` chords a shell's line editor reads, short of two recorded
+  exceptions: `Ctrl+V` paste on Windows and `Ctrl+-` zoom-out (#323).
+
+### Fixed (a missing temp dir)
+
+- termherd creates its temp dir (`TMPDIR`, or `TMP` / `TEMP` on Windows) when
+  it is missing, and logs a warning naming it. Without it, the
+  single-instance lock went off silently, so a second termherd could start,
+  and a Windows build was seen to hang before showing its window. A temp dir
+  that cannot be created is named in a warning instead of failing in
+  silence (#441).
+
+### Security (captures are private)
+
+- Captures and screencasts are readable only by you: `~/.termherd/captures/`
+  is `0700` (an existing one is tightened on the next capture) and every
+  JSON, PNG and GIF in it is `0600`. A doc saved from the doc editor keeps
+  its own mode instead of taking the default one through its temp copy, and
+  a new one is created `0600` (#288).
+- A capture masks the secrets its terminal text shows before writing the
+  dump: AWS keys, `sk-…` API keys, GitHub tokens, `Bearer` tokens and PEM
+  private keys become `[redacted]`. On by default; `"capture": { "redact":
+  false }` in `settings.json` turns it off (#288).
+- `~/.termherd/captures/` keeps only the newest 50 captures: older ones are
+  deleted after each capture or screencast. Only files TermHerd named are
+  ever touched (#288).
+
+### Fixed (closing a shell running a program asks first)
+
+- Under the default `confirmWhenActive`, closing a tab or quitting now asks
+  while a shell runs a program in front of it (`vim`, `less`, `htop`, a long
+  `make`), even when its status reads `idle`. macOS and Linux read which
+  process owns the terminal; Windows counts a program on the alternate
+  screen (#143).
+
+### Fixed (a dead key shows its pending character)
+
+- A dead key (`^`, `¨`, `` ` ``, `~` on a French layout) shows its pending
+  character underlined at the cursor until the next key completes it, as
+  other macOS terminals do. It clears on the commit, on Escape, and when the
+  window or the terminal loses focus (#322).
+
+### Fixed (a multi-line paste asks before it runs line by line)
+
+- A paste holding a line break into a terminal that did not turn bracketed
+  paste on — `sh`, `cmd.exe` — now waits for a prompt naming the tab and the
+  line count, instead of running each line as it arrives. **Paste** sends the
+  text unchanged, **Cancel** drops it. Over MCP the prompt is the
+  `paste-confirm` overlay. Single-line pastes, and pastes into Claude Code or
+  any program using bracketed paste, are unchanged (#291).
+
+### Fixed (Meta and cursor keys send what xterm sends)
+
+- The arrows, Home and End send `ESC O A`-style sequences once a program
+  switches to application cursor keys, as vim and less expect; modified
+  arrows keep their `ESC [ 1 ; <mod>` form (#321).
+- Meta reaches more keys: <kbd>Meta</kbd>+<kbd>.</kbd> sends `ESC .`,
+  <kbd>Meta</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> `ESC B`,
+  <kbd>Ctrl</kbd>+<kbd>Meta</kbd>+<kbd>B</kbd> `ESC ^B` and
+  <kbd>Meta</kbd>+<kbd>Space</kbd> `ESC` and a space. They used to drop the
+  `ESC`, the Shift or the Meta. On macOS, Space follows the Option side like
+  a letter: the composing side keeps its plain space (#321).
+
+### Fixed (a doc save lands on the doc it wrote)
+
+- A doc keeps its `• modified` mark when you type while its save is in
+  flight, so closing it still asks before losing those keystrokes. A save
+  that answers after you moved to another doc no longer marks that doc
+  `saved` nor changes its on-disk baseline (#384).
+
+### Fixed (Plans & memory lists an added repo's CLAUDE.md)
+
+- *Plans & memory* lists the `CLAUDE.md` of a repo added to the sidebar
+  before it has any session, as soon as it is added, and drops it when the
+  repo is forgotten. It used to wait for the repo's first session (#444).
+
+### Fixed (a read after a wait shows what the status reported)
+
+- Over MCP, a `read_terminal` after `wait_for_status`, and the text
+  `prompt_in_session` returns, show at least the output that produced the
+  status waited for. A read right after an `idle` could still show Claude's
+  spinner, one screen behind (#436).
+
+### Fixed (a long Claude command is submitted)
+
+- A confirmed Claude command with a long argument, such as a `/rename` to a
+  long name from the tab menu or MCP `claude_command`, is submitted. Claude
+  Code used to read the line and its Enter as one paste, and waited for a
+  second Enter. Enter now follows the line after a pause, as
+  `run_in_session` and `prompt_in_session` already did (#439).
+
+### Fixed (a TermHerd started from a Claude session)
+
+- A TermHerd started from inside a Claude Code session no longer passes that
+  session's identity (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PID`,
+  its messaging socket, …) to every pane. A Claude launched in such a
+  TermHerd now writes its session file again, so its agent name, hover card
+  and MCP identity are found (#356).
+
+### Fixed (the tab menu says why *Tab colour…* is unavailable)
+
+- On a Claude tab that cannot take `/color` right now — busy, a draft in its
+  prompt, or the view scrolled off the prompt — the tab menu lists
+  *Tab colour…* greyed out with the reason, instead of hiding it. Over MCP,
+  `enter` on it reports `refused` with the reason and keeps the menu open
+  (#373).
+
+### Fixed (the active tab's status dot reads on its fill)
+
+- The status dot on the active tab is shaded against that tab's fill rather
+  than the window background, so it keeps 3:1 contrast on every theme. On
+  stock Dark a busy dot sat near 2.5:1 on the blue chip, on Dracula near
+  1.3:1 (#382).
+
+### Security (the live bridge checks Host and Origin itself)
+
+- The MCP live bridge refuses, with a 403, a request whose `Host` or `Origin`
+  is not `127.0.0.1`, `localhost` or `[::1]` on its own port. It used to rely
+  on the MCP library's default Host check, and checked no Origin (#293).
+
+### Fixed (the session scan stays inside `~/.claude/projects`)
+
+- The sidebar's scan no longer follows a symlink under `~/.claude/projects`,
+  so a link there can no longer surface another file's content in the sidebar
+  and search. A transcript over 256 MiB is read as its first and last 128 MiB
+  instead of whole, and titles, slugs, version, model and effort are cut to
+  120 characters (#290).
+
+### Fixed (zoom in with Cmd/Ctrl + Shift + `+`)
+
+- <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> (<kbd>Ctrl</kbd> off macOS)
+  zooms in on QWERTY and AZERTY. It used to reach the terminal, and Claude
+  Code's prompt with it: a press names its key before Shift, so it arrived as
+  `mod+shift+=`, which nothing bound. Zoom-in now binds `mod+=`,
+  `mod+shift+=` and `mod+plus` (the keypad `+`). The never-matching
+  `mod+shift+plus` default is gone, and so is `alt+shift+plus` from
+  `split-vertical`, which keeps `alt+shift+=`. A `settings.json` override
+  spelling `shift+plus` for the main-row key should write `shift+=` (#370).
+
+### Added (more keys in chords and in the terminal)
+
+- Chords can name `pageup`, `pagedown`, `insert`, `delete`, `backspace`,
+  `space` and `f1` to `f12`, in `settings.json` and over MCP `press_keys`.
+  The `shift+insert` paste example in the docs now works (#324).
+- F1 to F12 and Insert reach the terminal with their xterm sequences: htop's
+  F10, mc's function-key bar and vim mappings receive them. They used to
+  send nothing (#321).
+
+### Fixed (double-click selection of a path or URL)
+
+- A double-click on a path or URL selects what a link click opens: a
+  sentence's closing `.` and a compiler's trailing `:` are left out, a `:42`
+  suffix is kept, a URL's `?query` is included and an OSC 8 label selects
+  whole. It used to take the raw run of path characters (#442).
+
+### Fixed (Ctrl+Space in the terminal)
+
+- Ctrl+Space sends NUL, which Emacs reads as set-mark and zsh's
+  `set-mark-command` expects. It used to type a plain space.
+
+### Added (parking a tab)
+
+- Park a tab with the tab menu's *Park tab* or the new `toggle-park-tab`
+  action (no default chord): it shrinks to its status dot and kind mark at the
+  strip's end and leaves the tab cycle, its sessions still running. Selecting
+  it, dragging it back, or a session in it asking for attention unparks it.
+  The MCP `snapshot` reports `parked` per tab (#353).
+
+### Changed (the live bridge explains how its tools combine)
+
+- An agent connecting to the live MCP bridge now reads how to use it: address
+  sessions by handle, act then wait (`busy` before `idle`) then read, never
+  poll `snapshot`, and take a screenshot last. It used to say only that it
+  would "later" drive sessions, which it has done for months. `press_keys` no
+  longer claims that `escape` cannot leave a session rename.
+
+### Added (termherd:// links in the terminal)
+
+- A `termherd://` URL in terminal output is a link: Cmd/Ctrl+hover underlines
+  it, Cmd/Ctrl+click hands it to the OS.
+
+### Added (opening a tab from a termherd:// link)
+
+- `termherd://open?repo=<absolute path>` shows the tab working in that repo,
+  or opens a shell there. A link never types into a session nor starts
+  Claude, and anything else is refused. The macOS `.app`, the `.deb` and the
+  Windows installer register the scheme; a link reaching a second launch is
+  handed to the running instance (#446). A release from before this one, still
+  running, never reads the hand-over: quit it first.
+
+### Changed (a second instance on Windows and Linux)
+
+- The single-instance lock follows the temp directory on Windows and Linux, as
+  it already did on macOS: a build started with its own `TMP` (Windows) or
+  `TMPDIR` (Linux) runs beside the one you use. A running older release does
+  not see a newer build, nor the reverse; quit one before starting the other.
+
+### Added (pick which Option key is Meta)
+
+- On macOS the right Option key now types what the layout composes, such as
+  `|` with ⌥⇧L on a French layout, while the left one stays Meta (⌥B / ⌥F move
+  by word). `terminal.option_as_meta` picks the side (#59).
+
+### Added (⌘M minimizes)
+
+- On macOS a Window menu gives ⌘M its *Minimize*, with Zoom beside it (#114).
+
+### Added (every iced theme, with matching terminal colours)
+
+- The interface theme offers all 22 iced themes, and 14 new terminal schemes
+  share their names (from alacritty-theme). Status dots and `/color` marks
+  are shaded per theme to stay legible.
+
+### Added (emoji from the Character Viewer)
+
+- On macOS, Ctrl+Cmd+Space opens the Character Viewer from a new Edit →
+  *Emoji & Symbols* menu item, instead of typing a space into the terminal,
+  and a character picked there now reaches the tab and session rename fields
+  as well as the terminal (#349).
+
+### Added (a notification click opens its tab)
+
+- Clicking a desktop notification raised by a tab brings TermHerd forward on
+  that tab and pane, restoring a minimised window first. An open prompt keeps
+  its screen. Confirmed by a real click on macOS; Linux and Windows are read
+  from the notification libraries' sources (#352).
+
+### Added (a richer tab hover card)
+
+- The tab hover card shows the model and effort, the Claude Code version and
+  how long its first pane has run, beside the agent name (#344).
+
+### Added (Claude's `/color` on tabs)
+
+- A Claude tab is outlined, and its sidebar row marked, in the colour its
+  `/color` set, read from the session's transcript; the hover card names the
+  colour (#342).
+
+### Added (MCP background tabs)
+
+- `open_session` and `close_pane` take `background: true` to open a tab or
+  close a pane without moving the user's focus, and every `open_session` reply carries
+  `opened_handle` (#363).
+
+### Added (the tab follows Claude's name)
+
+- A Claude tab takes the name Claude gives its session, and renaming a Claude
+  tab asks Claude to `/rename` rather than overriding it (#119).
+
+### Added (typed slash commands)
+
+- termherd can type a confirmed slash command into an idle Claude session —
+  `send-to-desktop`, and the MCP `claude_command` tool — behind a prompt that
+  shows the exact line first (#337).
+
+### Added (earlier, since 0.1.0-prerelease.5)
+
+- A tab shows its kind beside its status dot rather than in its title (#341).
+- The MCP snapshot reports each Claude pane's pid, peer name and session id
+  (#333).
+- A settings panel, live reload of `settings.json`, and the options on the
+  live bridge (#292, #297, #298).
+
+### Fixed (a Claude session read idle for an instant mid-turn)
+
+- A Claude session no longer reads `idle` when Claude Code shows its idle title
+  for a moment between two busy stretches, as when a background subagent's
+  result restarts the agent: the title has to stand for 150 ms first. A wait on
+  `idle` no longer settles mid-turn (#427).
+
+### Fixed (a newline sent over MCP did not submit to Claude Code)
+
+- `run_in_session` and `prompt_in_session` send a trailing newline as Enter,
+  so it submits in Claude Code as it does in a shell (#426).
+
+### Fixed (prompt_in_session answered before the prompt ran)
+
+- `prompt_in_session` waits for the session to start on the prompt before
+  waiting for it to settle, instead of reporting the status from before it
+  (#427).
+
+### Fixed (a burst of output held memory and drew late)
+
+- A burst of terminal output no longer holds hundreds of megabytes or draws
+  seconds late (#414).
+
+### Fixed (the test suite reset a developer's favorites)
+
+- Running the test suite no longer rewrites `~/.termherd`, which reset
+  favorites, folded projects and window bounds at the next launch (#407).
+
+### Fixed (the bridge token written through a planted file)
+
+- The live bridge's token file is created afresh, never written through a
+  file or symlink another user planted in a shared `/tmp` (#284).
+
+### Fixed (quitting lost a modified doc's edits)
+
+- Quitting TermHerd with unsaved doc edits now asks first, and the quit
+  prompt names the doc beside the sessions it stops. It asks under every
+  `close.app` policy, `noConfirmation` included (#385).
+
+### Fixed (a modified doc closed without asking)
+
+- Closing the doc editor with unsaved edits — its `✕ close` button or
+  Escape — or opening another doc over it now asks before discarding them;
+  Escape at the prompt goes back to the editor (#248).
+
+### Fixed (a tab drag lost off the strip)
+
+- A tab drag stays alive when the pointer leaves the tab strip (#348).
+
+### Added (pick a tab's colour)
+
+- The tab menu's *Tab colour…*, or a `pick-tab-color` action (unbound by
+  default), opens a list of the eight colours Claude's `/color` takes, and
+  *None*, over the focused tab. On a Claude tab the pick is typed as
+  `/color <name>` behind the slash-command prompt, so Claude keeps the colour
+  and the tab shows it once its transcript records it; the list is offered
+  only while that Claude is idle with an empty prompt. A shell tab keeps the
+  colour itself, until it closes — and so does a Claude tab whose Claude has
+  exited, which is no longer typed into as Claude (outside Windows, where
+  that cannot be told). The arrows, Enter and Escape drive the list,
+  so MCP `press_keys` / `run_action` can too (#343).
+
+### Changed (an agent's key press holds a physical Enter back)
+
+- A slash-command prompt armed through MCP `press_keys` or `run_action` —
+  `send-to-desktop`, or a colour picked for a Claude tab — now ignores a
+  physical Enter for 600 ms, as one armed by the `claude_command` tool already
+  did (#343).
+
+### Added (a context menu on each tab)
+
+- Right-click a tab, or press `open-tab-menu` (⌘⇧M on macOS, Ctrl+Shift+M on
+  Windows and Linux), for a menu of what can be done to it: rename, copy its agent
+  name (when a named Claude runs in it), a new shell or Claude session beside
+  it, split it, close its pane. Each entry runs the keyboard action of the
+  same name on the focused tab, which a right-click focuses first. The arrows,
+  Enter and Escape drive it, so MCP `press_keys` / `run_action` can too, and
+  Enter reports the verdict of the entry it ran (#340).
+- A shortcut with Cmd, Ctrl or Alt that is bound to nothing is now logged at
+  debug level (`RUST_LOG=termherd=debug`) with the key and modifiers it
+  arrived as, so a binding that never fires can be told apart from one that
+  never reached termherd.
+
+### Fixed (slash commands refused with Claude's prompt on screen)
+
+- termherd did not find Claude's input prompt on screen, for two reasons:
+  Claude Code draws a no-break space after its `❯` prompt marker, where
+  termherd expected an ASCII one, and once a session is renamed it writes the
+  name into the rule above the prompt, which termherd no longer read as a
+  rule. Every slash command termherd types into Claude — the rename, `/color`
+  and `send-to-desktop` — was refused with "Claude's input prompt is not on
+  screen", and the tab menu left out *Tab colour…* right after a rename
+  (#374).
+
+### Fixed (a working Claude read as idle)
+
+- Claude Code 2.1 marks a working session's title with `◐` / `◑` rather than
+  a Braille spinner, which termherd did not recognise. A Claude session read
+  as idle while it worked, and once Claude's "waiting for your input" ping
+  arrived it read as needing attention for good, since only work clears that.
+  Every reader of the status was affected: the status dot, `wait_for_status`,
+  the close confirmation, and the slash commands offered only to an idle
+  Claude, `send-to-desktop` and the rename (#371).
+
+### Added (rename a tab from the keyboard)
+
+- A `rename-tab` action, bound to ⌘⇧I on macOS and Ctrl+Shift+I on Windows
+  and Linux, opens the focused tab's inline rename — the field a double-click
+  opens, filled with the tab's current name. With no tab open it does nothing,
+  and reports `inert` / `no-context` over MCP (#338).
+
+### Changed (fresh Claude sessions start under a known id)
+
+- Every fresh Claude session now starts as `claude --session-id <uuid>`, with
+  an id termherd mints, so a new tab knows its conversation from the first
+  keystroke rather than only once it is resumed (#336). Its sidebar row, once
+  scanned, brings the open tab forward instead of resuming a second copy, and
+  its tab hover shows the same session card. An id Claude's own session file
+  proves wins, and is kept after Claude exits, so a re-key by `/clear` or a
+  plan-accept is followed once termherd next reads that file (a tab hover or a
+  sidebar click). Reopening a closed Claude tab resumes the conversation it
+  held last when the sidebar lists it, else starts a new one under a new id.
+- A resume id outside Claude's charset (or starting with `-`) is no longer
+  typed: the tab opens a bare shell instead.
+- **The Claude Code CLI floor rises from 1.0.61 to 2.0.73**, an estimate:
+  Claude Code's changelog never records when `--session-id` arrived, and
+  2.0.73 is the oldest release whose notes show it in use.
+
+### Added (copy a session's agent name)
+
+- A `copy-agent-name` action, unbound by default, copies the peer name Claude
+  Code gives the focused session (`termherd-b0`, the name `/list-agents`
+  shows), read afresh from `~/.claude/sessions/<pid>.json`. With no Claude in
+  front it does nothing, and reports `inert` / `no-context` over MCP. The tab
+  hover card gains an `Agent:` line with the same name. Nothing is named on
+  Windows, where ConPTY reports no foreground process (#339).
+
+## [0.1.0-prerelease.5] - 2026-09-26
+
+### Fixed (the copy chord no longer overwrites a program's own copy)
+
+- In a pane whose program reads the mouse — Claude Code in full-screen mode,
+  vim, lazygit — the copy chord used to write the last text termherd had copied
+  over the clipboard, on every press, once anything had been copied anywhere:
+  the program's own copy of a drag was silently replaced by stale text (#316).
+  The shell no longer keeps a copy cache; the terminal reports whether it holds
+  a selection at all (including one scrolled out of view), and the chord asks
+  it to copy or does nothing. Over MCP, `copy` with nothing selected now
+  reports `inert` / `no-context` in that pane too.
+
+### Fixed (the stdio server could choose what termherd executes)
+
+- `set_option` listed `shell.program` / `shell.args` as writable beside
+  `theme` — and their value is what every shell session runs at the next
+  launch, so any client of `termherd-mcp` could set it unattended. Both are now
+  **read-only** over MCP; `list_options` and the schema resource carry a
+  `writable` flag per id, so a model can tell before it tries (#283).
+- A value that does not fit an option's kind (a non-array palette, a theme
+  outside `dark`/`light`) is now **refused** with a JSON-RPC error and nothing
+  is written. It used to be written anyway, with a warning in the answer; that
+  `warnings` text is gone.
+
+### Fixed (the mouse reaches a program that reads it)
+
+- A full-screen program with mouse reporting on — Claude Code's `/diff` and
+  `/resume`, vim, lazygit, fzf, less, tmux — now receives clicks, drags and
+  (when it asked for them) bare moves, in the SGR or X10 encoding it
+  negotiated. Only wheel notches were ever forwarded before; a press over such
+  a program was consumed as a local text selection and the program never heard
+  of it (#155). While a program reads the mouse the terminal draws no selection
+  of its own and a right-click reaches the program instead of pasting; hold
+  **Shift** to select text out of it, and the link modifier still opens a path
+  or URL.
+- `mouse_in_session` answers `forwarded` for such a program, beside
+  `selection` and `ignored`, and an agent can now drive a mouse-mode TUI
+  through the act → wait → observe loop. It rejects a session that has
+  exited rather than claiming its terminal did something.
+- A drag that leaves the pane still ends with its release, on the border
+  cell; a modifier pressed or released mid-drag no longer hands half the
+  gesture to the other owner; and motion is reported to the program once
+  per cell rather than once per pixel.
+
+### Added (a pointer inside a terminal, over MCP)
+
+- `mouse_in_session` places one mouse event at a **cell** of a session's
+  terminal — the pointer counterpart of `run_in_session` (#300). `kind` is
+  `press` / `release` / `click` / `drag` / `move`, `col` / `row` are 0-based
+  cells of the visible screen, `button` is optional. A cell
+  outside the pane's geometry, or an unknown word, rejects the whole call
+  before anything applies. The answer's `pointer` field says what the terminal
+  did: `selection` (a press then a drag selects the text between them, both
+  cells included; a bare click clears it) or `ignored`.
+- The event travels the wheel's path end to end (`Event::TerminalPointer` →
+  `PtyHost::pointer` → the terminal thread); the gesture rule lives once in
+  `core`, read by the shell to answer and by the terminal to place the
+  selection with its live offset. It landed before #155 (above) so that fix
+  could be verified by the agent that wrote it.
+
+### Added (hidden terminal hyperlinks)
+
+- A link whose label hides its URL — an OSC 8 hyperlink, the way `gh`,
+  `ls --hyperlink` and rendered markdown print `#76` over an issue URL — now
+  underlines on hover and opens on Cmd/Ctrl+click like a printed URL (#84).
+  The `Screen` snapshot carries every hyperlink as a span over its cells, and
+  the pointer answers that span before it scans the visible text; a
+  hyperlink laid over text that is itself URL-shaped opens the hyperlink.
+
+### Fixed (list_sessions over MCP)
+
+- `list_sessions` answered a bare JSON array, which MCP clients reject on their
+  schema check — every call failed before the caller saw a row. The sessions now
+  ride in a `sessions` field, like every other tool's answer (#299).
+- Every tool now shapes its structured answer at one seam, which refuses
+  anything but an object, and a sweep reads the tool list from the router so a
+  tool added later cannot slip past the rule.
+
+### Added (a repository in the sidebar, before it has any session)
+
+- A sidebar row is no longer born only from a session. **+ Add a repo** opens
+  the native folder picker, and dropping a folder on the window does the same
+  thing — a dropped *file* is ignored (#279). The row carries the usual `$` and
+  🤖 launch buttons, says `No sessions yet` until it has one, and sorts to the
+  top until then. A ✕ takes it back out; it appears only on rows you added,
+  since a discovered project has no declaration to drop.
+- Hand-added repositories live in `~/.termherd/metadata.json`, beside stars and
+  renames. Nothing is written under `~/.claude`.
+- Over MCP: `add_repo` and `forget_repo`, answering about the sidebar row —
+  membership, not what the window happens to be drawing — and `declared` on
+  each project in `snapshot` and in the ⌘⇧S capture.
+
 ### Changed (clipboard mouse gestures)
 
 - The two classic terminal clipboard conventions are settings now, both off by

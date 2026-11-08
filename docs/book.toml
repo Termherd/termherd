@@ -7,8 +7,9 @@ src = "src"
 
 [build]
 build-dir = "book"
-# A link to a page that does not exist must fail the build, not silently mint an
-# empty page. The chapter map in SUMMARY.md is a promise; this keeps it honest.
+# A SUMMARY.md entry for a page that does not exist must fail the build, not
+# silently mint an empty page (in-page links are not checked). The chapter map
+# in SUMMARY.md is a promise; this keeps it honest.
 create-missing = false
 
 [output.html]

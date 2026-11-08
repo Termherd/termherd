@@ -4,8 +4,8 @@ Every session you open is a **tab**. Every tab holds a **pane tree** — one
 terminal, or many, split vertically and horizontally.
 
 ```text
-┌ my-app ●busy ┬ tests ○idle ┬ notes ────────────────┐
-├──────────────┴─────────────┴───────────────────────┤
+┌ ●busy ✳ my-app ┬ ○idle ❯ tests ┬ ○idle ❯ notes ────┐
+├────────────────┴───────────────┴───────────────────┤
 │                        │                           │
 │   claude (my-app)      │   $ cargo test            │
 │                        │                           │
@@ -14,8 +14,8 @@ terminal, or many, split vertically and horizontally.
 │                        │   $ git log --oneline     │
 │                        │                           │
 └────────────────────────┴───────────────────────────┘
-   mod+D splits vertically · mod+Shift+D horizontally
-        (mod = Cmd on macOS, Ctrl on Windows and Linux)
+   Cmd+D / Alt+Shift+Plus split side by side
+   Cmd+Shift+D / Alt+Shift+Minus or D split stacked
 ```
 
 ## Tabs
@@ -23,45 +23,250 @@ terminal, or many, split vertically and horizontally.
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |
 | Next / previous tab | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | same |
-| Jump to tab 1–9 | <kbd>Cmd</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> |
-| New shell here | <kbd>Cmd</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>T</kbd> |
+| Jump to tab 1–9 | <kbd>Cmd</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> |
+| New shell here | <kbd>Cmd</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 | New Claude session here | <kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> |
-| Reopen the tab you closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
-| Close focused pane | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>W</kbd> |
+| Reopen the tab you closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
+| Close focused pane | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> |
+| Rename the focused tab | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> |
+| Open the focused tab's menu | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> |
 
 **Jump-to-tab is matched by physical key position**, not by the character the
 key produces. On AZERTY and QWERTZ, where the number row produces `&`, `é`, …
-without Shift, <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>1</kbd> still lands on tab 1.
+without Shift, <kbd>Cmd</kbd>/<kbd>Alt</kbd>+<kbd>1</kbd> still lands on tab 1.
 
 Each tab carries its own **activity dot** (see
-[Status and attention](./status.md)), a title derived from its session, and a
-`×` to close it. Hovering a tab shows the session's fuller description — the
-same card the sidebar shows.
+[Status and attention](./status.md)), a **kind mark** — `✳` for a Claude
+session, `❯` for a shell — a title derived from its session, and a `×` to close
+it. In a split tab, the mark follows the focused pane. The kind is never part
+of the title, so renaming a tab or a retitle from Claude cannot lose it: a
+fresh tab is titled after its project alone. Hovering a tab shows the
+session's fuller description — the card the sidebar shows, for a fresh Claude
+tab as soon as the sidebar lists its session. Should `/clear` or a
+plan-accept give the conversation a new id, the tab picks it up from
+Claude's own session file the next time TermHerd reads it — hovering the
+tab, or clicking a row in the sidebar — and keeps it after Claude exits
+(not on Windows, where that file cannot be matched to its pane). Until then
+the sidebar's status dot stays on the old row. Reopening a closed Claude tab
+resumes the conversation it held last, once the sidebar lists it; a fresh
+tab closed before then comes back as a new conversation. When a Claude
+runs in it, the card also names its agent (`Agent: termherd-b0`), the peer
+name other Claude sessions address it by; the `copy-agent-name` action puts
+it on the clipboard. The card also says how long the tab has run, counted from
+the moment termherd started its terminal (`Running for 1h 12m`), and which
+Claude Code version runs in it: the one the running Claude reports, else the
+one its transcript last recorded. Model and effort come from the transcript,
+as in the sidebar card. A plain shell tab, with no Claude running in it,
+shows only its running time beside its working directory; a shell tab in
+which `claude` was typed by hand also shows its agent and version while that
+Claude runs. In a split tab, the card describes the first pane.
+
+**A Claude tab wears the colour its `/color` set.** Run `/color green` in a
+Claude session and its tab is outlined in green, and its sidebar row gets a
+green bar, usually within half a second — the time the sidebar takes to
+notice the transcript changed — and at most about ten seconds later if the
+filesystem watch misses the change. `/color default` takes the colour away
+again. The
+colour is Claude's, read from the session's transcript: there is no setting
+for it, and on a Claude tab no way to override it from TermHerd (a shell tab's
+pick, below, does win over a Claude started by hand in that shell). In a split
+tab the focused pane decides, as it does for the kind mark, so a shell focused
+beside a coloured Claude leaves the tab uncoloured.
+
+The eight colours are tuned for each theme, but red and green are both among
+them, so the colour is never the only cue: the hover card names it
+(`Colour: green`) — in a split, the colour the outline shows, the focused
+pane's. A shell tab wears the colour picked for it, below.
+
+**TermHerd asks Claude rather than overriding it.** Where a change belongs to
+Claude — handing a session to the desktop app with `send-to-desktop`, or a
+Claude tab's colour from the colour list below — TermHerd types Claude's own
+slash command for you, behind a prompt that shows the exact line first.
+<kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops it.
+It is offered only while that Claude is idle with nothing typed in its prompt; a
+draft that appears meanwhile keeps the prompt open and says so.
+
+**A Claude tab goes by the name Claude gives its session.** The title is the
+first of these that exists:
+
+| Rank | Source |
+| --- | --- |
+| 1 | the session's name — Claude's `/rename` or one you gave it in the sidebar, whichever came last |
+| 2 | the title Claude last reported to the terminal |
+| 3 | Claude's own summary of the conversation, else its first prompt |
+| 4 | the project the tab opened in |
+
+A `/rename` typed in Claude reaches the tab the next time TermHerd rescans
+`~/.claude`, which it does when the transcript changes on disk — a fresh tab
+included, since TermHerd starts it under a session id of its own. A
+conversation with no prompt yet has nothing to rescan, so a rename typed
+before the first prompt shows once that prompt is sent.
+
+**Double-click a tab to rename it**, or press the `rename-tab` chord to rename
+the focused one; both open the same field and end the same way. The tab strip
+does not scroll yet: with more tabs than fit, the focused one can sit past its
+right edge, and the chord then opens a field you cannot see. It still holds the
+keyboard, so <kbd>Escape</kbd> leaves it.
+
+The field opens on the current name; clear
+it and it shows, greyed out, the name <kbd>Enter</kbd> would then leave. For a
+shell tab, the name you type is the tab's own and stays until you clear it,
+which reverts the tab to the name it would have without one. For a Claude
+tab, TermHerd asks Claude instead: <kbd>Enter</kbd> arms `/rename <name>`
+behind the same prompt as any other command, and the tab takes the new name
+once Claude has recorded it. When Claude cannot take the command — busy,
+waiting on an answer, a draft in its prompt — the rename is not lost
+silently: a notice under the tab strip says why, until you dismiss it with
+`✕`. A blank name, or the name the tab already shows, asks nothing. Once the
+Claude in a tab has exited and its shell is back in front, the tab is
+renamed like a shell tab.
+
+**Right-click a tab for its menu**, or press `open-tab-menu` for the focused
+one. A right-click focuses the tab first, because every entry acts on the
+focused tab:
+
+| Entry | Runs | Shown on |
+| --- | --- | --- |
+| Rename tab | `rename-tab` | every tab |
+| Tab colour… | `pick-tab-color` | every tab; disabled, with why, when no colour can be picked now (below) |
+| Copy agent name | `copy-agent-name` | a tab whose focused pane has a named Claude in front |
+| New shell here | `new-shell-here` | every tab |
+| New Claude session here | `new-claude-session-here` | every tab |
+| Split right | `split-vertical` | every tab |
+| Split down | `split-horizontal` | every tab |
+| Park tab | `toggle-park-tab` | every tab |
+| Close pane | `close-focused` | every tab |
+
+Each entry is the keyboard action of the same name, so it does exactly what
+that action's chord does — *Rename tab* opens the field above, which on a
+Claude tab asks Claude to `/rename`; *Close pane* closes the focused pane of a
+split and the whole tab otherwise, asking first as the chord does.
+<kbd>↑</kbd> and <kbd>↓</kbd> move the selection, <kbd>Enter</kbd> runs it,
+<kbd>Escape</kbd> or a click outside the menu closes it without running
+anything.
+
+*Tab colour…* is always listed. When no colour can be picked for the focused
+pane at the moment the menu opens, it is greyed out with the reason beneath
+it — *Claude busy*, *draft in prompt*, *prompt not on screen* (the view is
+scrolled back), and the like — and choosing it runs nothing and leaves the
+menu open.
+
+*Copy agent name* is listed when the action would find a name at the moment
+the menu opens: a Claude runs in front of the focused pane and has written its
+session file, whether the pane was opened as a Claude session or as a shell.
+It never appears on Windows, where no Claude is ever named. The menu belongs
+to the pane it opened over: if that pane closes or loses focus, the menu goes
+with it.
+
+The menu opens in
+the middle of the window rather than beside the tab, and screen readers do not
+see it: it is drawn by termherd, not by the operating system.
+
+**Pick a tab's colour** from the menu's *Tab colour…*, or with the
+`pick-tab-color` action. A list of the eight colours `/color` offers, and
+*None*, opens over the tab on the colour it wears — *None* when it wears
+none; <kbd>↑</kbd>,
+<kbd>↓</kbd>, <kbd>Enter</kbd> and <kbd>Escape</kbd> drive it, as they drive
+the menu, and a click picks too. Where the pick goes depends on the focused
+pane:
+
+| Focused pane | A pick | Shows |
+| --- | --- | --- |
+| Claude, still running | types `/color <name>` (`/color default` for *None*), behind the prompt below | once Claude records it, usually half a second later (ten seconds at most) |
+| Shell — or a Claude tab whose Claude has exited | is kept on the tab by TermHerd | at once |
+
+A Claude tab's colour is Claude's: TermHerd keeps no copy of it, so it never
+disagrees with Claude's own prompt bar, and a `/color` typed by hand changes
+it just the same. The list is not offered for a Claude that is busy, or
+waiting on an answer, or has something typed in its prompt — the action does
+nothing then, and the menu greys *Tab colour…* out, saying why — and if that
+Claude gets busy while the list is open, the pick is refused and the list
+stays, saying why. Once the Claude in a tab has exited, the tab is back at the
+shell it ran in, and TermHerd colours it as a shell: `/color` is never typed
+into a shell.
+That needs the operating system to report what runs in front of the shell,
+which Windows does not, so there a Claude tab stays Claude's.
+
+A shell tab's colour lasts as long as the tab: it moves with the tab and is
+gone once the tab closes, and a tab reopened with `reopen-closed-tab` comes
+back uncoloured. It also wins over the colour of a Claude you start by hand
+in that shell, and *None* hides that colour too.
 
 **Tabs reorder by drag-and-drop.** Press a tab and drag it onto another slot:
 the carried tab fades, the drop slot is outlined, and the reorder commits on
-release. A plain click still just activates the tab. The order lives in the
-pure workspace model — the tab strip holds only transient pointer state, so
-there is no second, rival tab tree to drift out of sync.
+release. The drag survives the pointer leaving the strip: releasing anywhere
+drops the tab at the last slot shown. To cancel, drag back onto the carried
+tab before releasing; switching away from termherd mid-drag abandons it too.
+A plain click still just activates the tab.
+The order lives in the pure workspace model — the tab strip holds only
+transient pointer state, so there is no second, rival tab tree to drift out
+of sync.
 
-## Splits
+### Parking a tab
+
+**Park a tab you are not working in** with the menu's *Park tab*, or with the
+`toggle-park-tab` action, which has no default chord (bind one in
+[settings](../reference/settings.md)). The tab shrinks to its activity dot and
+kind mark, moves to the right end of the strip, after the other tabs, and
+leaves the <kbd>Ctrl</kbd>+<kbd>Tab</kbd> cycle. Parking does not pause
+anything: its sessions keep running, and their status and notifications keep
+flowing. Hovering a parked tab still shows its card.
+
+A parked tab comes back when you select it: click it, jump to it by number, or
+reopen its session from the sidebar. It then takes its place at the end of
+the unparked tabs. A session in it that asks for attention brings it back as
+well, without switching to it — unless every tab was parked, since a parked
+tab is shown only then. Dragging a tab past the last unparked tab parks it,
+and dragging a parked tab before it unparks it. New tabs open before the
+parked ones, and a closed parked tab reopens unparked. The tab menu offers
+*Park tab* on unparked tabs only.
+
+### Opening a tab from a link
+
+A page can link straight into termherd: a README, a dashboard, a report
+listing repos. The link names a repo by its absolute path, percent-encoded:
+
+```text
+termherd://open?repo=/Users/me/work/my%20repo
+termherd://open?repo=C:%5CUsers%5Cme%5Cwork
+```
+
+termherd shows the tab already working in that repo: a pane whose current
+directory is the repo or a folder inside it. That pane takes the focus, and a
+parked tab is unparked. When no pane works there, termherd opens a shell in the
+repo, in front. A link never types into a session and never starts Claude: it
+only shows a tab or opens a shell. Anything else is refused whole and opens
+nothing: another action, another parameter, a relative path, a network share
+(`//host/share`), a path with a control character. When termherd is not
+running, the link starts it.
+
+A shell is still a shell: opening one runs your shell's startup files and
+prompt in that directory, as `cd` would. A prompt that runs `git status` reads
+the repo's own git configuration, so follow a link into a repo only when you
+would `cd` into it. Each link opens at most one shell, but nothing limits how
+many links a page sends.
+
+The installers register the scheme: the macOS `.app`, the `.deb`, and the
+Windows installer. The AppImage installs nothing, so it registers nothing, and
+neither does a build run with `cargo run`.
 
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |
-| Split vertical (side by side) | <kbd>Cmd</kbd>+<kbd>D</kbd> | <kbd>Ctrl</kbd>+<kbd>D</kbd> |
-| Split horizontal (stacked) | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> |
+| Split vertical (side by side) | <kbd>Cmd</kbd>+<kbd>D</kbd> | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> |
+| Split horizontal (stacked) | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> or <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> |
 | Focus a neighbour | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>←↑↓→</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>←↑↓→</kbd> |
 
 A split opens a **fresh shell** beside the focused pane. Directional focus
-walks the pane tree geometrically — <kbd>Shift</kbd>+<kbd>→</kbd> goes to the
-pane on the right, whatever the nesting.
+walks the pane tree geometrically — <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>→</kbd>
+goes to the pane on the right, whatever the nesting.
 
 Closing the **last** pane in a tab closes the tab.
 
-**Drag-resize is not shipped yet.** Panes divide their space evenly; the
-remaining piece of `F-terminal-split` is a draggable divider. Two extra focus
-actions, `focus-next` and `focus-prev`, exist in the keymap with no default
-chord — bind them yourself if you prefer cycling to directional movement
+**Drag-resize a split** by dragging the handle between its panes. The ratio
+updates as you drag; each side stays between 10% and 90% of that split's usable
+space. Terminal sizes update when you release. Two extra focus actions,
+`focus-next` and `focus-prev`, exist in the keymap with no default chord — bind
+them yourself if you prefer cycling to directional movement
 ([`settings.json`](../reference/settings.md)).
 
 ## Closing, and what asks first
@@ -70,7 +275,8 @@ Closing a tab, and quitting the app, are each governed by their own
 confirmation policy — `alwaysConfirm`, `confirmWhenActive` (the default), or
 `noConfirmation`. Under the default, a tab whose session is mid-command asks
 before closing; an idle one closes silently. Quitting names how many sessions
-will be force-stopped.
+will be force-stopped, and always asks while the doc editor holds unsaved
+changes.
 
 A pane whose **shell exits cleanly closes itself**; one whose shell exited with
 a failure stays on screen so you can read what happened.

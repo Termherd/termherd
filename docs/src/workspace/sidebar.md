@@ -1,26 +1,42 @@
 # The sidebar: browse, search, star
 
 The sidebar is the session browser. It lists every Claude session TermHerd
-found by walking `~/.claude/projects`, grouped by project, and it refreshes
-live as the filesystem changes — a session started elsewhere appears without a
-restart.
+found by walking `~/.claude/projects`, grouped by project — together with the
+repositories you added by hand, which need no session to appear. It refreshes
+live as the filesystem changes, so a session started elsewhere shows up without
+a restart:
 
-Toggle it with <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>B</kbd>.
+- half a second after the changes stop;
+- two seconds at most while a session keeps writing;
+- ten seconds at most if the filesystem watch delivers nothing at all, as
+  macOS can: the sidebar also rescans on its own every ten seconds.
+
+The walk follows no symlink: a linked project folder, session subdirectory or
+`.jsonl` under `~/.claude/projects` is skipped. A transcript is read whole up
+to 256 MiB; past that, only its first and last 128 MiB are read, so the message
+count of such a session misses its middle. Titles and slugs are cut to 120
+characters, like the summary.
+
+Toggle it with <kbd>Cmd</kbd>+<kbd>B</kbd> (macOS) or
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> (Windows, Linux).
 
 ```text
 ┌──────────────────────────┐
-│ Search…                  │  ← Cmd/Ctrl+F focuses this
+│ ◀ Hide       + Add a repo  ⚙ │  ← add a folder · open the settings panel
+│ Search…                  │  ← focus: Cmd+F / Ctrl+Shift+F
 │ ☐ Titles only            │
 │ ☐ Show archived          │
 ├──────────────────────────┤
 │ ★ Favorites              │
 │   my-app · fix the race  │
 ├──────────────────────────┤
-│ ▾ my-app          $  🤖  │  ← launch a shell / a fresh Claude session
+│   new-repo     ❯  ✳   ✕  │  ← added by hand, no sessions yet
+│     No sessions yet …    │
+│ ▾ my-app          ❯  ✳   │  ← launch a shell / a fresh Claude session
 │     fix the race  ★ ⊟ ✎  │
 │     add the cache ★ ⊟ ✎  │
 │     … 3 more             │
-│ ▸ other-repo      $  🤖  │
+│ ▸ other-repo      ❯  ✳   │
 ├──────────────────────────┤
 │ Plans & memory           │
 │   CLAUDE.md (global)     │
@@ -33,21 +49,71 @@ Toggle it with <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>B</kbd>.
 
 Click a project to expand it, then a session to resume it in a new tab.
 
-Beside each project row are two launch buttons: **`$`** opens a plain shell in
-that project's directory, **🤖** starts a fresh Claude session there. The same
-two actions are on the keyboard as <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>T</kbd>
+Beside each project row are two launch buttons: **`❯`** opens a plain shell in
+that project's directory, **`✳`** starts a fresh Claude session there — under a
+session id TermHerd picks (`claude --session-id <uuid>`), so once the session
+shows up in the list, clicking it brings its tab forward instead of resuming
+a second copy. The same
+two actions are on the keyboard as <kbd>Cmd</kbd>+<kbd>T</kbd> (elsewhere
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>)
 and <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>, which use the
 *focused* session's
 directory instead.
 
+## Adding a repository
+
+A project only appears once it has a Claude session, so a repository you have
+never opened Claude in is invisible — including the one you are about to start
+work in. **+ Add a repo** puts it there anyway: pick a folder, or **drop one on
+the window**. Both do the same thing.
+
+Drop a **folder**, not a file: a dropped file is ignored, so dragging one onto
+a terminal never quietly adds its directory.
+
+The row that appears carries the same `❯` and `✳` buttons as any other, and says
+`No sessions yet` until it has one. When it does, it becomes an ordinary
+project row — there is no second entry.
+
+An added repository sorts to the top of the list until its first session, then
+takes its place by recency like everything else. A **✕** on its row removes it;
+the button only appears on rows you added, since a discovered project has no
+declaration to drop. Removing a repository that has since gained sessions drops
+only the addition — the project stays, because the scan still finds it.
+
+What you pick is not always what is stored, but it is filed by **exactly the
+rule the scan uses** for a session's working directory — that agreement is what
+keeps one repository on one row. A git worktree collapses onto its main
+checkout; a file becomes the folder holding it; everything else is stored as
+given, symlinks and all.
+
+One consequence is worth knowing: a **subdirectory is not climbed**. Add
+`~/dev/app/crates/core` and you get a row for that subdirectory, not for
+`~/dev/app` — because a Claude session started there is filed the same way.
+Add the directory you actually want the row for.
+
+Additions live in `~/.termherd/metadata.json`, beside stars and renames.
+Nothing is written under `~/.claude`.
+
 Hovering a session shows a card with its fuller description — relative last
-activity and message count (`3h ago · 214 messages`). The same card is what a
-tab shows on hover.
+activity and message count (`3h ago · 214 messages`), the model of its last
+reply with the last reasoning effort the transcript recorded
+(`Model: claude-opus-5-5  ·  medium effort`), and the Claude Code version that
+wrote it (`Claude Code 2.1.294`). A line is left out when the transcript does
+not record it: older Claude Code versions write no effort. A tab shows the same
+card on hover, plus the live facts described in
+[Tabs and splits](tabs-and-splits.md).
+
+A session given a colour with Claude Code's `/color` shows a thin bar of that
+colour at the start of its row, whether or not it is open, and its card names
+the colour (`Colour: green`) for anyone who cannot tell the bars apart. The
+colour comes from the session's transcript, so a `/color` in an open session
+reaches its row at the next rescan.
 
 ## Search
 
-<kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>F</kbd> focuses the search box. Search runs
-in memory over the scan's digests — titles, slugs, first prompts and indexed
+<kbd>Cmd</kbd>+<kbd>F</kbd> (elsewhere <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd>)
+focuses the search box. Search runs in memory over the scan's digests —
+titles, slugs, first prompts and indexed
 transcript text.
 
 - A **content hit** renders the matched line in muted text under the session
@@ -72,7 +138,14 @@ Three buttons on each session row:
 
 All three are an **overlay**: they are written to
 `~/.termherd/metadata.json`, never under `~/.claude`. Nothing you do in the
-sidebar changes what the Claude CLI sees.
+sidebar changes what the Claude CLI sees, with one exception: renaming a
+session that is **open in a Claude tab** asks Claude to rename it, with
+`/rename`, exactly as renaming its tab does (see
+[Tabs and splits](./tabs-and-splits.md)). Clearing the field still only
+removes the sidebar's own name, and the greyed-out hint shows the title that
+leaves. Between a name given here and Claude's own `/rename`, the later one
+shows: a rename here outranks the name Claude had, until Claude is renamed
+again.
 
 ## Density
 
@@ -84,18 +157,23 @@ limit to `0` to always show every session —
 ## Plans & memory
 
 The bottom section lists Claude's plan files (`~/.claude/plans/*.md`) and the
-memory files: the global `~/.claude/CLAUDE.md` and each project's `CLAUDE.md`.
-Clicking one loads it off-thread and opens it in the main pane, replacing the
-terminal view until you close it.
+memory files: the global `~/.claude/CLAUDE.md` and the `CLAUDE.md` of each
+repo in the sidebar, an added repo with no session yet included. Clicking one
+loads it off-thread and opens it in the main pane, replacing the terminal view
+until you close it.
 
 The doc pane can **edit** — `💾 save`, with a `• modified` marker while there
 are unsaved changes and `saved` after a write. Two ways out, and they behave
-identically: the `✕ close` button, or <kbd>Escape</kbd>. Both **discard unsaved
-edits without asking** — a known rough edge, tracked as
-[#248](https://github.com/Termherd/termherd/issues/248).
+identically: the `✕ close` button, or <kbd>Escape</kbd>. With unsaved changes,
+both ask first — *Discard unsaved changes to “CLAUDE.md”?* — and clicking
+another doc in the sidebar asks too, naming both docs. <kbd>Enter</kbd> or
+`Discard` throws the edits away; <kbd>Escape</kbd> or `Cancel` goes back to the
+editor with them intact. Saving first closes without a question. Quitting
+TermHerd with unsaved changes asks too, naming the doc — whatever the
+`close.app` policy says, since that policy is about the sessions a quit stops.
 
 ## When nothing is open
 
 With no session open, the main pane shows a welcome card: how many sessions in
-how many projects were found, and the two ways to start — the `$` / 🤖 buttons
+how many projects were found, and the two ways to start — the `❯` / `✳` buttons
 beside a project, or a click on a session to resume it.

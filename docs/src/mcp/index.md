@@ -13,8 +13,8 @@ depends on how the session started.
  loopback │  └───────────▲────────────┘  │
    ┌──────┼──────────────┘               │
    │      │   the LIVE BRIDGE            │
-   │      │   13 tools · the running     │
-   │      │   workspace                  │
+   │      │   20 tools · the running     │
+   │      │   workspace + settings.json  │
    │      └──────────────────────────────┘
    │
    │  wired in at spawn, per-session token
@@ -33,11 +33,11 @@ depends on how the session started.
 
 | | [The live bridge](./live-bridge.md) | [The stdio server](./stdio.md) |
 | --- | --- | --- |
-| Reaches | the **running** workspace | the **settings file** |
+| Reaches | the **running** workspace and the settings file | the **settings file** |
 | Setup | none — wired in at spawn | you register `termherd-mcp` yourself |
 | Available to | sessions launched from TermHerd, plus any client that [attaches](./attach.md) | any Claude session |
 | Transport | in-process, loopback, per-session bearer token | JSON-RPC over stdio |
-| Surface | 13 tools | 2 tools + 2 resources |
+| Surface | 20 tools | 2 tools + 2 resources |
 | Needs the app running | ✅ yes | ❌ no |
 
 ## The gap between them, and the bridge across it
@@ -49,7 +49,7 @@ terminal that launched TermHerd could not ask it for a screenshot the app
 already knows how to take.
 
 [Attaching from outside](./attach.md) closes it — the **same** live bridge and
-the same thirteen tools, reached by a client TermHerd did not spawn. What was
+the same twenty tools, reached by a client TermHerd did not spawn. What was
 missing was discovery, not capability, so nothing new was added to the surface.
 It is opt-in (`mcp.attach`), because publishing an endpoint that can type into
 a terminal is a decision, not a default.
@@ -58,8 +58,11 @@ a terminal is a decision, not a default.
 
 - *"Split this pane and run the tests"* → **live bridge**. It only exists
   inside a session TermHerd started.
-- *"Switch me to a light theme"* → **stdio server**. It edits the file; the
-  change applies on restart.
+- *"Switch me to a light theme"* → either. Both carry `list_options` and
+  `set_option`, over one shared catalogue; the write lands in `settings.json`
+  and a running TermHerd applies it at once. From a session TermHerd started,
+  the bridge already has them — register the stdio server only for a session
+  started elsewhere.
 
 ## Design notes
 

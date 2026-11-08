@@ -6,7 +6,10 @@ to a light theme", from *any* Claude session, whether or not TermHerd is
 running.
 
 It speaks JSON-RPC over stdio and is stateless: it reads and writes
-`~/.termherd/settings.json`, nothing else.
+`~/.termherd/settings.json`, nothing else. A session TermHerd launched does not
+need it — [the live bridge](./live-bridge.md#settings) carries the same two
+tools over the same catalogue. Register this one for a session started
+elsewhere.
 
 ## Registering it
 
@@ -29,24 +32,37 @@ Add it to your `mcpServers` config, pointing `command` at the built binary:
 | Tool | Args | Does |
 | --- | --- | --- |
 | `list_options` | — | lists the configurable options with their current values |
-| `set_option` | `id`, `value` | sets one option; the change lands in `settings.json` and applies on restart |
+| `set_option` | `id`, `value` | sets one **writable** option; the change lands in `settings.json` and applies at once |
 
 Both speak the option **id** — a stable, dotted name:
 
-| id | Kind | Values |
-| --- | --- | --- |
-| `theme` | enum | `dark`, `light` |
-| `shell.program` | string | unset means the platform default login shell |
-| `shell.args` | array | |
-| `terminal.colors.scheme` | enum | `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` |
-| `terminal.colors.foreground` | string | `"#rrggbb"` |
-| `terminal.colors.background` | string | `"#rrggbb"` |
-| `terminal.colors.cursor` | string | `"#rrggbb"` |
-| `terminal.colors.palette` | array | the 16 ANSI colours — normal 0–7, bright 8–15 |
+| id | Kind | Writable | Values |
+| --- | --- | --- | --- |
+| `theme` | enum | yes | `dark`, `light`, and the 20 named themes listed under [`theme`](../reference/settings.md#theme) |
+| `shell.program` | string | **no** | unset means the platform default login shell |
+| `shell.args` | array | **no** | |
+| `terminal.colors.scheme` | enum | yes | the 18 `theme` values marked ✓ under [`theme`](../reference/settings.md#theme) |
+| `terminal.colors.foreground` | string | yes | `"#rrggbb"` |
+| `terminal.colors.background` | string | yes | `"#rrggbb"` |
+| `terminal.colors.cursor` | string | yes | `"#rrggbb"` |
+| `terminal.colors.palette` | array | yes | the 16 ANSI colours — normal 0–7, bright 8–15 |
+
+`shell.program` and `shell.args` are **read-only** over MCP: their value is
+what TermHerd executes for every shell session at the next launch, and an
+agent must not get to choose that unattended. `list_options` and the schema
+carry the `writable` flag per id, so a model can tell before it tries.
+
+`set_option` **refuses** rather than degrades: a read-only id, an unknown id,
+or a value that does not fit the option's kind (a non-array palette, a theme
+outside the listed choices) answers a JSON-RPC error and writes nothing. So
+does a `settings.json` that does not parse: writing the one option onto an
+empty object would discard the rest of the file. `null` is
+always accepted on a writable id — it unsets the option.
 
 That is the whole write surface today. The `close`, `sidebar`, `record`,
-`open`, `keys`, `mcp`, `terminal.font_size`, `terminal.copy_on_select` and
-`terminal.paste_on_right_click` blocks of
+`capture`, `open`, `mcp`, `keys`, `terminal.font_size`,
+`terminal.copy_on_select`, `terminal.paste_on_right_click` and
+`terminal.option_as_meta` blocks of
 [`settings.json`](../reference/settings.md) are file-only — `keys` is
 readable as a resource, below.
 
@@ -64,7 +80,9 @@ live bridge, and a surface able to widen its own reach is not a setting.
 keymap itself uses, so it cannot drift from the binary you are running. It is
 the machine-readable form of
 [Keyboard shortcuts](../reference/keyboard.md), and the catalogue the live
-bridge's `run_action` speaks.
+bridge's `run_action` speaks — less the `activate-tab-N` family, which
+`run_action` accepts but the resource does not list. Defaults are those of the
+platform the server runs on.
 
 ## What it is not
 

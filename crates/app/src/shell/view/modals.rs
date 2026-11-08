@@ -1,22 +1,21 @@
-//! Confirmation modals and the scrim that hosts them. Quit, tab-close and
-//! archive all confirm through the one centred [`modal`] overlay (so the three
-//! flows look and behave alike), driven by [`Shell::active_confirmation`] which
-//! picks the single armed confirmation in priority order.
+//! Confirmation modals and the scrim that hosts them. Every confirmation goes
+//! through the one centred [`modal`] overlay, so they look and behave alike,
+//! driven by [`Shell::active_confirmation`] which picks the single armed
+//! confirmation in priority order.
 
 use iced::widget::{button, center, container, mouse_area, opaque, row, stack, text};
 use iced::{Color, Element};
 
 use super::clip;
+use crate::shell::docs::DocDiscard;
 use crate::shell::{Message, Shell};
 use crate::strings;
 
 impl Shell {
     /// The active confirmation card and the message to fire when its backdrop is
-    /// dismissed. Quit, tab-close and archive are all routed through the same
-    /// [`modal`] presentation for parity, in priority order (quit > tab-close >
-    /// archive — at most one is armed at a time); `view` wraps the base UI with
-    /// it. `pub(in crate::shell)` so the shell's own tests can assert the
-    /// routing.
+    /// dismissed, in the priority order of the chain below — at most one is
+    /// armed at a time. `pub(in crate::shell)` so the shell's own tests can
+    /// assert the routing.
     pub(in crate::shell) fn active_confirmation(&self) -> Option<(Element<'_, Message>, Message)> {
         self.quit_confirmation()
             .map(|card| (card, Message::CancelCloseWindow))
@@ -28,17 +27,52 @@ impl Shell {
                 self.archive_confirmation()
                     .map(|card| (card, Message::CancelArchive))
             })
+            .or_else(|| {
+                self.claude_command_confirmation()
+                    .map(|card| (card, Message::CancelClaudeCommand))
+            })
+            .or_else(|| {
+                self.paste_confirmation()
+                    .map(|card| (card, Message::CancelPaste))
+            })
+            .or_else(|| {
+                self.doc_discard_confirmation()
+                    .map(|card| (card, Message::CancelDocDiscard))
+            })
     }
 
-    /// The quit-confirmation card (shown when a window close is armed and live
-    /// sessions would be hard-killed). `None` when no quit is pending.
+    fn doc_discard_confirmation(&self) -> Option<Element<'_, Message>> {
+        let discard = self.discarding_doc.as_ref()?;
+        let current = clip(
+            self.open_doc.as_ref().map_or("", |doc| doc.label.as_str()),
+            24,
+        );
+        let prompt = match discard {
+            DocDiscard::Close => strings::doc_discard_prompt(&current),
+            DocDiscard::Open { label, .. } => {
+                strings::doc_discard_open_prompt(&current, &clip(label, 24))
+            }
+        };
+        Some(Self::confirmation_bar(
+            prompt,
+            strings::DISCARD,
+            button::danger,
+            Message::ConfirmDocDiscard,
+            Message::CancelDocDiscard,
+        ))
+    }
+
+    pub(in crate::shell) fn quit_prompt(&self) -> String {
+        let unsaved_doc = self.unsaved_doc().map(|doc| clip(&doc.label, 24));
+        strings::quit_prompt(self.core.live_session_count(), unsaved_doc.as_deref())
+    }
+
     fn quit_confirmation(&self) -> Option<Element<'_, Message>> {
         if !self.quit_pending() {
             return None;
         }
-        let live = self.core.live_session_count();
         Some(Self::confirmation_bar(
-            strings::quit_prompt(live),
+            self.quit_prompt(),
             strings::QUIT,
             button::danger,
             Message::ConfirmCloseWindow,
@@ -83,6 +117,55 @@ impl Shell {
         ))
     }
 
+    /// The card naming the exact line about to be typed into a Claude session,
+    /// and the tab it lands in. `None` when no command is armed.
+    fn claude_command_confirmation(&self) -> Option<Element<'_, Message>> {
+        let pending = self.claude_command.as_ref()?;
+        let line = pending.command.line();
+        let prompt = match &pending.refused {
+            Some(refusal) => strings::claude_command_refused(&line, &refusal.to_string()),
+            None => {
+                let workspace = &self.core.workspace;
+                let title = workspace
+                    .tab_of(pending.session)
+                    .and_then(|index| workspace.tabs.get(index))
+                    .map_or("", |tab| tab.display_title());
+                strings::claude_command_prompt(&line, &clip(title, 24))
+            }
+        };
+        Some(Self::confirmation_bar(
+            prompt,
+            strings::SEND,
+            button::primary,
+            Message::ConfirmClaudeCommand,
+            Message::CancelClaudeCommand,
+        ))
+    }
+
+    /// The question before a paste the target terminal would run line by line:
+    /// how many lines, and the tab they land in — which need not be the one
+    /// focused, since a right-click pastes where it points. `None` when no
+    /// paste is held.
+    pub(in crate::shell) fn paste_prompt(&self) -> Option<String> {
+        let pending = self.core.pending_paste()?;
+        let workspace = &self.core.workspace;
+        let title = workspace
+            .tab_of(pending.session)
+            .and_then(|index| workspace.tabs.get(index))
+            .map_or("", |tab| tab.display_title());
+        Some(strings::paste_prompt(pending.lines(), &clip(title, 24)))
+    }
+
+    fn paste_confirmation(&self) -> Option<Element<'_, Message>> {
+        Some(Self::confirmation_bar(
+            self.paste_prompt()?,
+            strings::PASTE,
+            button::danger,
+            Message::ConfirmPaste,
+            Message::CancelPaste,
+        ))
+    }
+
     /// A confirmation card shared by the quit, close and archive prompts:
     /// the question, a styled confirm button, and an Annuler cancel, in the
     /// rounded container they use. Keeping one builder stops the prompts
@@ -103,15 +186,21 @@ impl Shell {
             .on_press(on_cancel)
             .style(button::text)
             .padding(6);
-        container(
+        modal_card(
             row![prompt, confirm, cancel]
                 .spacing(12)
                 .align_y(iced::Center),
         )
+    }
+}
+
+/// The card every [`modal`] shows its content on, so the prompts and the tab
+/// menu keep one look.
+pub(super) fn modal_card<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    container(content)
         .padding(6)
         .style(container::rounded_box)
         .into()
-    }
 }
 
 /// Overlay `content` as a centred modal over `base`, dimming everything behind

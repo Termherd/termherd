@@ -4,13 +4,16 @@
 //! own `window.json` (FR12).
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use termherd_core::keymap::Platform;
 use termherd_core::{Action, KeyChord, Keymap};
 use termherd_pty::Palette;
 use tracing::warn;
 
 use crate::attach::AttachMode;
+use crate::paths::DataDir;
 use crate::record_config::RecordConfig;
 
 /// The persisted user settings. Every field defaults, so a missing or partial
@@ -22,6 +25,7 @@ pub struct Settings {
     /// shell.
     pub shell: Option<ShellProfile>,
     /// GUI chrome theme (the terminal grid keeps its own colours).
+    #[serde(deserialize_with = "theme_or_default")]
     pub theme: ThemeChoice,
     /// Keyboard overrides: action name (kebab-case) → one chord or a list of
     /// chords. Each entry replaces that action's platform default (FR9). Same
@@ -42,20 +46,38 @@ pub struct Settings {
     pub close: CloseSettings,
     /// How a clicked file leaves termherd. Absent → the OS default handler.
     pub open: OpenSettings,
-    /// Whether a running instance publishes its live bridge for a client it did
-    /// not spawn. Absent → it does not.
+    /// MCP control surface settings. Absent → defaults.
     pub mcp: McpSettings,
+    /// What a state capture writes. Absent → secrets are masked.
+    pub capture: CaptureSettings,
 }
 
-/// The live-bridge exposure settings. One key today, and a block rather than a
-/// bare `attach` at the top level because the exposure is the *server's*
-/// posture, not a workspace preference.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+/// On-disk capture settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CaptureSettings {
+    /// Mask the secrets a capture's terminal text shows. On by default, and a
+    /// value that is not `true`/`false` keeps it on.
+    #[serde(deserialize_with = "flag_on")]
+    pub redact: bool,
+}
+
+impl Default for CaptureSettings {
+    fn default() -> Self {
+        Self { redact: true }
+    }
+}
+
+/// On-disk MCP control surface settings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpSettings {
-    /// Whether this instance publishes `{ url, token }` for an outside client:
-    /// `false` (the default), `true`, or `"never"` — which also refuses the
-    /// `TERMHERD_MCP_ATTACH` override. See [`crate::attach`].
+    /// Allow an agent (via MCP) to prompt another Claude session (`SessionKind::Claude`).
+    /// Off by default (`false`). Shell sessions (`SessionKind::Shell`) are never gated by this.
+    pub allow_claude_nesting: bool,
+    /// Whether this instance publishes `{ url, token }` for a client it did not
+    /// spawn: `false` (the default), `true`, or `"never"` — which also refuses
+    /// the `TERMHERD_MCP_ATTACH` override. See [`crate::attach`].
     pub attach: AttachMode,
 }
 
@@ -223,6 +245,42 @@ pub struct TerminalSettings {
     /// A right-click pastes the clipboard into the pane under the pointer.
     #[serde(deserialize_with = "flag")]
     pub paste_on_right_click: bool,
+    /// Which macOS Option key is Meta.
+    #[serde(deserialize_with = "option_as_meta_or_default")]
+    pub option_as_meta: OptionAsMeta,
+}
+
+/// Which Option key acts as Meta on macOS; the other one composes glyphs
+/// (`⌥⇧L` → `|` on a French layout). Elsewhere Alt is always Meta.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OptionAsMeta {
+    None,
+    #[default]
+    Left,
+    Right,
+    Both,
+}
+
+fn option_as_meta_or_default<'de, D>(de: D) -> Result<OptionAsMeta, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    enum_or_default(de, "terminal.option_as_meta")
+}
+
+/// Parse a named choice; an unknown value warns and falls back to the default
+/// instead of failing the whole file.
+fn enum_or_default<'de, D, T>(de: D, setting: &str) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(de)?;
+    Ok(T::deserialize(&value).unwrap_or_else(|_| {
+        warn!(%value, setting, "unknown value; using the default");
+        T::default()
+    }))
 }
 
 /// Parse a JSON boolean, treating anything else as "not asked for" (with a
@@ -230,16 +288,41 @@ pub struct TerminalSettings {
 /// malformed colour or open command gets. A `"yes"` or a `1` costs its own
 /// setting and nothing else.
 ///
-/// Both flags default to off, so one fallback value serves both.
+/// For a flag that defaults to off; [`flag_on`] is its mirror.
 fn flag<'de, D>(de: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    flag_or(de, false)
+}
+
+/// [`flag`] for a flag that defaults to on: a malformed value keeps it on.
+fn flag_on<'de, D>(de: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    flag_or(de, true)
+}
+
+fn flag_or<'de, D>(de: D, fallback: bool) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let value = serde_json::Value::deserialize(de)?;
     Ok(value.as_bool().unwrap_or_else(|| {
-        warn!(%value, "terminal flag is not true/false; leaving it off");
-        false
+        warn!(%value, fallback, "flag is not true/false; keeping its default");
+        fallback
     }))
+}
+
+/// Parse the chrome theme, degrading an unknown name to the default (with a
+/// warning) rather than failing serde for the whole file — a typo, or a theme a
+/// newer build added, costs the chrome and nothing else.
+fn theme_or_default<'de, D>(de: D) -> Result<ThemeChoice, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    enum_or_default(de, "theme")
 }
 
 /// Which mouse gestures reach the clipboard — the classic terminal
@@ -261,9 +344,8 @@ pub struct ClipboardGestures {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ColorSettings {
-    /// A built-in scheme the overrides below start from: `"solarized-dark"`,
-    /// `"solarized-light"`, `"gruvbox-dark"` or `"gruvbox-light"`; absent →
-    /// the built-in default scheme.
+    /// A built-in scheme the overrides below start from, one of
+    /// [`Palette::schemes`]; absent → the built-in default scheme.
     pub scheme: Option<String>,
     /// Default text colour, `"#rrggbb"`.
     pub foreground: Option<String>,
@@ -346,6 +428,7 @@ impl Default for TerminalSettings {
             colors: ColorSettings::default(),
             copy_on_select: false,
             paste_on_right_click: false,
+            option_as_meta: OptionAsMeta::default(),
         }
     }
 }
@@ -365,15 +448,88 @@ impl TerminalSettings {
     }
 }
 
-/// Which iced theme dresses the GUI chrome (sidebar, tab strip, buttons).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ThemeChoice {
-    /// A dark chrome, matching the terminal's dark background.
+/// One row per theme: the variant, its `settings.json` name, and the iced
+/// theme of the same variant name.
+macro_rules! theme_choices {
+    ($($(#[$attr:meta])* $variant:ident => $name:literal,)+) => {
+        /// Which iced theme dresses the GUI chrome: one variant per iced
+        /// built-in. A named variant shares its settings name with the
+        /// `terminal.colors.scheme` preset it matches, where one is published.
+        #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+        #[serde(into = "&'static str", try_from = "String")]
+        pub enum ThemeChoice {
+            $($(#[$attr])* $variant,)+
+        }
+
+        impl ThemeChoice {
+            /// Every choice, in the order the settings panel lists them.
+            pub const ALL: [Self; [$($name),+].len()] = [$(Self::$variant),+];
+
+            /// The value `settings.json` spells this choice with.
+            #[must_use]
+            pub const fn settings_name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)+
+                }
+            }
+
+            /// The iced theme this choice maps to.
+            #[must_use]
+            pub fn to_iced(self) -> iced::Theme {
+                match self {
+                    $(Self::$variant => iced::Theme::$variant,)+
+                }
+            }
+        }
+    };
+}
+
+theme_choices! {
     #[default]
-    Dark,
-    /// A light chrome.
-    Light,
+    Dark => "dark",
+    Light => "light",
+    SolarizedDark => "solarized-dark",
+    SolarizedLight => "solarized-light",
+    GruvboxDark => "gruvbox-dark",
+    GruvboxLight => "gruvbox-light",
+    Dracula => "dracula",
+    Nord => "nord",
+    CatppuccinLatte => "catppuccin-latte",
+    CatppuccinFrappe => "catppuccin-frappe",
+    CatppuccinMacchiato => "catppuccin-macchiato",
+    CatppuccinMocha => "catppuccin-mocha",
+    TokyoNight => "tokyo-night",
+    TokyoNightStorm => "tokyo-night-storm",
+    TokyoNightLight => "tokyo-night-light",
+    KanagawaWave => "kanagawa-wave",
+    KanagawaDragon => "kanagawa-dragon",
+    KanagawaLotus => "kanagawa-lotus",
+    Moonfly => "moonfly",
+    Nightfly => "nightfly",
+    Oxocarbon => "oxocarbon",
+    Ferra => "ferra",
+}
+
+impl From<ThemeChoice> for &'static str {
+    fn from(theme: ThemeChoice) -> Self {
+        theme.settings_name()
+    }
+}
+
+impl TryFrom<String> for ThemeChoice {
+    type Error = String;
+
+    fn try_from(name: String) -> Result<Self, Self::Error> {
+        Self::from_settings_name(&name).ok_or(name)
+    }
+}
+
+/// The name a person reads — iced's own, so the picker and the theme it
+/// applies cannot disagree.
+impl std::fmt::Display for ThemeChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_iced().fmt(f)
+    }
 }
 
 /// When a close that would terminate running session(s) asks for confirmation
@@ -434,13 +590,12 @@ impl Default for CloseSettings {
 }
 
 impl ThemeChoice {
-    /// The iced theme this choice maps to.
+    /// The choice `settings.json` spells `name`, if any.
     #[must_use]
-    pub fn to_iced(self) -> iced::Theme {
-        match self {
-            ThemeChoice::Dark => iced::Theme::Dark,
-            ThemeChoice::Light => iced::Theme::Light,
-        }
+    pub fn from_settings_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|theme| theme.settings_name() == name)
     }
 }
 
@@ -463,12 +618,27 @@ impl Settings {
         self.terminal.font_size()
     }
 
+    /// Whether a capture masks the secrets its terminal text shows.
+    #[must_use]
+    pub fn redacts_captures(&self) -> bool {
+        self.capture.redact
+    }
+
     /// Which mouse gestures reach the clipboard.
     #[must_use]
     pub fn clipboard_gestures(&self) -> ClipboardGestures {
         ClipboardGestures {
             copy_on_select: self.terminal.copy_on_select,
             paste_on_right_click: self.terminal.paste_on_right_click,
+        }
+    }
+
+    /// Which Option key is Meta on `platform`; only macOS composes on Option.
+    #[must_use]
+    pub fn option_as_meta_on(&self, platform: Platform) -> OptionAsMeta {
+        match platform {
+            Platform::MacOs => self.terminal.option_as_meta,
+            Platform::Windows | Platform::Linux => OptionAsMeta::Both,
         }
     }
 
@@ -525,17 +695,97 @@ impl Settings {
     /// Load persisted settings; any problem (no file, bad JSON) falls back to
     /// defaults — a corrupt config must never prevent startup.
     #[must_use]
-    pub fn load() -> Self {
-        crate::json_store::load_json(FILE)
+    pub fn load(file: &Path) -> Self {
+        crate::json_store::load_json(file)
+    }
+
+    /// Re-read the file while the app runs. `None` when it does not parse,
+    /// so the running settings stay as they are.
+    #[must_use]
+    pub fn reload(file: &Path) -> Option<Self> {
+        crate::json_store::reload_json(file)
+    }
+
+    /// The shell to launch, as the PTY adapter takes it; `None` for the
+    /// platform default login shell.
+    #[must_use]
+    pub fn shell_profile(&self) -> Option<termherd_pty::Shell> {
+        self.shell.as_ref().map(|s| termherd_pty::Shell {
+            program: s.program.clone(),
+            args: s.args.clone(),
+        })
+    }
+
+    /// The startup load: an unparseable file is set aside and reported rather
+    /// than silently replaced by defaults the next save would write over it.
+    #[must_use]
+    pub fn load_checked(file: &Path) -> (Self, Option<crate::json_store::LoadProblem>) {
+        crate::json_store::load_json_checked(file)
     }
 }
 
-/// `~/.termherd/settings.json` — the app data dir from the PRD (§7).
+/// One appearance key the settings panel changed. Each pick persists only its
+/// own key, so a value another writer put in the file meanwhile — an MCP
+/// `set_option`, a hand edit — is not overwritten with a stale copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppearanceChange {
+    /// The GUI chrome theme.
+    Theme(ThemeChoice),
+    /// The terminal scheme; `None` clears it back to the built-in palette.
+    Scheme(Option<String>),
+}
+
+impl AppearanceChange {
+    /// The catalogue option this change sets, and its value: the panel writes
+    /// through the same validated setter as both MCP surfaces.
+    fn option(&self) -> (&'static str, serde_json::Value) {
+        match self {
+            AppearanceChange::Theme(theme) => ("theme", serde_json::json!(theme)),
+            AppearanceChange::Scheme(scheme) => {
+                ("terminal.colors.scheme", serde_json::json!(scheme))
+            }
+        }
+    }
+}
+
+/// Persist one appearance change to `settings.json`, keeping the rest of the
+/// file — explicit colour overrides included — as the user wrote it. A
+/// failure is logged, never fatal.
+pub fn save_appearance(file: &Path, change: &AppearanceChange) {
+    let (id, value) = change.option();
+    if let Err(e) = termherd_mcp::file::set_option_at(file, id, &value) {
+        warn!(error = %e, path = %file.display(), "could not save the appearance");
+    }
+}
+
+/// Where the settings file lives in `dir`.
+#[must_use]
+pub fn path(dir: &DataDir) -> PathBuf {
+    dir.file(FILE)
+}
+
+/// The file's name within the data dir (PRD §7).
 const FILE: &str = "settings.json";
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_appearance_pick_lands_in_the_data_dir_and_every_read_finds_it() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = path(&DataDir::at(tmp.path()));
+        assert_eq!(file, tmp.path().join("settings.json"));
+
+        save_appearance(&file, &AppearanceChange::Theme(ThemeChoice::Light));
+
+        assert_eq!(Settings::load(&file).theme, ThemeChoice::Light);
+        assert_eq!(Settings::load_checked(&file).0.theme, ThemeChoice::Light);
+        assert_eq!(
+            Settings::reload(&file).map(|s| s.theme),
+            Some(ThemeChoice::Light)
+        );
+    }
 
     #[test]
     fn defaults_are_a_default_shell_and_dark_theme() {
@@ -701,6 +951,55 @@ mod tests {
         let s: Settings =
             serde_json::from_str(r#"{ "terminal": { "font_size": -3 } }"#).expect("valid json");
         assert!((s.font_size() - 6.0).abs() < f32::EPSILON);
+    }
+
+    fn option_as_meta_from(value: &str) -> Settings {
+        serde_json::from_str(&format!(
+            r#"{{ "terminal": {{ "option_as_meta": {value}, "copy_on_select": true }} }}"#
+        ))
+        .expect("a terminal block with option_as_meta parses")
+    }
+
+    #[test]
+    fn the_left_option_key_is_meta_by_default() {
+        assert_eq!(
+            Settings::default().option_as_meta_on(Platform::MacOs),
+            OptionAsMeta::Left
+        );
+    }
+
+    #[test]
+    fn option_as_meta_reads_each_side() {
+        for (value, side) in [
+            ("none", OptionAsMeta::None),
+            ("left", OptionAsMeta::Left),
+            ("right", OptionAsMeta::Right),
+            ("both", OptionAsMeta::Both),
+        ] {
+            let settings = option_as_meta_from(&format!("\"{value}\""));
+            assert_eq!(settings.option_as_meta_on(Platform::MacOs), side, "{value}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_option_as_meta_falls_back_to_left_and_costs_nothing_else() {
+        for value in [r#""middle""#, "true", "1"] {
+            let settings = option_as_meta_from(value);
+            assert_eq!(
+                settings.terminal.option_as_meta,
+                OptionAsMeta::Left,
+                "{value}"
+            );
+            assert!(settings.terminal.copy_on_select, "{value}");
+        }
+    }
+
+    #[test]
+    fn alt_is_meta_on_both_sides_off_macos_whatever_the_setting() {
+        let settings = option_as_meta_from(r#""none""#);
+        for platform in [Platform::Windows, Platform::Linux] {
+            assert_eq!(settings.option_as_meta_on(platform), OptionAsMeta::Both);
+        }
     }
 
     #[test]
@@ -971,6 +1270,118 @@ mod tests {
     }
 
     #[test]
+    fn every_settings_name_is_unique_and_is_what_serde_writes() {
+        for theme in ThemeChoice::ALL {
+            let name = theme.settings_name();
+            assert_eq!(ThemeChoice::from_settings_name(name), Some(theme));
+            assert_eq!(serde_json::json!(theme), serde_json::json!(name));
+        }
+    }
+
+    #[test]
+    fn every_iced_theme_has_exactly_one_choice() {
+        let mapped = ThemeChoice::ALL.map(ThemeChoice::to_iced);
+        assert_eq!(mapped.len(), iced::Theme::ALL.len());
+        for theme in iced::Theme::ALL {
+            assert_eq!(
+                mapped.iter().filter(|m| *m == theme).count(),
+                1,
+                "{theme} must be offered once"
+            );
+        }
+    }
+
+    /// The pairing is by name alone; the unpaired themes are a decision.
+    #[test]
+    fn named_themes_pair_with_the_scheme_of_the_same_name() {
+        for scheme in Palette::schemes() {
+            assert!(
+                ThemeChoice::from_settings_name(scheme).is_some(),
+                "{scheme} has no theme"
+            );
+        }
+        let unpaired: Vec<_> = ThemeChoice::ALL
+            .map(ThemeChoice::settings_name)
+            .into_iter()
+            .filter(|n| Palette::named(n).is_none())
+            .collect();
+        assert_eq!(unpaired, ["dark", "light", "kanagawa-lotus", "ferra"]);
+    }
+
+    #[test]
+    fn the_mcp_catalogue_offers_exactly_the_panel_choices() {
+        let choices = |id: &str| {
+            termherd_mcp::OPTIONS
+                .iter()
+                .find(|o| o.id == id)
+                .expect("a catalogued option")
+                .choices
+                .to_vec()
+        };
+        assert_eq!(
+            choices("theme"),
+            ThemeChoice::ALL.map(ThemeChoice::settings_name)
+        );
+        assert_eq!(
+            choices("terminal.colors.scheme"),
+            Palette::schemes().collect::<Vec<_>>()
+        );
+    }
+
+    /// What the panel would write, applied by the catalogue's own setter.
+    fn saved(change: &AppearanceChange) -> Settings {
+        let (id, value) = change.option();
+        let written = termherd_mcp::set_option(&serde_json::json!({}), id, &value)
+            .expect("the catalogue accepts every panel choice");
+        serde_json::from_value(written).expect("valid settings")
+    }
+
+    #[test]
+    fn every_saved_theme_reads_back_as_what_was_picked() {
+        for theme in ThemeChoice::ALL {
+            assert_eq!(saved(&AppearanceChange::Theme(theme)).theme, theme);
+        }
+    }
+
+    #[test]
+    fn every_saved_scheme_reads_back_as_what_was_picked() {
+        for scheme in Palette::schemes() {
+            let s = saved(&AppearanceChange::Scheme(Some(scheme.to_string())));
+            assert_eq!(s.terminal.colors.scheme.as_deref(), Some(scheme));
+        }
+        let s = saved(&AppearanceChange::Scheme(None));
+        assert_eq!(s.terminal.colors.scheme, None, "built-in clears the scheme");
+    }
+
+    #[test]
+    fn an_unknown_theme_degrades_alone() {
+        for bad in [r#""banana""#, "3", "null"] {
+            let json = format!(
+                r#"{{ "theme": {bad}, "terminal": {{ "colors": {{ "scheme": "solarized-light" }} }} }}"#
+            );
+            let s: Settings = serde_json::from_str(&json).expect("bad theme keeps the file");
+            assert_eq!(
+                s.theme,
+                ThemeChoice::Dark,
+                "{bad} falls back to the default"
+            );
+            assert_eq!(
+                s.terminal.colors.scheme.as_deref(),
+                Some("solarized-light"),
+                "the rest of the file survives"
+            );
+        }
+    }
+
+    #[test]
+    fn named_themes_serialise_kebab_cased_like_the_terminal_schemes() {
+        let json = serde_json::to_string(&ThemeChoice::SolarizedLight).expect("serialise");
+        assert_eq!(json, "\"solarized-light\"");
+        let back: ThemeChoice = serde_json::from_str(r#""gruvbox-dark""#).expect("deserialise");
+        assert_eq!(back, ThemeChoice::GruvboxDark);
+    }
+
+    #[test]
     fn theme_round_trips_through_json_lowercased() {
         let json = serde_json::to_string(&ThemeChoice::Light).expect("serialise");
         assert_eq!(json, "\"light\"");
@@ -1032,5 +1443,38 @@ mod tests {
         assert_eq!(shell.program, "bash");
         assert_eq!(shell.args, vec!["-l".to_string()]);
         assert_eq!(s.theme, ThemeChoice::Light);
+    }
+
+    #[test]
+    fn mcp_settings_default_and_deserialisation() {
+        assert!(!Settings::default().mcp.allow_claude_nesting);
+
+        let s: Settings = serde_json::from_str(r#"{ "mcp": { "allow_claude_nesting": true } }"#)
+            .expect("valid json");
+        assert!(s.mcp.allow_claude_nesting);
+    }
+
+    #[test]
+    fn captures_are_redacted_unless_turned_off() {
+        assert!(Settings::default().redacts_captures());
+        let silent: Settings = serde_json::from_str(r#"{ "capture": {} }"#).expect("valid json");
+        assert!(
+            silent.redacts_captures(),
+            "an empty block keeps the default"
+        );
+        let off: Settings =
+            serde_json::from_str(r#"{ "capture": { "redact": false } }"#).expect("valid json");
+        assert!(!off.redacts_captures());
+    }
+
+    #[test]
+    fn a_non_boolean_redact_falls_back_to_redacting() {
+        // A typo must not be read as "off": the safe side is to mask.
+        for bad in [r#""no""#, "0", "null", "[]"] {
+            let json = format!(r#"{{ "theme": "light", "capture": {{ "redact": {bad} }} }}"#);
+            let s: Settings = serde_json::from_str(&json).expect("valid json");
+            assert!(s.redacts_captures(), "{bad}");
+            assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file applies");
+        }
     }
 }

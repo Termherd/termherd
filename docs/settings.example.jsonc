@@ -10,7 +10,8 @@
 // settings.json and strip the comments.
 //
 // ── Load behaviour ─────────────────────────────────────────────────────────
-// The file is read once at startup (edit + restart; no in-app panel yet).
+// The file is read at startup and again whenever it is saved: a change
+// applies without a restart (a half-written save changes nothing).
 // Every field is optional: a missing file, a missing field, or a corrupt
 // file falls back to the built-in defaults — settings never block startup.
 // Out-of-range values clamp instead of failing the file, and one bad value
@@ -18,8 +19,10 @@
 // warning: the rest of the file still applies.
 //
 // The same options are exposed to a Claude session over MCP: the
-// `termherd-mcp` server's `list_options` / `set_option` tools read and write
-// this file (see "MCP control surface" in the README).
+// `termherd-mcp` server's `list_options` reads this file and `set_option`
+// writes the ids flagged `writable` — `shell.program` / `shell.args` name what
+// termherd executes, so they are read-only there (see "MCP control surface"
+// in the README).
 {
   // ── Shell ────────────────────────────────────────────────────────────────
   // The shell launched for each session. Omit the whole block (or set it to
@@ -30,8 +33,13 @@
   },
 
   // ── Theme ────────────────────────────────────────────────────────────────
-  // GUI chrome theme (sidebar, tab strip, buttons): "dark" (default) or
-  // "light". The terminal grid keeps its own colours — see `terminal.colors`.
+  // GUI chrome theme: "dark" (default), "light", "solarized-dark",
+  // "solarized-light", "gruvbox-dark", "gruvbox-light", "dracula", "nord",
+  // "catppuccin-latte", "catppuccin-frappe", "catppuccin-macchiato",
+  // "catppuccin-mocha", "tokyo-night", "tokyo-night-storm",
+  // "tokyo-night-light", "kanagawa-wave", "kanagawa-dragon",
+  // "kanagawa-lotus", "moonfly", "nightfly", "oxocarbon" or "ferra".
+  // Give `terminal.colors.scheme` the same value for a matching grid.
   "theme": "dark",
 
   // ── Close confirmation ──────────────────────────────────────────────────
@@ -42,7 +50,8 @@
   //                         process (a working shell or any live Claude);
   //                         an all-idle target closes/quits silently.
   //   "noConfirmation"    — never ask.
-  // Both default to "confirmWhenActive".
+  // Both default to "confirmWhenActive". Unsaved doc edits make a quit ask
+  // under any value.
   "close": {
     "tab": "confirmWhenActive",
     "app": "confirmWhenActive"
@@ -113,14 +122,17 @@
     // A right-click pastes into THE PANE UNDER THE POINTER (not necessarily
     // the focused one), bracketed when that pane asked for bracketed paste.
     "paste_on_right_click": false,
+    // macOS only: which Option key is Meta (⌥B / ⌥F move by word) — "none",
+    // "left", "right" or "both". The other one types what the layout
+    // composes, e.g. ⌥⇧L → | on a French layout.
+    "option_as_meta": "left",
 
     // Terminal grid colours. Start from a named scheme, then override
     // individual slots; every field is optional and a malformed colour
     // degrades to its default alone.
     "colors": {
-      // Built-in scheme the overrides start from: "solarized-dark",
-      // "solarized-light", "gruvbox-dark" or "gruvbox-light".
-      // Omit for the built-in default scheme.
+      // Built-in scheme the overrides start from: any `theme` value above but
+      // "dark", "light", "kanagawa-lotus" and "ferra". Omit for the default.
       "scheme": "solarized-dark",
       // Default text / background / cursor-block colours, "#rrggbb"
       // (the "#" is optional).
@@ -154,8 +166,22 @@
     "scale": 0.5
   },
 
-  // ── Live-bridge exposure ─────────────────────────────────────────────────
-  // Whether a running instance publishes { url, token } to
+  // ── State capture (Ctrl/Cmd+Shift+S) ─────────────────────────────────────
+  // Mask the secrets a capture's terminal text shows (access keys, API
+  // tokens, Bearer headers, private keys) before it is written to
+  // ~/.termherd/captures/. A value that is not true/false keeps it on.
+  // Default: true.
+  "capture": {
+    "redact": true
+  },
+
+  // ── MCP live bridge ──────────────────────────────────────────────────────
+  // allow_claude_nesting: whether `prompt_in_session` may prompt another
+  // *Claude* session (an agent driving an agent). Shell sessions are never
+  // gated. A single call can also opt in with its own
+  // `allow_claude_nesting: true`. Default: false.
+  //
+  // attach: whether a running instance publishes { url, token } to
   // ~/.termherd/bridge.json (0600) so a client it did NOT spawn — a script,
   // an editor, the terminal you launched it from — can attach with
   // `termherd mcp-config`. Default: false.
@@ -167,6 +193,7 @@
   // Off by default because the bridge can type into a terminal: publishing it
   // makes that reachable by anything running as you.
   "mcp": {
+    "allow_claude_nesting": false,
     "attach": false
   },
 
@@ -181,24 +208,30 @@
   // Ctrl elsewhere):
   //
   //   copy                      Cmd+C (macOS) / Ctrl+Shift+C
-  //   paste                     Cmd+V (macOS) / Ctrl+V, Ctrl+Shift+V
+  //   paste                     Cmd+V (macOS) / Ctrl+Shift+V, and Ctrl+V on Windows
+  //   copy-agent-name           (unbound) copies the focused Claude's agent name
+  //   send-to-desktop           (unbound) asks to type /desktop into the focused Claude
   //   next-tab                  Ctrl+Tab
   //   prev-tab                  Ctrl+Shift+Tab
-  //   activate-tab-1 … -9       mod+1 … mod+9 (physical number-row keys)
-  //   close-focused             mod+W
-  //   reopen-closed-tab         mod+Shift+T
-  //   new-shell-here            mod+T
+  //   activate-tab-1 … -9       Cmd+1 … Cmd+9 (macOS) / Alt+1 … Alt+9 (number-row keys)
+  //   close-focused             mod+W ; Ctrl+Shift+W off macOS
+  //   rename-tab                mod+Shift+I (inline rename of the focused tab)
+  //   open-tab-menu             mod+Shift+M (the focused tab's menu)
+  //   pick-tab-color            (unbound) the focused tab's colour list
+  //   toggle-park-tab           (unbound) park the focused tab, or unpark it
+  //   reopen-closed-tab         mod+Shift+T ; Ctrl+Alt+Shift+T off macOS
+  //   new-shell-here            mod+T ; Ctrl+Shift+T off macOS
   //   new-claude-session-here   mod+Alt+T
   //   open-new-session          (unbound)
-  //   split-vertical            mod+D
-  //   split-horizontal          mod+Shift+D
+  //   split-vertical            mod+D ; Alt+Shift+= off macOS
+  //   split-horizontal          mod+Shift+D ; Alt+Shift+- / Alt+Shift+D off macOS
   //   focus-left / -right       mod+Shift+Left / Right
   //   focus-up / -down          mod+Shift+Up / Down
   //   focus-next / focus-prev   (unbound)
-  //   focus-search              mod+F
-  //   toggle-sidebar            mod+B
-  //   scroll-top / -bottom      mod+Up / mod+Down
-  //   zoom-in                   mod+= / mod+plus / mod+Shift+plus
+  //   focus-search              mod+F ; Ctrl+Shift+F off macOS
+  //   toggle-sidebar            mod+B ; Ctrl+Shift+B off macOS
+  //   scroll-top / -bottom      mod+Up / mod+Down ; Ctrl+Shift+Home / End off macOS
+  //   zoom-in                   mod+= / mod+Shift+= / mod+plus (keypad +)
   //   zoom-out                  mod+-
   //   zoom-reset                mod+0
   //   capture                   mod+Shift+S (state dump for an AI assistant)
@@ -209,6 +242,6 @@
   "keys": {
     "copy": "ctrl+y",
     "paste": ["ctrl+shift+v", "shift+insert"],
-    "activate-tab-1": "alt+1"
+    "activate-tab-1": "ctrl+1"
   }
 }

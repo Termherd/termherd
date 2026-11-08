@@ -68,11 +68,17 @@ issues #18–#29.
 | [F-auto-update](#f-auto-update) | feature | packaging | ☐ | Check for a new release from inside the app and apply it. |
 | [F-fork-detection](#f-fork-detection) | feature | sessions | ☐ | Detect a forked or plan-accepted session — blocked, the signals do not exist. |
 | [F-jsonl-viewer](#f-jsonl-viewer) | feature | sessions | ☐ | Render a Claude session's JSONL transcript as readable messages, not raw lines. |
+| [F-keymap-help](#f-keymap-help) | feature | keymap | ☐ | An in-app, filterable list of shortcuts, built from the live keymap. |
+| [F-readme-showcase](#f-readme-showcase) | chore | packaging | ☐ | A README first screen that shows the product: one line of benefit, a GIF, a few screenshots. |
 | [F-store-cache](#f-store-cache) | feature | sessions | ☐ | A SQLite digest cache with an FTS5 index, replacing the in-memory scan. |
 | [F-terminal-images](#f-terminal-images) | feature | terminal | ☐ | Render images inline in the terminal — parked, no demand and no cheap slice. |
-| [F-terminal-split](#f-terminal-split) | feature | workspace, keymap | ☐ | Split panes with directional focus; drag-resize is what remains. |
 | [F-close-on-exit](#f-close-on-exit) | feature | terminal, workspace | ✅ | A pane whose shell exits cleanly closes itself; a failed one stays readable. |
+| [F-notification-focus-tab](#f-notification-focus-tab) | feature | workspace, sessions | ✅ | Clicking a tab's desktop notification brings termherd forward on that tab. |
+| [F-repo-add](#f-repo-add) | feature | sidebar, sessions | ✅ | Declare a repository in the sidebar, before it has any session. |
+| [F-session-id-at-launch](#f-session-id-at-launch) | feature | sessions | ✅ | A fresh Claude tab knows its session id from the first keystroke. |
+| [F-settings-panel](#f-settings-panel) | feature | workspace | ✅ | An in-app settings panel — appearance first, applied live and saved on pick. |
 | [F-terminal-cwd](#f-terminal-cwd) | feature | terminal, mcp, sessions | ✅ | The shell announces the directory it is in, so a session's `cwd` follows a `cd`. |
+| [F-terminal-split](#f-terminal-split) | feature | workspace, keymap | ✅ | Split panes with directional focus and drag-adjustable ratios. |
 
 ## Could
 
@@ -82,24 +88,45 @@ issues #18–#29.
 | [F-capture](#f-capture) | feature | workspace | ☐ | Capture termherd along a fidelity ladder: debug dumps, promo, bug repros. |
 | [F-file-browser](#f-file-browser) | feature | workspace, sidebar | ☐ | A file tree for the focused repository, floating or as a right pane. |
 | [F-launch-profiles](#f-launch-profiles) | feature | sessions | ☐ | Persistent per-project `--add-dir`, applied to fresh and resumed launches. |
-| [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ☐ | The composed prompt→wait→read over any session, shell or Claude. |
+| [F-layout-restore](#f-layout-restore) | feature | workspace, sessions | ☐ | Restore tabs, splits and resumable sessions at launch. |
 | [F-mcp-control-surface](#f-mcp-control-surface) | feature | mcp | ☐ | Termherd exposes its own control and orchestration surface as an MCP server. |
 | [F-mcp-ide-bridge](#f-mcp-ide-bridge) | feature | mcp | ☐ | A live MCP/IDE bridge to Claude — termherd as the client, not the server. |
+| [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) | feature | mcp, workspace | ☐ | The pointer rung, chrome half: click and drag termherd's own interface. |
 | [F-multi-window](#f-multi-window) | feature | workspace | ☐ | More than one termherd window, and tabs that travel between them. |
+| [F-pane-accent-border](#f-pane-accent-border) | feature | workspace | ☐ | A session's colour on its pane border inside a split tab. |
+| [F-prompt-history](#f-prompt-history) | feature | sessions | ☐ | A read-only panel of the prompts typed in a session, with copy. |
+| [F-repo-prune](#f-repo-prune) | feature | sidebar | ☐ | Sweep the sidebar for projects whose directory no longer exists. |
+| [F-repo-remove](#f-repo-remove) | feature | sidebar | ☐ | Take a project or repository out of the sidebar, durably and explicitly. |
 | [F-repo-view](#f-repo-view) | feature | sidebar, sessions | ☐ | A per-repository surface to browse and manage one repo's sessions. |
 | [F-scheduled-tasks](#f-scheduled-tasks) | feature | sessions | ☐ | Launch a session on a schedule rather than on a click. |
-| [F-session-accent-colors](#f-session-accent-colors) | feature | workspace, sidebar | ☐ | A per-session accent on its tab, sidebar row and pane border. |
 | [F-session-grid](#f-session-grid) | feature | workspace | ☐ | A layout preset over the pane model. |
+| [F-session-reveal](#f-session-reveal) | feature | sessions, workspace | ☐ | Reveal a session's directory and transcript in the OS file manager. |
+| [F-session-send-desktop](#f-session-send-desktop) | feature | sessions | ☐ | Continue a session in Claude Desktop by sending it `/desktop`. |
+| [F-worktree-launch](#f-worktree-launch) | feature | sessions, sidebar | ☐ | Start a Claude session in a fresh git worktree, grouped under its project. |
+| [F-claude-command](#f-claude-command) | feature | sessions, keymap | ✅ | Send a confirmed slash command into an idle Claude session. |
+| [F-copy-agent-name](#f-copy-agent-name) | feature | sessions, workspace | ✅ | Copy a session's agent name, the one `/list-agents` shows. |
+| [F-keymap-rename-tab](#f-keymap-rename-tab) | feature | keymap, workspace | ✅ | A `rename-tab` keymap action opening the focused tab's inline rename. |
+| [F-mcp-agent-loop](#f-mcp-agent-loop) | feature | mcp, sessions | ✅ | The composed prompt→wait→read over any session, shell or Claude. |
 | [F-mcp-attach](#f-mcp-attach) | feature | mcp, workspace | ✅ | The attach rung: reach the live bridge from outside a spawned session. |
+| [F-mcp-background-tab](#f-mcp-background-tab) | feature | mcp, workspace | ✅ | Open and close a tab over MCP without moving the user's focus. |
 | [F-mcp-config-write](#f-mcp-config-write) | feature | mcp | ✅ | `set_option` and `keys` on the stateless stdio slice. |
 | [F-mcp-keys](#f-mcp-keys) | feature | mcp, keymap | ✅ | The keyboard rung: drive the app by key chords through the real keymap. |
 | [F-mcp-live-bridge](#f-mcp-live-bridge) | feature | mcp | ✅ | The gate: an in-process MCP server on loopback, reaching the live `core::App`. |
+| [F-mcp-options-bridge](#f-mcp-options-bridge) | feature | mcp | ✅ | `list_options` and `set_option` on the live bridge, not only the stdio slice. |
 | [F-mcp-orchestration](#f-mcp-orchestration) | feature | mcp, workspace | ✅ | The action rung: six mutating tools, each over an existing `core::App` event. |
+| [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) | feature | mcp, terminal | ✅ | The pointer rung, terminal half: place a mouse event inside a session. |
 | [F-mcp-screenshot](#f-mcp-screenshot) | feature | mcp, workspace | ✅ | The pixel rung: the window as a PNG, for what text cannot answer. |
 | [F-mcp-snapshot](#f-mcp-snapshot) | feature | mcp, workspace | ✅ | The perception rung: a filterable, light-by-default view of the whole app. |
 | [F-mcp-snapshot-g1](#f-mcp-snapshot-g1) | feature | mcp, workspace | ✅ | One model, two readers: the capture dump is now the MCP snapshot. |
 | [F-mcp-terminal-sync](#f-mcp-terminal-sync) | feature | mcp, terminal | ✅ | The wait rung: block until a session's status settles, then read its text. |
+| [F-session-accent-colors](#f-session-accent-colors) | feature | workspace, sidebar | ✅ | A per-session accent on its tab and sidebar row. |
+| [F-tab-context-menu](#f-tab-context-menu) | feature | workspace, keymap | ✅ | A per-tab action menu, from a right-click or an `open-tab-menu` action. |
+| [F-tab-hover-details](#f-tab-hover-details) | feature | workspace, sessions | ✅ | The tab hover card shows agent name, model, effort, version and elapsed time. |
+| [F-tab-kind-icon](#f-tab-kind-icon) | feature | workspace | ✅ | A kind mark beside each tab's status dot, instead of a glyph in its title. |
+| [F-tab-park](#f-tab-park) | feature | workspace, keymap | ✅ | Park a tab: a compact chip at the strip's end, out of the tab cycle. |
+| [F-tab-title-sync](#f-tab-title-sync) | feature | workspace, sessions | ✅ | A Claude tab's title follows the session name Claude holds. |
 | [F-terminal-palette](#f-terminal-palette) | feature | terminal | ✅ | Configurable terminal colours, by preset or by explicit field. |
+| [F-url-scheme](#f-url-scheme) | feature | workspace, packaging | ✅ | Open a tab from an HTML link: a `termherd://` URL scheme. |
 
 ## Backlog
 
@@ -107,6 +134,7 @@ issues #18–#29.
 | --- | --- | --- | --- | --- |
 | [F-i18n](#f-i18n) | feature | workspace | ☐ | Internationalization — parked; the English-first externalization shipped. |
 | [F-keymap-advanced](#f-keymap-advanced) | feature | keymap, terminal | ☐ | The keymap concerns from the gist that still need design. |
+| [F-mcp-self-diagnosis](#f-mcp-self-diagnosis) | feature | mcp | ☐ | Ship with the bridge what an agent now learns from this repo's docs. |
 | [F-search-ux](#f-search-ux) | feature | sidebar | ☐ | Search activation and scope; the one real gap was a match snippet. |
 | [F-favorites](#f-favorites) | feature | sidebar | ✅ | Favorites in the sidebar — one concept with the session star. |
 
@@ -115,6 +143,8 @@ issues #18–#29.
 | ID | Type | Area | Status | Summary |
 | --- | --- | --- | --- | --- |
 | [F-file-diff-panel](#f-file-diff-panel) | feature | workspace | ☐ | Show a diff of the files a session touched, in a panel beside the terminal. |
+| [F-public-launch](#f-public-launch) | chore | packaging | ☐ | Open the project to contributors, then announce it. |
+| [F-status-hooks](#f-status-hooks) | feature | sessions | ☐ | Session status from Claude Code hooks, beside the screen and OSC readings. |
 
 ## Details
 
@@ -157,8 +187,10 @@ merge-conflict risk). Scoped from a brainstorm
 (#105), unused deps (#106), and the crate-level dependency rule as an
 architecture fitness function enforcing the hexagonal inward-only invariant
 (#107) all landed. **P2 follow-ups — shipped** as the intra-crate refactor
-cluster #167–#173, now complete: the intra-crate architecture gate
-(`intra-crate-arch`) is #173 — a module-boundary check
+cluster #167–#173, now complete: the intra-crate architecture gate (#173,
+consolidated with `rustfmt` into `rustfmt & arch` in #393, while `cargo-deny`,
+`cargo-machete`, and the crate dependency rule + toolchain lockstep run in
+`cargo-checks`) — a module-boundary check
 (`scripts/check-module-boundaries.sh`: leaf modules stay leaves, renderers
 don't reach the executor, `core::app` submodules go through the parent
 registry), an OS-cfg containment check (`scripts/check-os-cfg-containment.sh`:
@@ -172,7 +204,7 @@ split + `Sessions` registry + `Sidebar`/`FontState` field-flatten, A1–A4 —
 `F-antigravity-sessions` #160/#161 build on), #171 (F, json_store —
 **shipped**) and #172 (pty →
 `input`/`grid`/`events`/`status`/`session`/`kill`/`manager` — **shipped**, the
-seam #143 foreground-process detection and #155 vim mouse build on).
+seam #143 foreground-process detection and #155 mouse buttons build on).
 Cognitive-complexity (signal C) stays unfiled. **Report-only** (was blocked on
 a quality-report home): file length (signal A) now ships **inside #173's gate**
 as a job-summary report; churn×size hotspots (signal J) stays unfiled. Dropped:
@@ -186,9 +218,10 @@ The window itself: lifecycle, saved bounds, and the native menu gap.
 
 Window, lifecycle, bounds (menu: deferred to M3 with the keymap — no native
 menu API in iced; menu items mirror keymap actions). The deferral left one
-visible gap on macOS: winit builds only the *application* menu, so there is no
-Window menu and **⌘M does not minimize** (#114) — a system gesture users expect
-of any window, not a keymap preference
+visible gap on macOS: winit builds only the *application* menu, so there was no
+Window menu and ⌘M did not minimize (#114) — a system gesture users expect
+of any window, not a keymap preference. **Closed by #399**: termherd adds a
+Window menu (Minimize ⌘M, Zoom) beside winit's
 
 <a id="f-builtin-terminal"></a>
 
@@ -203,11 +236,16 @@ routed to the focused PTY; wheel scrollback; drag-to-select + copy; `claude
 --resume` on a session click; PTY resize follows the window. Verified
 end-to-end on Windows resuming a real Claude session. The widget shipped; the
 **terminal ergonomics a user compares against Ghostty/iTerm are still open**,
-each a refinement of this entry rather than a feature of its own:
-Cmd/Ctrl-clickable
-hyperlinks whose displayed text differs from the URL (OSC 8, #84), auto-scroll
+each a refinement of this entry rather than a feature of its own: auto-scroll
 when a drag-selection reaches the canvas edge (#157), and Alt+drag rectangular
-selection (#159). The **clipboard mouse conventions** closed on that list
+selection (#159). **Hidden hyperlinks** (OSC 8, #84) closed on that list: the
+`Screen` snapshot now carries every hyperlink as a span over the cells it
+covers, read off alacritty's own parse rather than re-detected, and the pointer
+answers that span before it scans the row's text — so a label like `#76`
+underlines and opens its issue URL exactly as a printed URL does. The span
+rides beside the grid rather than in each cell, which keeps `ScreenCell` a
+plain `Copy` value and mirrors how the selection already travels. The
+**clipboard mouse conventions** closed on that list
 (#36): `terminal.copy_on_select` and `terminal.paste_on_right_click`, both off
 by default. Copy-on-select was in fact already shipped and unconditional, so
 the setting *added the off position* — the automatic copy is now opt-in and the
@@ -242,10 +280,19 @@ configured string is split on whitespace *before* `{path}` is substituted, so a
 filename cannot become a second argument, and a placeholder in the program name
 is refused outright — what the terminal printed picks the file, never the
 executable. Unconfigured, the OS handoff and its refusal both stand.
-Two contract bugs sit on the same surface: mouse reporting
-isn't forwarded to the child (#155, vim) and the `emitted_lines_never_drift`
-property has a known failing scroll sequence whose seed was never committed
-(#102)
+Mouse buttons reach the child since #155: a program with mouse reporting on
+gets presses, releases, drags and motion in the SGR or X10 encoding it
+negotiated, the terminal selects nothing of its own over it, and Shift takes
+the mouse back for a local selection. The copy chord used to fall back to a
+cache of the last text copied when no selection was visible, which in a pane
+the child owns — never a visible selection — overwrote the child's own copy on
+every chord (#316); the cache is gone and the chord asks the terminal whether
+it holds a selection, scrolled out of view or not. The scroll-drift property no
+longer carries a known failure. This entry used to call its failing sequence
+the one contract bug remaining on the surface (#102). It was f32 noise in the
+test's own reference sum, not a scrolling defect, and `b1d8045` had already
+fixed it the day after it was filed. The issue closed on 2026-09-24, and its
+seed now replays (#328)
 
 <a id="f-close-confirm-policy"></a>
 
@@ -363,15 +410,18 @@ name from the scanned digest (#109/#118) — current Claude (2.1.220) *does* emi
 an OSC-0 title, but reports its own product name (`✳ Claude Code`) until it has
 something session-specific to say, and #236 filters that as no title at all, so
 the OSC-0 override (#24) still does not fire there; a fresh/unscanned session
-keeps the `<repo>` kind label. The OSC plumbing stays in place and still wins
-where a Claude does emit a real title: the `osc` decoder carries the title
-text, the `pty` reader forwards a change as `PtyEvent::Title`, and
+keeps the `<repo>` label, its kind shown beside the title rather than in it
+([F-tab-kind-icon](#f-tab-kind-icon)). The OSC plumbing stays in place and
+still wins where a Claude does emit a real title: the `osc` decoder carries the
+title text, the `pty` reader forwards a change as `PtyEvent::Title`, and
 `Workspace::set_session_title` relabels the hosting tab — which also lets a
 sidebar rename retitle the open tab live. Reflecting Claude's *own* `/rename`
-and live task name is tracked as #119. Hovering a tab shows the session's
+and live task name shipped in #119, see
+[F-tab-title-sync](#f-tab-title-sync). Hovering a tab shows the session's
 fuller description — the same hover card the sidebar uses for a resumed
 session, a title + cwd card otherwise (#76, `App::tab_record` resolves the
-record so the two surfaces stay single-sourced). Drag-reorder (FR5) and
+record so the two surfaces stay single-sourced). Drag-reorder (FR5) — whose
+release is heard window-wide, so a drag survives leaving the strip (#348) — and
 keyboard switching (`Ctrl+Tab`, via `F-keyboard-shortcuts`) both ship.
 Double-clicking a chip renames the tab inline (#145): a durable
 `Tab.custom_title` overlays the derived title (`Tab::display_title` resolves
@@ -390,8 +440,9 @@ Shell select, theme, window prefs (M3): `~/.termherd/settings.json` (serde,
 defaults on missing/corrupt) carries a shell profile (program + args), injected
 into the `PtyManager` so each session launches the chosen shell, and a GUI
 theme (dark/light) wired to the iced chrome. (thin) Window bounds keep their
-own `window.json` (FR12). File-based for now; an in-app settings panel is the
-full version later
+own `window.json` (FR12). The file is reloaded on save (#297) —
+every setting applies without a restart, the shell from the next session —
+and the appearance is also set from [F-settings-panel](#f-settings-panel)
 
 <a id="f-status-notifications"></a>
 
@@ -481,6 +532,27 @@ Never scoped beyond the name. Sibling to
 [F-file-diff-panel](#f-file-diff-panel) in the rendering family — the same
 question of what termherd draws itself rather than letting the PTY draw.
 
+<a id="f-keymap-help"></a>
+
+### F-keymap-help
+
+An in-app, filterable list of shortcuts, built from the live keymap.
+
+Today the shortcuts are only in the book. A command palette can follow on the
+same list. Issue: #423. Related: [F-keymap-advanced](#f-keymap-advanced), #326.
+
+<a id="f-readme-showcase"></a>
+
+### F-readme-showcase
+
+A README first screen that shows the product: one line of benefit, a GIF, a
+few screenshots.
+
+The repository has no image of the app. The GIF can be recorded with
+termherd's own recorder ([F-capture](#f-capture)).
+
+Issue: #424.
+
 <a id="f-store-cache"></a>
 
 ### F-store-cache
@@ -508,22 +580,6 @@ incompatible protocols (OSC/ DCS/APC). Zero demand signal beyond the filed
 issue. Revisit on a real user report of the silent drop, or a free cycle after
 `F-terminal-split` (#54/#55)
 
-<a id="f-terminal-split"></a>
-
-### F-terminal-split
-
-Split panes with directional focus; drag-resize is what remains.
-
-Split panes (h/v), focus, resize (moved from Must, PRD rev. 5): the **#54 MVP
-shipped** — the `split-*`/`focus-*`/`close-focused` keymap actions now drive
-`core` (recursive iced pane rendering from the `Workspace` tree, fixed-ratio
-50/50 splits, per-leaf PTY geometry), plus click-to-focus (`Event::FocusPane`)
-and directional keyboard focus that cycles within its axis (`Event::FocusDir`,
-`mod+shift+arrows`); `mod+w` collapses the focused pane rather than the whole
-tab. Default binds: `mod+d` / `mod+shift+d` split, `mod+shift+arrows` focus.
-What remains is **drag-resize (#55, blocked-by #54)** to flip the fixed ratio;
-`core::Workspace` stays the single source of truth throughout
-
 <a id="f-close-on-exit"></a>
 
 ### F-close-on-exit
@@ -541,6 +597,192 @@ proved redundant and was dropped mid-review). Ship also fixed exit detection on
 Windows: ConPTY never delivers reader EOF on a child's natural exit, so the
 `pty` adapter reaps in a dedicated waiter thread. Fixed policy, no settings
 knob
+
+<a id="f-notification-focus-tab"></a>
+
+### F-notification-focus-tab
+
+Clicking a tab's desktop notification brings termherd forward on that tab.
+
+Built in #352. **Confirmed by a real click on macOS** (2026-10-08): a Claude
+session that finished in a background tab raised a notification, and clicking it
+brought that tab forward. The minimised-window and open-prompt paths, and Linux
+and Windows, are still read from the sources only. `Effect::Notify` carries the
+`SessionId`; the `os-notify` thread that posts the notification waits for the
+OS's answer, and a body click sends the session to the shell over a channel an
+iced subscription drains. The shell reveals the pane through the path the MCP
+`focus_pane` tool takes — unless a prompt is open, which keeps its screen — then
+restores and raises the window. A session closed in the meantime reveals nothing
+but still raises the window.
+
+Per OS, from the sources: macOS waits through
+`mac-notification-sys` directly, since notify-rust 4.18's `wait_for_response`
+there returns "expired" at once and never sees the click; XDG needs the
+`"default"` action declared and replaces a session's notification in place,
+so one waiter per session; Windows answers `Expired` when a toast times out
+into the action centre, so a click from there is lost, and the toast is
+attributed to PowerShell until termherd registers an application id. A waiting
+thread cannot be cancelled from outside the backend, so at most 16 wait at
+once; past that a notification posts without a click. Builds on
+[F-status-notifications](#f-status-notifications). Torture report:
+`.personal/feature-torture/reports/F-notification-focus-tab.md`.
+
+<a id="f-repo-add"></a>
+
+### F-repo-add
+
+Declare a repository in the sidebar, before it has any session.
+
+**#279.** A sidebar group is born from a *session*: the scan walks
+`~/.claude/projects`, so a repository you have never opened Claude in cannot
+appear, and the `$` / 🤖 launch buttons beside a project header — exactly the
+gesture you want for it — are out of reach. This adds the missing half.
+
+The change is one line of model and one of consequence. `RepoMeta`, already
+keyed by real project path in `~/.termherd/metadata.json` and already written
+to grow, gains a `declared` flag orthogonal to its star; and the sidebar stops
+being a pure function of the scan:
+
+```text
+visible = (discovered ∪ declared) − removed − presentation
+```
+
+Only the first two terms are in scope. The predicate is written **once** so
+[F-repo-remove](#f-repo-remove) and the ephemeral presentation mode (#265) can
+each drop their term into it rather than growing a second visibility rule.
+
+Three details carried the risk. The union is keyed on the path, so a declared
+repository that gains its first session stops being empty instead of doubling.
+And "declared repositories sort to the top until they have a session" meets the
+repo star from [F-favorites](#f-favorites), so the two became one ordered key
+(starred → declared-and-empty → recent activity) rather than two competing
+sorts of the same list.
+
+**The normalisation was got wrong twice, and the second time is the lesson.**
+The plan said a subdirectory resolves to its `repo_root()`; that was corrected
+before implementation, on the grounds that `repo_root()` stops at a linked
+worktree (whose `.git` is a file) and would file a declared worktree under a
+path the scan never produces. The correction composed `repo_root()` *with*
+`canonicalize` and the worktree collapse — and both of the added steps were
+themselves wrong, for the same reason the first version was, which review
+caught: **the scan applies neither**. It keys on the `cwd` the CLI wrote, and
+nothing else. So a declared subdirectory was filed at the repository root while
+a session started there was filed at the subdirectory (two rows), and
+`canonicalize` diverged wherever a symlink stood in the path — on Windows, for
+*every* repository, since it yields the `\\?\C:\…` form no transcript contains.
+
+What settled it is a rule, not a fix: there is **one** key function,
+`scan::sidebar_key`, and the walk and the declaration both call it. A step that
+only one side can apply is not normalisation, it is a second sidebar row. The
+cross-check test asserts against the walk's own output, and now on the cases
+that actually differ — a subdirectory, and a path through a symlink. Its first
+version passed vacuously: it exercised a worktree *root*, where the two rules
+coincide, and wrote the already-resolved path into the fixture's `cwd`, putting
+the same prefix on both sides of its own assertion.
+
+The Windows half is the sharper half. This entry cited `#239`'s lesson — a
+string destined for another grammar takes that grammar's separators — while the
+diff carried a fresh instance of it, and a `cargo check --target
+x86_64-pc-windows-msvc` was taken for a Windows check. It compiles either way:
+the divergence is behavioural, which is exactly what that job cannot see.
+
+Two gestures, converging on a single event so there is one path to test: a `+`
+button opening the native folder dialog (`rfd`, `xdg-portal` on Linux so no GTK
+is pulled in), and a folder dropped on the window. Neither is exercisable
+headless, which is the argument for the convergence — and the reason both log
+a `via` field naming the gesture. A declaration made by a drop is
+byte-for-byte the one made by the picker, so where no test can watch, the log
+is the only thing that can, and an unlabelled line says nothing about which
+surface a user actually reached. Dropping a declaration logs too, carrying
+whether the row survived on its sessions: "forgotten" and "gone from the
+sidebar" are different events and a reader would assume the second.
+
+The agent surface shipped with it: `ProjectSnapshot.declared`, so the ⌘⇧S
+capture and the MCP `snapshot` report it from one model, plus `add_repo`
+(answering with the key it kept, since the caller may have passed a worktree)
+and `forget_repo` (answering whether the row survived on its sessions).
+`add_repo` is the first MCP tool to write outside the workspace — into the
+overlay, never `settings.json`, so the file-only enumerations in the book stay
+true.
+
+One cleanup fell out of it. The snapshot restated the sidebar's filter and
+order in its own words under a doc-comment asking the next reader to keep the
+two in step; both now go through one `sidebar_row_shown` / `sidebar_row_order`
+pair, and a test walks four searches asserting the snapshot's rows *are* the
+rendered ones — with distinct mtimes, without which every ordering key is equal
+and that assertion cannot fail.
+
+The shared predicate stopped one seam short in four places, which a second
+review caught, and the four are one shape: a rule the sidebar applies, restated
+or skipped by whoever reads it next. The MCP outcome answered off the *rendered*
+list, so a search left in the search box reported a successful `add_repo` as a
+failure. The snapshot decided "did this row match" from a count the archive
+filter had already thinned, so a declared repo whose only hit was archived
+vanished from it while the screen drew it. The fold was masked in the view
+alone, so an empty row reported a fold the screen contradicted and went on
+storing one invisibly. And the key rule normalised no spelling, so a trailing
+slash — which a picker cannot produce and a caller can — was a second permanent
+row that `forget_repo` could not reach.
+
+That last one is the same lesson as the first two normalisation mistakes,
+arrived at from the opposite side: `canonicalize` was wrong because the scan
+cannot apply it, and lexical folding is right because the scan's own producer
+already has. The test that missed it built its paths with `PathBuf::join`,
+which normalises them away before the assertion ever runs.
+
+The row order is keyed on the **unfiltered** sessions, which review also
+caught: taken from the filtered set, typing in the search box reordered the
+projects under the cursor, and a repo whose sessions were merely all archived
+read as one that never had any and was pinned to the top as freshly added.
+
+Adjacent: [F-repo-view](#f-repo-view) (#148) takes the other end — this is
+about a repository *existing* in the sidebar, that one about *viewing* it.
+
+<a id="f-session-id-at-launch"></a>
+
+### F-session-id-at-launch
+
+A fresh Claude tab knows its session id from the first keystroke.
+
+Before, a fresh tab carried no Claude id, so every feature that reads a
+session's JSONL — [F-tab-title-sync](#f-tab-title-sync),
+[F-session-accent-colors](#f-session-accent-colors),
+[F-tab-hover-details](#f-tab-hover-details),
+[F-prompt-history](#f-prompt-history), [F-session-reveal](#f-session-reveal) —
+did nothing there (#336).
+
+**Shipped in #336, both sources, layered.** The shell mints a v4 UUID for every
+fresh launch and the launch line gains `claude --session-id <uuid>` (validated
+at the argv seam: a non-UUID is dropped, never typed). The per-pane session
+file `~/.claude/sessions/<pid>.json`, the reader
+[F-copy-agent-name](#f-copy-agent-name) built, outranks the minted id whenever
+it proves the Claude in front, since Claude rewrites it on a re-key. One
+accessor, `LiveSession::claude_session_id` (with `App::claude_session_id` and
+`App::tab_claude_session_id`), is what every reader of a pane's transcript
+goes through; the last id a file proved outlives the Claude that wrote it.
+Reopening a closed Claude tab resumes its last conversation when the scan has
+it, else starts a new one under a new id. The CLI floor rose to 2.0.73, an
+estimate: the oldest release whose changelog shows `--session-id` in use.
+
+Not verified: whether `/clear` or a plan-accept re-keys a session started with
+`--session-id`. If it does, the session file is what follows it.
+
+<a id="f-settings-panel"></a>
+
+### F-settings-panel
+
+An in-app settings panel — appearance first, applied live and saved on pick.
+
+The ⚙ in the sidebar header, or `mod+,` (`open-settings`), opens a modal
+panel over the workspace: the chrome theme (`dark`, `light`, and the four
+presets named after the terminal schemes) and the terminal scheme. A pick
+applies at once — the chrome on the next frame, every running terminal through
+a shared palette the PTY manager repaints — and writes only its own key to
+`settings.json`, leaving the rest of the file as written. This is the live
+reload [F-terminal-palette](#f-terminal-palette) deferred, and the in-app
+panel [F-settings](#f-settings) promised. A running Claude session keeps the
+light/dark look it chose from its startup colour query until it restarts.
+Other settings stay file-only for now.
 
 <a id="f-terminal-cwd"></a>
 
@@ -587,6 +829,23 @@ end-to-end proof is a real PTY running the platform's own shell with a typed
 `cd` — the only test that can tell whether the recipe reached the user's shell
 at all; the unit tests below it assert a snippet or a decoded string, neither
 of which knows if the hook ever ran.
+
+<a id="f-terminal-split"></a>
+
+### F-terminal-split
+
+Split panes with directional focus and drag-adjustable ratios.
+
+Split panes (h/v), focus, resize (moved from Must, PRD rev. 5): the **#54 MVP
+shipped** — the `split-*`/`focus-*`/`close-focused` keymap actions now drive
+`core` (recursive iced pane rendering from the `Workspace` tree, fixed-ratio
+50/50 splits, per-leaf PTY geometry), plus click-to-focus (`Event::FocusPane`)
+and directional keyboard focus that cycles within its axis (`Event::FocusDir`,
+`mod+shift+arrows`); `mod+w` collapses the focused pane rather than the whole
+tab. Default binds: `mod+d` / `mod+shift+d` split, `mod+shift+arrows` focus.
+**Drag-resize (#55) shipped:** draggable handles adjust each split from 10% to
+90% of its usable extent. `core::Workspace` remains the single source of
+truth, and the affected tab's PTYs resize on release.
 
 <a id="f-activity-stats"></a>
 
@@ -673,16 +932,17 @@ resume }` (`crates/core/src/app.rs`) and the command is *typed* into the shell
 (`launch_command`, `crates/pty/src/lib.rs`), so the one real cost is
 cross-shell path quoting (pwsh vs bash)
 
-<a id="f-mcp-agent-loop"></a>
+<a id="f-layout-restore"></a>
 
-### F-mcp-agent-loop
+### F-layout-restore
 
-The composed prompt→wait→read over any session, shell or Claude.
+Restore tabs, splits and resumable sessions at launch.
 
-The composed prompt→wait→read over **any** session, shell or Claude: the
-primitive shipped as `run_in_session` (#194) and is kind-agnostic, so what is
-left is the one-round-trip composition, the guards, and an opt-in scoped to the
-nested-Claude case only. Depends on #195
+The window position survives a restart (FR12); the workspace inside it does
+not. `Workspace` is plain data and sessions already resume (FR4), so this is
+saving and replaying the tree.
+
+Issue: #421.
 
 <a id="f-mcp-control-surface"></a>
 
@@ -725,7 +985,7 @@ shippable:
   mutating tools, each over an existing `core::App` event.
 - [x] [F-mcp-terminal-sync](#f-mcp-terminal-sync) — The wait rung: block until
   a session's status settles, then read its text.
-- [ ] [F-mcp-agent-loop](#f-mcp-agent-loop) — The composed prompt→wait→read
+- [x] [F-mcp-agent-loop](#f-mcp-agent-loop) — The composed prompt→wait→read
   over any session, shell or Claude.
 - [x] [F-mcp-keys](#f-mcp-keys) — The keyboard rung: drive the app by key
   chords through the real keymap.
@@ -735,6 +995,12 @@ shippable:
   capture dump is now the MCP snapshot.
 - [x] [F-mcp-attach](#f-mcp-attach) — The attach rung: reach the live bridge
   from outside, not only from a session it spawned.
+- [x] [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) — The pointer rung,
+  terminal half: a mouse event inside a session. Unblocked #155, now fixed.
+- [ ] [F-mcp-pointer-chrome](#f-mcp-pointer-chrome) — The pointer rung, chrome
+  half: click and drag termherd's own interface.
+- [x] [F-mcp-options-bridge](#f-mcp-options-bridge) — `list_options` and
+  `set_option` on the live bridge too, over the stdio slice's catalogue.
 
 <a id="f-mcp-ide-bridge"></a>
 
@@ -744,6 +1010,46 @@ A live MCP/IDE bridge to Claude — termherd as the client, not the server.
 
 Live MCP/IDE bridge to Claude (moved from Unsure, PRD rev. 6); decoupled from
 the still-Unsure diff panel
+
+<a id="f-mcp-pointer-chrome"></a>
+
+### F-mcp-pointer-chrome
+
+The pointer rung, chrome half: click and drag termherd's own interface.
+
+The pointer rung, chrome half: click and drag termherd's **own** interface —
+sidebar rows, the tab strip, split gutters — the way `press_keys` presses its
+own keyboard. Filed as #301, `needs-design`.
+
+A set of affordances exists only under the mouse, so no agent can reach or
+regression-test any of them: drag a split gutter (#55), drag a tab to another
+window (#153) or out to detach it (#154), auto-scroll a drag-selection at the
+edge (#157), alt+drag for column selection (#159), Cmd/Ctrl-click a hyperlink
+(#84, shipped — the gesture exists and an agent still cannot make it). The
+argument that produced [F-mcp-keys](#f-mcp-keys) — a surface an
+agent cannot reach is a surface an agent cannot regression-test — applies
+unchanged to the pointer, with a larger uncovered surface behind it.
+
+Pixel addressed, because the chrome is not a grid: `mouse_at_app(kind, x, y,
+…)` in the same frame `screenshot` returns, so the loop is *see the pixels,
+click the pixels* with no third coordinate system to reconcile. The answer
+names what the click reached and the resulting focus, and an open overlay eats
+a click as it eats a chord.
+
+Open design questions, which is why it stays design-first: whether a drag is
+one call carrying a path or a press / move / release sequence — the drag-heavy
+tickets above should settle it — and how it reconciles with the keyboard rung's
+invariant that neither tool may reach a state the keyboard cannot, since a
+gutter drag is exactly such a state.
+
+Landing it falsifies several claims written while no MCP caller had a pointer:
+the "which is every MCP caller" premise on `escape` in `shell/routing.rs` and
+its sweep in `shell.rs`, "Mouse-only, which is no one, over MCP" in
+[F-mcp-keys](#f-mcp-keys), and "Two tools reach TermHerd's own interface" in
+the manual's keyboard page.
+
+Sibling of [F-mcp-pointer-terminal](#f-mcp-pointer-terminal), the half that
+unblocked #155.
 
 <a id="f-multi-window"></a>
 
@@ -760,6 +1066,109 @@ one by dropping outside any window, both *blocked by* #149 and both reusing the
 in-window `TabDrag` plumbing that already reorders tabs. The gate is #149's
 conversion: `core::Workspace` is one tree today, so "which window owns this
 tab" has no representation yet
+
+<a id="f-pane-accent-border"></a>
+
+### F-pane-accent-border
+
+A session's colour on its pane border inside a split tab.
+
+[F-session-accent-colors](#f-session-accent-colors) colours the tab chip and
+the sidebar row, and a split tab shows its focused pane's colour. In a split
+of two coloured panes the chip can only name one; outlining each pane in its
+own colour would tell them apart where the chip cannot. Spawned by the
+torture report on the accent feature
+(`.personal/feature-torture/reports/F-session-accent-colors.md`), which
+accepted "no pane border in v1"; revisit when split tabs with several
+coloured sessions are common enough to ask for it. Design-first: no issue yet.
+
+<a id="f-prompt-history"></a>
+
+### F-prompt-history
+
+A read-only panel of the prompts typed in a session, with copy.
+
+Read from the session JSONL through a pure `claude`-crate function (#345); the
+filter that tells a typed prompt from tool results and meta entries is the
+risk. First slice of [F-jsonl-viewer](#f-jsonl-viewer). Torture report:
+`.personal/feature-torture/reports/F-prompt-history.md`.
+
+<a id="f-repo-prune"></a>
+
+### F-repo-prune
+
+Sweep the sidebar for projects whose directory no longer exists.
+
+A maintenance pass, on demand. Nothing today knows whether a `ProjectGroup`'s
+path still exists on disk: the scan does `exists()` checks while collapsing
+worktrees and deriving a `cwd`, but a group's own liveness is never probed, so
+a deleted checkout keeps its row — with its star, its renames, and two launch
+buttons that will fail.
+
+The sweep runs **when asked**, not on every scan. An automatic version reads
+better and is the dangerous one: an unplugged external drive or an unmounted
+network volume would silently take a dozen projects with it. On demand, the
+list is proposed and confirmed before anything applies.
+
+It also does not delete. It sets the `removed` flag that
+[F-repo-remove](#f-repo-remove) owns, so an over-eager sweep is undone by the
+same *Show removed* toggle a manual removal is — the property that makes the
+whole thing safe to run without thinking about what is currently mounted.
+
+It concerns both halves of [F-repo-add](#f-repo-add)'s union: a declared
+repository whose directory was deleted, and a discovered project whose `cwd`
+went away. That symmetry is why it is a feature of its own rather than a
+paragraph in either.
+
+**No issue yet: it is blocked on its sibling, not on design.** The sweep sets
+[F-repo-remove](#f-repo-remove)'s `removed` flag, which does not exist yet, and
+that flag is the whole reason an over-eager prune is recoverable. Building this
+first would mean either deleting outright or inventing a second flag to be
+merged later — both worse than waiting.
+
+<a id="f-repo-remove"></a>
+
+### F-repo-remove
+
+Take a project or repository out of the sidebar, durably and explicitly.
+
+The subtraction term of the sidebar's membership rule, whose other half
+[F-repo-add](#f-repo-add) introduces:
+
+```text
+visible = (discovered ∪ declared) − removed − presentation
+```
+
+`removed` is one more flag on the `RepoMeta` overlay, and it means the same
+thing from both directions while doing two different things. On a repository
+that exists only because it was declared, removing clears the declaration and
+it genuinely disappears. On a *discovered* project nothing can be deleted —
+`~/.claude` is not ours to write and the next scan brings it back — so removing
+is a durable hide. One field covers both; the button's label is what changes.
+
+That is why this is not #265. **#265 is the ephemeral half** — reduce the
+sidebar for the duration of a screenshot, gone at the next launch — and the two
+were separated precisely so neither has to compromise: #265 weighed ephemeral
+against durable and could not pick, because the durable answer was a different
+gesture. A `hidden` flag beside `removed` would be two names for one invariant.
+
+Reversibility is the open design point. A *Show removed* toggle mirrors the
+archive checkbox that already exists for sessions and is the obvious answer;
+whether removal is offered per session as well as per project is a second
+question, and the model above is written per project path, so extending it is a
+decision rather than a consequence.
+
+[F-repo-prune](#f-repo-prune) is its automated caller: pruning sets this flag
+rather than erasing anything, which is what makes an over-eager sweep
+recoverable.
+
+**No issue yet, and that is the reason.** Reversibility above is not a detail
+to settle while building: a removal with no way back is a different feature
+from one with a *Show removed* toggle, and the per-session question changes the
+data model rather than the UI. Filed as it stands, the ticket would carry the
+decision instead of the work. [F-repo-add](#f-repo-add) shipped the insertion
+point — the visibility predicate is written once — so nothing is blocked
+meanwhile.
 
 <a id="f-repo-view"></a>
 
@@ -784,19 +1193,6 @@ Never scoped beyond the name. Adjacent to
 [F-mcp-agent-loop](#f-mcp-agent-loop), which drives a session without a human;
 this one would decide *when*.
 
-<a id="f-session-accent-colors"></a>
-
-### F-session-accent-colors
-
-A per-session accent on its tab, sidebar row and pane border.
-
-Per-session / per-agent visual accents: give each session (or agent kind —
-Claude, plain shell, `agy`) a colour used on its tab chip, sidebar row and pane
-border, so parallel sessions are distinguishable at a glance. Chrome accents,
-not grid colours — sibling of, but separate from, `F-terminal-palette`. Natural
-home for the assignment is the `~/.termherd/metadata.json` overlay (like
-`F-session-metadata`). **Design-first**
-
 <a id="f-session-grid"></a>
 
 ### F-session-grid
@@ -804,6 +1200,125 @@ home for the assignment is the `~/.termherd/metadata.json` overlay (like
 A layout preset over the pane model.
 
 A layout preset over the pane model
+
+<a id="f-session-reveal"></a>
+
+### F-session-reveal
+
+Reveal a session's directory and transcript in the OS file manager.
+
+Two keymap actions, `reveal-session-dir` and `reveal-transcript` (#346),
+beside the existing `Effect::OpenPath`. The transcript path comes from the
+scan, never rebuilt from the project path. Torture report:
+`.personal/feature-torture/reports/F-session-reveal.md`.
+
+<a id="f-session-send-desktop"></a>
+
+### F-session-send-desktop
+
+Continue a session in Claude Desktop by sending it `/desktop`.
+
+Sent through [F-claude-command](#f-claude-command), from a keymap action and
+the [F-tab-context-menu](#f-tab-context-menu) (#347). The tab stays open on
+its shell afterwards, since success is not observable. macOS and Windows x64
+only. Torture report:
+`.personal/feature-torture/reports/F-session-send-desktop.md`.
+
+<a id="f-worktree-launch"></a>
+
+### F-worktree-launch
+
+Start a Claude session in a fresh git worktree, grouped under its project.
+
+The sidebar already groups worktrees (FR1); only creating one at launch is
+missing.
+
+Issue: #422.
+
+<a id="f-claude-command"></a>
+
+### F-claude-command
+
+Send a confirmed slash command into an idle Claude session.
+
+One write path for every edit termherd makes to a Claude session (#337): a
+closed catalogue (`/rename`, `/color`, `/desktop`), sent only when the session
+is idle, behind a confirmation overlay that names the exact line typed. The
+overlay is a `KeyboardOwner` rung, so `escape` leaves it. Claude drives the
+information termherd shows; termherd sends actions.
+
+Shipped (#337): `core::ClaudeCommand` renders the line, and makes a name safe to
+type — control characters and line breaks become spaces, invisible formatting is
+dropped, a trailing backslash goes, an empty name is refused. The colour is the
+closed `ClaudeColor` palette, kept in the `claude` codec so the transcript
+reader can share it. `App::claude_command_check` refuses anything but a Claude
+launch idle at an empty input prompt — read off the screen by `read_prompt`, so
+a draft or an open picker refuses — and is asked again at the send, where a
+refusal keeps the prompt open and says why. The confirmation answers `enter` and
+`escape` itself, so a synthesised key event reaches both. Two surfaces arm it: a
+`send-to-desktop` action, unbound by default, and an MCP `claude_command` tool,
+which arms the same prompt instead of typing. Confirming sends Ctrl+U, then the
+line, then Enter on its own. A prompt the MCP tool arms ignores a physical Enter
+for 600 ms.
+
+Checked against a live Claude Code: the shape of the empty prompt (its `Try "…"`
+hint) and of a two-line draft. That check missed two shapes Claude Code 2.1 also
+draws, a no-break space after `❯` and the session name inside the rule above the
+prompt; both read as "prompt not on screen" until #374. Not checked: whether the
+line and its Enter, written back to back, always submit rather than read as a
+paste, and whether an `@` in a name opens the file autocomplete. The rename and
+colour surfaces that use this path are #119 and #343.
+
+<a id="f-copy-agent-name"></a>
+
+### F-copy-agent-name
+
+Copy a session's agent name, the one `/list-agents` shows.
+
+The peer name Claude Code gives a session (`termherd-b0`) is how one session
+addresses another (#339). Read from `~/.claude/sessions/<pid>.json`, through
+the pid-to-session-file reader #333 built. Also shown in
+[F-tab-hover-details](#f-tab-hover-details).
+
+Shipped (#339): a `copy-agent-name` action, unbound by default and reachable
+through `run_action`, which re-reads the file on every press and is inert
+(`no-context`) when no Claude in front has written one; and an `Agent:` line
+in the tab hover card, read from a cache refreshed when the foreground job
+changes and when the pointer enters the tab. The tab menu entry shipped
+with #340.
+
+Not shipped: Windows. ConPTY reports no foreground process, so no pid leads to
+a session file and nothing is ever named there; finding the Claude pid another
+way is #357. Nor does a build launched from inside a Claude session name
+anything, since its PTYs inherit that session's `CLAUDE*` environment (#356).
+
+<a id="f-keymap-rename-tab"></a>
+
+### F-keymap-rename-tab
+
+A `rename-tab` keymap action opening the focused tab's inline rename.
+
+Rename was double-click only, so neither the keyboard, the
+[F-tab-context-menu](#f-tab-context-menu) nor MCP `run_action` could reach it
+(#338).
+
+Shipped (#338): `rename-tab`, bound to ⌘⇧I on macOS (Terminal.app's *Edit
+Title*) and Ctrl+Shift+I elsewhere, a chord a legacy-encoded terminal program
+cannot tell from Ctrl+I (Tab). It opens the field a double-click opens, filled
+with the tab's current name, and reports `inert` / `no-context` with no tab
+open. Over MCP, `enter` commits the field and `escape` abandons it, using the
+same commit message as the widget submit (#246).
+
+<a id="f-mcp-agent-loop"></a>
+
+### F-mcp-agent-loop
+
+The composed prompt→wait→read over any session, shell or Claude.
+
+The composed prompt→wait→read over **any** session, shell or Claude: the
+primitive shipped as `run_in_session` (#194) and is kind-agnostic, so what is
+left is the one-round-trip composition, the guards, and an opt-in scoped to the
+nested-Claude case only. Depends on #195
 
 <a id="f-mcp-attach"></a>
 
@@ -825,7 +1340,8 @@ the launcher — was the one process with no way to speak to it. `press_keys`,
 `screenshot` and `wait_for_status` were all there, all unreachable.
 
 So the missing piece is **discovery, not capability**. No new tool: the same
-thirteen, reached by a client that was not spawned as a child.
+tool set the spawned session gets, reached by a client that was not spawned
+as a child.
 
 **The shape, as shipped.** The pieces are small and their arrangement was not:
 
@@ -847,9 +1363,9 @@ thirteen, reached by a client that was not spawned as a child.
   refuses every real call; probing with the operation actually intended cannot.
   A refused token (401) is reported apart from a dead port, since the two send
   the caller to opposite places.
-- **The surface is the same thirteen.** A narrower read-only variant would be a
-  second contract to keep true, and the interesting uses (drive, wait,
-  screenshot) are the mutating ones.
+- **The surface is the same tool set a spawned session gets.** A narrower
+  read-only variant would be a second contract to keep true, and the
+  interesting uses (drive, wait, screenshot) are the mutating ones.
 
 **The security delta was the real design question, and it is not zero.** A
 spawned session's token reaches it through a file only that session's process
@@ -875,6 +1391,35 @@ the *client* of Claude's IDE bridge), and the stdio `termherd-mcp` server
 already reaches any session from anywhere — but only the settings file, never
 the running workspace, which is exactly the gap this closes.
 
+<a id="f-mcp-background-tab"></a>
+
+### F-mcp-background-tab
+
+Open and close a tab over MCP without moving the user's focus.
+
+**Background open and close** (#363). Every action of
+[F-mcp-orchestration](#f-mcp-orchestration) moved the keyboard: an open
+activated its new tab, a close focused its target first. An agent running
+workers beside a human sent that human's next keys into a terminal they did
+not choose. One optional `background` flag (default `false`) on `open_session`
+and `close_pane` fixes it without a new tool and without changing the default.
+
+A background open appends its tab without activating it — a `Placement` on
+`core`'s `LaunchSpec` — and sizes its PTY to the tab area at once, so a Claude
+started there never draws its first screen for the default grid. A background
+close goes through a public `Event::ClosePane(SessionId)` over the existing
+`Workspace::close_pane_of`, never revealing the pane, and requires `pane`: the
+focused pane is the user's. The flag means *never take focus*, not *focus
+cannot move* — closing the focused pane still hands focus to its sibling.
+Every `open_session` reply now carries `opened_handle`, since `focused_handle`
+no longer names the new session.
+
+Answered probes: `mouse_in_session` reaches a never-drawn tab, since a
+terminal's screen fills from its output rather than from drawing. An MCP close
+asks no confirmation, background or not; the book says so rather than the
+behaviour changing. An "opened by an agent" cue on the tab stays out of scope.
+Follow-up candidate: the same flag on `split_pane`.
+
 <a id="f-mcp-config-write"></a>
 
 ### F-mcp-config-write
@@ -884,6 +1429,12 @@ the running workspace, which is exactly the gap this closes.
 Shipped as #191. Config is a file, so this rung needed no live bridge — it was
 independent of the rest of [F-mcp-control-surface](#f-mcp-control-surface) and
 deliverable on its own.
+
+Narrowed in #283: `shell.program` and `shell.args` are read-only over MCP —
+their value is what the next launch executes — and `list_options` and the
+schema resource carry a `writable` flag per id so a model can tell before it
+tries. A value that does not fit an option's kind is refused with a JSON-RPC
+error and nothing is written; it used to be written anyway with a warning.
 
 <a id="f-mcp-keys"></a>
 
@@ -920,7 +1471,9 @@ empty close stack, `scroll_focused` with nothing focused, `cycle_tab` with
 nothing open, `toggle_record` mid-drain, `close_focused_pane` with no tab at
 all, `copy_selection` with nothing selected) and every one of them reported
 `ran`. The last two are the ones a caller would be hurt by soonest: a false
-`ran` on `copy` has an agent paste stale clipboard content, and `close-focused`
+`ran` on `copy` has an agent paste stale clipboard content (a second way to
+that false `ran`, through a filled copy cache in a pane with nothing selected,
+was #316), and `close-focused`
 is the very action the overlay behaviour rests on. So `inert` carries a
 `reason` — `no-surface` (wired to nothing, retrying is pointless) or
 `no-context` (a precondition the caller can create) — since the two call for
@@ -953,16 +1506,14 @@ because inventing a stricter gesture for the key alone would have left the
 button's identical hole standing while looking closed. Discarding a modified
 doc without asking is a real defect on *both* paths and is filed as its own
 (#248) — widened here, not created here, and not half-fixed inside a keyboard
-PR. It also accumulates rather than stopping at the first
+PR. (Since fixed: both paths ask before discarding, in #386, and so does a
+quit, in #392.) It also accumulates rather than stopping at the first
 failure: a sweep that names one offender reads as *and the rest are fine*,
 which is the assumption that let this one through. Tidy-first prerequisite:
 `PaneRename` announced itself as `session-rename` in its own `label()`, in the
-MCP reply, and in the tests — the code was the only name that disagreed. Left
-open on purpose: `enter` reaches neither rename over MCP, since both commit
-through the widget's `on_submit`, which no synthesised key event touches. That
-is a missing capability, not a parked surface — `escape` always gets the
-keyboard back — so it is a separate ticket (#246) rather than a passenger on
-this fix
+MCP reply, and in the tests — the code was the only name that disagreed. Both
+rename handlers now route `enter` to their existing commit messages, while
+the widget submit callbacks remain in place for human input (#246).
 
 <a id="f-mcp-live-bridge"></a>
 
@@ -989,6 +1540,23 @@ Apache-2.0 (cargo-deny allows it), edition 2024, tokio-native (reuses the #192
 runtime, now `enable_all` for the listener); the http stack is
 `hyper`/`hyper-util` (frugal base — no axum). Unblocks #194/#195/#196
 
+<a id="f-mcp-options-bridge"></a>
+
+### F-mcp-options-bridge
+
+`list_options` and `set_option` on the live bridge, not only the stdio slice.
+
+Shipped as #298. A session termherd launched — the only kind it launches —
+saw seventeen tools, none about settings, so "switch me to a light theme"
+needed the stdio server registered by hand. The bridge now carries both over
+the same pure catalogue in `crates/mcp` (one implementation, two transports;
+the tool descriptions are pinned equal by a test, since `#[tool]` takes only
+a literal). Neither surface writes over a `settings.json` that does not
+parse. Paired with the settings hot reload (#297): this makes the change
+reachable from a session, that one makes it visible without a restart. Rung
+of [F-mcp-control-surface](#f-mcp-control-surface), after
+[F-mcp-config-write](#f-mcp-config-write).
+
 <a id="f-mcp-orchestration"></a>
 
 ### F-mcp-orchestration
@@ -1010,6 +1578,47 @@ and address a pane **in any tab** — `Event::RevealPane` activates the owning
 tab first, since click-to-focus (`FocusPane`) only reaches the active one and a
 silent no-op there would let a close destroy the wrong terminal. Depends on #193;
 with #212 (perception) this closes the act→observe loop
+
+<a id="f-mcp-pointer-terminal"></a>
+
+### F-mcp-pointer-terminal
+
+The pointer rung, terminal half: place a mouse event inside a session.
+
+**The pointer rung, terminal half.** Place a mouse event **inside a session's
+terminal**, the way `run_in_session` places text there. Shipped as
+`mouse_in_session(session, kind, col, row, button?)` (#300). Cell
+addressed — a terminal is a grid, and a grid is what an SGR report carries — and
+bounded by the pane's last rendered geometry: a cell outside it rejects the
+whole call before anything applies, as a malformed chord does for `press_keys`.
+The answer says what the terminal did with it: `selection` when it drove the
+local text selection, `ignored` when the event maps to no local gesture (a
+release, a move, a button other than the left one).
+
+Two gaps motivated it. The act→wait→observe loop had no pointer at all, so
+every mouse-mode TUI a session hosts — Claude Code's `/diff` and `/resume`,
+lazygit, fzf, vim — was unreachable to an agent whose keyboard already worked.
+And #155 (mouse clicks are never encoded to the child) could not be verified
+end to end by the agent that fixes it: its encoder half unit-tests the way the
+wheel's already does in `pty::input`, but the gesture itself against a real
+child is what decides whether a TUI actually responds. **Blocked #155**, which
+is why it landed first.
+
+It shares one seam with that bug, and the rung built the seam without the
+second copy the design feared. The path mirrors the wheel's end to end —
+`Event::TerminalPointer` → `Effect::TerminalPointer` → `PtyHost::pointer` → the
+per-session terminal thread, which holds the live scroll offset — and the
+gesture rule lives once in `core::app::pointer`: *whether* an event drives the
+selection is read off the event (that is what the shell answers), *where* it
+lands is placed by the terminal with its live offset. #155 then *extended*
+that arm as planned: `PointerEvent::route` reads the child's mouse reporting
+and answers forward / select / nothing, the SGR/X10 encoder grew from
+`wheel_bytes` into `mouse_bytes`, `forwarded` is the third answer, and the
+canvas hands its own bare press / drag / release / move down the same path
+while Shift keeps a local selection possible.
+
+Sibling of [F-mcp-pointer-chrome](#f-mcp-pointer-chrome), which drives
+termherd's own interface rather than a terminal and blocks nothing.
 
 <a id="f-mcp-screenshot"></a>
 
@@ -1040,12 +1649,14 @@ all testable headlessly; a window-less run answers with the reason as a
 the recorder) and the PNG encoder (from the capture dump) moved into one pure
 `app::image` module rather than being copied a third time. Depends on #212/#193.
 **#196 + #229 + #215 are one capability in three parts** — drive the UI, see
-the pixels, read the terminal — the loop that lets an agent *verify* a gesture
-fix instead of only proposing it. With #229 shipped, #196 is what remains of
-*that* trio. The loop it completes used to be out of reach for anything
-termherd did not spawn — the launcher that most wants to verify a fix was the
-one caller with no way in — which [F-mcp-attach](#f-mcp-attach) (#267) has
-since closed, opt-in, by publishing the endpoint rather than by adding a tool
+the pixels, read the terminal — and with #229 shipped, #196 is what remains of
+*that* trio. The **gesture** gap the three parts left — the surface pressed
+keys and could not click, so #155 was proposable and unverifiable — closed
+when [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) (#300) landed and #155
+followed. The loop used to be out of reach entirely for anything termherd did
+not spawn — the launcher that most wants to verify a fix was the one caller
+with no way in — which [F-mcp-attach](#f-mcp-attach) (#267) has since closed,
+opt-in, by publishing the endpoint rather than by adding a tool
 
 <a id="f-mcp-snapshot"></a>
 
@@ -1110,6 +1721,152 @@ session's current status, so an agent can choose between waiting again and
 giving up. Bounds are the caller's: `timeout_ms` (default 30 s) capped at 5 min
 (Q7). Depends on #193; unblocks #196
 
+<a id="f-session-accent-colors"></a>
+
+### F-session-accent-colors
+
+A per-session accent on its tab and sidebar row.
+
+Per-session visual accents: a colour on a session's tab chip and sidebar row,
+so parallel sessions are distinguishable at a glance. The pane border inside a
+split tab is [F-pane-accent-border](#f-pane-accent-border). Chrome
+accents, not grid colours — sibling of, but separate from,
+`F-terminal-palette`. The kind is shown by
+[F-tab-kind-icon](#f-tab-kind-icon), so colour stays free for the session.
+
+Scoped into two slices. For a Claude tab the colour is the one Claude Code's
+`/color` set — the last `agent-color` entry in the transcript — with no local
+copy (#342). Picking a colour sends `/color` to a Claude tab through
+[F-claude-command](#f-claude-command) and stores it on a shell tab, which
+Claude knows nothing of (#343). Both use the same eight-colour palette as
+`/color`.
+
+Slice 1 shipped (#342): the digest keeps the last `agent-color` value, an
+open tab follows it at the next rescan, and the focused pane decides a split
+tab. A Claude tab is outlined and its sidebar row barred in the colour, and
+the hover card names it — the cue for anyone who cannot tell red from green.
+The MCP `snapshot` reports it per pane.
+
+Slice 2 shipped (#343): the tab menu's *Tab colour…* and a `pick-tab-color`
+action open the palette, plus *None*, over the focused tab. Who keeps a
+pane's colour is decided by its launch, the rule the slash-command check
+uses: a pick for a Claude pane is typed as `/color` behind the confirmation,
+and a shell tab stores it in `core` until the tab closes. A Claude launch
+whose Claude has exited counts as a shell, so `/color` is never typed into
+one. Torture report:
+`.personal/feature-torture/reports/F-session-accent-colors.md`.
+
+<a id="f-tab-context-menu"></a>
+
+### F-tab-context-menu
+
+A per-tab action menu, from a right-click or an `open-tab-menu` action.
+
+An in-app overlay rather than a native OS menu, so `press_keys` / `run_action`
+can drive it (#340). Every entry is an existing keymap action; the entries
+arrive with their own features — [F-keymap-rename-tab](#f-keymap-rename-tab),
+[F-session-accent-colors](#f-session-accent-colors),
+[F-session-reveal](#f-session-reveal), [F-prompt-history](#f-prompt-history),
+[F-copy-agent-name](#f-copy-agent-name),
+[F-session-send-desktop](#f-session-send-desktop). Torture report:
+`.personal/feature-torture/reports/F-tab-context-menu.md`.
+
+Shipped (#340): the menu, bound to `mod+shift+m`. A first `mod+.` binding
+never fired on French AZERTY: a chord is named from the key without Shift,
+so `.` (Shift+`;` there) arrives as `;`; a letter is reachable on every
+layout. A
+right-click focuses the tab first, since every entry acts on focus, and the
+menu is anchored on that pane: it closes when the pane loses focus. It is a
+`tab-menu` rung on the keyboard ladder that answers the arrows, `enter` and
+`escape` itself, so MCP can drive it end to end; `enter` reports the verdict
+of the entry it ran. Entries today: rename tab, tab colour… (only where a pick
+can apply, added by #343), copy agent name (only when the action would find a
+name), new shell / new Claude session here, split right / down, close pane.
+The list is data in `shell::tab_menu`: each later entry (reveal, history, send
+to Claude Desktop) is one line there once its action exists. Not yet: the menu opens
+centred rather than beside the tab, and a screen reader cannot see it.
+
+<a id="f-tab-hover-details"></a>
+
+### F-tab-hover-details
+
+The tab hover card shows agent name, model, effort, version and elapsed time.
+
+Extends the single-sourced session card (#76) with what Claude records in the
+transcript and in its session file (#344). Needs
+[F-session-id-at-launch](#f-session-id-at-launch) and
+[F-copy-agent-name](#f-copy-agent-name). Torture report:
+`.personal/feature-torture/reports/F-tab-hover-details.md`.
+
+The agent name shipped with [F-copy-agent-name](#f-copy-agent-name) (#339): an
+`Agent:` line the tab card carries and the sidebar's does not. Model, effort,
+version and elapsed time shipped in #344: the transcript digest records the
+last reply's model and effort and the last recorded version, the live session
+file's version outranks the transcript's, and the shell stamps each PTY spawn
+so the card can say how long a tab has run. The MCP pane snapshot is
+unchanged.
+
+<a id="f-tab-kind-icon"></a>
+
+### F-tab-kind-icon
+
+A kind mark beside each tab's status dot, instead of a glyph in its title.
+
+Each tab chip shows `✳` (Claude) or `❯` (shell) between its status dot and its
+title, read from the focused pane's `Launch` through `App::tab_kind` (#341).
+The title no longer carries `$` / `🤖`: a fresh tab is titled after its
+project, so a rename opens on a clean name, a Claude retitle cannot drop the
+mark, and the MCP `title` carries no presentation noise (`kind` already said
+it). The sidebar's launch buttons take the same two marks, so the button
+that opens a tab shows what the tab will. Lands ahead of
+[F-tab-title-sync](#f-tab-title-sync), which rewrites the same title policy.
+Torture report:
+`.personal/feature-torture/reports/F-tab-kind-icon.md`.
+
+<a id="f-tab-park"></a>
+
+### F-tab-park
+
+Park a tab: a compact chip at the strip's end, out of the tab cycle.
+
+Presentational only: the session keeps running and its status still flows
+(#353). Active tabs come first and parked tabs after, an order every
+`Workspace` mutator keeps. Selecting a parked tab, dragging it out, or its
+session asking for attention unparks it; dragging a tab into the parked
+zone parks it. A natural entry for [F-tab-context-menu](#f-tab-context-menu).
+Torture report: `.personal/feature-torture/reports/F-tab-park.md`.
+
+Shipped (#353): `toggle-park-tab` with no default chord, a *Park tab* entry in
+the tab menu, and `parked` on the snapshot. Attention unparks without taking
+the focus; a drag takes the zone it lands in.
+
+Deferred to a later tidy-first (#454): shell tab state stored by session rather
+than as an index re-anchored after each message, and one drop-zone rule shared
+by the strip view and `Workspace::move_tab`. The third slice is done (#446):
+`core` reports a change of the shown tab as `Effect::TabShown`.
+
+<a id="f-tab-title-sync"></a>
+
+### F-tab-title-sync
+
+A Claude tab's title follows the session name Claude holds.
+
+Shipped in #119. One resolver in `core` ranks a tab's title sources —
+the session's name (Claude's `/rename` or a name kept in the sidebar,
+whichever was given last) >
+the live OSC title > Claude's AI title or first prompt > the launch label —
+and every open tab re-resolves on a rescan, a metadata load, a sidebar
+rename and a re-key. That reaches fresh tabs too, through the id minted by
+[F-session-id-at-launch](#f-session-id-at-launch).
+
+Renaming a Claude tab (double-click, the MCP `rename_tab`, or the sidebar ✎
+on an open session) arms `/rename` through
+[F-claude-command](#f-claude-command) rather than keeping a local copy that
+disagrees with Claude; a refusal shows a notice under the tab strip. A shell
+tab keeps its local name (#145), and so does a Claude tab whose Claude has
+exited. Once cleared, the rename field shows the name a blank commit leaves.
+The "follow by default" setting was dropped as YAGNI. Torture report: `.personal/feature-torture/reports/F-tab-title-sync.md`.
+
 <a id="f-terminal-palette"></a>
 
 ### F-terminal-palette
@@ -1129,6 +1886,41 @@ alone. Restart-to-apply; the MCP catalog exposes the five keys. Dims stay a
 fixed hand-tuned table (legibility guards). Deliberately out: selection colour
 (app affordance), live reload (waits for the in-app settings panel). Verified
 end-to-end via F-capture on a real session (Solarized Light)
+
+Since then (#381): both keys apply live; all 22 iced chrome themes, 18
+same-name schemes (14 from alacritty-theme, Apache-2.0) in one `pty::schemes`
+table; chrome marks shaded per theme to hold 3:1. Kanagawa Lotus and Ferra
+have no published palette. The paragraph above describes #183 as shipped;
+its four presets, "restart-to-apply" and "live reload out" are superseded by
+this entry.
+
+Open (2026-10-29): the status dot on the active tab chip is shaded against the
+window background, not the chip's fill, and can sit below 3:1 (#382). Not
+ticketed: dropping the fixed light-theme darkening for a pure contrast search
+would shift the stock light themes' colours, a visual call nobody has made.
+Licences for the imported schemes: `THIRD_PARTY_NOTICES.md`.
+
+<a id="f-url-scheme"></a>
+
+### F-url-scheme
+
+Open a tab from an HTML link: a `termherd://` URL scheme.
+
+Shipped (#446): `termherd://open?repo=<absolute path>` shows the tab working
+in the repo, or opens a shell there. A link is untrusted input: it never
+writes to a terminal nor launches Claude, and `core::deeplink` refuses
+anything its grammar does not name. A repo path is the target key because it
+survives a restart, where the MCP `handle` does not.
+
+Every launch drops its link into `~/.termherd/inbox/`, which the running
+instance watches and drains: a second launch (Windows, Linux) hands it over
+and exits, a cold start reads it at startup, and on macOS the `GetURL` Apple
+Event lands in the same inbox. The installers declare the scheme through
+`cargo-packager`'s `deep-link-protocols`; the AppImage registers nothing.
+
+Open: `session/<resume_id>` as a second action, should a link need to name
+one conversation. Discovery from outside overlaps
+[F-mcp-attach](#f-mcp-attach).
 
 <a id="f-i18n"></a>
 
@@ -1161,9 +1953,40 @@ Keymap concerns from the gist that need design, layered on the shipped
   — **stays design-first** (feature-torture 🧬 `F-keymap-advanced.md`):
   blocked on foreground-process detection (macOS `tcgetpgrp` vs Windows
   ConPTY gap); file only once that's designed
-- a configurable "bypass" key so a modifier passes through to the terminal
-  instead of the app (cf. Ghostty `macos-option-as-alt`) — **graduated to
-  #59** (the cheap, high-value slice)
+- ~~a configurable "bypass" key so a modifier passes through to the terminal
+  instead of the app (cf. Ghostty `macos-option-as-alt`)~~ — **done** with
+  #59: `terminal.option_as_meta` (`none` / `left` / `right` / `both`, default
+  `left`) picks which macOS Option key is Meta; the other one types the glyph
+  the layout composes
+
+<a id="f-mcp-self-diagnosis"></a>
+
+### F-mcp-self-diagnosis
+
+Ship with the bridge what an agent now learns from this repo's docs.
+
+Design-first; nothing here is scoped. The review of the agent context files
+on 2026-11-07 moved the calling rules into the server's instructions, and
+left four things an agent outside this repo still cannot learn or do from the
+bridge alone:
+
+- **Guidance as MCP resources or prompts.** The diagnosis recipes live only
+  in a project skill (`drive-termherd`), so a client
+  launched from another repo never reads them. The stdio server already
+  publishes `termherd://keys/schema`; a guide resource, or MCP prompts per
+  recipe, would travel the same way.
+- **The PTY bytes a press produced.** The ground truth for a keyboard defect
+  is a fresh shell running `stty raw -echo` and `dd | xxd` while
+  [F-mcp-keys](#f-mcp-keys) presses. A tool that answers the bytes written to
+  a session would replace the recipe and the second shell.
+- **The clipboard.** Checking what `copy` wrote needs `pbcopy` / `pbpaste`
+  outside the sandbox, on macOS only. A read of termherd's own last
+  clipboard write would make the check cross-platform and sandbox-free.
+- **A wait that cannot answer on the old status.** `wait_for_status` still
+  answers at once on the status from before a prompt, which is why every
+  caller is told to wait for `busy` first; `prompt_in_session` fixed it for
+  its own loop only (#435). A wait for the next transition would make the
+  rule unnecessary. Related open defect: #436.
 
 <a id="f-search-ux"></a>
 
@@ -1210,3 +2033,23 @@ Show a diff of the files a session touched, in a panel beside the terminal.
 Never scoped beyond the name — deliberately Unsure. It was coupled to
 [F-mcp-ide-bridge](#f-mcp-ide-bridge) until PRD rev. 6 moved the bridge to
 Could and left the panel here.
+
+<a id="f-public-launch"></a>
+
+### F-public-launch
+
+Open the project to contributors, then announce it.
+
+Discussions, a code of conduct and labelled first issues, then a public post
+once [F-readme-showcase](#f-readme-showcase) and an installable release
+([F-packaging-ci](#f-packaging-ci)) are in.
+
+<a id="f-status-hooks"></a>
+
+### F-status-hooks
+
+Session status from Claude Code hooks, beside the screen and OSC readings.
+
+Status breaks whenever Claude Code changes the bytes it draws; a hook is an
+explicit contract. A timeboxed probe first: a comparable tool went back from
+hooks to screen reading for another agent, and the reason is unknown.

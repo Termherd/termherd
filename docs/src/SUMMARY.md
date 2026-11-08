@@ -14,6 +14,7 @@
 - [The terminal](./workspace/terminal.md)
 - [Status and attention](./workspace/status.md)
 - [Capture and record](./workspace/capture.md)
+- [The settings panel](./workspace/settings-panel.md)
 
 # Reference
 

@@ -10,7 +10,7 @@ use crate::metadata::Overlay;
 use crate::snapshot::WorkspaceSnapshot;
 use crate::workspace::SessionId;
 
-use super::{PathRequest, PathRoots, ScrollTarget, SelectOp, SpawnSpec};
+use super::{PathRequest, PathRoots, PointerEvent, ScrollTarget, SelectOp, SpawnSpec};
 
 /// Side effects the runtime must perform. The iced shell turns these into
 /// `pty`-adapter calls (`docs/ARCHITECTURE.md` §8).
@@ -20,6 +20,18 @@ pub enum Effect {
     Spawn(SpawnSpec),
     /// Write bytes to a session's PTY stdin.
     Write { session: SessionId, bytes: Vec<u8> },
+    /// Paste `text` into a session's PTY stdin. The adapter frames it: line
+    /// breaks become Enter, wrapped in the bracketed-paste markers when
+    /// `bracketed`.
+    Paste {
+        session: SessionId,
+        text: String,
+        bracketed: bool,
+    },
+    /// Press Enter in a session, in a write of its own after a pause. Claude
+    /// Code reads a burst of about 64 bytes or more as a paste, where an Enter
+    /// arriving with the text is a line break, not a submit.
+    Submit { session: SessionId },
     /// Resize a session's PTY to the given cell geometry.
     Resize {
         session: SessionId,
@@ -34,6 +46,11 @@ pub enum Effect {
     },
     /// Apply a selection change to a session's terminal grid.
     Select { session: SessionId, op: SelectOp },
+    /// Hand a cell-addressed pointer event to a session's terminal.
+    TerminalPointer {
+        session: SessionId,
+        pointer: PointerEvent,
+    },
     /// Ask a session's terminal to copy its current selection — the text comes
     /// back out-of-band (a PTY event), so it is read from the live selection.
     CopyTerminalSelection { session: SessionId },
@@ -64,8 +81,14 @@ pub enum Effect {
     OpenPath(crate::open::OpenTarget),
     /// Post a desktop notification to the OS notification centre. The
     /// shell performs it; `title` names the session/project that wants the
-    /// user, `body` is Claude's message.
-    Notify { title: String, body: String },
+    /// user, `body` is Claude's message. `session` is the pane a click on the
+    /// notification brings back — the stable handle, never the title (two tabs
+    /// may share one) nor the Claude resume id (which re-keys).
+    Notify {
+        session: SessionId,
+        title: String,
+        body: String,
+    },
     /// Write a captured state snapshot for the AI dev loop (G1). The shell
     /// encodes it to `capture-<ts>.json` and takes the companion PNG; `core`
     /// only builds the pure, diffable payload. It is the same
@@ -87,4 +110,7 @@ pub enum Effect {
     /// encoder without writing a file. Emitted when a recording is stopped before
     /// the first frame.
     CancelRecording,
+    /// Another tab is shown, or a tab gesture asked for one: the runtime
+    /// settles the view on the tab now shown.
+    TabShown,
 }

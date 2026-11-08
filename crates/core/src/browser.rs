@@ -34,9 +34,21 @@ impl ProjectGroup {
     /// When this project last saw activity (its freshest session).
     #[must_use]
     pub fn last_activity(&self) -> Option<SystemTime> {
-        self.sessions.iter().filter_map(|s| s.modified).max()
+        last_activity(&self.sessions)
     }
 }
+
+/// When a set of sessions last saw activity. Free-standing so the sidebar can
+/// ask it of a borrowed slice — the snapshot orders rows without materialising
+/// the groups the rendering path clones.
+#[must_use]
+pub fn last_activity(sessions: &[SessionRecord]) -> Option<SystemTime> {
+    sessions.iter().filter_map(|s| s.modified).max()
+}
+
+const MINUTE: u64 = 60;
+const HOUR: u64 = 60 * MINUTE;
+const DAY: u64 = 24 * HOUR;
 
 /// A compact, language-neutral relative age — `now`, `5m`, `3h`, `2d`, `4w`,
 /// `1y` — used to disambiguate sidebar rows whose titles collide within a
@@ -44,9 +56,6 @@ impl ProjectGroup {
 /// (no clock), the adapter owns the wall clock.
 #[must_use]
 pub fn relative_age(elapsed: Duration) -> String {
-    const MINUTE: u64 = 60;
-    const HOUR: u64 = 60 * MINUTE;
-    const DAY: u64 = 24 * HOUR;
     const WEEK: u64 = 7 * DAY;
     const YEAR: u64 = 365 * DAY;
 
@@ -63,6 +72,31 @@ pub fn relative_age(elapsed: Duration) -> String {
         format!("{}w", secs / WEEK)
     } else {
         format!("{}y", secs / YEAR)
+    }
+}
+
+/// How long a session has run, compact and language-neutral: `<1m`, `3m`,
+/// `1h 12m`, `2d 3h`. Two units at most, the smaller one dropped when it is
+/// zero. Unlike [`relative_age`], an hour is not rounded away: a running time
+/// is read for its minutes.
+#[must_use]
+pub fn compact_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < MINUTE {
+        return "<1m".to_owned();
+    }
+    if secs < HOUR {
+        return format!("{}m", secs / MINUTE);
+    }
+    let (big, big_unit, small, small_unit) = if secs < DAY {
+        (secs / HOUR, "h", secs % HOUR / MINUTE, "m")
+    } else {
+        (secs / DAY, "d", secs % DAY / HOUR, "h")
+    };
+    if small == 0 {
+        format!("{big}{big_unit}")
+    } else {
+        format!("{big}{big_unit} {small}{small_unit}")
     }
 }
 
@@ -102,28 +136,31 @@ pub fn group_projects(records: Vec<SessionRecord>) -> Vec<ProjectGroup> {
     groups
 }
 
-/// Filter groups for the search box (FR3): case-insensitive, matching the
+/// Filter rows for the search box (FR3): case-insensitive, matching the
 /// project path or, per session, the display title — plus summary, slug and
-/// indexed text unless `titles_only`. Groups keep their order; a group
-/// whose path matches is kept whole.
+/// indexed text unless `titles_only`. Rows keep their order; a row whose path
+/// matches is kept whole.
+///
+/// Takes **borrowed** rows, which is what the sidebar actually holds once the
+/// scan's groups are united with the hand-added repos. Owning the union first
+/// would clone every digest in the browser on **every frame**, only to clone
+/// the survivors again here.
 #[must_use]
-pub fn filter_projects(
-    groups: &[ProjectGroup],
+pub fn filter_rows(
+    rows: &[(&str, &[SessionRecord])],
     query: &str,
     titles_only: bool,
 ) -> Vec<ProjectGroup> {
     let needle = query.trim().to_lowercase();
-    if needle.is_empty() {
-        return groups.to_vec();
-    }
-    groups
-        .iter()
-        .filter_map(|group| {
-            if group.path.to_lowercase().contains(&needle) {
-                return Some(group.clone());
+    rows.iter()
+        .filter_map(|(path, sessions)| {
+            if needle.is_empty() || path.to_lowercase().contains(&needle) {
+                return Some(ProjectGroup {
+                    path: (*path).to_owned(),
+                    sessions: sessions.to_vec(),
+                });
             }
-            let sessions: Vec<SessionRecord> = group
-                .sessions
+            let sessions: Vec<SessionRecord> = sessions
                 .iter()
                 .filter(|s| session_matches(s, &needle, titles_only))
                 .cloned()
@@ -132,7 +169,7 @@ pub fn filter_projects(
                 None
             } else {
                 Some(ProjectGroup {
-                    path: group.path.clone(),
+                    path: (*path).to_owned(),
                     sessions,
                 })
             }
@@ -247,6 +284,15 @@ mod tests {
     use proptest::prelude::*;
     use std::time::{Duration, UNIX_EPOCH};
 
+    /// Borrow owned groups as the rows `filter_rows` takes — the shape the
+    /// sidebar builds from the scan united with the declared repos.
+    fn rows_of(groups: &[ProjectGroup]) -> Vec<(&str, &[SessionRecord])> {
+        groups
+            .iter()
+            .map(|group| (group.path.as_str(), group.sessions.as_slice()))
+            .collect()
+    }
+
     fn record(project: &str, id: &str, age_secs: u64) -> SessionRecord {
         SessionRecord {
             session_id: id.to_owned(),
@@ -254,11 +300,7 @@ mod tests {
             digest: SessionDigest {
                 summary: format!("prompt {id}"),
                 message_count: 1,
-                text_content: String::new(),
-                slug: None,
-                custom_title: None,
-                ai_title: None,
-                tail: Vec::new(),
+                ..SessionDigest::default()
             },
             modified: Some(UNIX_EPOCH + Duration::from_secs(age_secs)),
         }
@@ -315,7 +357,7 @@ mod tests {
     #[test]
     fn empty_query_keeps_everything() {
         let groups = group_projects(vec![record("/a", "s1", 1)]);
-        assert_eq!(filter_projects(&groups, "  ", false), groups);
+        assert_eq!(filter_rows(&rows_of(&groups), "  ", false), groups);
     }
 
     #[test]
@@ -324,13 +366,13 @@ mod tests {
         r.digest.text_content = "Fix the Login Bug\n".into();
         let groups = group_projects(vec![r, record("/b", "s2", 2)]);
 
-        let hits = filter_projects(&groups, "lOgIn", false);
+        let hits = filter_rows(&rows_of(&groups), "lOgIn", false);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, "/a");
         // Content does not match in titles-only mode…
-        assert!(filter_projects(&groups, "login", true).is_empty());
+        assert!(filter_rows(&rows_of(&groups), "login", true).is_empty());
         // …but titles still do ("prompt s2" is the display title).
-        let hits = filter_projects(&groups, "PROMPT S2", true);
+        let hits = filter_rows(&rows_of(&groups), "PROMPT S2", true);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, "/b");
     }
@@ -341,7 +383,7 @@ mod tests {
             record("/apps/web", "s1", 1),
             record("/apps/web", "s2", 2),
         ]);
-        let hits = filter_projects(&groups, "web", true);
+        let hits = filter_rows(&rows_of(&groups), "web", true);
         assert_eq!(hits[0].sessions.len(), 2);
     }
 
@@ -358,11 +400,27 @@ mod tests {
     }
 
     #[test]
+    fn compact_elapsed_shows_two_units_at_each_boundary() {
+        let at = |secs| compact_elapsed(Duration::from_secs(secs));
+        assert_eq!(at(0), "<1m");
+        assert_eq!(at(59), "<1m");
+        assert_eq!(at(60), "1m");
+        assert_eq!(at(3 * 60 + 59), "3m");
+        assert_eq!(at(3599), "59m");
+        assert_eq!(at(3600), "1h");
+        assert_eq!(at(3600 + 12 * 60), "1h 12m");
+        assert_eq!(at(86_399), "23h 59m");
+        assert_eq!(at(86_400), "1d");
+        assert_eq!(at(2 * 86_400 + 3 * 3600 + 59 * 60), "2d 3h");
+        assert_eq!(at(400 * 86_400), "400d");
+    }
+
+    #[test]
     fn non_matching_sessions_are_dropped_from_a_group() {
         let mut hit = record("/a", "findme", 1);
         hit.digest.summary = "the needle".into();
         let groups = group_projects(vec![hit, record("/a", "other", 2)]);
-        let filtered = filter_projects(&groups, "needle", false);
+        let filtered = filter_rows(&rows_of(&groups), "needle", false);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].sessions.len(), 1);
         assert_eq!(filtered[0].sessions[0].session_id, "findme");

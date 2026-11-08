@@ -1,10 +1,13 @@
-//! Terminal input byte protocol (FR4): keys, wheel and paste encoded to the
-//! bytes a terminal expects. A pure, GUI-free leaf — the GUI translates its own
+//! Terminal input byte protocol (FR4): keys, mouse (wheel and buttons) and
+//! paste encoded to the bytes a terminal expects. A pure, GUI-free leaf — the GUI translates its own
 //! key/mouse events into these neutral types so the codec never depends on any
 //! GUI crate. Depends only on `alacritty_terminal`'s [`TermMode`] to read what
 //! mouse/scroll protocol the focused application negotiated.
 
 use alacritty_terminal::term::TermMode;
+use termherd_core::{PointerButton, PointerEvent, PointerKind};
+
+use crate::mode::{CursorKeys, cursor_keys, mouse_reporting};
 
 /// The bytes a paste sends to the PTY (FR4). Newlines are normalised to the
 /// carriage return the terminal expects for Enter; when the application has
@@ -49,6 +52,19 @@ pub enum TermKey {
     Delete,
     PageUp,
     PageDown,
+    Insert,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
 }
 
 /// The modifier keys held during a key press, as far as the byte protocol is
@@ -62,27 +78,17 @@ pub struct KeyMods {
 
 /// Translate a key press into the bytes a terminal expects (FR4): control
 /// combinations, the named keys and (modifier-aware) cursor/editing sequences,
-/// otherwise the layout-resolved `text`. Pure and GUI-free — the input byte
-/// protocol lives here in the terminal adapter, next to [`paste_bytes`].
+/// otherwise the layout-resolved `text`. `cursor` is the cursor-key encoding
+/// the application negotiated (see [`crate::Screen::cursor_keys`]). Pure and
+/// GUI-free — the input byte protocol lives here in the terminal adapter, next
+/// to [`paste_bytes`].
 #[must_use]
-pub fn key_bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<u8>> {
-    // Ctrl+<char> control bytes (Ctrl-A → 0x01, Ctrl-Space → NUL, …).
-    if mods.ctrl
-        && let TermKey::Char(ch) = key
-    {
-        let lower = ch.to_ascii_lowercase();
-        if lower.is_ascii_alphabetic() {
-            return Some(vec![(lower as u8 - b'a') + 1]);
-        }
-        match ch {
-            ' ' => return Some(vec![0]),
-            '[' => return Some(vec![27]),
-            '\\' => return Some(vec![28]),
-            ']' => return Some(vec![29]),
-            _ => {}
-        }
-    }
-
+pub fn key_bytes(
+    key: TermKey,
+    mods: KeyMods,
+    text: Option<&str>,
+    cursor: CursorKeys,
+) -> Option<Vec<u8>> {
     let modifier = modifier_param(mods);
 
     match key {
@@ -106,30 +112,70 @@ pub fn key_bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<
             b"\x7f".to_vec()
         }),
         TermKey::Escape => Some(b"\x1b".to_vec()),
-        TermKey::Space => Some(b" ".to_vec()),
+        TermKey::Space => char_bytes(' ', mods, Some(" ")),
         // Cursor / navigation keys take a `1;<mod>` parameter when modified —
         // e.g. Ctrl+Right (`ESC[1;5C`) for word jump, Shift+Up (`ESC[1;2A`).
-        TermKey::Up => Some(csi_letter(b'A', modifier)),
-        TermKey::Down => Some(csi_letter(b'B', modifier)),
-        TermKey::Right => Some(csi_letter(b'C', modifier)),
-        TermKey::Left => Some(csi_letter(b'D', modifier)),
-        TermKey::Home => Some(csi_letter(b'H', modifier)),
-        TermKey::End => Some(csi_letter(b'F', modifier)),
+        TermKey::Up => Some(cursor_key(b'A', modifier, cursor)),
+        TermKey::Down => Some(cursor_key(b'B', modifier, cursor)),
+        TermKey::Right => Some(cursor_key(b'C', modifier, cursor)),
+        TermKey::Left => Some(cursor_key(b'D', modifier, cursor)),
+        TermKey::Home => Some(cursor_key(b'H', modifier, cursor)),
+        TermKey::End => Some(cursor_key(b'F', modifier, cursor)),
         // `~`-terminated editing keys gain the same `;<mod>` parameter.
         TermKey::Delete => Some(csi_tilde(3, modifier)),
         TermKey::PageUp => Some(csi_tilde(5, modifier)),
         TermKey::PageDown => Some(csi_tilde(6, modifier)),
-        // Alt+<char> (Meta) prefixes the character with `ESC`, the readline
-        // convention for word-wise editing (Alt+B / Alt+F / Alt+D …). Limited
-        // to ASCII alphanumerics so macOS Option-composed glyphs (e.g. Option+e
-        // → "´") still fall through to the layout-resolved text below.
-        TermKey::Char(ch) if mods.alt && !mods.ctrl && ch.is_ascii_alphanumeric() => {
-            Some(vec![0x1b, ch as u8])
-        }
-        TermKey::Char(_) => text
+        TermKey::Insert => Some(csi_tilde(2, modifier)),
+        // F1–F4 keep the VT100 PF1–PF4 form (`SS3 P`…`S`) while unmodified;
+        // a modifier needs a parameter, which only the CSI form can carry.
+        TermKey::F1 => Some(pf_key(b'P', modifier)),
+        TermKey::F2 => Some(pf_key(b'Q', modifier)),
+        TermKey::F3 => Some(pf_key(b'R', modifier)),
+        TermKey::F4 => Some(pf_key(b'S', modifier)),
+        // F5–F12 skip 16 and 22: the VT220 numbering left gaps between groups.
+        TermKey::F5 => Some(csi_tilde(15, modifier)),
+        TermKey::F6 => Some(csi_tilde(17, modifier)),
+        TermKey::F7 => Some(csi_tilde(18, modifier)),
+        TermKey::F8 => Some(csi_tilde(19, modifier)),
+        TermKey::F9 => Some(csi_tilde(20, modifier)),
+        TermKey::F10 => Some(csi_tilde(21, modifier)),
+        TermKey::F11 => Some(csi_tilde(23, modifier)),
+        TermKey::F12 => Some(csi_tilde(24, modifier)),
+        TermKey::Char(ch) => char_bytes(ch, mods, text),
+    }
+}
+
+/// A character key: Ctrl's control byte, the Meta-prefixed ASCII character,
+/// or the layout-resolved `text`. Meta prefixes `ESC`, the readline convention
+/// for word-wise editing (Alt+B, Alt+., Ctrl+Alt+B …). Whether a macOS Option
+/// key is Meta at all is the shell's to decide: it clears `alt` for an Option
+/// side that composes.
+fn char_bytes(ch: char, mods: KeyMods, text: Option<&str>) -> Option<Vec<u8>> {
+    let byte = if mods.ctrl {
+        control_byte(ch)
+    } else if mods.alt {
+        meta_char(ch, mods.shift)
+    } else {
+        None
+    };
+    match byte {
+        Some(byte) if mods.alt => Some(vec![0x1b, byte]),
+        Some(byte) => Some(vec![byte]),
+        None => text
             .filter(|t| !t.is_empty())
             .map(|t| t.as_bytes().to_vec()),
     }
+}
+
+/// The ASCII byte Meta sends after `ESC` for `ch`, or `None` to leave the key
+/// to its text. `ch` is the key without modifiers, so Shift is applied here:
+/// it upper-cases a letter, while a shifted symbol depends on the layout and
+/// keeps its text.
+fn meta_char(ch: char, shift: bool) -> Option<u8> {
+    if shift && ch.is_ascii_alphabetic() {
+        return Some(ch.to_ascii_uppercase() as u8);
+    }
+    (ch == ' ' || (!shift && ch.is_ascii_graphic())).then_some(ch as u8)
 }
 
 /// Translate a wheel scroll into the bytes a full-screen application expects,
@@ -151,34 +197,21 @@ pub fn wheel_bytes(mode: TermMode, col: u16, row: u16, lines: i32) -> Option<Vec
     let up = lines > 0;
 
     // Mouse reporting: each wheel notch is a button-press event — button 64 up,
-    // 65 down — at the pointer cell. SGR when negotiated (1006), else legacy X10.
-    let mouse = TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_MOTION | TermMode::MOUSE_DRAG;
-    if mode.intersects(mouse) {
+    // 65 down — at the pointer cell, in whichever encoding is negotiated.
+    if mouse_reporting(mode).is_some() {
         let button: u8 = if up { 64 } else { 65 };
-        // Mouse coordinates are 1-based.
-        let (c, r) = (col + 1, row + 1);
         let mut out = Vec::new();
         for _ in 0..count {
-            if mode.contains(TermMode::SGR_MOUSE) {
-                out.extend_from_slice(format!("\x1b[<{button};{c};{r}M").as_bytes());
-            } else {
-                // ESC[M Cb Cx Cy, every value biased by 32 and capped at a byte.
-                out.extend_from_slice(&[0x1b, b'[', b'M', x10(u16::from(button)), x10(c), x10(r)]);
-            }
+            mouse_report(&mut out, mode, button, col, row, false);
         }
         return Some(out);
     }
 
     // Alternate-scroll (1007) in the alt screen, no mouse mode: one cursor key
-    // per line, in SS3 form when DECCKM (app-cursor) is on, else CSI.
+    // per line, encoded as the arrow key would be.
     if mode.contains(TermMode::ALT_SCREEN) && mode.contains(TermMode::ALTERNATE_SCROLL) {
         let final_byte = if up { b'A' } else { b'B' };
-        // CSI form reuses the cursor-key encoder; DECCKM swaps it for SS3.
-        let seq = if mode.contains(TermMode::APP_CURSOR) {
-            vec![0x1b, b'O', final_byte]
-        } else {
-            csi_letter(final_byte, 1)
-        };
+        let seq = cursor_key(final_byte, 1, cursor_keys(mode));
         let mut out = Vec::with_capacity(seq.len() * count);
         for _ in 0..count {
             out.extend_from_slice(&seq);
@@ -188,6 +221,49 @@ pub fn wheel_bytes(mode: TermMode, col: u16, row: u16, lines: i32) -> Option<Vec
 
     // Normal screen, no mouse mode: the caller scrolls its own scrollback.
     None
+}
+
+/// The bytes that report a pointer event to an application reading the mouse:
+/// SGR (1006) when negotiated, else legacy X10; a `Click` is a press followed
+/// by its release. Whether the application's mode covers the event is
+/// `PointerEvent::route`'s question, asked by the caller — this only encodes.
+#[must_use]
+pub fn mouse_bytes(mode: TermMode, pointer: PointerEvent) -> Vec<u8> {
+    // xterm button codes: left 0, middle 1, right 2; motion adds 32, and a
+    // motion with no button held reports as button 3.
+    let button: u8 = match pointer.button {
+        PointerButton::Left => 0,
+        PointerButton::Middle => 1,
+        PointerButton::Right => 2,
+    };
+    let (col, row) = (pointer.col, pointer.row);
+    let mut out = Vec::new();
+    match pointer.kind {
+        PointerKind::Press => mouse_report(&mut out, mode, button, col, row, false),
+        PointerKind::Release => mouse_report(&mut out, mode, button, col, row, true),
+        PointerKind::Click => {
+            mouse_report(&mut out, mode, button, col, row, false);
+            mouse_report(&mut out, mode, button, col, row, true);
+        }
+        PointerKind::Drag => mouse_report(&mut out, mode, 32 + button, col, row, false),
+        PointerKind::Move => mouse_report(&mut out, mode, 32 + 3, col, row, false),
+    }
+    out
+}
+
+/// One mouse report appended to `out`: SGR `ESC[<Cb;Cx;CyM` (`m` for a
+/// release, which keeps the button) when negotiated, else the legacy
+/// `ESC[M Cb Cx Cy` with every value biased by 32 and a release as button 3.
+/// `col`/`row` are 0-based; the wire is 1-based.
+fn mouse_report(out: &mut Vec<u8>, mode: TermMode, button: u8, col: u16, row: u16, release: bool) {
+    let (c, r) = (col + 1, row + 1);
+    if mode.contains(TermMode::SGR_MOUSE) {
+        let final_byte = if release { 'm' } else { 'M' };
+        out.extend_from_slice(format!("\x1b[<{button};{c};{r}{final_byte}").as_bytes());
+    } else {
+        let cb = if release { 3 } else { button };
+        out.extend_from_slice(&[0x1b, b'[', b'M', x10(u16::from(cb)), x10(c), x10(r)]);
+    }
 }
 
 /// The legacy X10 mouse-coordinate byte: value biased by 32, saturating at the
@@ -203,6 +279,33 @@ fn modifier_param(m: KeyMods) -> u8 {
     1 + (m.shift as u8) + (m.alt as u8) * 2 + (m.ctrl as u8) * 4
 }
 
+/// The C0 control byte Ctrl turns `ch` into (Ctrl-A → 0x01, Ctrl-Space → NUL,
+/// the bracket family → 0x1b–0x1d), or `None` for a character Ctrl leaves be.
+fn control_byte(ch: char) -> Option<u8> {
+    let lower = ch.to_ascii_lowercase();
+    if lower.is_ascii_alphabetic() {
+        return Some((lower as u8 - b'a') + 1);
+    }
+    match ch {
+        ' ' => Some(0),
+        '[' => Some(27),
+        '\\' => Some(28),
+        ']' => Some(29),
+        _ => None,
+    }
+}
+
+/// An arrow or Home/End key: SS3 (`ESC O <final>`) when the application set
+/// DECCKM and no modifier is held, else the CSI form, which alone can carry a
+/// modifier parameter.
+fn cursor_key(final_byte: u8, modifier: u8, cursor: CursorKeys) -> Vec<u8> {
+    if cursor == CursorKeys::Application && modifier <= 1 {
+        vec![0x1b, b'O', final_byte]
+    } else {
+        csi_letter(final_byte, modifier)
+    }
+}
+
 /// A letter-terminated cursor sequence (`A`=Up, `C`=Right, `H`=Home …):
 /// `ESC[<final>` unmodified, `ESC[1;<mod><final>` when modified.
 fn csi_letter(final_byte: u8, modifier: u8) -> Vec<u8> {
@@ -213,7 +316,16 @@ fn csi_letter(final_byte: u8, modifier: u8) -> Vec<u8> {
     }
 }
 
-/// A `~`-terminated editing key (Delete=3, PageUp=5, PageDown=6):
+/// F1–F4: `ESC O <final>` unmodified, `ESC[1;<mod><final>` when modified.
+fn pf_key(final_byte: u8, modifier: u8) -> Vec<u8> {
+    if modifier <= 1 {
+        vec![0x1b, b'O', final_byte]
+    } else {
+        csi_letter(final_byte, modifier)
+    }
+}
+
+/// A `~`-terminated key (Insert=2, Delete=3, PageUp=5, PageDown=6, F5=15…):
 /// `ESC[<n>~` unmodified, `ESC[<n>;<mod>~` when modified.
 fn csi_tilde(n: u8, modifier: u8) -> Vec<u8> {
     if modifier <= 1 {
@@ -258,48 +370,183 @@ mod tests {
         alt: false,
         shift: true,
     };
+    const CTRL_ALT: KeyMods = KeyMods {
+        ctrl: true,
+        alt: true,
+        shift: false,
+    };
+    const ALT_SHIFT: KeyMods = KeyMods {
+        ctrl: false,
+        alt: true,
+        shift: true,
+    };
+
+    /// The bytes of a key pressed while the application keeps normal cursor
+    /// keys, the mode every test but the DECCKM ones runs in.
+    fn bytes(key: TermKey, mods: KeyMods, text: Option<&str>) -> Option<Vec<u8>> {
+        key_bytes(key, mods, text, CursorKeys::Normal)
+    }
+
+    /// Each arrow and Home/End with its unmodified bytes in normal and in
+    /// application cursor mode, spelled out rather than derived.
+    const CURSOR_KEYS: [(TermKey, &[u8], &[u8]); 6] = [
+        (TermKey::Up, b"\x1b[A", b"\x1bOA"),
+        (TermKey::Down, b"\x1b[B", b"\x1bOB"),
+        (TermKey::Right, b"\x1b[C", b"\x1bOC"),
+        (TermKey::Left, b"\x1b[D", b"\x1bOD"),
+        (TermKey::Home, b"\x1b[H", b"\x1bOH"),
+        (TermKey::End, b"\x1b[F", b"\x1bOF"),
+    ];
 
     #[test]
-    fn ctrl_letters_and_symbols_map_to_control_bytes() {
+    fn unmodified_cursor_keys_follow_the_applications_cursor_mode() {
+        for (key, normal, application) in CURSOR_KEYS {
+            assert_eq!(
+                key_bytes(key, NONE, None, CursorKeys::Normal).as_deref(),
+                Some(normal),
+                "{key:?} in normal mode"
+            );
+            assert_eq!(
+                key_bytes(key, NONE, None, CursorKeys::Application).as_deref(),
+                Some(application),
+                "{key:?} under DECCKM"
+            );
+        }
+    }
+
+    #[test]
+    fn modified_cursor_keys_stay_csi_in_both_modes() {
+        for cursor in [CursorKeys::Normal, CursorKeys::Application] {
+            assert_eq!(
+                key_bytes(TermKey::Up, SHIFT, None, cursor),
+                Some(b"\x1b[1;2A".to_vec()),
+                "{cursor:?}"
+            );
+            assert_eq!(
+                key_bytes(TermKey::Right, CTRL, None, cursor),
+                Some(b"\x1b[1;5C".to_vec()),
+                "{cursor:?}"
+            );
+            assert_eq!(
+                key_bytes(TermKey::End, ALT, None, cursor),
+                Some(b"\x1b[1;3F".to_vec()),
+                "{cursor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decckm_leaves_the_other_keys_alone() {
+        for key in [
+            TermKey::F1,
+            TermKey::PageUp,
+            TermKey::Enter,
+            TermKey::Insert,
+        ] {
+            assert_eq!(
+                key_bytes(key, NONE, None, CursorKeys::Application),
+                bytes(key, NONE, None),
+                "{key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn meta_prefixes_escape_to_a_symbol() {
+        // zsh insert-last-word, readline yank-last-arg.
         assert_eq!(
-            key_bytes(TermKey::Char('c'), CTRL, Some("c")),
-            Some(vec![3])
-        );
-        assert_eq!(
-            key_bytes(TermKey::Char('a'), CTRL, Some("a")),
-            Some(vec![1])
-        );
-        // Ctrl+Space is NUL; the bracket family fills 0x1b–0x1d.
-        assert_eq!(
-            key_bytes(TermKey::Char(' '), CTRL, Some(" ")),
-            Some(vec![0])
-        );
-        assert_eq!(
-            key_bytes(TermKey::Char('['), CTRL, Some("[")),
-            Some(vec![27])
-        );
-        assert_eq!(
-            key_bytes(TermKey::Char(']'), CTRL, Some("]")),
-            Some(vec![29])
+            bytes(TermKey::Char('.'), ALT, Some(".")),
+            Some(b"\x1b.".to_vec())
         );
     }
 
     #[test]
-    fn plain_named_keys_map_to_their_sequences() {
-        assert_eq!(key_bytes(TermKey::Enter, NONE, None), Some(b"\r".to_vec()));
-        assert_eq!(key_bytes(TermKey::Tab, NONE, None), Some(b"\t".to_vec()));
+    fn meta_with_shift_sends_the_upper_case_letter() {
+        // iced reports the key without modifiers, so Shift arrives as a flag.
         assert_eq!(
-            key_bytes(TermKey::Backspace, NONE, None),
+            bytes(TermKey::Char('b'), ALT_SHIFT, Some("B")),
+            Some(b"\x1bB".to_vec())
+        );
+    }
+
+    #[test]
+    fn meta_with_shift_on_a_symbol_leaves_the_layouts_text() {
+        assert_eq!(
+            bytes(TermKey::Char('.'), ALT_SHIFT, Some(">")),
+            Some(b">".to_vec())
+        );
+    }
+
+    #[test]
+    fn ctrl_alt_prefixes_escape_to_the_control_byte() {
+        assert_eq!(
+            bytes(TermKey::Char('b'), CTRL_ALT, Some("b")),
+            Some(b"\x1b\x02".to_vec())
+        );
+    }
+
+    #[test]
+    fn meta_space_is_escape_space_and_ctrl_meta_space_is_escape_nul() {
+        assert_eq!(bytes(TermKey::Space, ALT, None), Some(b"\x1b ".to_vec()));
+        assert_eq!(
+            bytes(TermKey::Space, CTRL_ALT, None),
+            Some(b"\x1b\x00".to_vec())
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn meta_is_escape_before_the_unmodified_bytes(
+            ch in proptest::char::range(' ', '~'),
+            ctrl: bool,
+        ) {
+            // Ctrl+symbol keeps its text, with or without Meta: not encoded yet.
+            proptest::prop_assume!(!ctrl || control_byte(ch).is_some());
+            let text = ch.to_string();
+            let plain = KeyMods { ctrl, alt: false, shift: false };
+            let meta = KeyMods { alt: true, ..plain };
+            let unmodified = bytes(TermKey::Char(ch), plain, Some(&text)).expect("a printable key");
+            let mut expected = vec![0x1b];
+            expected.extend_from_slice(&unmodified);
+            proptest::prop_assert_eq!(bytes(TermKey::Char(ch), meta, Some(&text)), Some(expected));
+        }
+
+        #[test]
+        fn meta_shift_is_escape_before_the_upper_case_letter(
+            ch in proptest::char::range('a', 'z'),
+        ) {
+            let upper = ch.to_ascii_uppercase();
+            proptest::prop_assert_eq!(
+                bytes(TermKey::Char(ch), ALT_SHIFT, Some(&upper.to_string())),
+                Some(vec![0x1b, upper as u8])
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_letters_and_symbols_map_to_control_bytes() {
+        assert_eq!(bytes(TermKey::Char('c'), CTRL, Some("c")), Some(vec![3]));
+        assert_eq!(bytes(TermKey::Char('a'), CTRL, Some("a")), Some(vec![1]));
+        // Ctrl+Space is NUL; the bracket family fills 0x1b–0x1d.
+        assert_eq!(bytes(TermKey::Char(' '), CTRL, Some(" ")), Some(vec![0]));
+        assert_eq!(bytes(TermKey::Char('['), CTRL, Some("[")), Some(vec![27]));
+        assert_eq!(bytes(TermKey::Char('\\'), CTRL, Some("\\")), Some(vec![28]));
+        assert_eq!(bytes(TermKey::Char(']'), CTRL, Some("]")), Some(vec![29]));
+    }
+
+    #[test]
+    fn plain_named_keys_map_to_their_sequences() {
+        assert_eq!(bytes(TermKey::Enter, NONE, None), Some(b"\r".to_vec()));
+        assert_eq!(bytes(TermKey::Tab, NONE, None), Some(b"\t".to_vec()));
+        assert_eq!(
+            bytes(TermKey::Backspace, NONE, None),
             Some(b"\x7f".to_vec())
         );
+        assert_eq!(bytes(TermKey::Escape, NONE, None), Some(b"\x1b".to_vec()));
+        assert_eq!(bytes(TermKey::Space, NONE, None), Some(b" ".to_vec()));
+        assert_eq!(bytes(TermKey::Up, NONE, None), Some(b"\x1b[A".to_vec()));
         assert_eq!(
-            key_bytes(TermKey::Escape, NONE, None),
-            Some(b"\x1b".to_vec())
-        );
-        assert_eq!(key_bytes(TermKey::Space, NONE, None), Some(b" ".to_vec()));
-        assert_eq!(key_bytes(TermKey::Up, NONE, None), Some(b"\x1b[A".to_vec()));
-        assert_eq!(
-            key_bytes(TermKey::Delete, NONE, None),
+            bytes(TermKey::Delete, NONE, None),
             Some(b"\x1b[3~".to_vec())
         );
     }
@@ -307,19 +554,70 @@ mod tests {
     #[test]
     fn enter_tab_and_backspace_carry_their_modifiers() {
         // Shift / Alt+Enter insert a newline instead of submitting.
-        assert_eq!(key_bytes(TermKey::Enter, SHIFT, None), Some(b"\n".to_vec()));
-        assert_eq!(
-            key_bytes(TermKey::Enter, ALT, None),
-            Some(b"\x1b\r".to_vec())
-        );
+        assert_eq!(bytes(TermKey::Enter, SHIFT, None), Some(b"\n".to_vec()));
+        assert_eq!(bytes(TermKey::Enter, ALT, None), Some(b"\x1b\r".to_vec()));
         // Shift+Tab is back-tab; Alt+Backspace deletes the previous word.
+        assert_eq!(bytes(TermKey::Tab, SHIFT, None), Some(b"\x1b[Z".to_vec()));
         assert_eq!(
-            key_bytes(TermKey::Tab, SHIFT, None),
-            Some(b"\x1b[Z".to_vec())
+            bytes(TermKey::Backspace, ALT, None),
+            Some(b"\x1b\x7f".to_vec())
+        );
+    }
+
+    /// Every function key with the bytes xterm sends for it unmodified and
+    /// with Ctrl held, spelled out rather than derived from the encoder.
+    const FUNCTION_KEYS: [(TermKey, &[u8], &[u8]); 12] = [
+        (TermKey::F1, b"\x1bOP", b"\x1b[1;5P"),
+        (TermKey::F2, b"\x1bOQ", b"\x1b[1;5Q"),
+        (TermKey::F3, b"\x1bOR", b"\x1b[1;5R"),
+        (TermKey::F4, b"\x1bOS", b"\x1b[1;5S"),
+        (TermKey::F5, b"\x1b[15~", b"\x1b[15;5~"),
+        (TermKey::F6, b"\x1b[17~", b"\x1b[17;5~"),
+        (TermKey::F7, b"\x1b[18~", b"\x1b[18;5~"),
+        (TermKey::F8, b"\x1b[19~", b"\x1b[19;5~"),
+        (TermKey::F9, b"\x1b[20~", b"\x1b[20;5~"),
+        (TermKey::F10, b"\x1b[21~", b"\x1b[21;5~"),
+        (TermKey::F11, b"\x1b[23~", b"\x1b[23;5~"),
+        (TermKey::F12, b"\x1b[24~", b"\x1b[24;5~"),
+    ];
+
+    #[test]
+    fn function_keys_send_the_xterm_sequences() {
+        // F1–F4 are SS3 unmodified and switch to CSI 1;<mod> once modified;
+        // F5–F12 are `~`-terminated with the historical gaps at 16 and 22.
+        for (key, plain, ctrl) in FUNCTION_KEYS {
+            assert_eq!(bytes(key, NONE, None).as_deref(), Some(plain), "{key:?}");
+            assert_eq!(
+                bytes(key, CTRL, None).as_deref(),
+                Some(ctrl),
+                "Ctrl+{key:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_modified_f1_carries_the_xterm_modifier_parameter() {
+        assert_eq!(bytes(TermKey::F1, SHIFT, None), Some(b"\x1b[1;2P".to_vec()));
+        assert_eq!(bytes(TermKey::F12, ALT, None), Some(b"\x1b[24;3~".to_vec()));
+    }
+
+    #[test]
+    fn ctrl_space_is_nul_whether_the_space_bar_arrives_named_or_as_a_character() {
+        // iced reports the space bar as a named key, so the `Char(' ')` rule
+        // alone left a real Ctrl+Space typing a plain space.
+        assert_eq!(bytes(TermKey::Space, CTRL, None), Some(vec![0]));
+        assert_eq!(bytes(TermKey::Char(' '), CTRL, Some(" ")), Some(vec![0]));
+    }
+
+    #[test]
+    fn insert_is_the_tilde_key_two() {
+        assert_eq!(
+            bytes(TermKey::Insert, NONE, None),
+            Some(b"\x1b[2~".to_vec())
         );
         assert_eq!(
-            key_bytes(TermKey::Backspace, ALT, None),
-            Some(b"\x1b\x7f".to_vec())
+            bytes(TermKey::Insert, SHIFT, None),
+            Some(b"\x1b[2;2~".to_vec())
         );
     }
 
@@ -343,24 +641,21 @@ mod tests {
     fn modified_cursor_and_tilde_keys_carry_a_csi_parameter() {
         // Ctrl+Right (word jump), Shift+Up (select), Ctrl+Home.
         assert_eq!(
-            key_bytes(TermKey::Right, CTRL, None),
+            bytes(TermKey::Right, CTRL, None),
             Some(b"\x1b[1;5C".to_vec())
         );
+        assert_eq!(bytes(TermKey::Up, SHIFT, None), Some(b"\x1b[1;2A".to_vec()));
         assert_eq!(
-            key_bytes(TermKey::Up, SHIFT, None),
-            Some(b"\x1b[1;2A".to_vec())
-        );
-        assert_eq!(
-            key_bytes(TermKey::Home, CTRL, None),
+            bytes(TermKey::Home, CTRL, None),
             Some(b"\x1b[1;5H".to_vec())
         );
         // `~`-terminated keys gain the same parameter before the `~`.
         assert_eq!(
-            key_bytes(TermKey::Delete, CTRL, None),
+            bytes(TermKey::Delete, CTRL, None),
             Some(b"\x1b[3;5~".to_vec())
         );
         assert_eq!(
-            key_bytes(TermKey::PageUp, CTRL, None),
+            bytes(TermKey::PageUp, CTRL, None),
             Some(b"\x1b[5;5~".to_vec())
         );
     }
@@ -369,20 +664,20 @@ mod tests {
     fn alt_letters_are_meta_prefixed_other_chars_send_text() {
         // Alt+B is readline word-motion: ESC then the letter.
         assert_eq!(
-            key_bytes(TermKey::Char('b'), ALT, Some("b")),
+            bytes(TermKey::Char('b'), ALT, Some("b")),
             Some(vec![0x1b, b'b'])
         );
         // A macOS Option-composed glyph (non-ASCII) falls through to its text.
         assert_eq!(
-            key_bytes(TermKey::Char('´'), ALT, Some("´")),
+            bytes(TermKey::Char('´'), ALT, Some("´")),
             Some("´".as_bytes().to_vec())
         );
         // A plain character sends its layout-resolved text; none -> nothing.
         assert_eq!(
-            key_bytes(TermKey::Char('é'), NONE, Some("é")),
+            bytes(TermKey::Char('é'), NONE, Some("é")),
             Some("é".as_bytes().to_vec())
         );
-        assert_eq!(key_bytes(TermKey::Char('x'), NONE, None), None);
+        assert_eq!(bytes(TermKey::Char('x'), NONE, None), None);
     }
 
     // --- wheel forwarding for mouse-mode / alt-screen TUIs --------------
@@ -460,5 +755,138 @@ mod tests {
         // A TUI with both negotiated gets real wheel events, not arrows.
         let mode = MOUSE | TermMode::SGR_MOUSE | TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
         assert_eq!(wheel_bytes(mode, 0, 0, 1), Some(b"\x1b[<64;1;1M".to_vec()));
+    }
+
+    // --- button / motion reports -----------------------------------------
+
+    const SGR: TermMode = TermMode::SGR_MOUSE;
+
+    fn with(kind: PointerKind, button: PointerButton, col: u16, row: u16) -> PointerEvent {
+        PointerEvent {
+            button,
+            ..PointerEvent::left(kind, col, row)
+        }
+    }
+
+    #[test]
+    fn sgr_press_and_release_carry_the_button_and_the_one_based_cell() {
+        assert_eq!(
+            mouse_bytes(SGR, PointerEvent::left(PointerKind::Press, 4, 2)),
+            b"\x1b[<0;5;3M"
+        );
+        assert_eq!(
+            mouse_bytes(SGR, PointerEvent::left(PointerKind::Release, 4, 2)),
+            b"\x1b[<0;5;3m"
+        );
+    }
+
+    #[test]
+    fn sgr_buttons_are_numbered_left_middle_right() {
+        assert_eq!(
+            mouse_bytes(SGR, with(PointerKind::Press, PointerButton::Middle, 0, 0)),
+            b"\x1b[<1;1;1M"
+        );
+        assert_eq!(
+            mouse_bytes(SGR, with(PointerKind::Press, PointerButton::Right, 0, 0)),
+            b"\x1b[<2;1;1M"
+        );
+        assert_eq!(
+            mouse_bytes(SGR, with(PointerKind::Release, PointerButton::Right, 0, 0)),
+            b"\x1b[<2;1;1m",
+            "SGR keeps the button on release"
+        );
+    }
+
+    #[test]
+    fn a_click_is_a_press_followed_by_its_release() {
+        assert_eq!(
+            mouse_bytes(SGR, PointerEvent::left(PointerKind::Click, 4, 2)),
+            b"\x1b[<0;5;3M\x1b[<0;5;3m"
+        );
+    }
+
+    #[test]
+    fn sgr_drag_adds_the_motion_flag_to_the_button() {
+        assert_eq!(
+            mouse_bytes(SGR, PointerEvent::left(PointerKind::Drag, 4, 2)),
+            b"\x1b[<32;5;3M"
+        );
+        assert_eq!(
+            mouse_bytes(SGR, with(PointerKind::Drag, PointerButton::Right, 4, 2)),
+            b"\x1b[<34;5;3M"
+        );
+    }
+
+    #[test]
+    fn sgr_move_with_no_button_is_motion_over_button_three() {
+        assert_eq!(
+            mouse_bytes(SGR, PointerEvent::left(PointerKind::Move, 4, 2)),
+            b"\x1b[<35;5;3M"
+        );
+    }
+
+    #[test]
+    fn legacy_x10_biases_every_byte_and_releases_as_button_three() {
+        let x10 = TermMode::empty();
+        assert_eq!(
+            mouse_bytes(x10, PointerEvent::left(PointerKind::Press, 4, 2)),
+            vec![0x1b, b'[', b'M', 32, 37, 35]
+        );
+        assert_eq!(
+            mouse_bytes(x10, with(PointerKind::Release, PointerButton::Right, 4, 2)),
+            vec![0x1b, b'[', b'M', 35, 37, 35],
+            "X10 has no per-button release"
+        );
+        assert_eq!(
+            mouse_bytes(x10, PointerEvent::left(PointerKind::Drag, 4, 2)),
+            vec![0x1b, b'[', b'M', 64, 37, 35]
+        );
+    }
+
+    #[test]
+    fn legacy_x10_saturates_a_cell_the_protocol_cannot_address() {
+        // Column 300 has no byte in X10; it pins at 255 rather than wrapping
+        // onto a cell in the first row.
+        let bytes = mouse_bytes(
+            TermMode::empty(),
+            PointerEvent::left(PointerKind::Press, 300, 0),
+        );
+        assert_eq!(bytes[4], 255);
+    }
+
+    #[test]
+    fn no_default_binding_claims_a_terminal_control_key() {
+        // A bound chord never reaches the pane, so no default may be a chord
+        // this encoder turns into a C0 control byte. One exemption, asserted
+        // to still be in use: Ctrl+V pastes on Windows.
+        use termherd_core::Action;
+        use termherd_core::keymap::{MOD_CTRL, Platform, default_bindings};
+        let mut exemption_used = false;
+        for platform in Platform::ALL {
+            for (chord, action) in default_bindings(platform) {
+                if chord.mods != MOD_CTRL {
+                    continue;
+                }
+                let mut chars = chord.key.chars();
+                let (Some(ch), None) = (chars.next(), chars.next()) else {
+                    continue;
+                };
+                if (platform, ch, action) == (Platform::Windows, 'v', Action::Paste) {
+                    exemption_used = true;
+                    continue;
+                }
+                let text = ch.to_string();
+                let bytes = bytes(TermKey::Char(ch), CTRL, Some(&text));
+                let control = matches!(bytes.as_deref(), Some([b]) if *b < 0x20 || *b == 0x7f);
+                assert!(
+                    !control,
+                    "{action:?} claims Ctrl+{ch} on {platform:?}, which the pane reads as {bytes:?}"
+                );
+            }
+        }
+        assert!(
+            exemption_used,
+            "Windows no longer pastes on Ctrl+V: drop the exemption above"
+        );
     }
 }

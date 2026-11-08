@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use termherd_core::{SessionStatus, WorkspaceSnapshot};
+use termherd_core::{ClaudeColor, ClaudeIdentity, SessionKind, SessionStatus, WorkspaceSnapshot};
 
 /// The on-the-wire snapshot.
 #[derive(Serialize)]
@@ -57,11 +57,13 @@ struct ProjectDto {
     path: String,
     session_count: usize,
     collapsed: bool,
+    declared: bool,
 }
 
 #[derive(Serialize)]
 struct TabDto {
     active: bool,
+    parked: bool,
     title: String,
     /// Most-urgent status among the tab's sessions, or `None` if none live.
     status: Option<&'static str>,
@@ -78,6 +80,40 @@ struct PaneDto {
     cwd: Option<String>,
     /// `"starting"`, `"busy"`, `"idle"`, `"attention"`, or `"exited"`.
     status: &'static str,
+    #[serde(flatten)]
+    identity: IdentityDto,
+    /// The colour the pane wears — Claude's `/color` for a Claude pane, the
+    /// tab's picked colour for a shell — by its `/color` name; `null` when it
+    /// wears none.
+    color: Option<&'static str>,
+}
+
+/// Who the Claude in a pane is, as three flat fields shared by a snapshot pane
+/// and a `list_sessions` row. Each is `null`, never omitted, when unknown: no
+/// Claude in front, Windows, or a Claude Code that wrote no session file.
+#[derive(Serialize)]
+pub(crate) struct IdentityDto {
+    pid: Option<u32>,
+    peer_name: Option<String>,
+    session_id: Option<String>,
+}
+
+impl From<&ClaudeIdentity> for IdentityDto {
+    fn from(identity: &ClaudeIdentity) -> Self {
+        Self {
+            pid: identity.pid,
+            peer_name: identity.peer_name.clone(),
+            session_id: identity.session_id.clone(),
+        }
+    }
+}
+
+/// The stable external string for a session kind — one place every DTO reads.
+pub(crate) fn kind_str(kind: SessionKind) -> &'static str {
+    match kind {
+        SessionKind::Shell => "shell",
+        SessionKind::Claude => "claude",
+    }
 }
 
 /// The stable external string for a session status — one place every DTO reads.
@@ -117,6 +153,7 @@ impl From<&WorkspaceSnapshot> for SnapshotDto {
                         path: project.path.clone(),
                         session_count: project.session_count,
                         collapsed: project.collapsed,
+                        declared: project.declared,
                     })
                     .collect(),
             }),
@@ -124,6 +161,7 @@ impl From<&WorkspaceSnapshot> for SnapshotDto {
                 tabs.iter()
                     .map(|tab| TabDto {
                         active: tab.active,
+                        parked: tab.parked,
                         title: tab.title.clone(),
                         status: tab.status.map(status_str),
                         panes: tab.panes.iter().map(pane_dto).collect(),
@@ -139,11 +177,75 @@ impl From<&WorkspaceSnapshot> for SnapshotDto {
 fn pane_dto(pane: &termherd_core::PaneSnapshot) -> PaneDto {
     PaneDto {
         handle: pane.handle.to_string(),
-        kind: match pane.kind {
-            termherd_core::SessionKind::Shell => "shell",
-            termherd_core::SessionKind::Claude => "claude",
-        },
+        kind: kind_str(pane.kind),
         cwd: pane.cwd.clone(),
         status: status_str(pane.status),
+        identity: IdentityDto::from(&pane.identity),
+        color: pane.color.map(ClaudeColor::name),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use termherd_core::PaneSnapshot;
+
+    fn pane(kind: SessionKind, identity: ClaudeIdentity) -> serde_json::Value {
+        coloured_pane(kind, identity, None)
+    }
+
+    fn coloured_pane(
+        kind: SessionKind,
+        identity: ClaudeIdentity,
+        color: Option<ClaudeColor>,
+    ) -> serde_json::Value {
+        serde_json::to_value(pane_dto(&PaneSnapshot {
+            handle: 7,
+            kind,
+            cwd: Some("/proj".to_owned()),
+            status: SessionStatus::Idle,
+            identity,
+            color,
+        }))
+        .expect("encode")
+    }
+
+    #[test]
+    fn a_coloured_pane_names_its_colour_as_slash_color_spells_it() {
+        let json = coloured_pane(
+            SessionKind::Claude,
+            ClaudeIdentity::default(),
+            Some(ClaudeColor::Purple),
+        );
+        assert_eq!(json["color"], "purple");
+    }
+
+    #[test]
+    fn a_claude_pane_carries_pid_peer_name_and_session_id_flat() {
+        let json = pane(
+            SessionKind::Claude,
+            ClaudeIdentity {
+                pid: Some(4399),
+                peer_name: Some("proj-35".to_owned()),
+                session_id: Some("7eff".to_owned()),
+            },
+        );
+        assert_eq!(json["pid"], 4399);
+        assert_eq!(json["peer_name"], "proj-35");
+        assert_eq!(json["session_id"], "7eff");
+    }
+
+    #[test]
+    fn an_unknown_identity_is_null_not_missing() {
+        // A reader tells "termherd does not know" from "this termherd predates
+        // the field" by the key being there.
+        let json = pane(SessionKind::Shell, ClaudeIdentity::default());
+        for key in ["pid", "peer_name", "session_id", "color"] {
+            assert_eq!(
+                json.get(key),
+                Some(&serde_json::Value::Null),
+                "{key} must be present and null"
+            );
+        }
     }
 }

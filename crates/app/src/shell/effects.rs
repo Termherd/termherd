@@ -10,17 +10,33 @@ mod os;
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use iced::{Task, window};
+use termherd_core::claude_command::SUBMIT;
 use termherd_core::{
     Effect, Launch, McpConfig, OpenTarget, Section, SessionId, SnapshotFilter, SnapshotInputs,
     SpawnSpec, TerminalScope, WorkspaceSnapshot, ports::PtyError,
 };
 
+use termherd_claude::session_file::SessionFile;
+use termherd_scan::read_session_file;
+
 use super::bridge::Request;
+use super::notify_click::Posting;
 use super::{Message, Shell};
-use os::{notify, open_path, open_url, spawn_editor};
+use os::{notify, notify_clickable, notify_replacing, open_path, open_url, spawn_editor};
+
+/// Pause before a submit's Enter. Claude Code takes a burst of about 64 bytes
+/// or more for a paste, where Enter is a line break, so Enter must reach it in
+/// a read of its own.
+pub(super) const ENTER_GAP: Duration = Duration::from_millis(50);
+
+/// Wait out [`ENTER_GAP`]. The sleep blocks inside the future, as the scan and
+/// the PNG encode do: iced's executor here has no tokio timer to await.
+pub(super) async fn enter_gap() {
+    std::thread::sleep(ENTER_GAP);
+}
 
 /// Open a resolved file. The configured command fails *visibly* — a click
 /// that opens nothing is indistinguishable from a click that missed, and
@@ -61,9 +77,24 @@ impl Shell {
         let outcome = match effect {
             Effect::Spawn(mut spec) => {
                 self.attach_mcp(&mut spec);
-                self.pty.spawn(spec)
+                let session = spec.session;
+                let spawned = self.pty.spawn(spec);
+                if spawned.is_ok() {
+                    self.stamp_spawn(session);
+                }
+                spawned
             }
             Effect::Write { session, bytes } => self.pty.write(session, &bytes),
+            Effect::Paste {
+                session,
+                text,
+                bracketed,
+            } => self
+                .pty
+                .write(session, &termherd_pty::paste_bytes(&text, bracketed)),
+            Effect::Submit { session } => {
+                return Task::perform(enter_gap(), move |()| Message::SubmitDue(session));
+            }
             Effect::Resize {
                 session,
                 cols,
@@ -71,6 +102,7 @@ impl Shell {
             } => self.pty.resize(session, cols, rows),
             Effect::Scroll { session, target } => self.pty.scroll(session, target),
             Effect::Select { session, op } => self.pty.select(session, op),
+            Effect::TerminalPointer { session, pointer } => self.pty.pointer(session, pointer),
             Effect::CopyTerminalSelection { session } => self.pty.copy_selection(session),
             Effect::Kill(session) => {
                 self.revoke_mcp(session);
@@ -78,11 +110,15 @@ impl Shell {
             }
             // Metadata / fold state are file writes, not PTY calls.
             Effect::SaveMetadata(metadata) => {
-                crate::metadata_store::save(&metadata);
+                if let Some(dir) = &self.data_dir {
+                    crate::metadata_store::save(dir, &metadata);
+                }
                 Ok(())
             }
             Effect::SaveCollapsed(collapsed) => {
-                crate::collapsed_store::save(&collapsed);
+                if let Some(dir) = &self.data_dir {
+                    crate::collapsed_store::save(dir, &collapsed);
+                }
                 Ok(())
             }
             // Opening a link and a desktop notification are OS handoffs.
@@ -105,19 +141,59 @@ impl Shell {
                     |(request, resolved)| Message::PathResolved { request, resolved },
                 );
             }
-            Effect::Notify { title, body } => notify(&title, &body),
+            Effect::Notify {
+                session,
+                title,
+                body,
+            } => match self.notification_clicks.posting(session) {
+                Posting::Wait(slot) => notify_clickable(&title, &body, slot),
+                Posting::Replace(id) => notify_replacing(&title, &body, id),
+                Posting::Plain => {
+                    tracing::debug!("too many notifications awaiting a click; posting unclickable");
+                    notify(&title, &body)
+                }
+            },
             // Capture writes the dump and schedules the PNG; record drives the
             // encoder thread. Both return a task the loop above batches in.
             Effect::Capture(dump) => return self.capture_dump(dump),
             Effect::StartRecording
             | Effect::CaptureFrame
             | Effect::FinishRecording { .. }
-            | Effect::CancelRecording => return self.record.run_one(effect),
+            | Effect::CancelRecording => {
+                return self.record.run_one(effect, self.captures.as_deref());
+            }
+            Effect::TabShown => return self.settle_after_tab_switch(),
         };
         if let Err(error) = outcome {
             tracing::warn!(%error, "pty effect failed");
         }
         Task::none()
+    }
+
+    /// Press Enter in `session` once its submit's pause has passed. Through
+    /// `core`, so a session that exited during the pause is not written to.
+    pub(super) fn press_enter(&mut self, session: SessionId) -> Task<Message> {
+        let effects = self.core.apply(termherd_core::Event::TerminalInput {
+            session,
+            bytes: SUBMIT.to_vec(),
+        });
+        self.perform(effects)
+    }
+
+    /// Tell `core` when `session`'s PTY started, by the wall clock it has no
+    /// access to, so a hover card can say how long the session has run.
+    fn stamp_spawn(&mut self, session: SessionId) {
+        let effects = self.core.apply(termherd_core::Event::SessionSpawned {
+            session,
+            at: SystemTime::now(),
+        });
+        // Mid-`perform_one` there is no `Task` to carry an effect out with, so
+        // an effect this event starts emitting must fail the tests rather than
+        // vanish.
+        debug_assert!(
+            effects.is_empty(),
+            "SessionSpawned now emits effects: route them through `perform`"
+        );
     }
 
     /// Enrich a Claude spawn with the live-bridge endpoint: mint a per-session
@@ -130,7 +206,7 @@ impl Shell {
         let Some(endpoint) = &self.mcp_endpoint else {
             return;
         };
-        if !matches!(spec.launch, Launch::Claude { .. }) {
+        if !matches!(spec.launch, Launch::Claude(_)) {
             return;
         }
         let token = self.mcp_tokens.issue();
@@ -153,13 +229,18 @@ impl Shell {
     /// Gather the adapter-owned inputs for a bridge request: the config summary
     /// and the scoped terminal text a `snapshot` needs, which the pure `core`
     /// cannot read (settings live here, the grid in the `pty` adapter). Only the
-    /// filter's scope is read, so an unscoped call gathers nothing. Any other
-    /// request needs no injection, so it gets the empty default.
+    /// filter's scope is read, so an unscoped call gathers nothing.
+    /// `list_sessions` needs only the session files; any other request needs
+    /// no injection, so it gets the empty default.
     pub(super) fn snapshot_inputs(&self, request: &Request) -> SnapshotInputs {
-        let Request::Snapshot(filter) = request else {
-            return SnapshotInputs::default();
-        };
-        self.snapshot_inputs_for(filter)
+        match request {
+            Request::Snapshot(filter) => self.snapshot_inputs_for(filter),
+            Request::ListSessions => SnapshotInputs {
+                session_files: self.session_files(),
+                ..SnapshotInputs::default()
+            },
+            _ => SnapshotInputs::default(),
+        }
     }
 
     /// The adapter-owned inputs a given filter needs. Shared by the bridge
@@ -171,7 +252,34 @@ impl Shell {
                 .includes(Section::Config)
                 .then(|| self.config.clone()),
             terminals: self.scoped_terminal_text(filter),
+            session_files: if filter.includes(Section::Tabs) {
+                self.session_files()
+            } else {
+                BTreeMap::new()
+            },
         }
+    }
+
+    /// Claude's session file for each pid a pane has in front of its shell,
+    /// keyed by that pid; a pid with no readable file is simply absent. Read
+    /// afresh on every call, since Claude rewrites its name and session id in
+    /// place. Which pane the file then describes is `core`'s call.
+    // ponytail: one small read per pane on the GUI thread, per snapshot or
+    // list_sessions (and per tab hover, job change or agent-name copy, through
+    // `session_file`); move it to the terminal thread if a caller polls hard.
+    fn session_files(&self) -> BTreeMap<u32, SessionFile> {
+        self.core
+            .sessions
+            .values()
+            .filter_map(|session| session.foreground.as_ref().map(|job| job.pid))
+            .filter_map(|pid| self.session_file(pid).map(|file| (pid, file)))
+            .collect()
+    }
+
+    /// Claude's session file for `pid`, read now. `None` when there is no
+    /// sessions directory, no file, or none that decodes.
+    pub(super) fn session_file(&self, pid: u32) -> Option<SessionFile> {
+        read_session_file(&self.claude_dir.as_ref()?.join("sessions"), pid)
     }
 
     /// The full visible text of the sessions the filter scopes in, keyed by
@@ -207,13 +315,13 @@ impl Shell {
     }
 
     /// Resolve the captures dir and write the dump for an `Effect::Capture`. A
-    /// no-op when no home directory is set.
+    /// no-op without a data directory.
     fn capture_dump(&self, dump: WorkspaceSnapshot) -> Task<Message> {
-        let Some(dir) = crate::capture::captures_dir() else {
-            tracing::warn!("no home directory; capture skipped");
+        let Some(dir) = &self.captures else {
+            tracing::warn!("no data directory; capture skipped");
             return Task::none();
         };
-        self.perform_capture(&dir, dump)
+        self.perform_capture(dir, dump)
     }
 
     /// Write the rung-0 JSON dump into `dir` now and schedule the rung-1 PNG.
@@ -227,16 +335,23 @@ impl Shell {
         dir: &std::path::Path,
         dump: WorkspaceSnapshot,
     ) -> Task<Message> {
-        if let Err(error) = std::fs::create_dir_all(dir) {
+        if let Err(error) = termherd_private_fs::ensure_dir(dir) {
             tracing::warn!(%error, "could not create captures dir; capture skipped");
             return Task::none();
         }
+        let dump = if self.redact_captures {
+            crate::capture::redacted(dump)
+        } else {
+            dump
+        };
         let stamp = crate::capture::stamp(SystemTime::now());
         match crate::capture::write_dump(dir, &stamp, &dump) {
             Ok(path) => tracing::info!(path = %path.display(), "capture dump written"),
             Err(error) => tracing::warn!(%error, "could not write capture dump"),
         }
-        let png_path = crate::capture::png_path(dir, &stamp);
+        crate::capture::enforce_retention(dir);
+        let png_path =
+            crate::capture::artefact_path(dir, &stamp, crate::capture::Artefact::Screenshot);
         // Screenshot the live window (rung 1), then encode + write the PNG.
         // `Task::<Option>::and_then` only fires for `Some`, so a window-less run
         // simply skips the PNG and the JSON dump still stands.

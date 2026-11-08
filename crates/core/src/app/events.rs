@@ -7,12 +7,15 @@
 use std::collections::HashSet;
 
 use crate::browser::SessionRecord;
+use crate::claude_command::{ClaudeColor, ClaudeCommand, PromptInput};
 use crate::metadata::Overlay;
 use crate::snapshot::SnapshotInputs;
-use crate::workspace::{Direction, SessionId, SplitDir};
+use crate::workspace::{Branch, Direction, SessionId, SplitDir};
+use termherd_claude::session_file::SessionFile;
 
 use super::{
-    LaunchSpec, PathRequest, ResolvedPath, ScrollTarget, SelectOp, SessionStatus, TargetProbe, Zoom,
+    ForegroundJob, LaunchSpec, PathRequest, PointerEvent, ResolvedPath, ScrollTarget, SelectOp,
+    SessionStatus, TargetProbe, Zoom,
 };
 
 #[derive(Debug, Clone)]
@@ -30,6 +33,23 @@ pub enum Event {
         session: SessionId,
         bytes: Vec<u8>,
     },
+    /// The user pasted `text` into a terminal whose bracketed-paste mode is
+    /// `bracketed`. Written at once, or held for confirmation when the terminal
+    /// would run its lines one by one — see
+    /// [`paste_needs_confirmation`](super::paste_needs_confirmation).
+    Paste {
+        session: SessionId,
+        text: String,
+        bracketed: bool,
+    },
+    /// Write the paste held for confirmation.
+    ConfirmPaste,
+    /// Drop the paste held for confirmation without writing it.
+    CancelPaste,
+    /// Submit what was typed into a terminal: Enter, kept apart from the text.
+    TerminalSubmit {
+        session: SessionId,
+    },
     /// A terminal pane changed size (in cells); propagate to the PTY (FR4).
     TerminalResized {
         session: SessionId,
@@ -41,6 +61,12 @@ pub enum Event {
     Select {
         session: SessionId,
         op: SelectOp,
+    },
+    /// A cell-addressed pointer event for a terminal (FR4); see
+    /// [`pointer_select`](super::pointer_select) for what it does there.
+    TerminalPointer {
+        session: SessionId,
+        pointer: PointerEvent,
     },
     /// Copy a terminal's current selection to the clipboard. The text is read
     /// from the terminal's own selection (not a snapshot), so it is exact even
@@ -82,10 +108,47 @@ pub enum Event {
         session: SessionId,
         cwd: String,
     },
+    /// The process in front of the session's shell changed: `Some(pid)` while a
+    /// job runs there (for a Claude pane, Claude itself), `None` while the
+    /// shell is in front. Never sent where the platform cannot say (ConPTY). The pid is what
+    /// names Claude's own session file, the only record of its peer name.
+    ForegroundJobChanged {
+        session: SessionId,
+        job: Option<ForegroundJob>,
+    },
+    /// The program in `session`'s terminal entered (`on`) or left the
+    /// alternate screen — what a full-screen program (an editor, a pager, a
+    /// monitor) draws on. Where the foreground job cannot be read, it is the
+    /// sign that one is running.
+    AltScreenChanged {
+        session: SessionId,
+        on: bool,
+    },
+    /// The shell read Claude's session file for the job in front of
+    /// `session`: the file, or `None` when there was none to read.
+    SessionFileRead {
+        session: SessionId,
+        file: Option<SessionFile>,
+    },
+    /// The shell spawned `session`'s PTY at `at`, by its own clock: the
+    /// moment a hover card counts the session's running time from.
+    SessionSpawned {
+        session: SessionId,
+        at: std::time::SystemTime,
+    },
     /// The user clicked a tab to bring it to the front (FR5).
     ActivateTab(usize),
     /// The user closed a tab (FR5); its sessions' PTYs are killed.
     CloseTab(usize),
+    /// Park the tab at `index`, or unpark it when it is parked. Presentational:
+    /// its sessions keep running, so it yields no effects.
+    ToggleParkTab(usize),
+    /// Close the pane hosting `SessionId` wherever it lives, killing its PTY,
+    /// without bringing it into view first: the active tab and the focus stay
+    /// unless the closed pane held the focus, which then passes to its
+    /// sibling. A lone pane closes its tab, which goes on the reopen stack as
+    /// any tab close does. Unknown sessions are ignored.
+    ClosePane(SessionId),
     /// The user dragged the tab at `from` to rest at index `to` (FR5). A
     /// pure reorder: no PTY is touched, so it yields no effects.
     MoveTab {
@@ -93,8 +156,12 @@ pub enum Event {
         to: usize,
     },
     /// Reopen the most recently closed tab, restoring its mode and
-    /// directory. A no-op when nothing has been closed.
-    ReopenClosedTab,
+    /// directory. A no-op when nothing has been closed. A fresh Claude tab
+    /// comes back as a new conversation under `fresh_claude_id`, minted by the
+    /// shell: the id it closed with already names a transcript.
+    ReopenClosedTab {
+        fresh_claude_id: String,
+    },
     /// Give the tab at `index` a manual name, overriding its derived title
     /// (FR5). A blank title clears the override; the manual name is never
     /// clobbered by a later OSC/digest update. A pure relabel — no PTY touched.
@@ -102,8 +169,22 @@ pub enum Event {
         index: usize,
         title: String,
     },
+    /// Give the tab at `index` a colour of termherd's own — only when its
+    /// focused pane is one Claude does not colour (see
+    /// [`App::color_keeper`](crate::App::color_keeper)); a Claude pane is
+    /// recoloured by typing `/color` into it instead. `Default` clears it.
+    SetTabColor {
+        index: usize,
+        color: ClaudeColor,
+    },
     /// Split the focused pane, opening a fresh session beside it (FR6).
     SplitFocused(SplitDir),
+    /// Set a split ratio by tree path in a specific tab.
+    SetSplitRatio {
+        tab: usize,
+        path: Vec<Branch>,
+        ratio: f32,
+    },
     /// Close the focused pane (FR6); its PTY is killed and the split collapses.
     CloseFocusedPane,
     /// Move focus to the next / previous pane in the active tab (FR6).
@@ -126,6 +207,24 @@ pub enum Event {
     ToggleStar(String),
     /// Toggle a repo's star, by real project path (`F-favorites`, repo-level).
     ToggleRepoStar(String),
+    /// Add a repo to the sidebar by hand (`F-repo-add`), by real project path.
+    /// The path arrives already normalised by the adapter, exactly as a scanned
+    /// `project_path` does — so a declaration and a discovery of the same repo
+    /// land on one key.
+    DeclareRepo(String),
+    /// Drop a hand-added repo's declaration. The group survives if the scan
+    /// still reports sessions for it; it disappears only when nothing else
+    /// justified its presence.
+    ForgetRepo(String),
+    /// A `termherd://open` link: show the tab working in this repo, or open
+    /// a shell there. Never types into a session nor launches Claude.
+    OpenRepo {
+        /// The repo as the link wrote it, where a new shell opens.
+        path: String,
+        /// The same repo as the filesystem resolves it, when that differs: a
+        /// pane may report either spelling, so either one matches.
+        resolved: Option<String>,
+    },
     /// Toggle a session's archived flag, by Claude session id.
     ToggleArchive(String),
     /// Set (or clear, when empty) a session's custom title.
@@ -205,4 +304,14 @@ pub enum Event {
     /// (skip the OS banner — the per-window suppression the OS itself applies
     /// when unfocused already covers that case).
     WindowFocusChanged(bool),
+    /// The user confirmed typing a Claude slash command into a session. Sent
+    /// only if the session can still take it — see
+    /// [`App::claude_command_check`](super::App::claude_command_check).
+    SendClaudeCommand {
+        session: SessionId,
+        command: ClaudeCommand,
+        /// The session's prompt as its screen shows it now — read again at
+        /// the confirmation, not carried over from the arming.
+        prompt: PromptInput,
+    },
 }

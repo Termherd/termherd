@@ -13,12 +13,12 @@ use core::ops::Range;
 
 /// URL schemes we recognise as clickable. Order matters only in that no scheme
 /// is a prefix of another here, so the first match at a position is correct.
-const SCHEMES: [&str; 4] = ["https://", "http://", "file://", "ftp://"];
+const SCHEMES: [&str; 5] = ["https://", "http://", "file://", "ftp://", "termherd://"];
 
 /// Find the clickable URL spans in one line of terminal text.
 ///
 /// Ranges are character indices into `line` (== grid columns). Each span begins
-/// at a scheme (`https://`, `http://`, `file://`, `ftp://`) sitting on a word
+/// at a scheme (`https://`, `http://`, `file://`, `ftp://`, `termherd://`) on a word
 /// boundary and runs to the first character that cannot belong to a URL.
 /// Trailing sentence punctuation and unbalanced closing brackets are trimmed so
 /// prose like `(see https://example.com).` yields just the bare URL.
@@ -160,6 +160,14 @@ mod tests {
         assert_eq!(links("http://x.y"), ["http://x.y"]);
         assert_eq!(links("file:///etc/hosts"), ["file:///etc/hosts"]);
         assert_eq!(links("ftp://host/path"), ["ftp://host/path"]);
+    }
+
+    #[test]
+    fn termherd_scheme_is_a_link() {
+        assert_eq!(
+            links("open termherd://open?repo=/Users/me/dev/app now"),
+            ["termherd://open?repo=/Users/me/dev/app"]
+        );
     }
 
     #[test]

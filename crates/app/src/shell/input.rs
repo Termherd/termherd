@@ -7,6 +7,8 @@ use iced::keyboard;
 use termherd_core::{KeyChord, keymap};
 use termherd_pty::{KeyMods, TermKey};
 
+use crate::settings::OptionAsMeta;
+
 /// The keymap chord for a key press (FR9): the key's normalised name plus the
 /// modifier bits. `None` for keys we do not bind (so they reach the terminal).
 ///
@@ -45,8 +47,8 @@ pub(super) fn chord_of(
 /// it would consume for a human, and `escape` / `enter` reach it — a chord
 /// resolved straight to its keymap action could never do that.
 ///
-/// `None` for a chord naming a key no event can carry (`"f2"`, `"space"`): those
-/// bind to nothing today, so no round trip is owed.
+/// `None` for a chord naming a key no event can carry (`"f13"`, `"capslock"`):
+/// no real press resolves such a binding either, so no round trip is owed.
 ///
 /// The number row is rebuilt by *physical* position, mirroring how `chord_of`
 /// reads it — otherwise `cmd+1` would come back as the character `1` and fail to
@@ -79,21 +81,70 @@ pub(super) fn event_of(chord: &KeyChord) -> Option<keyboard::Event> {
 const NON_DIGIT: keyboard::key::Physical =
     keyboard::key::Physical::Unidentified(keyboard::key::NativeCode::Unidentified);
 
-/// The named key a chord name spells, or `None` when it names a character. The
-/// inverse of [`key_name`]'s named arms, and deliberately no wider: a name this
-/// does not know is a key no binding can hold.
-fn named_key(name: &str) -> Option<keyboard::key::Named> {
+/// A named key as the three sides of the shell see it: the name a chord spells
+/// it by, the key iced reports, and the key the terminal codec encodes.
+#[derive(Debug, Clone, Copy)]
+struct NamedKey {
+    name: &'static str,
+    key: keyboard::key::Named,
+    term: TermKey,
+}
+
+const fn named(name: &'static str, key: keyboard::key::Named, term: TermKey) -> NamedKey {
+    NamedKey { name, key, term }
+}
+
+/// The named keys a chord can spell and a terminal receives. The one table
+/// every direction reads, so a key nameable on a real press is nameable over
+/// MCP and the reverse, and a nameable key bound to nothing reaches the
+/// terminal. A named key missing here reaches neither.
+const NAMED_KEYS: &[NamedKey] = {
     use keyboard::key::Named;
-    match name {
-        "tab" => Some(Named::Tab),
-        "enter" => Some(Named::Enter),
-        "escape" => Some(Named::Escape),
-        "up" => Some(Named::ArrowUp),
-        "down" => Some(Named::ArrowDown),
-        "left" => Some(Named::ArrowLeft),
-        "right" => Some(Named::ArrowRight),
-        _ => None,
-    }
+    &[
+        named("tab", Named::Tab, TermKey::Tab),
+        named("enter", Named::Enter, TermKey::Enter),
+        named("escape", Named::Escape, TermKey::Escape),
+        // Arrow keys carry chord names so bindings like `mod+up` (scroll) and
+        // `mod+shift+left` (pane focus) resolve, instead of leaking the raw
+        // cursor sequence to the shell.
+        named("up", Named::ArrowUp, TermKey::Up),
+        named("down", Named::ArrowDown, TermKey::Down),
+        named("left", Named::ArrowLeft, TermKey::Left),
+        named("right", Named::ArrowRight, TermKey::Right),
+        // Home / End name the scroll-to-top / bottom chords off macOS.
+        named("home", Named::Home, TermKey::Home),
+        named("end", Named::End, TermKey::End),
+        named("pageup", Named::PageUp, TermKey::PageUp),
+        named("pagedown", Named::PageDown, TermKey::PageDown),
+        named("insert", Named::Insert, TermKey::Insert),
+        named("delete", Named::Delete, TermKey::Delete),
+        named("backspace", Named::Backspace, TermKey::Backspace),
+        named("space", Named::Space, TermKey::Space),
+        named("f1", Named::F1, TermKey::F1),
+        named("f2", Named::F2, TermKey::F2),
+        named("f3", Named::F3, TermKey::F3),
+        named("f4", Named::F4, TermKey::F4),
+        named("f5", Named::F5, TermKey::F5),
+        named("f6", Named::F6, TermKey::F6),
+        named("f7", Named::F7, TermKey::F7),
+        named("f8", Named::F8, TermKey::F8),
+        named("f9", Named::F9, TermKey::F9),
+        named("f10", Named::F10, TermKey::F10),
+        named("f11", Named::F11, TermKey::F11),
+        named("f12", Named::F12, TermKey::F12),
+    ]
+};
+
+/// The table row for an iced named key, or `None` for a key outside it.
+fn row_of(key: keyboard::key::Named) -> Option<&'static NamedKey> {
+    NAMED_KEYS.iter().find(|row| row.key == key)
+}
+
+/// The named key a chord name spells, or `None` when it names a character.
+fn named_key(name: &str) -> Option<keyboard::key::Named> {
+    NAMED_KEYS
+        .iter()
+        .find_map(|row| (row.name == name).then_some(row.key))
 }
 
 /// A single-digit chord name as a number-row key: the character it types plus
@@ -170,26 +221,16 @@ fn physical_digit_name(physical: &keyboard::key::Physical) -> Option<String> {
     Some(digit.to_string())
 }
 
-/// The keymap name of an iced key: a lowercased character, or a handful of
-/// named keys that bindings use. `None` for keys no shortcut can target.
+/// The keymap name of an iced key: a lowercased character, or a named key from
+/// [`NAMED_KEYS`]. `None` for keys no shortcut can target.
 fn key_name(key: &keyboard::Key) -> Option<String> {
-    use keyboard::key::Named;
     match key {
         keyboard::Key::Character(c) => c
             .chars()
             .next()
             .map(|ch| ch.to_ascii_lowercase().to_string()),
-        keyboard::Key::Named(Named::Tab) => Some("tab".to_string()),
-        keyboard::Key::Named(Named::Enter) => Some("enter".to_string()),
-        keyboard::Key::Named(Named::Escape) => Some("escape".to_string()),
-        // Arrow keys carry chord names so bindings like `mod+up` (scroll) and
-        // `mod+shift+left` (pane focus) resolve — without this they fall through
-        // to the terminal, leaking the raw cursor sequence to the shell.
-        keyboard::Key::Named(Named::ArrowUp) => Some("up".to_string()),
-        keyboard::Key::Named(Named::ArrowDown) => Some("down".to_string()),
-        keyboard::Key::Named(Named::ArrowLeft) => Some("left".to_string()),
-        keyboard::Key::Named(Named::ArrowRight) => Some("right".to_string()),
-        _ => None,
+        keyboard::Key::Named(named) => row_of(*named).map(|row| row.name.to_owned()),
+        keyboard::Key::Unidentified => None,
     }
 }
 
@@ -213,25 +254,10 @@ pub(super) fn numpad_char(location: keyboard::Location, text: Option<&str>) -> O
 /// (`termherd_pty::key_bytes`). `None` for keys with no terminal sequence, so
 /// they reach no PTY. The byte protocol itself lives in the terminal adapter.
 pub(super) fn to_term_key(key: &keyboard::Key) -> Option<TermKey> {
-    use keyboard::Key;
-    use keyboard::key::Named;
     match key {
-        Key::Character(c) => c.chars().next().map(TermKey::Char),
-        Key::Named(Named::Enter) => Some(TermKey::Enter),
-        Key::Named(Named::Tab) => Some(TermKey::Tab),
-        Key::Named(Named::Backspace) => Some(TermKey::Backspace),
-        Key::Named(Named::Escape) => Some(TermKey::Escape),
-        Key::Named(Named::Space) => Some(TermKey::Space),
-        Key::Named(Named::ArrowUp) => Some(TermKey::Up),
-        Key::Named(Named::ArrowDown) => Some(TermKey::Down),
-        Key::Named(Named::ArrowLeft) => Some(TermKey::Left),
-        Key::Named(Named::ArrowRight) => Some(TermKey::Right),
-        Key::Named(Named::Home) => Some(TermKey::Home),
-        Key::Named(Named::End) => Some(TermKey::End),
-        Key::Named(Named::Delete) => Some(TermKey::Delete),
-        Key::Named(Named::PageUp) => Some(TermKey::PageUp),
-        Key::Named(Named::PageDown) => Some(TermKey::PageDown),
-        _ => None,
+        keyboard::Key::Character(c) => c.chars().next().map(TermKey::Char),
+        keyboard::Key::Named(named) => row_of(*named).map(|row| row.term),
+        keyboard::Key::Unidentified => None,
     }
 }
 
@@ -241,6 +267,94 @@ pub(super) fn key_mods(m: keyboard::Modifiers) -> KeyMods {
         ctrl: m.control(),
         alt: m.alt(),
         shift: m.shift(),
+    }
+}
+
+/// Which Alt (Option) keys are held, read from the Alt keys' own press and
+/// release: a letter's event says Alt is down, never which one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct AltSides {
+    left: bool,
+    right: bool,
+}
+
+/// Alt key events as winit reports them, for tests on both sides of the shell.
+#[cfg(test)]
+pub(super) mod alt_events {
+    use iced::keyboard::key::{Code, Named, Physical};
+    use iced::keyboard::{Event, Key, Location, Modifiers};
+
+    fn physical(location: Location) -> Physical {
+        Physical::Code(match location {
+            Location::Right => Code::AltRight,
+            _ => Code::AltLeft,
+        })
+    }
+
+    pub(in crate::shell) fn alt_down(location: Location) -> Event {
+        let key = Key::Named(Named::Alt);
+        Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: physical(location),
+            location,
+            modifiers: Modifiers::ALT,
+            text: None,
+            repeat: false,
+        }
+    }
+
+    /// The Alt key at `location` coming up, leaving `modifiers` held.
+    pub(in crate::shell) fn alt_up(location: Location, modifiers: Modifiers) -> Event {
+        let key = Key::Named(Named::Alt);
+        Event::KeyReleased {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: physical(location),
+            location,
+            modifiers,
+        }
+    }
+}
+
+impl AltSides {
+    /// Fold one keyboard event into the held sides.
+    pub(super) fn track(&mut self, event: &keyboard::Event) {
+        use keyboard::key::Named;
+        match event {
+            keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(Named::Alt),
+                location,
+                ..
+            } => self.set(*location, true),
+            keyboard::Event::KeyReleased {
+                key: keyboard::Key::Named(Named::Alt),
+                location,
+                ..
+            } => self.set(*location, false),
+            // A release lost to a focus change must not leave a side stuck down.
+            _ if !event_modifiers(event).alt() => *self = Self::default(),
+            _ => {}
+        }
+    }
+
+    fn set(&mut self, location: keyboard::Location, held: bool) {
+        match location {
+            keyboard::Location::Left => self.left = held,
+            keyboard::Location::Right => self.right = held,
+            _ => {}
+        }
+    }
+}
+
+/// Whether a held Alt sends Meta under `option`. An Alt with no known side
+/// (an MCP press) counts as either side.
+pub(super) fn sends_meta(option: OptionAsMeta, sides: AltSides) -> bool {
+    match option {
+        OptionAsMeta::None => false,
+        OptionAsMeta::Left => sides.left || !sides.right,
+        OptionAsMeta::Right => sides.right || !sides.left,
+        OptionAsMeta::Both => true,
     }
 }
 
@@ -256,10 +370,11 @@ pub(super) fn event_modifiers(event: &keyboard::Event) -> keyboard::Modifiers {
 
 #[cfg(test)]
 mod tests {
+    use super::alt_events::{alt_down, alt_up};
     use super::*;
     use iced::keyboard::key::{Code, Named, Physical};
-    use iced::keyboard::{Key, Modifiers};
-    use termherd_core::keymap::action_catalog;
+    use iced::keyboard::{Key, Location, Modifiers};
+    use termherd_core::keymap::{Platform, default_bindings};
 
     /// The chord a synthesised event reads back as, or `None` when the chord
     /// could not be synthesised at all — the whole round trip in one call.
@@ -290,8 +405,13 @@ mod tests {
             to_term_key(&Key::Named(Named::PageDown)),
             Some(TermKey::PageDown)
         );
+        assert_eq!(to_term_key(&Key::Named(Named::F2)), Some(TermKey::F2));
+        assert_eq!(
+            to_term_key(&Key::Named(Named::Insert)),
+            Some(TermKey::Insert)
+        );
         // Keys with no terminal sequence reach no PTY.
-        assert_eq!(to_term_key(&Key::Named(Named::F2)), None);
+        assert_eq!(to_term_key(&Key::Named(Named::CapsLock)), None);
         assert_eq!(to_term_key(&Key::Unidentified), None);
     }
 
@@ -307,6 +427,63 @@ mod tests {
         );
         // Cmd / Super (logo) never affects terminal bytes.
         assert_eq!(key_mods(Modifiers::LOGO), KeyMods::default());
+    }
+
+    const LEFT: AltSides = AltSides {
+        left: true,
+        right: false,
+    };
+    const RIGHT: AltSides = AltSides {
+        left: false,
+        right: true,
+    };
+    const BOTH: AltSides = AltSides {
+        left: true,
+        right: true,
+    };
+
+    #[test]
+    fn sends_meta_follows_the_side_the_setting_names() {
+        use OptionAsMeta::{Both, Left, None, Right};
+        for (option, sides, meta) in [
+            (Left, LEFT, true),
+            (Left, RIGHT, false),
+            (Right, LEFT, false),
+            (Right, RIGHT, true),
+            (Both, LEFT, true),
+            (Both, RIGHT, true),
+            (None, LEFT, false),
+            (None, RIGHT, false),
+        ] {
+            assert_eq!(sends_meta(option, sides), meta, "{option:?} with {sides:?}");
+        }
+    }
+
+    #[test]
+    fn an_alt_with_no_known_side_is_meta_unless_neither_key_is() {
+        let unknown = AltSides::default();
+        for option in [OptionAsMeta::Left, OptionAsMeta::Right, OptionAsMeta::Both] {
+            assert!(sends_meta(option, unknown), "{option:?}");
+        }
+        assert!(!sends_meta(OptionAsMeta::None, unknown));
+    }
+
+    #[test]
+    fn alt_sides_follow_each_alt_keys_press_and_release() {
+        let mut sides = AltSides::default();
+        sides.track(&alt_down(Location::Right));
+        assert_eq!(sides, RIGHT);
+        sides.track(&alt_down(Location::Left));
+        assert_eq!(sides, BOTH);
+        sides.track(&alt_up(Location::Right, Modifiers::ALT));
+        assert_eq!(sides, LEFT);
+    }
+
+    #[test]
+    fn any_event_without_alt_held_clears_both_sides() {
+        let mut sides = BOTH;
+        sides.track(&keyboard::Event::ModifiersChanged(Modifiers::empty()));
+        assert_eq!(sides, AltSides::default());
     }
 
     #[test]
@@ -334,9 +511,17 @@ mod tests {
             chord_of(&Key::Named(Named::ArrowUp), &NON_DIGIT, Modifiers::LOGO),
             Some(KeyChord::new("up", keymap::MOD_CMD))
         );
-        // Keys no shortcut targets carry no chord.
         assert_eq!(
             chord_of(&Key::Named(Named::F2), &NON_DIGIT, Modifiers::default()),
+            Some(KeyChord::new("f2", 0))
+        );
+        // Keys no shortcut targets carry no chord.
+        assert_eq!(
+            chord_of(
+                &Key::Named(Named::CapsLock),
+                &NON_DIGIT,
+                Modifiers::default()
+            ),
             None
         );
     }
@@ -413,20 +598,13 @@ mod tests {
         // The defaults are the chords that must work on day one. A chord that
         // does not round-trip is a binding `press_keys` silently cannot reach —
         // exactly the silent-drop this rung exists to avoid.
-        let primary = if cfg!(target_os = "macos") {
-            "cmd"
-        } else {
-            "ctrl"
-        };
-        for entry in action_catalog() {
-            for spec in entry.default_chords {
-                let chord = KeyChord::parse(&spec.replace("mod", primary))
-                    .expect("a shipped default chord spec parses");
+        // Every platform's, so a Windows-only chord is checked from a Mac.
+        for platform in Platform::ALL {
+            for (chord, action) in default_bindings(platform) {
                 assert_eq!(
                     round_trip(&chord).as_ref(),
                     Some(&chord),
-                    "default chord `{spec}` for {} must round-trip",
-                    entry.name
+                    "default chord {chord:?} for {action:?} on {platform:?} must round-trip"
                 );
             }
         }
@@ -472,11 +650,53 @@ mod tests {
     }
 
     #[test]
+    fn the_editing_and_function_keys_are_nameable() {
+        // Each of these has a terminal sequence, so a chord naming it must reach
+        // the keymap on a real press and be synthesisable over `press_keys`.
+        let names = [
+            "pageup",
+            "pagedown",
+            "delete",
+            "backspace",
+            "space",
+            "insert",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain((1..=12).map(|n| format!("f{n}")));
+        for name in names {
+            let chord = KeyChord::new(name.as_str(), 0);
+            assert_eq!(round_trip(&chord).as_ref(), Some(&chord), "`{name}`");
+        }
+    }
+
+    #[test]
+    fn every_named_key_round_trips() {
+        // Read from the table the code uses, so a row added later is covered.
+        for row in NAMED_KEYS {
+            let chord = KeyChord::new(row.name, keymap::MOD_SHIFT);
+            assert_eq!(round_trip(&chord).as_ref(), Some(&chord), "`{}`", row.name);
+        }
+    }
+
+    #[test]
+    fn no_two_rows_share_a_name_or_a_key() {
+        // Lookups take the first match, so a second row for the same name or
+        // key would be dead in one direction and live in the other.
+        for (i, row) in NAMED_KEYS.iter().enumerate() {
+            for other in &NAMED_KEYS[i + 1..] {
+                assert_ne!(row.name, other.name);
+                assert_ne!(row.key, other.key, "`{}` and `{}`", row.name, other.name);
+            }
+        }
+    }
+
+    #[test]
     fn a_chord_no_key_event_can_carry_synthesises_nothing() {
         // `key_name` never produces these, so no real press could resolve such a
         // binding either. Reporting nothing is the faithful answer; inventing an
         // event would give the MCP surface a reach the keyboard lacks.
-        for name in ["f2", "space", "pageup", "home"] {
+        for name in ["f13", "capslock", "printscreen"] {
             assert_eq!(
                 event_of(&KeyChord::new(name, keymap::MOD_CMD)),
                 None,
@@ -525,10 +745,12 @@ mod tests {
         /// modifier set survives the round trip.
         #[test]
         fn arbitrary_nameable_chords_round_trip(
-            name in proptest::sample::select(vec![
-                "a", "z", "0", "5", "9", "-", "=", "+",
-                "tab", "enter", "escape", "up", "down", "left", "right",
-            ]),
+            name in proptest::sample::select(
+                ["a", "z", "0", "5", "9", "-", "=", "+"]
+                    .into_iter()
+                    .chain(NAMED_KEYS.iter().map(|row| row.name))
+                    .collect::<Vec<_>>()
+            ),
             mods in 0u8..16,
         ) {
             let chord = KeyChord::new(name, mods);
@@ -549,5 +771,325 @@ mod tests {
             ),
             Some(KeyChord::new("c", keymap::MOD_CMD))
         );
+    }
+
+    /// What the default keymap does with a press, built the way iced hands it
+    /// over: `key` is winit's `key_without_modifiers`, so Shift never changes
+    /// the character it names.
+    fn default_action_of(
+        platform: keymap::Platform,
+        key: &str,
+        physical: Code,
+        modifiers: Modifiers,
+    ) -> Option<termherd_core::Action> {
+        let chord = chord_of(
+            &Key::Character(key.into()),
+            &Physical::Code(physical),
+            modifiers,
+        )?;
+        keymap::default_bindings(platform)
+            .into_iter()
+            .find_map(|(bound, action)| (bound == chord).then_some(action))
+    }
+
+    #[test]
+    fn the_tab_menu_chord_is_reachable_from_a_real_press_on_qwerty_and_azerty() {
+        use keymap::Platform;
+        use termherd_core::Action;
+        let cmd_shift = Modifiers::LOGO | Modifiers::SHIFT;
+        let ctrl_shift = Modifiers::CTRL | Modifiers::SHIFT;
+        // QWERTY: M sits on KeyM. AZERTY: the M key is where QWERTY has `;`.
+        for physical in [Code::KeyM, Code::Semicolon] {
+            assert_eq!(
+                default_action_of(Platform::MacOs, "m", physical, cmd_shift),
+                Some(Action::OpenTabMenu),
+                "{physical:?} on macOS"
+            );
+            assert_eq!(
+                default_action_of(Platform::Linux, "m", physical, ctrl_shift),
+                Some(Action::OpenTabMenu),
+                "{physical:?} on Windows and Linux"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shifted_punctuation_chord_arrives_as_its_unshifted_key() {
+        // Why `.` cannot be a default: on AZERTY it is Shift+`;`, and the key
+        // a press reports drops the Shift, so Cmd+Shift+`;` names `;`.
+        assert_eq!(
+            chord_of(
+                &Key::Character(";".into()),
+                &Physical::Code(Code::Comma),
+                Modifiers::LOGO | Modifiers::SHIFT,
+            ),
+            Some(KeyChord::new(";", keymap::MOD_CMD | keymap::MOD_SHIFT))
+        );
+    }
+
+    // ---- Which default chords a real press can produce ------------------
+    //
+    // A layout is its typing keys as iced reports them: the physical code and
+    // the character the key types without Shift, which `key` carries whether
+    // Shift is held or not. Dead keys are left out: they report no character.
+
+    type Layout = &'static [(Code, &'static str)];
+
+    const QWERTY_US: Layout = &[
+        (Code::Backquote, "`"),
+        (Code::Digit1, "1"),
+        (Code::Digit2, "2"),
+        (Code::Digit3, "3"),
+        (Code::Digit4, "4"),
+        (Code::Digit5, "5"),
+        (Code::Digit6, "6"),
+        (Code::Digit7, "7"),
+        (Code::Digit8, "8"),
+        (Code::Digit9, "9"),
+        (Code::Digit0, "0"),
+        (Code::Minus, "-"),
+        (Code::Equal, "="),
+        (Code::KeyQ, "q"),
+        (Code::KeyW, "w"),
+        (Code::KeyE, "e"),
+        (Code::KeyR, "r"),
+        (Code::KeyT, "t"),
+        (Code::KeyY, "y"),
+        (Code::KeyU, "u"),
+        (Code::KeyI, "i"),
+        (Code::KeyO, "o"),
+        (Code::KeyP, "p"),
+        (Code::BracketLeft, "["),
+        (Code::BracketRight, "]"),
+        (Code::Backslash, "\\"),
+        (Code::KeyA, "a"),
+        (Code::KeyS, "s"),
+        (Code::KeyD, "d"),
+        (Code::KeyF, "f"),
+        (Code::KeyG, "g"),
+        (Code::KeyH, "h"),
+        (Code::KeyJ, "j"),
+        (Code::KeyK, "k"),
+        (Code::KeyL, "l"),
+        (Code::Semicolon, ";"),
+        (Code::Quote, "'"),
+        (Code::KeyZ, "z"),
+        (Code::KeyX, "x"),
+        (Code::KeyC, "c"),
+        (Code::KeyV, "v"),
+        (Code::KeyB, "b"),
+        (Code::KeyN, "n"),
+        (Code::KeyM, "m"),
+        (Code::Comma, ","),
+        (Code::Period, "."),
+        (Code::Slash, "/"),
+    ];
+
+    /// French AZERTY as Windows and Linux ship it: `-` on the 6 key, `=` right
+    /// of `)`.
+    const AZERTY_PC: Layout = &[
+        (Code::Backquote, "²"),
+        (Code::Digit1, "&"),
+        (Code::Digit2, "é"),
+        (Code::Digit3, "\""),
+        (Code::Digit4, "'"),
+        (Code::Digit5, "("),
+        (Code::Digit6, "-"),
+        (Code::Digit7, "è"),
+        (Code::Digit8, "_"),
+        (Code::Digit9, "ç"),
+        (Code::Digit0, "à"),
+        (Code::Minus, ")"),
+        (Code::Equal, "="),
+        (Code::KeyQ, "a"),
+        (Code::KeyW, "z"),
+        (Code::KeyE, "e"),
+        (Code::KeyR, "r"),
+        (Code::KeyT, "t"),
+        (Code::KeyY, "y"),
+        (Code::KeyU, "u"),
+        (Code::KeyI, "i"),
+        (Code::KeyO, "o"),
+        (Code::KeyP, "p"),
+        (Code::BracketRight, "$"),
+        (Code::Backslash, "*"),
+        (Code::KeyA, "q"),
+        (Code::KeyS, "s"),
+        (Code::KeyD, "d"),
+        (Code::KeyF, "f"),
+        (Code::KeyG, "g"),
+        (Code::KeyH, "h"),
+        (Code::KeyJ, "j"),
+        (Code::KeyK, "k"),
+        (Code::KeyL, "l"),
+        (Code::Semicolon, "m"),
+        (Code::Quote, "ù"),
+        (Code::IntlBackslash, "<"),
+        (Code::KeyZ, "w"),
+        (Code::KeyX, "x"),
+        (Code::KeyC, "c"),
+        (Code::KeyV, "v"),
+        (Code::KeyB, "b"),
+        (Code::KeyN, "n"),
+        (Code::KeyM, ","),
+        (Code::Comma, ";"),
+        (Code::Period, ":"),
+        (Code::Slash, "!"),
+    ];
+
+    /// French AZERTY as macOS ships it: `-` right of `)`, `=` right of `:`.
+    const AZERTY_MAC: Layout = &[
+        (Code::Digit1, "&"),
+        (Code::Digit2, "é"),
+        (Code::Digit3, "\""),
+        (Code::Digit4, "'"),
+        (Code::Digit5, "("),
+        (Code::Digit6, "§"),
+        (Code::Digit7, "è"),
+        (Code::Digit8, "!"),
+        (Code::Digit9, "ç"),
+        (Code::Digit0, "à"),
+        (Code::Minus, ")"),
+        (Code::Equal, "-"),
+        (Code::KeyQ, "a"),
+        (Code::KeyW, "z"),
+        (Code::KeyE, "e"),
+        (Code::KeyR, "r"),
+        (Code::KeyT, "t"),
+        (Code::KeyY, "y"),
+        (Code::KeyU, "u"),
+        (Code::KeyI, "i"),
+        (Code::KeyO, "o"),
+        (Code::KeyP, "p"),
+        (Code::BracketRight, "$"),
+        (Code::KeyA, "q"),
+        (Code::KeyS, "s"),
+        (Code::KeyD, "d"),
+        (Code::KeyF, "f"),
+        (Code::KeyG, "g"),
+        (Code::KeyH, "h"),
+        (Code::KeyJ, "j"),
+        (Code::KeyK, "k"),
+        (Code::KeyL, "l"),
+        (Code::Semicolon, "m"),
+        (Code::Quote, "ù"),
+        (Code::KeyZ, "w"),
+        (Code::KeyX, "x"),
+        (Code::KeyC, "c"),
+        (Code::KeyV, "v"),
+        (Code::KeyB, "b"),
+        (Code::KeyN, "n"),
+        (Code::KeyM, ","),
+        (Code::Comma, ";"),
+        (Code::Period, ":"),
+        (Code::Slash, "="),
+    ];
+
+    const LAYOUTS: [(&str, Layout); 3] = [
+        ("QWERTY", QWERTY_US),
+        ("AZERTY (PC)", AZERTY_PC),
+        ("AZERTY (Mac)", AZERTY_MAC),
+    ];
+
+    /// The keypad operators, the same on every layout.
+    const KEYPAD: Layout = &[
+        (Code::NumpadAdd, "+"),
+        (Code::NumpadSubtract, "-"),
+        (Code::NumpadMultiply, "*"),
+        (Code::NumpadDivide, "/"),
+    ];
+
+    /// Whether some press on `layout` reads back as `chord`. A keypad
+    /// operator counts only without Shift: a default holding Shift spells a
+    /// typing key, and one reachable only by holding Shift over the keypad is
+    /// that key's shifted face misnamed.
+    fn reachable_on(layout: Layout, chord: &KeyChord) -> bool {
+        let modifiers = modifiers_of(chord.mods);
+        let press = |&(code, typed): &(Code, &str)| {
+            chord_of(
+                &Key::Character(typed.into()),
+                &Physical::Code(code),
+                modifiers,
+            )
+        };
+        let keypad = if chord.mods & keymap::MOD_SHIFT == 0 {
+            KEYPAD
+        } else {
+            &[]
+        };
+        layout
+            .iter()
+            .chain(keypad)
+            .map(press)
+            .chain(
+                NAMED_KEYS
+                    .iter()
+                    .map(|row| chord_of(&Key::Named(row.key), &NON_DIGIT, modifiers)),
+            )
+            .any(|read| read.as_ref() == Some(chord))
+    }
+
+    #[test]
+    fn every_default_chord_is_produced_by_a_real_press() {
+        // A chord no press produces is a binding that never fires, and the
+        // keystroke it was meant for falls through to the terminal.
+        for platform in Platform::ALL {
+            for (chord, action) in default_bindings(platform) {
+                assert!(
+                    LAYOUTS
+                        .iter()
+                        .any(|(_, layout)| reachable_on(layout, &chord)),
+                    "default {chord:?} for {action:?} on {platform:?} is produced by no press"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_default_action_is_reachable_on_qwerty_and_azerty() {
+        for platform in Platform::ALL {
+            let bindings = default_bindings(platform);
+            for (_, action) in &bindings {
+                for (name, layout) in LAYOUTS {
+                    assert!(
+                        bindings
+                            .iter()
+                            .any(|(chord, bound)| bound == action && reachable_on(layout, chord)),
+                        "{action:?} on {platform:?} has no default a {name} press produces"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zoom_in_is_reachable_from_the_plus_key_with_or_without_shift() {
+        use termherd_core::Action;
+        // The `+` face of this key needs Shift on all three layouts, so the
+        // press reports `=` either way.
+        for (layout, physical) in [
+            ("QWERTY", Code::Equal),
+            ("AZERTY (PC)", Code::Equal),
+            ("AZERTY (Mac)", Code::Slash),
+        ] {
+            for (platform, primary) in [
+                (Platform::MacOs, Modifiers::LOGO),
+                (Platform::Linux, Modifiers::CTRL),
+                (Platform::Windows, Modifiers::CTRL),
+            ] {
+                for modifiers in [primary, primary | Modifiers::SHIFT] {
+                    assert_eq!(
+                        default_action_of(platform, "=", physical, modifiers),
+                        Some(Action::ZoomIn),
+                        "{layout} {modifiers:?} on {platform:?}"
+                    );
+                }
+                assert_eq!(
+                    default_action_of(platform, "+", Code::NumpadAdd, primary),
+                    Some(Action::ZoomIn),
+                    "keypad + on {platform:?}"
+                );
+            }
+        }
     }
 }

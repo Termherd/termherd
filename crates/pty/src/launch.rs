@@ -6,8 +6,9 @@
 use std::path::{Path, PathBuf};
 
 use portable_pty::CommandBuilder;
+use termherd_claude::session_id::{is_uuid, is_valid};
 use termherd_core::workspace::SessionId;
-use termherd_core::{Launch, McpConfig};
+use termherd_core::{ClaudeLaunch, Launch, McpConfig};
 
 use crate::integration::{SHELL_DIR_PREFIX, integration_for};
 
@@ -17,7 +18,10 @@ use crate::integration::{SHELL_DIR_PREFIX, integration_for};
 /// (FR4a). `mcp_config`, when set, is the path to a written `mcpServers` file
 /// passed as `--mcp-config` so the session can reach termherd's live bridge —
 /// the path is on argv, but the token inside the file is not. `settings` is the
-/// [`write_title_settings`] overlay that keeps the status channel open. Pure so
+/// [`write_title_settings`] overlay that keeps the status channel open. A fresh
+/// launch's minted id goes on as `--session-id` only when it is UUID-shaped:
+/// anything else is dropped, and Claude picks its own. A resume id outside
+/// Claude's charset types nothing at all. Pure so
 /// the command contract is unit-tested without a real PTY.
 pub(crate) fn launch_command(
     launch: &Launch,
@@ -33,8 +37,29 @@ pub(crate) fn launch_command(
     .collect::<String>();
     match launch {
         Launch::Shell => None,
-        Launch::Claude { resume: None } => Some(format!("claude{flags}\r")),
-        Launch::Claude { resume: Some(id) } => Some(format!("claude{flags} --resume {id}\r")),
+        Launch::Claude(ClaudeLaunch::Fresh(None)) => Some(format!("claude{flags}\r")),
+        Launch::Claude(ClaudeLaunch::Fresh(Some(id))) if is_uuid(id) => {
+            Some(format!("claude{flags} --session-id {id}\r"))
+        }
+        // Production ids are minted as UUIDs, so this arm guards the seam rather
+        // than a known path. `core` still records the id it was given; that
+        // disagreement only costs a transcript lookup that finds nothing.
+        Launch::Claude(ClaudeLaunch::Fresh(Some(id))) => {
+            tracing::warn!(
+                id,
+                "refusing a session id that is not a UUID; launching without --session-id"
+            );
+            Some(format!("claude{flags}\r"))
+        }
+        Launch::Claude(ClaudeLaunch::Resume(id)) if is_valid(id) => {
+            Some(format!("claude{flags} --resume {id}\r"))
+        }
+        // A resume cannot go ahead without its id, and a fresh conversation in
+        // its place would pass for the one asked for: the shell is left bare.
+        Launch::Claude(ClaudeLaunch::Resume(id)) => {
+            tracing::warn!(id, "refusing to resume a malformed session id");
+            None
+        }
     }
 }
 
@@ -51,13 +76,13 @@ pub(crate) fn launch_command(
 /// configured is lost. `None` (logged, not fatal) if the write fails: the
 /// session then launches with whatever title setting the user has.
 ///
-/// `--settings` arrived in Claude Code **1.0.61**, which is therefore the CLI
-/// floor termherd's README states: an older one rejects the flag and the launch
-/// fails outright, rather than merely losing its status.
-pub(crate) fn write_title_settings(session: SessionId) -> Option<PathBuf> {
-    let path = std::env::temp_dir().join(format!("termherd-settings-{}.json", session.0.get()));
+/// `--settings` arrived in Claude Code **1.0.61**: an older CLI rejects the
+/// flag and the launch fails outright, rather than merely losing its status.
+/// The floor the README states is higher still, for `--session-id`.
+pub fn write_title_settings(private: &PrivateFiles, session: SessionId) -> Option<PathBuf> {
+    let path = private.settings(session);
     let json = r#"{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":"0"}}"#;
-    match write_private(&path, json) {
+    match termherd_private_fs::write_file(&path, json) {
         Ok(()) => Some(path),
         Err(error) => {
             tracing::warn!(
@@ -77,14 +102,19 @@ pub(crate) fn write_title_settings(session: SessionId) -> Option<PathBuf> {
 /// *decides* lives there, pure and unit-tested. It lives in this module because
 /// the files are secrets-adjacent in the same sense as the mcp config: they are
 /// executed by the user's shell, so they go through the same private-write
-/// discipline (see [`private_dir`]).
+/// discipline (see [`termherd_private_fs::create_dir`]).
 ///
 /// A shell with no recipe, or a directory that cannot be made privately, leaves
 /// the command untouched: that session then falls back on the foreground process
 /// group ([`crate::status::foreground_status`]). A degradation, not a failure,
 /// so it is logged rather than propagated.
-pub(crate) fn apply_integration(session: SessionId, program: &str, cmd: &mut CommandBuilder) {
-    let dir = shell_dir(session);
+pub(crate) fn apply_integration(
+    private: &PrivateFiles,
+    session: SessionId,
+    program: &str,
+    cmd: &mut CommandBuilder,
+) {
+    let dir = private.shell_dir(session);
     let Some(integration) = integration_for(program, &dir, |key| std::env::var_os(key)) else {
         return;
     };
@@ -122,29 +152,21 @@ pub(crate) fn apply_integration(session: SessionId, program: &str, cmd: &mut Com
     }
 }
 
-/// The private per-session directory a shell-integration recipe is written
-/// into. Named once, because three readers need the same answer: the launch
-/// that writes it, the teardown that removes it, and — through
-/// [`SHELL_DIR_PREFIX`] — the nested launch that must not mistake it for the
-/// user's own home.
-fn shell_dir(session: SessionId) -> PathBuf {
-    std::env::temp_dir().join(format!("{SHELL_DIR_PREFIX}{}", session.0.get()))
-}
-
 /// Create the private directory and write every startup file into it.
 fn write_startup_files(dir: &Path, files: &[(PathBuf, String)]) -> std::io::Result<()> {
     if files.is_empty() {
         return Ok(());
     }
     // Session ids restart at 1 with each run, so a directory left behind by a
-    // crashed one would collide — and [`private_dir`] refuses to adopt what it
-    // finds, which would cost that session its marks *for good*. Clearing first
+    // crashed one would collide — and [`termherd_private_fs::create_dir`]
+    // refuses to adopt what it finds, which would cost that session its marks
+    // *for good*. Clearing first
     // keeps that refusal aimed at directories we could not have written: in a
     // shared temp directory another user's entry cannot be removed either.
     let _ = std::fs::remove_dir_all(dir);
-    private_dir(dir)?;
+    termherd_private_fs::create_dir(dir)?;
     for (path, contents) in files {
-        write_private(path, contents)?;
+        termherd_private_fs::write_file(path, contents)?;
     }
     Ok(())
 }
@@ -157,34 +179,51 @@ fn write_startup_files(dir: &Path, files: &[(PathBuf, String)]) -> std::io::Resu
 /// config holds a **bearer token** for termherd's live bridge, which has no
 /// business outliving the session it authorised. Best-effort by construction:
 /// a file already gone is the desired state, and a teardown is no place to fail.
-pub(crate) fn discard_private_files(session: SessionId) {
-    let temp = std::env::temp_dir();
-    let id = session.0.get();
-    let _ = std::fs::remove_dir_all(shell_dir(session));
-    let _ = std::fs::remove_file(temp.join(format!("termherd-mcp-{id}.json")));
-    let _ = std::fs::remove_file(temp.join(format!("termherd-settings-{id}.json")));
+pub(crate) fn discard_private_files(private: &PrivateFiles, session: SessionId) {
+    let _ = std::fs::remove_dir_all(private.shell_dir(session));
+    let _ = std::fs::remove_file(private.mcp_config(session));
+    let _ = std::fs::remove_file(private.settings(session));
 }
 
-/// Create `path` as a directory only this user can reach (`0o700` on Unix), and
-/// **fail if it already exists**.
+/// Where every session's private files live: its shell-integration directory,
+/// its mcp config, its settings overlay, each named by the session id.
 ///
-/// Both halves are load-bearing. The default temp directory is per-user on
-/// macOS but is the shared, world-writable `/tmp` on Linux, and what goes in
-/// here is not merely read — it is *sourced by the user's login shell*. A
-/// directory another local user pre-created under the name we are about to use
-/// would let them choose what that shell executes. Refusing to adopt an existing
-/// directory turns that into a fallback to the foreground poll; the private mode
-/// keeps the files unreadable and unwritable to anyone else afterwards.
-#[cfg(unix)]
-fn private_dir(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::DirBuilderExt;
+/// Session ids restart at 1 in every process, so two processes sharing a root
+/// name the same files, and each deletes the other's on teardown. The root is
+/// therefore chosen once, by whoever builds the [`crate::PtyManager`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivateFiles(PathBuf);
 
-    std::fs::DirBuilder::new().mode(0o700).create(path)
-}
+impl PrivateFiles {
+    /// Private files rooted at `root`, an existing directory.
+    #[must_use]
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self(root.into())
+    }
 
-#[cfg(not(unix))]
-fn private_dir(path: &Path) -> std::io::Result<()> {
-    std::fs::create_dir(path)
+    /// The private per-session directory a shell-integration recipe is
+    /// written into. Named once, because three readers need the same answer:
+    /// the launch that writes it, the teardown that removes it, and — through
+    /// [`SHELL_DIR_PREFIX`] — the nested launch that must not mistake it for
+    /// the user's own home.
+    fn shell_dir(&self, session: SessionId) -> PathBuf {
+        self.0
+            .join(format!("{SHELL_DIR_PREFIX}{}", session.0.get()))
+    }
+
+    /// Where [`write_mcp_config`] puts `session`'s mcp config.
+    #[must_use]
+    pub fn mcp_config(&self, session: SessionId) -> PathBuf {
+        self.0
+            .join(format!("termherd-mcp-{}.json", session.0.get()))
+    }
+
+    /// Where [`write_title_settings`] puts `session`'s settings overlay.
+    #[must_use]
+    pub fn settings(&self, session: SessionId) -> PathBuf {
+        self.0
+            .join(format!("termherd-settings-{}.json", session.0.get()))
+    }
 }
 
 /// Write the `mcpServers` config for a Claude launch and return its path, so
@@ -193,10 +232,14 @@ fn private_dir(path: &Path) -> std::io::Result<()> {
 /// [`termherd_claude::mcp::servers_config`], shared with the attach path so one
 /// config format stays one config format. `None` (logged, not fatal) if the
 /// write fails: the session then launches without the live bridge.
-pub(crate) fn write_mcp_config(session: SessionId, config: &McpConfig) -> Option<PathBuf> {
-    let path = std::env::temp_dir().join(format!("termherd-mcp-{}.json", session.0.get()));
+pub fn write_mcp_config(
+    private: &PrivateFiles,
+    session: SessionId,
+    config: &McpConfig,
+) -> Option<PathBuf> {
+    let path = private.mcp_config(session);
     let json = termherd_claude::mcp::servers_config(&config.url, &config.token);
-    match write_private(&path, &json) {
+    match termherd_private_fs::write_file(&path, &json) {
         Ok(()) => Some(path),
         Err(error) => {
             tracing::warn!(
@@ -206,34 +249,6 @@ pub(crate) fn write_mcp_config(session: SessionId, config: &McpConfig) -> Option
             None
         }
     }
-}
-
-/// Write `contents` to `path` readable only by the current user (`0o600` on
-/// Unix) — the file carries a bearer token, so a world-readable temp file would
-/// leak it to any other local user. On non-Unix the platform's per-user temp
-/// ACLs are relied on.
-///
-/// Public because the app writes the same kind of file for the attach rung: the
-/// permission fork is OS-conditional, and a second copy of it would be a second
-/// quarantined home for `cfg(unix)` to hide in.
-#[cfg(unix)]
-pub fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
-    file.write_all(contents.as_bytes())
-}
-
-#[cfg(not(unix))]
-pub fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
-    std::fs::write(path, contents)
 }
 
 /// What [`apply_terminal_env`] advertises as the host terminal. Claude CLI only
@@ -256,9 +271,168 @@ pub(crate) fn apply_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("TERM_PROGRAM_VERSION", TERM_PROGRAM_VERSION);
 }
 
+/// The variables a Claude Code session exports to every process it starts, each
+/// naming *that* session: its id, its pid, its messaging socket and token, the
+/// mark that a process runs inside it. A termherd started from such a process
+/// would otherwise hand them to every PTY, and a Claude started there takes
+/// itself for part of the parent session — it then wrote no
+/// `~/.claude/sessions/<pid>.json`, which is how termherd names a session.
+///
+/// A list, not a `CLAUDE` prefix: the same namespace holds what a user
+/// configures on purpose (`CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK`, …),
+/// which must keep reaching the sessions termherd starts.
+pub(crate) const INHERITED_SESSION_VARS: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+    "AI_AGENT",
+];
+
+/// Remove every [`INHERITED_SESSION_VARS`] entry from what `cmd` will spawn
+/// with, leaving the rest of the environment as inherited.
+///
+/// Removed by name rather than by filtering what the builder lists: its
+/// listing skips a value that is not UTF-8, and a removal by name also matches
+/// Windows' case-insensitive keys.
+pub(crate) fn strip_inherited_session_env(cmd: &mut CommandBuilder) {
+    for name in INHERITED_SESSION_VARS {
+        cmd.env_remove(name);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every variable `cmd` will spawn with, as name/value pairs.
+    fn spawn_env(cmd: &CommandBuilder) -> Vec<(String, String)> {
+        cmd.iter_full_env_as_str()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect()
+    }
+
+    /// Seen exported by a Claude Code 2.1.319 Bash tool. Spelled out here
+    /// rather than read from [`INHERITED_SESSION_VARS`], so an entry dropped
+    /// from the list fails a test instead of quietly shrinking it.
+    const SEEN_FROM_A_CLAUDE_SESSION: &[&str] = &[
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_SESSION_ATTENDED",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
+        "AI_AGENT",
+    ];
+
+    /// What a user sets on purpose, in the same namespace.
+    const USER_CONFIGURATION: &[&str] = &[
+        "CLAUDE_CONFIG_DIR",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_TMPDIR",
+        "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
+        "CLAUDE_CODE_EFFORT_LEVEL",
+        "ANTHROPIC_API_KEY",
+        "PATH",
+        "HOME",
+    ];
+
+    fn is_inherited_session_var(name: &str) -> bool {
+        INHERITED_SESSION_VARS.contains(&name)
+    }
+
+    #[test]
+    fn every_variable_naming_the_parent_session_is_inherited_session_state() {
+        for name in SEEN_FROM_A_CLAUDE_SESSION {
+            assert!(is_inherited_session_var(name), "{name} must be stripped");
+        }
+    }
+
+    #[test]
+    fn user_configuration_is_not_session_state() {
+        for name in USER_CONFIGURATION {
+            assert!(!is_inherited_session_var(name), "{name} must be kept");
+        }
+    }
+
+    #[test]
+    fn a_variable_merely_sharing_a_session_name_prefix_is_kept() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env("CLAUDECODE_EXTRA", "kept");
+        cmd.env("CLAUDE_PID_FILE", "kept");
+        strip_inherited_session_env(&mut cmd);
+        assert_eq!(cmd.get_env("CLAUDECODE_EXTRA"), Some("kept".as_ref()));
+        assert_eq!(cmd.get_env("CLAUDE_PID_FILE"), Some("kept".as_ref()));
+    }
+
+    #[test]
+    fn stripping_removes_the_parent_session_and_keeps_the_user_configuration() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        for name in SEEN_FROM_A_CLAUDE_SESSION.iter().chain(USER_CONFIGURATION) {
+            cmd.env(name, "seeded");
+        }
+        strip_inherited_session_env(&mut cmd);
+        let env = spawn_env(&cmd);
+        for name in SEEN_FROM_A_CLAUDE_SESSION {
+            assert!(
+                env.iter().all(|(key, _)| key != name),
+                "{name} reached the spawn"
+            );
+        }
+        for name in USER_CONFIGURATION {
+            assert!(
+                env.contains(&((*name).to_owned(), "seeded".to_owned())),
+                "{name} was lost"
+            );
+        }
+    }
+
+    mod stripping {
+        use proptest::prelude::*;
+
+        use super::*;
+
+        proptest! {
+            /// Whatever else the environment holds, stripping takes away the
+            /// session variables and nothing more.
+            #[test]
+            fn removes_exactly_the_session_variables(
+                others in proptest::collection::btree_map(
+                    "[A-Z][A-Z0-9_]{0,15}", "[ -~]{0,12}", 0..8,
+                ),
+                seeded in proptest::sample::subsequence(SEEN_FROM_A_CLAUDE_SESSION, 0..=11),
+            ) {
+                let mut cmd = CommandBuilder::new("/bin/sh");
+                for (name, value) in &others {
+                    cmd.env(name, value);
+                }
+                for name in &seeded {
+                    cmd.env(name, "seeded");
+                }
+                let before = spawn_env(&cmd);
+                strip_inherited_session_env(&mut cmd);
+
+                let expected: Vec<_> = before
+                    .into_iter()
+                    .filter(|(name, _)| !is_inherited_session_var(name))
+                    .collect();
+                prop_assert_eq!(spawn_env(&cmd), expected);
+                for name in &seeded {
+                    prop_assert!(cmd.get_env(name).is_none(), "{} survived", name);
+                }
+            }
+        }
+    }
 
     /// The three flags a fully-wired Claude launch carries, as paths.
     fn mcp() -> &'static Path {
@@ -301,11 +475,12 @@ mod tests {
     fn performing_a_recipe_writes_its_files_and_points_the_command_at_them() {
         // The recipe being right is worth nothing if it is never performed:
         // this is the seam between the tested contract and the spawned command.
-        let session = SessionId(std::num::NonZeroU64::new(97).expect("nonzero"));
+        let (_tmp, private) = scratch();
+        let session = session(97);
         let mut cmd = CommandBuilder::new("/bin/zsh");
-        apply_integration(session, "/bin/zsh", &mut cmd);
+        apply_integration(&private, session, "/bin/zsh", &mut cmd);
 
-        let dir = shell_dir(session);
+        let dir = private.shell_dir(session);
         assert_eq!(
             set_on(&cmd, "ZDOTDIR"),
             Some(dir.display().to_string()),
@@ -316,7 +491,6 @@ mod tests {
             rc.contains("133;A"),
             "the written rc carries the hooks, got {rc}"
         );
-        discard_private_files(session);
     }
 
     #[test]
@@ -324,13 +498,14 @@ mod tests {
         // Session ids restart at 1 with each run, so the second run's session 1
         // meets the first run's directory. Refusing it there would cost that
         // session its marks for good — a bug that only shows up after a crash.
-        let session = SessionId(std::num::NonZeroU64::new(96).expect("nonzero"));
-        let stale = shell_dir(session);
+        let (_tmp, private) = scratch();
+        let session = session(96);
+        let stale = private.shell_dir(session);
         std::fs::create_dir_all(&stale).expect("leave a stale directory");
         std::fs::write(stale.join(".zshrc"), "stale\n").expect("with stale contents");
 
         let mut cmd = CommandBuilder::new("/bin/zsh");
-        apply_integration(session, "/bin/zsh", &mut cmd);
+        apply_integration(&private, session, "/bin/zsh", &mut cmd);
         assert_eq!(
             set_on(&cmd, "ZDOTDIR"),
             Some(stale.display().to_string()),
@@ -338,42 +513,51 @@ mod tests {
         );
         let rc = std::fs::read_to_string(stale.join(".zshrc")).expect("rewritten");
         assert!(rc.contains("133;A"), "and rewritten, got {rc}");
-        discard_private_files(session);
     }
 
     #[test]
     fn tearing_a_session_down_takes_its_private_files_with_it() {
         // The mcp config holds the live bridge's bearer token; leaving it in a
         // temp directory after the session is gone leaves the token there too.
-        let session = SessionId(std::num::NonZeroU64::new(95).expect("nonzero"));
+        let (_tmp, private) = scratch();
+        let session = session(95);
         let mut cmd = CommandBuilder::new("/bin/zsh");
-        apply_integration(session, "/bin/zsh", &mut cmd);
-        let overlay = write_title_settings(session).expect("overlay written");
-        let dir = shell_dir(session);
+        apply_integration(&private, session, "/bin/zsh", &mut cmd);
+        let overlay = write_title_settings(&private, session).expect("overlay written");
+        let dir = private.shell_dir(session);
         assert!(dir.exists() && overlay.exists(), "both exist while it runs");
 
-        discard_private_files(session);
+        discard_private_files(&private, session);
         assert!(!dir.exists(), "the integration directory is gone");
         assert!(!overlay.exists(), "the settings overlay is gone");
     }
 
-    #[test]
-    fn a_directory_that_is_already_there_is_never_adopted() {
-        // The startup files are *sourced by the user's login shell*, and the
-        // default temp directory is the shared `/tmp` on Linux. Adopting a
-        // directory already in place would let whoever created it choose what
-        // that shell runs. Our own leftovers are cleared first
-        // (`write_startup_files`); what survives that clearing is, by
-        // construction, a directory another user owns — and it must be refused.
-        let planted = std::env::temp_dir().join("termherd-planted-94");
-        let _ = std::fs::remove_dir_all(&planted);
-        std::fs::create_dir_all(&planted).expect("plant the directory");
+    fn session(id: u64) -> SessionId {
+        SessionId(std::num::NonZeroU64::new(id).expect("nonzero"))
+    }
 
+    /// A root for private files that no other process shares.
+    fn scratch() -> (tempfile::TempDir, PrivateFiles) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let private = PrivateFiles::new(tmp.path());
+        (tmp, private)
+    }
+
+    #[test]
+    fn a_file_left_by_a_crashed_run_is_replaced_not_refused() {
+        // Session ids restart at 1 each run.
+        let (_tmp, private) = scratch();
+        let session = session(84);
+        let path = private.settings(session);
+        std::fs::write(&path, "stale").expect("leave a stale overlay");
+
+        let written =
+            write_title_settings(&private, session).expect("our own leftover is replaced");
+        let contents = std::fs::read_to_string(&written).expect("readable overlay");
         assert!(
-            private_dir(&planted).is_err(),
-            "an existing directory must never be adopted"
+            contents.contains("CLAUDE_CODE_DISABLE_TERMINAL_TITLE"),
+            "got {contents}"
         );
-        let _ = std::fs::remove_dir_all(&planted);
     }
 
     #[test]
@@ -384,19 +568,16 @@ mod tests {
         // shell is bash, which is most Linux ones. Even without the panic, the
         // argument would demote the login shell to an ordinary one and change
         // which startup files run. Declining costs the marks, not the session.
-        let session = SessionId(std::num::NonZeroU64::new(93).expect("nonzero"));
-        // Cleared first: this is the one test that asserts an *absence* under
-        // the shared temp directory, so a directory left by an earlier failed
-        // — or mutated — run would fail it for reasons that are not its own.
-        discard_private_files(session);
+        let (_tmp, private) = scratch();
+        let session = session(93);
         let mut cmd = CommandBuilder::new_default_prog();
-        apply_integration(session, "/bin/bash", &mut cmd);
+        apply_integration(&private, session, "/bin/bash", &mut cmd);
         assert!(
             cmd.is_default_prog(),
             "the default login shell must be left exactly as it was"
         );
         assert!(
-            !shell_dir(session).exists(),
+            !private.shell_dir(session).exists(),
             "and nothing is written for a recipe that will not be applied"
         );
     }
@@ -406,15 +587,14 @@ mod tests {
         // The same recipe is fine on a shell the user named: that builder
         // already carries its own argv, so there is no login-shell argv0 to
         // lose and no panic to trip.
-        let session = SessionId(std::num::NonZeroU64::new(92).expect("nonzero"));
+        let (_tmp, private) = scratch();
         let mut cmd = CommandBuilder::new("/bin/bash");
-        apply_integration(session, "/bin/bash", &mut cmd);
+        apply_integration(&private, session(92), "/bin/bash", &mut cmd);
         assert!(
             cmd.get_argv().iter().any(|arg| arg == "--rcfile"),
             "got {:?}",
             cmd.get_argv()
         );
-        discard_private_files(session);
     }
 
     #[test]
@@ -434,10 +614,11 @@ mod tests {
             eprintln!("skipped: the inherited ZDOTDIR is the user's own, not one termherd wrote");
             return;
         }
-        let session = SessionId(std::num::NonZeroU64::new(91).expect("nonzero"));
-        let integration =
-            integration_for("/bin/zsh", &shell_dir(session), |key| std::env::var_os(key))
-                .expect("zsh has a recipe");
+        let (_tmp, private) = scratch();
+        let integration = integration_for("/bin/zsh", &private.shell_dir(session(91)), |key| {
+            std::env::var_os(key)
+        })
+        .expect("zsh has a recipe");
         let inherited = inherited.display().to_string();
         for (path, contents) in integration.files {
             assert!(
@@ -450,9 +631,9 @@ mod tests {
 
     #[test]
     fn performing_an_unknown_shells_recipe_leaves_the_command_alone() {
-        let session = SessionId(std::num::NonZeroU64::new(98).expect("nonzero"));
+        let (_tmp, private) = scratch();
         let mut cmd = CommandBuilder::new("/usr/bin/nu");
-        apply_integration(session, "/usr/bin/nu", &mut cmd);
+        apply_integration(&private, session(98), "/usr/bin/nu", &mut cmd);
         assert_eq!(set_on(&cmd, "ZDOTDIR"), None);
         assert!(cmd.get_argv().len() <= 1, "no arguments were appended");
     }
@@ -464,10 +645,10 @@ mod tests {
 
     #[test]
     fn a_fresh_claude_launch_types_bare_claude() {
-        // The 🤖 button must start Claude *fresh*, never with
+        // The Claude button must start Claude *fresh*, never with
         // a stray `--resume`.
         assert_eq!(
-            launch_command(&Launch::Claude { resume: None }, None, None),
+            launch_command(&Launch::Claude(ClaudeLaunch::Fresh(None)), None, None),
             Some("claude\r".to_owned())
         );
     }
@@ -475,15 +656,17 @@ mod tests {
     #[test]
     fn a_claude_launch_with_an_mcp_config_passes_the_flag_before_resume() {
         assert_eq!(
-            launch_command(&Launch::Claude { resume: None }, Some(mcp()), None),
+            launch_command(
+                &Launch::Claude(ClaudeLaunch::Fresh(None)),
+                Some(mcp()),
+                None
+            ),
             Some("claude --mcp-config /tmp/termherd-mcp-3.json\r".to_owned()),
             "a fresh Claude gets the mcp flag"
         );
         assert_eq!(
             launch_command(
-                &Launch::Claude {
-                    resume: Some("abc-123".to_owned())
-                },
+                &Launch::Claude(ClaudeLaunch::Resume("abc-123".to_owned())),
                 Some(mcp()),
                 None
             ),
@@ -497,14 +680,16 @@ mod tests {
         // The overlay is what keeps the OSC title — and therefore the whole
         // status channel — alive against a user who disabled it globally.
         assert_eq!(
-            launch_command(&Launch::Claude { resume: None }, None, Some(settings())),
+            launch_command(
+                &Launch::Claude(ClaudeLaunch::Fresh(None)),
+                None,
+                Some(settings())
+            ),
             Some("claude --settings /tmp/termherd-settings-3.json\r".to_owned())
         );
         assert_eq!(
             launch_command(
-                &Launch::Claude {
-                    resume: Some("abc-123".to_owned())
-                },
+                &Launch::Claude(ClaudeLaunch::Resume("abc-123".to_owned())),
                 Some(mcp()),
                 Some(settings())
             ),
@@ -523,8 +708,8 @@ mod tests {
     fn the_settings_overlay_re_enables_the_terminal_title() {
         // The one claim the file exists for: whatever the user's own settings
         // say, a termherd-launched session reports its status.
-        let path = write_title_settings(SessionId(std::num::NonZeroU64::new(41).expect("nonzero")))
-            .expect("the overlay is written");
+        let (_tmp, private) = scratch();
+        let path = write_title_settings(&private, session(41)).expect("the overlay is written");
         let written = std::fs::read_to_string(&path).expect("readable overlay");
         assert!(
             written.contains(r#""CLAUDE_CODE_DISABLE_TERMINAL_TITLE":"0""#),
@@ -534,20 +719,85 @@ mod tests {
             written.starts_with(r#"{"env":"#),
             "it must land in the env block Claude reads, got {written}"
         );
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn a_resumed_claude_launch_types_resume_with_the_id() {
         assert_eq!(
             launch_command(
-                &Launch::Claude {
-                    resume: Some("abc-123".to_owned())
-                },
+                &Launch::Claude(ClaudeLaunch::Resume("abc-123".to_owned())),
                 None,
                 None
             ),
             Some("claude --resume abc-123\r".to_owned())
         );
+    }
+
+    const MINTED: &str = "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f9012";
+
+    #[test]
+    fn a_fresh_claude_launch_under_a_minted_id_passes_it_as_session_id() {
+        assert_eq!(
+            launch_command(
+                &Launch::Claude(ClaudeLaunch::Fresh(Some(MINTED.to_owned()))),
+                Some(mcp()),
+                Some(settings())
+            ),
+            Some(format!(
+                "claude --mcp-config /tmp/termherd-mcp-3.json \
+                 --settings /tmp/termherd-settings-3.json --session-id {MINTED}\r"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_resumed_claude_launch_never_carries_a_session_id() {
+        // `--session-id` beside `--resume` asks Claude to fork the resumed
+        // conversation under a new id, which is not what resuming means.
+        let line = launch_command(
+            &Launch::Claude(ClaudeLaunch::Resume(MINTED.to_owned())),
+            None,
+            None,
+        )
+        .expect("a Claude launch types a line");
+        assert!(!line.contains("--session-id"), "got {line}");
+    }
+
+    #[test]
+    fn an_id_that_is_not_a_uuid_never_reaches_the_launch_line() {
+        for bad in [
+            "--help",
+            "-0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f901",
+            "abc-123",
+            "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f901z",
+            "0b9f2c4e_7d1a_4e8b_9c3f_5a6d7e8f9012",
+            "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f9012; rm -rf ~",
+            "",
+        ] {
+            assert_eq!(
+                launch_command(
+                    &Launch::Claude(ClaudeLaunch::Fresh(Some(bad.to_owned()))),
+                    None,
+                    None
+                ),
+                Some("claude\r".to_owned()),
+                "{bad:?} must be dropped, the launch going ahead without it"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_resume_id_is_never_typed() {
+        for bad in ["--help", "-rf", "abc; rm -rf ~", ""] {
+            assert_eq!(
+                launch_command(
+                    &Launch::Claude(ClaudeLaunch::Resume(bad.to_owned())),
+                    None,
+                    None
+                ),
+                None,
+                "{bad:?} must leave the shell bare"
+            );
+        }
     }
 }

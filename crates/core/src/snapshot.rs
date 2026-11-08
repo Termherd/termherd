@@ -16,6 +16,9 @@
 
 use std::collections::BTreeMap;
 
+use termherd_claude::color::ClaudeColor;
+use termherd_claude::session_file::SessionFile;
+
 use crate::app::SessionStatus;
 
 /// Default number of trailing terminal lines a snapshot keeps per scoped
@@ -109,6 +112,11 @@ pub struct SnapshotInputs {
     /// Full visible text per session handle, from the `pty` adapter. The core
     /// keeps only the scoped handles and truncates each to `text_lines`.
     pub terminals: BTreeMap<u64, String>,
+    /// Claude's per-process session files, keyed by the pid that names them,
+    /// read by the adapter for the pids the panes report. A pid with no entry
+    /// had no readable file, which is not an error: a job other than Claude, an
+    /// older CLI, or a session still starting writes none.
+    pub session_files: BTreeMap<u32, SessionFile>,
 }
 
 /// The config bits the pure core cannot read — the terminal scheme, the record
@@ -198,6 +206,11 @@ pub struct ProjectSnapshot {
     pub session_count: usize,
     /// Whether the project's session list is folded shut.
     pub collapsed: bool,
+    /// Whether the user added this repo to the sidebar by hand (`F-repo-add`).
+    /// True whether or not the scan also reports sessions for it; a row that is
+    /// `declared` with `session_count: 0` is a launch point waiting for its
+    /// first session, not a project that lost one.
+    pub declared: bool,
 }
 
 /// One open tab: its label, the most-urgent status among its sessions, and its
@@ -206,6 +219,9 @@ pub struct ProjectSnapshot {
 pub struct TabSnapshot {
     /// Whether this is the active tab.
     pub active: bool,
+    /// Whether the tab is parked: a compact chip at the strip's end, out of
+    /// the tab cycle. Its sessions keep running.
+    pub parked: bool,
     /// The label the user sees.
     pub title: String,
     /// Most-urgent activity among the tab's sessions, or `None` if none live.
@@ -228,6 +244,29 @@ pub struct PaneSnapshot {
     pub cwd: Option<String>,
     /// Current activity.
     pub status: SessionStatus,
+    /// Who the Claude in front of this pane is; all `None` when none is.
+    pub identity: ClaudeIdentity,
+    /// The colour the pane wears, as its tab chip shows it: for a Claude pane
+    /// the one `/color` set, read from its transcript by the last scan; for a
+    /// shell the one picked for its tab. `None` when it wears none.
+    pub color: Option<ClaudeColor>,
+}
+
+/// What identifies the Claude process a pane runs, to a peer that wants to
+/// address it. Every field is `None` unless the job in front of the pane has a
+/// session file it wrote itself (its start time matches), whatever kind the
+/// pane was launched as.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClaudeIdentity {
+    /// The Claude process id — the job in front of the pane's shell. `None`
+    /// on Windows, where ConPTY reports no foreground process group, and for a
+    /// job with no session file, which is no Claude this can vouch for.
+    pub pid: Option<u32>,
+    /// The name other Claude sessions address this one by, from its session
+    /// file. `None` when the file names none.
+    pub peer_name: Option<String>,
+    /// The Claude session id, from the same file. `None` likewise.
+    pub session_id: Option<String>,
 }
 
 /// The kind of program a session runs, as an external client sees it — the

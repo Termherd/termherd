@@ -8,7 +8,7 @@ caller outside that process tree lacks is the **address**: an ephemeral port it
 cannot learn, and a token it was never handed.
 
 Attaching publishes that address, once, for the whole instance. The tools are
-unchanged — the same thirteen, reached from somewhere else.
+unchanged — the same twenty, reached from somewhere else.
 
 ## Turning it on
 

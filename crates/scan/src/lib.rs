@@ -15,9 +15,11 @@
 //! The concerns live in submodules under the crate root: `watch` (the
 //! debounced fs watch behind FR2, an independent leaf), `cache` (the
 //! incremental-scan signatures and reuse), `derive` (cwd derivation, the
-//! codec seam), `walk` (the two-pass walk into records), and `repo` (the
+//! codec seam), `walk` (the two-pass walk into records), `entry` (which
+//! entries the walk enters and reads, and how much), and `repo` (the
 //! repo-root helper). Dependency direction: `lib → walk → derive → cache`,
-//! with `watch`/`repo` independent.
+//! `walk` and `derive` both on the `entry` leaf, with `watch`/`repo`
+//! independent.
 //!
 //! Rescans are incremental: the walk (`read_dir` + one stat per file)
 //! always runs in full — it is what detects adds and removes — but a session
@@ -32,8 +34,11 @@
 
 mod cache;
 mod derive;
+mod entry;
+mod open_file;
 mod paths;
 mod repo;
+mod session_file;
 mod walk;
 mod watch;
 
@@ -48,8 +53,9 @@ use cache::ScanCache;
 use walk::scan_root;
 
 pub use paths::FsPathResolver;
-pub use repo::repo_root;
-pub use watch::{WatchHandle, watch_changes};
+pub use repo::{normalize_repo_path, repo_root, sidebar_key};
+pub use session_file::{MAX_SESSION_FILE_BYTES, read_session_file};
+pub use watch::{WatchHandle, watch_changes, watch_file};
 
 /// Scanner over a projects root (normally `~/.claude/projects`).
 pub struct FsScanner {

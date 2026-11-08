@@ -6,8 +6,9 @@
 //! colour queries the parser raises.
 
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Mutex, PoisonError, RwLock, mpsc};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
@@ -19,13 +20,18 @@ use portable_pty::{Child, ChildKiller, MasterPty};
 use termherd_claude::osc::{OscSignal, decode_chunk};
 
 use termherd_core::workspace::SessionId;
-use termherd_core::{ScrollTarget, SelectOp, SessionStatus};
+use termherd_core::{
+    ForegroundJob, PointerEvent, PointerRoute, ScrollTarget, SelectOp, SessionStatus,
+};
 
 use crate::events::{EventSink, PtyEvent};
-use crate::grid::{Palette, apply_select, indexed_rgb, snapshot};
-use crate::input::wheel_bytes;
+use crate::grid::{Palette, apply_pointer, apply_select, indexed_rgb, snapshot};
+use crate::input::{mouse_bytes, wheel_bytes};
+use crate::mode::{self, mouse_reporting};
 use crate::prompt::decode_marks;
-use crate::status::{Activity, foreground_leader, foreground_status};
+use crate::status::{
+    Activity, foreground_job, foreground_leader, foreground_status, process_start,
+};
 use crate::workdir::decode_cwd;
 
 /// Read buffer for the per-session reader thread.
@@ -35,6 +41,67 @@ const READ_BUF: usize = 8192;
 /// waiter reported the process exit, before declaring the session over.
 const EOF_DRAIN_QUIET: std::time::Duration = std::time::Duration::from_millis(50);
 
+/// Shortest gap between two emitted screens. Each copies the whole grid, and
+/// one per read chunk queues them faster than the GUI drains them.
+pub(crate) const SCREEN_INTERVAL: Duration = Duration::from_millis(8);
+
+/// Paces the screens the terminal thread publishes: the first change goes out
+/// at once, then at most one per interval, and the last always once the gap
+/// passes.
+struct ScreenPacer {
+    interval: Duration,
+    last_sent: Option<Instant>,
+    unsent: bool,
+}
+
+impl ScreenPacer {
+    fn new(interval: Duration) -> Self {
+        Self {
+            interval,
+            last_sent: None,
+            unsent: false,
+        }
+    }
+
+    /// When the change held back goes out, if one is held.
+    fn due(&self) -> Option<Instant> {
+        self.last_sent
+            .filter(|_| self.unsent)
+            .map(|at| at + self.interval)
+    }
+
+    /// The grid changed: publish it now unless one went out too recently.
+    fn changed(&mut self, now: Instant, publish: impl FnOnce()) {
+        self.unsent = true;
+        if self
+            .last_sent
+            .is_none_or(|at| now.saturating_duration_since(at) >= self.interval)
+        {
+            self.publish(now, publish);
+        }
+    }
+
+    /// Publish the change held back, if its time has come.
+    fn publish_due(&mut self, now: Instant, publish: impl FnOnce()) {
+        if self.due().is_some_and(|at| at <= now) {
+            self.publish(now, publish);
+        }
+    }
+
+    /// Publish the change held back now, whatever the pacing.
+    fn publish_held(&mut self, now: Instant, publish: impl FnOnce()) {
+        if self.unsent {
+            self.publish(now, publish);
+        }
+    }
+
+    fn publish(&mut self, now: Instant, publish: impl FnOnce()) {
+        publish();
+        self.last_sent = Some(now);
+        self.unsent = false;
+    }
+}
+
 /// The PTY's input side, shared between user writes (the manager) and terminal
 /// replies (the parser). A `Mutex` serialises the two so responses never
 /// interleave with keystrokes mid-sequence.
@@ -43,6 +110,20 @@ pub(crate) type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 /// The PTY's control side, shared between the manager (resize) and the watcher
 /// thread (reading the foreground process group). Neither holds it for long.
 pub(crate) type SharedMaster = Arc<Mutex<Box<dyn MasterPty + Send>>>;
+
+/// The palette every session renders with, shared between the manager and
+/// each terminal thread so a scheme change reaches running sessions without a
+/// respawn.
+pub(crate) type SharedPalette = Arc<RwLock<Palette>>;
+
+/// The palette in force right now. A poisoned lock still holds a whole
+/// palette — a writer cannot half-assign one — so its value is read anyway.
+fn current(palette: &SharedPalette) -> Palette {
+    palette
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
 
 /// How often the watcher thread asks the PTY which process group owns it. Short
 /// enough that `wait_for_status` on an unintegrated shell settles promptly,
@@ -60,14 +141,14 @@ const FOREGROUND_POLL: std::time::Duration = std::time::Duration::from_millis(25
 #[derive(Clone)]
 struct PtyResponder {
     writer: SharedWriter,
-    palette: Palette,
+    palette: SharedPalette,
 }
 
 impl EventListener for PtyResponder {
     fn send_event(&self, event: Event) {
         let reply = match event {
             Event::PtyWrite(text) => text,
-            Event::ColorRequest(index, format) => match query_rgb(index, &self.palette) {
+            Event::ColorRequest(index, format) => match query_rgb(index, &current(&self.palette)) {
                 Some([r, g, b]) => format(Rgb { r, g, b }),
                 None => return,
             },
@@ -103,12 +184,20 @@ pub(crate) enum TermCmd {
     Scroll(ScrollTarget),
     /// Change the grid-anchored text selection (press / drag / clear).
     Select(SelectOp),
+    /// A cell-addressed pointer event, placed with the live scroll offset.
+    Pointer(PointerEvent),
     /// Copy the current selection to the clipboard via a `SelectionCopied` event.
     CopySelection,
-    /// What the PTY's foreground process group implies about the session's
-    /// activity, or `None` when the platform cannot say. The stand-in source
-    /// for a shell whose integration did not take (see [`crate::status`]).
-    Foreground(Option<SessionStatus>),
+    /// One reading of the PTY's foreground process group. `status` is what it
+    /// implies about the session's activity — the stand-in source for a shell
+    /// whose integration did not take (see [`crate::status`]) — and `job` the
+    /// job in front of the shell. Both `None` when the platform cannot say.
+    Foreground {
+        status: Option<SessionStatus>,
+        job: Option<ForegroundJob>,
+    },
+    /// The shared palette changed: emit a fresh screen in the new colours.
+    Repaint,
     /// The PTY reached end of file; the process is gone. `clean` carries the
     /// reaped exit status (see [`PtyEvent::Exited`]).
     Eof { clean: bool },
@@ -204,22 +293,69 @@ pub(crate) fn spawn_waiter(
 /// rides every prompt, so most repeat the last one, and forwarding those would
 /// wake the whole update loop to change nothing. Stated twice it would drift on
 /// the first edit that touched one of them.
-fn news(seen: &mut Option<String>, reported: Option<String>) -> Option<String> {
+fn news<T: PartialEq + Clone>(seen: &mut Option<T>, reported: Option<T>) -> Option<T> {
     let reported = reported?;
-    if seen.as_deref() == Some(reported.as_str()) {
+    if seen.as_ref() == Some(&reported) {
         return None;
     }
     *seen = Some(reported.clone());
     Some(reported)
 }
 
+/// What the terminal did with a cell-addressed pointer event.
+#[derive(Debug, PartialEq, Eq)]
+enum PointerInput {
+    /// The child reads the mouse: the bytes to write it.
+    Forward(Vec<u8>),
+    /// The terminal's own selection moved, so the screen must be re-emitted.
+    Selected,
+    /// A motion the child's mode does not cover, dropped — under any mouse
+    /// reporting the mouse is the child's.
+    Dropped,
+}
+
+/// Decide a pointer event on the terminal's *live* mode — a caller's snapshot
+/// may lag it — and apply the local half.
+fn pointer_input<T: EventListener>(term: &mut Term<T>, pointer: PointerEvent) -> PointerInput {
+    let mode = *term.mode();
+    match pointer.route(mouse_reporting(mode)) {
+        PointerRoute::Forward => PointerInput::Forward(mouse_bytes(mode, pointer)),
+        PointerRoute::Select => {
+            apply_pointer(term, pointer);
+            PointerInput::Selected
+        }
+        PointerRoute::Nothing => PointerInput::Dropped,
+    }
+}
+
+/// Write an encoded mouse report to the child. A failed write is logged, not
+/// surfaced: the pointer has no reply channel, and a child that has gone away
+/// is reported by the reader thread, not by its last missed click.
+fn forward_mouse(session: SessionId, input: &SharedWriter, bytes: &[u8]) {
+    if let Ok(mut w) = input.lock()
+        && let Err(error) = w.write_all(bytes).and_then(|()| w.flush())
+    {
+        tracing::debug!(session = session.0.get(), %error, "mouse forward to PTY failed");
+    }
+}
+
 /// Emit a [`PtyEvent::Status`] when `activity` has moved off `before`. Both
 /// sources — the OSC fold and the foreground poll — report through here, so a
 /// status change is logged and published in exactly one place.
-fn report_status(session: SessionId, before: SessionStatus, activity: &Activity, sink: &EventSink) {
+///
+/// `publish_screen` runs first, and only on a change: a reader that sees the
+/// status must find at least the screen of the bytes that produced it.
+fn report_status(
+    session: SessionId,
+    before: SessionStatus,
+    activity: &Activity,
+    sink: &EventSink,
+    publish_screen: impl FnOnce(),
+) {
     if activity.status == before {
         return;
     }
+    publish_screen();
     tracing::debug!(
         session = session.0.get(),
         from = ?before,
@@ -256,6 +392,7 @@ pub(crate) fn spawn_watcher(
             if !cfg!(unix) {
                 return;
             }
+            let mut job: Option<ForegroundJob> = None;
             loop {
                 std::thread::sleep(FOREGROUND_POLL);
                 let leader = match master.lock() {
@@ -264,10 +401,12 @@ pub(crate) fn spawn_watcher(
                     // the stand-in is optional, so end quietly.
                     Err(_) => break,
                 };
-                if ctrl
-                    .send(TermCmd::Foreground(foreground_status(leader, shell)))
-                    .is_err()
-                {
+                job = next_job(job, foreground_job(leader, shell), process_start);
+                let reading = TermCmd::Foreground {
+                    status: foreground_status(leader, shell),
+                    job: job.clone(),
+                };
+                if ctrl.send(reading).is_err() {
                     break;
                 }
             }
@@ -284,17 +423,58 @@ pub(crate) fn spawn_watcher(
         })
 }
 
+/// The job now in front, given the one before it. `ps` runs once per new job
+/// rather than on every poll, and again while a stamp is missing, since a
+/// lookup can lose the race with a process that is only just starting.
+fn next_job(
+    before: Option<ForegroundJob>,
+    pid: Option<u32>,
+    start_of: impl FnOnce(u32) -> Option<String>,
+) -> Option<ForegroundJob> {
+    let pid = pid?;
+    match before {
+        Some(job) if job.pid == pid && job.started.is_some() => Some(job),
+        _ => Some(ForegroundJob {
+            pid,
+            started: start_of(pid),
+        }),
+    }
+}
+
+/// What the terminal thread wakes up to.
+enum Next {
+    Cmd(TermCmd),
+    /// The deadline passed with no command.
+    Due,
+    /// Every command sender is gone.
+    Closed,
+}
+
+/// Block for the next command, or until `deadline` when there is one.
+fn next_cmd(rx: &mpsc::Receiver<TermCmd>, deadline: Option<Instant>) -> Next {
+    let Some(at) = deadline else {
+        return rx.recv().map_or(Next::Closed, Next::Cmd);
+    };
+    match rx.recv_timeout(at.saturating_duration_since(Instant::now())) {
+        Ok(cmd) => Next::Cmd(cmd),
+        Err(mpsc::RecvTimeoutError::Timeout) => Next::Due,
+        Err(mpsc::RecvTimeoutError::Disconnected) => Next::Closed,
+    }
+}
+
 /// The terminal thread: owns the `alacritty_terminal` grid and applies every
-/// [`TermCmd`] (bytes → parse + status, resize, scroll), emitting a fresh
-/// `Screen` each time. It exits — and reports [`PtyEvent::Exited`] — when the
-/// reader signals EOF or every command sender is dropped.
+/// [`TermCmd`] (bytes → parse + status, resize, scroll), emitting a `Screen`
+/// at most every `screen_interval` ([`SCREEN_INTERVAL`] outside tests). It
+/// exits — and reports [`PtyEvent::Exited`] — when the reader signals EOF or
+/// every command sender is dropped.
 pub(crate) fn spawn_term(
     session: SessionId,
     ctrl_rx: mpsc::Receiver<TermCmd>,
     size: (u16, u16),
     writer: SharedWriter,
     sink: EventSink,
-    palette: Palette,
+    palette: SharedPalette,
+    screen_interval: Duration,
 ) -> JoinHandle<()> {
     let (cols, rows) = size;
     let term_sink = sink.clone();
@@ -316,10 +496,39 @@ pub(crate) fn spawn_term(
             let mut activity = Activity::starting();
             let mut title: Option<String> = None;
             let mut cwd: Option<String> = None;
+            // `None` until the first reading the platform could make, so that
+            // one goes out even with the shell in front.
+            let mut in_front: Option<Option<ForegroundJob>> = None;
+            let mut alt_screen = Some(false);
             // Stays false when the loop ends without an EOF (every sender
             // dropped) — an unobserved exit is never a clean one.
             let mut clean = false;
-            while let Ok(cmd) = ctrl_rx.recv() {
+            let mut pacer = ScreenPacer::new(screen_interval);
+            let screen = |term: &Term<PtyResponder>| PtyEvent::Output {
+                session,
+                screen: snapshot(term, &current(&palette)),
+            };
+            loop {
+                let deadline = [pacer.due(), activity.due()].into_iter().flatten().min();
+                let next = next_cmd(&ctrl_rx, deadline);
+                // A queued command never lets the deadline fire, so a held idle
+                // that has stood is published before whatever comes next.
+                let (before, now) = (activity.status, Instant::now());
+                if activity.settle(now) {
+                    report_status(session, before, &activity, &term_sink, || {
+                        pacer.publish_held(now, || term_sink(screen(&term)));
+                    });
+                }
+                let cmd = match next {
+                    Next::Cmd(cmd) => cmd,
+                    Next::Due => {
+                        pacer.publish_due(now, || term_sink(screen(&term)));
+                        continue;
+                    }
+                    Next::Closed => break,
+                };
+                // A chunk's status goes out once the chunk is drawn, below.
+                let mut status_from = None;
                 match cmd {
                     TermCmd::Bytes(bytes) => {
                         // OSC status comes from the raw bytes — alacritty
@@ -327,9 +536,8 @@ pub(crate) fn spawn_term(
                         let text = String::from_utf8_lossy(&bytes);
                         let signals = decode_chunk(&text);
                         let marks = decode_marks(&text);
-                        let before = activity.status;
-                        activity.observe(&signals, &marks);
-                        report_status(session, before, &activity, &term_sink);
+                        status_from = Some(activity.status);
+                        activity.observe(&signals, &marks, Instant::now());
                         // Forward each OSC 9 notification's text to the OS,
                         // independent of the status fold above — the in-app
                         // `Attention` badge and the desktop alert are two
@@ -356,6 +564,10 @@ pub(crate) fn spawn_term(
                             term_sink(PtyEvent::Title { session, title });
                         }
                         parser.advance(&mut term, &bytes);
+                        let on = Some(mode::alt_screen(*term.mode()));
+                        if let Some(on) = news(&mut alt_screen, on) {
+                            term_sink(PtyEvent::AltScreen { session, on });
+                        }
                     }
                     TermCmd::Resize(c, r) => {
                         term.resize(TermSize::new(c as usize, r as usize));
@@ -367,17 +579,7 @@ pub(crate) fn spawn_term(
                         match target {
                             ScrollTarget::Wheel { col, row, lines } => {
                                 match wheel_bytes(*term.mode(), col, row, lines) {
-                                    Some(bytes) => {
-                                        if let Ok(mut w) = input.lock()
-                                            && let Err(error) = w.write_all(&bytes)
-                                        {
-                                            tracing::debug!(
-                                                session = session.0.get(),
-                                                %error,
-                                                "wheel forward to PTY failed"
-                                            );
-                                        }
-                                    }
+                                    Some(bytes) => forward_mouse(session, &input, &bytes),
                                     None => term.scroll_display(Scroll::Delta(lines)),
                                 }
                             }
@@ -386,6 +588,20 @@ pub(crate) fn spawn_term(
                         }
                     }
                     TermCmd::Select(op) => apply_select(&mut term, op),
+                    // Only a local selection changes a pixel; a forwarded or
+                    // dropped event must not re-emit the screen, since under
+                    // motion reporting one arrives per pixel the pointer moves.
+                    TermCmd::Pointer(pointer) => match pointer_input(&mut term, pointer) {
+                        PointerInput::Forward(bytes) => {
+                            forward_mouse(session, &input, &bytes);
+                            continue;
+                        }
+                        PointerInput::Selected => {}
+                        PointerInput::Dropped => continue,
+                    },
+                    // Nothing to apply: the snapshot below reads the new
+                    // palette.
+                    TermCmd::Repaint => {}
                     TermCmd::CopySelection => {
                         // Read the text from the live selection, not a snapshot,
                         // so a fast drag's copy is exact. Commands are FIFO, so
@@ -394,10 +610,16 @@ pub(crate) fn spawn_term(
                             term_sink(PtyEvent::SelectionCopied { session, text });
                         }
                     }
-                    TermCmd::Foreground(status) => {
+                    TermCmd::Foreground { status, job: now } => {
                         let before = activity.status;
                         if activity.poll(status) {
-                            report_status(session, before, &activity, &term_sink);
+                            report_status(session, before, &activity, &term_sink, || {
+                                pacer.publish_held(Instant::now(), || term_sink(screen(&term)));
+                            });
+                        }
+                        let read = status.map(|_| now);
+                        if let Some(job) = news(&mut in_front, read) {
+                            term_sink(PtyEvent::ForegroundJob { session, job });
                         }
                         // A poll changes no pixels; falling through to the
                         // snapshot below would redraw every session four times
@@ -426,17 +648,17 @@ pub(crate) fn spawn_term(
                         break;
                     }
                 }
-                term_sink(PtyEvent::Output {
-                    session,
-                    screen: snapshot(&term, &palette),
-                });
+                let now = Instant::now();
+                pacer.changed(now, || term_sink(screen(&term)));
+                if let Some(before) = status_from {
+                    report_status(session, before, &activity, &term_sink, || {
+                        pacer.publish_held(now, || term_sink(screen(&term)));
+                    });
+                }
             }
             // A final snapshot so any drained bytes reach the screen the tab
             // keeps showing on an unclean exit.
-            term_sink(PtyEvent::Output {
-                session,
-                screen: snapshot(&term, &palette),
-            });
+            term_sink(screen(&term));
             term_sink(PtyEvent::Exited { session, clean });
         })
         .unwrap_or_else(|_| {
@@ -450,6 +672,86 @@ pub(crate) fn spawn_term(
 
 #[cfg(test)]
 mod tests {
+    mod pacer {
+        use super::super::*;
+
+        const GAP: Duration = Duration::from_millis(8);
+
+        #[test]
+        fn the_first_change_goes_out_and_the_next_waits_out_the_gap() {
+            let t0 = Instant::now();
+            let mut pacer = ScreenPacer::new(GAP);
+            let mut sent = 0;
+            pacer.changed(t0, || sent += 1);
+            assert_eq!((sent, pacer.due()), (1, None), "the first goes out at once");
+
+            pacer.changed(t0 + Duration::from_millis(1), || sent += 1);
+            assert_eq!(sent, 1, "the second is held");
+            assert_eq!(pacer.due(), Some(t0 + GAP), "until the gap since the first");
+
+            pacer.publish_due(t0 + GAP - Duration::from_millis(1), || sent += 1);
+            assert_eq!(sent, 1, "not before it is due");
+            pacer.publish_due(t0 + GAP, || sent += 1);
+            assert_eq!((sent, pacer.due()), (2, None));
+        }
+
+        #[test]
+        fn a_held_change_goes_out_on_demand_and_nothing_else_does() {
+            let t0 = Instant::now();
+            let mut pacer = ScreenPacer::new(GAP);
+            let mut sent = 0;
+            pacer.publish_held(t0, || sent += 1);
+            assert_eq!(sent, 0, "nothing held, nothing sent");
+            pacer.changed(t0, || sent += 1);
+            pacer.changed(t0, || sent += 1);
+            pacer.publish_held(t0, || sent += 1);
+            assert_eq!((sent, pacer.due()), (2, None));
+        }
+    }
+
+    mod next_job {
+        use super::super::*;
+
+        fn job(pid: u32, started: Option<&str>) -> Option<ForegroundJob> {
+            Some(ForegroundJob {
+                pid,
+                started: started.map(str::to_owned),
+            })
+        }
+
+        fn never(_: u32) -> Option<String> {
+            panic!("a job already stamped must not be looked up again")
+        }
+
+        #[test]
+        fn the_same_stamped_job_is_kept_without_a_lookup() {
+            let before = job(4399, Some("Wed Oct  7 06:48:07 2026"));
+            assert_eq!(next_job(before.clone(), Some(4399), never), before);
+        }
+
+        #[test]
+        fn a_new_job_is_looked_up() {
+            let before = job(4399, Some("Wed Oct  7 06:48:07 2026"));
+            assert_eq!(
+                next_job(before, Some(5000), |pid| Some(format!("start of {pid}"))),
+                job(5000, Some("start of 5000"))
+            );
+        }
+
+        #[test]
+        fn a_job_whose_lookup_failed_is_looked_up_again() {
+            assert_eq!(
+                next_job(job(4399, None), Some(4399), |_| Some("late".to_owned())),
+                job(4399, Some("late"))
+            );
+        }
+
+        #[test]
+        fn the_shell_back_in_front_is_no_job() {
+            assert_eq!(next_job(job(4399, Some("x")), None, never), None);
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -511,12 +813,61 @@ mod tests {
     /// fold test can make: it is the terminal thread that decodes both dialects
     /// and decides what is worth emitting.
     fn statuses_reported(chunks: &[&str]) -> Vec<SessionStatus> {
+        let steps: Vec<_> = chunks.iter().map(|chunk| (*chunk, Then::Go)).collect();
+        statuses_reported_paced(&steps)
+    }
+
+    /// What a test does after sending a chunk.
+    #[derive(Clone, Copy)]
+    enum Then {
+        Go,
+        /// Wait until the thread has reported this many statuses in all.
+        Reported(usize),
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    enum Seen {
+        Status(SessionStatus),
+        Screen(String),
+        AltScreen(bool),
+        /// The pid of the job reported in front, `None` for the shell.
+        InFront(Option<u32>),
+    }
+
+    /// [`statuses_reported`], waiting after a chunk where a step says so.
+    fn statuses_reported_paced(steps: &[(&str, Then)]) -> Vec<SessionStatus> {
+        events_seen(steps)
+            .into_iter()
+            .filter_map(|seen| match seen {
+                Seen::Status(status) => Some(status),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Drive a real terminal thread over `steps` and collect the statuses and
+    /// screens it publishes, in order.
+    fn events_seen(steps: &[(&str, Then)]) -> Vec<Seen> {
+        let steps = steps
+            .iter()
+            .map(|(chunk, then)| (TermCmd::Bytes(chunk.as_bytes().to_vec()), *then))
+            .collect();
+        events_seen_paced(steps, SCREEN_INTERVAL)
+    }
+
+    /// [`events_seen`] over any commands, pacing screens by `screen_interval`.
+    fn events_seen_paced(steps: Vec<(TermCmd, Then)>, screen_interval: Duration) -> Vec<Seen> {
         let seen = Arc::new(Mutex::new(Vec::new()));
         let collected = seen.clone();
         let sink: EventSink = Arc::new(move |event| {
-            if let PtyEvent::Status { status, .. } = event {
-                collected.lock().expect("sink lock").push(status);
-            }
+            let entry = match event {
+                PtyEvent::Status { status, .. } => Seen::Status(status),
+                PtyEvent::Output { screen, .. } => Seen::Screen(screen.text()),
+                PtyEvent::AltScreen { on, .. } => Seen::AltScreen(on),
+                PtyEvent::ForegroundJob { job, .. } => Seen::InFront(job.map(|job| job.pid)),
+                _ => return,
+            };
+            collected.lock().expect("sink lock").push(entry);
         });
         let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(Arc::new(
             Mutex::new(Vec::new()),
@@ -529,11 +880,27 @@ mod tests {
             (80, 24),
             writer,
             sink,
-            Palette::named("solarized-light").expect("known scheme"),
+            Arc::new(RwLock::new(
+                Palette::named("solarized-light").expect("known scheme"),
+            )),
+            screen_interval,
         );
-        for chunk in chunks {
-            ctrl.send(TermCmd::Bytes(chunk.as_bytes().to_vec()))
-                .expect("terminal thread alive");
+        let reported = || {
+            let seen = seen.lock().expect("sink lock");
+            seen.iter()
+                .filter(|seen| matches!(seen, Seen::Status(_)))
+                .count()
+        };
+        for (cmd, then) in steps {
+            ctrl.send(cmd).expect("terminal thread alive");
+            if let Then::Reported(count) = then {
+                // Generous: a loaded CI runner may be slow to run the timer,
+                // and the assertion, not this wait, says what went wrong.
+                let give_up = Instant::now() + Duration::from_secs(10);
+                while reported() < count && Instant::now() < give_up {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
         }
         drop(ctrl);
         term.join().expect("terminal thread ends");
@@ -572,12 +939,12 @@ mod tests {
     #[test]
     fn claude_titles_still_report_activity_through_the_terminal_thread() {
         // The other dialect, unchanged: a spinner title is work, `✳` is a
-        // prompt, and the OSC 9 ping outranks both.
+        // prompt once it stands, and the OSC 9 ping outranks both.
         assert_eq!(
-            statuses_reported(&[
-                "\u{1b}]0;\u{280B} Thinking…\u{07}",
-                "\u{1b}]0;\u{2733} claude\u{07}",
-                "\u{1b}]9;allow Bash?\u{07}",
+            statuses_reported_paced(&[
+                ("\u{1b}]0;\u{280B} Thinking…\u{07}", Then::Go),
+                ("\u{1b}]0;\u{2733} claude\u{07}", Then::Reported(2)),
+                ("\u{1b}]9;allow Bash?\u{07}", Then::Go),
             ]),
             vec![
                 SessionStatus::Busy,
@@ -585,6 +952,209 @@ mod tests {
                 SessionStatus::Attention
             ]
         );
+    }
+
+    #[test]
+    fn a_claude_turn_as_claude_code_2_1_titles_it_reads_busy_until_it_settles() {
+        // The title sequence a recorded Claude Code 2.1.294 turn wrote under
+        // termherd's environment: `✳` at its prompt, `◐`/`◑` alternating
+        // while it works — tool calls included — then `✳` again, and the
+        // waiting-for-input ping once it has sat idle for a minute. The next
+        // turn must clear that ping: only work does. Each idle stands, as it
+        // did in the recording, so none is mistaken for a blip mid-turn.
+        let now = Then::Go;
+        assert_eq!(
+            statuses_reported_paced(&[
+                ("\u{1b}]0;\u{2733} Claude Code\u{07}", now),
+                ("\u{1b}]0;\u{25D0} Claude Code\u{07}", now),
+                ("\u{1b}]0;\u{25D0} Sleep command test\u{07}", now),
+                ("\u{1b}]0;\u{25D1} Sleep command test\u{07}", now),
+                (
+                    "\u{1b}]0;\u{2733} Sleep command test\u{07}",
+                    Then::Reported(3)
+                ),
+                ("\u{1b}]9;Claude is waiting for your input\u{07}", now),
+                ("\u{1b}]0;\u{25D0} Sleep command test\u{07}", now),
+                (
+                    "\u{1b}]0;\u{2733} Sleep command test\u{07}",
+                    Then::Reported(6)
+                ),
+            ]),
+            vec![
+                SessionStatus::Idle,
+                SessionStatus::Busy,
+                SessionStatus::Idle,
+                SessionStatus::Attention,
+                SessionStatus::Busy,
+                SessionStatus::Idle,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_brief_idle_title_between_two_busy_ones_is_not_reported() {
+        // A background subagent's result restarting the agent: `✳` for
+        // about 20 ms between two busy glyphs.
+        assert_eq!(
+            statuses_reported(&[
+                "\u{1b}]0;\u{25D0} Claude Code\u{07}",
+                "\u{1b}]0;\u{2733} Claude Code\u{07}",
+                "\u{1b}]0;\u{25D1} Claude Code\u{07}",
+            ]),
+            vec![SessionStatus::Busy]
+        );
+    }
+
+    #[test]
+    fn an_idle_title_that_stands_past_the_hold_is_reported_with_no_further_output() {
+        // Nothing follows Claude's last title of a turn: the thread's own
+        // timer has to publish it.
+        assert_eq!(
+            statuses_reported_paced(&[
+                ("\u{1b}]0;\u{25D0} Claude Code\u{07}", Then::Go),
+                ("\u{1b}]0;\u{2733} Claude Code\u{07}", Then::Reported(2)),
+            ]),
+            vec![SessionStatus::Busy, SessionStatus::Idle]
+        );
+    }
+
+    #[test]
+    fn output_during_a_held_idle_still_reaches_the_screen() {
+        // The hold's timer shares the loop with the screen's: output written
+        // under a held idle must be drawn before the idle is published.
+        let seen = events_seen(&[
+            ("\u{1b}]0;\u{25D0} Claude Code\u{07}", Then::Go),
+            ("\u{1b}]0;\u{2733} Claude Code\u{07}", Then::Go),
+            ("hello", Then::Reported(2)),
+        ]);
+        let drawn = seen
+            .iter()
+            .position(|seen| matches!(seen, Seen::Screen(text) if text.contains("hello")));
+        let idle = seen
+            .iter()
+            .position(|seen| *seen == Seen::Status(SessionStatus::Idle));
+        assert!(
+            drawn.is_some() && drawn < idle,
+            "drawn at {drawn:?}, idle at {idle:?}"
+        );
+    }
+
+    /// A screen interval no test outlasts: every screen after the first is
+    /// held, so only the ordering rule can let it out before a status.
+    const HELD: Duration = Duration::from_secs(60);
+
+    fn bytes(chunk: &str) -> TermCmd {
+        TermCmd::Bytes(chunk.as_bytes().to_vec())
+    }
+
+    /// Assert a screen showing `text` was published before `status`.
+    fn assert_drawn_before(seen: &[Seen], text: &str, status: SessionStatus) {
+        let drawn = seen
+            .iter()
+            .position(|seen| matches!(seen, Seen::Screen(screen) if screen.contains(text)));
+        let reported = seen.iter().position(|seen| *seen == Seen::Status(status));
+        assert!(
+            reported.is_some() && drawn < reported && drawn.is_some(),
+            "{text:?} drawn at {drawn:?}, {status:?} at {reported:?}: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn the_chunk_that_changes_the_status_is_drawn_before_the_status() {
+        let seen = events_seen_paced(
+            vec![
+                (bytes("first\r\n"), Then::Go),
+                (bytes("\u{1b}]133;A\u{07}prompt-shown"), Then::Reported(1)),
+            ],
+            HELD,
+        );
+        assert_drawn_before(&seen, "prompt-shown", SessionStatus::Idle);
+    }
+
+    #[test]
+    fn a_held_screen_is_drawn_before_a_status_from_the_foreground_poll() {
+        let seen = events_seen_paced(
+            vec![
+                (bytes("first\r\n"), Then::Go),
+                (bytes("second"), Then::Go),
+                (
+                    TermCmd::Foreground {
+                        status: Some(SessionStatus::Idle),
+                        job: None,
+                    },
+                    Then::Reported(1),
+                ),
+            ],
+            HELD,
+        );
+        assert_drawn_before(&seen, "second", SessionStatus::Idle);
+    }
+
+    /// The out-of-band reports among `seen`: alternate-screen flips and jobs
+    /// in front, in order.
+    fn reports(seen: Vec<Seen>) -> Vec<Seen> {
+        seen.into_iter()
+            .filter(|seen| matches!(seen, Seen::AltScreen(_) | Seen::InFront(_)))
+            .collect()
+    }
+
+    #[test]
+    fn entering_and_leaving_the_alternate_screen_is_reported_on_change_only() {
+        let seen = events_seen(&[
+            ("\u{1b}[?1049h", Then::Go),
+            ("drawn by the full-screen program", Then::Go),
+            ("\u{1b}[?1049l", Then::Go),
+            ("back at the prompt", Then::Go),
+            ("\u{1b}[?1049h", Then::Go),
+        ]);
+        assert_eq!(
+            reports(seen),
+            [true, false, true].map(Seen::AltScreen).to_vec()
+        );
+    }
+
+    fn reading(status: Option<SessionStatus>, pid: Option<u32>) -> (TermCmd, Then) {
+        let job = pid.map(|pid| ForegroundJob { pid, started: None });
+        (TermCmd::Foreground { status, job }, Then::Go)
+    }
+
+    #[test]
+    fn the_first_foreground_reading_is_reported_even_with_the_shell_in_front() {
+        // It is what tells "the shell is in front" from "the platform cannot
+        // say", which a close confirmation has to tell apart.
+        let seen = events_seen_paced(
+            vec![
+                reading(Some(SessionStatus::Idle), None),
+                reading(Some(SessionStatus::Idle), None),
+                reading(Some(SessionStatus::Busy), Some(4399)),
+                reading(Some(SessionStatus::Busy), Some(4399)),
+                reading(Some(SessionStatus::Idle), None),
+            ],
+            SCREEN_INTERVAL,
+        );
+        assert_eq!(
+            reports(seen),
+            [None, Some(4399), None].map(Seen::InFront).to_vec()
+        );
+    }
+
+    #[test]
+    fn a_reading_the_platform_could_not_make_reports_nothing_in_front() {
+        let seen = events_seen_paced(vec![reading(None, None)], SCREEN_INTERVAL);
+        assert_eq!(reports(seen), []);
+    }
+
+    #[test]
+    fn a_held_screen_is_drawn_before_a_settled_idle() {
+        let seen = events_seen_paced(
+            vec![
+                (bytes("\u{1b}]0;\u{25D0} Claude Code\u{07}"), Then::Go),
+                (bytes("\u{1b}]0;\u{2733} Claude Code\u{07}"), Then::Go),
+                (bytes("the answer"), Then::Reported(2)),
+            ],
+            HELD,
+        );
+        assert_drawn_before(&seen, "the answer", SessionStatus::Idle);
     }
 
     #[test]
@@ -600,7 +1170,7 @@ mod tests {
             &TermSize::new(20, 5),
             PtyResponder {
                 writer,
-                palette: palette.clone(),
+                palette: Arc::new(RwLock::new(palette.clone())),
             },
         );
         let mut parser: Processor = Processor::new();
@@ -624,7 +1194,7 @@ mod tests {
             &TermSize::new(20, 5),
             PtyResponder {
                 writer,
-                palette: palette.clone(),
+                palette: Arc::new(RwLock::new(palette.clone())),
             },
         );
         let mut parser: Processor = Processor::new();
@@ -635,6 +1205,140 @@ mod tests {
         assert!(
             reply.contains("rgb:6565/7b7b/8383"),
             "OSC 10 must report the palette foreground, got {reply:?}"
+        );
+    }
+
+    // --- the pointer, routed on the live mode -----------------------------
+
+    use alacritty_terminal::event::VoidListener;
+    use termherd_core::PointerKind;
+
+    fn term_showing(bytes: &[u8]) -> Term<VoidListener> {
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, bytes);
+        term
+    }
+
+    /// With the child reading the mouse the press is its, as bytes, and the
+    /// terminal's own selection is left alone — including by a drag the child's
+    /// mode does not cover, which is dropped rather than selected.
+    #[test]
+    fn under_mouse_reporting_a_press_is_forwarded_and_selects_nothing() {
+        let mut term = term_showing(b"hello wide\r\nworld\x1b[?1000h\x1b[?1006h");
+        let press = pointer_input(&mut term, PointerEvent::left(PointerKind::Press, 6, 0));
+        assert_eq!(
+            press,
+            PointerInput::Forward(b"\x1b[<0;7;1M".to_vec()),
+            "the press is the child's"
+        );
+        let drag = pointer_input(&mut term, PointerEvent::left(PointerKind::Drag, 4, 1));
+        assert_eq!(
+            drag,
+            PointerInput::Dropped,
+            "click reporting does not cover a drag"
+        );
+        assert!(
+            snapshot(&term, &Palette::default()).selection.is_empty(),
+            "neither event touched the terminal's own selection"
+        );
+    }
+
+    /// Reset the mode and the same gestures are the terminal's again.
+    #[test]
+    fn once_reporting_is_reset_the_pointer_selects_locally_again() {
+        let mut term = term_showing(b"hello\x1b[?1002h\x1b[?1002l");
+        let press = pointer_input(&mut term, PointerEvent::left(PointerKind::Press, 0, 0));
+        let drag = pointer_input(&mut term, PointerEvent::left(PointerKind::Drag, 4, 0));
+        assert_eq!(
+            (press, drag),
+            (PointerInput::Selected, PointerInput::Selected),
+            "nothing goes to the child"
+        );
+        assert_eq!(term.selection_to_string().as_deref(), Some("hello"));
+    }
+
+    /// End to end through the terminal thread: the bytes a mouse-mode child
+    /// receives for a click are written to the PTY's input, in the encoding
+    /// it negotiated.
+    #[test]
+    fn a_click_over_a_mouse_mode_child_is_written_to_the_pty() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(captured.clone()))));
+        let sink: EventSink = Arc::new(|_| {});
+        let session = SessionId(std::num::NonZeroU64::new(1).expect("nonzero"));
+        let (ctrl, ctrl_rx) = mpsc::channel();
+        let term = spawn_term(
+            session,
+            ctrl_rx,
+            (80, 24),
+            writer,
+            sink,
+            Arc::new(RwLock::new(Palette::default())),
+            SCREEN_INTERVAL,
+        );
+        ctrl.send(TermCmd::Bytes(b"\x1b[?1000h\x1b[?1006h".to_vec()))
+            .expect("terminal thread alive");
+        ctrl.send(TermCmd::Pointer(PointerEvent::left(
+            PointerKind::Click,
+            4,
+            2,
+        )))
+        .expect("terminal thread alive");
+        drop(ctrl);
+        term.join().expect("terminal thread ends");
+        assert_eq!(
+            captured.lock().expect("capture lock").as_slice(),
+            b"\x1b[<0;5;3M\x1b[<0;5;3m"
+        );
+    }
+
+    #[test]
+    fn a_burst_of_output_is_coalesced_and_ends_on_its_last_line() {
+        const CHUNKS: usize = 2000;
+        let screens = Arc::new(Mutex::new(Vec::new()));
+        let collected = screens.clone();
+        let sink: EventSink = Arc::new(move |event| {
+            if let PtyEvent::Output { screen, .. } = event {
+                collected.lock().expect("sink lock").push(screen);
+            }
+        });
+        let writer: SharedWriter = Arc::new(Mutex::new(Box::new(CaptureWriter(Arc::new(
+            Mutex::new(Vec::new()),
+        )))));
+        let session = SessionId(std::num::NonZeroU64::new(1).expect("nonzero"));
+        let (ctrl, ctrl_rx) = mpsc::channel();
+        let term = spawn_term(
+            session,
+            ctrl_rx,
+            (80, 24),
+            writer,
+            sink,
+            Arc::new(RwLock::new(Palette::default())),
+            SCREEN_INTERVAL,
+        );
+        for n in 1..=CHUNKS {
+            ctrl.send(TermCmd::Bytes(format!("line {n}\r\n").into_bytes()))
+                .expect("terminal thread alive");
+        }
+        drop(ctrl);
+        term.join().expect("terminal thread ends");
+        let screens = screens.lock().expect("sink lock");
+        assert!(
+            screens.len() < CHUNKS / 10,
+            "{} screens for {CHUNKS} chunks: output is not coalesced",
+            screens.len()
+        );
+        let last = screens.last().expect("at least the final screen");
+        let text: Vec<String> = last
+            .lines
+            .iter()
+            .map(|row| row.iter().map(|cell| cell.c).collect::<String>())
+            .collect();
+        assert!(
+            text.iter()
+                .any(|row| row.trim_end() == format!("line {CHUNKS}")),
+            "the last screen must show the last line, got {text:?}"
         );
     }
 }

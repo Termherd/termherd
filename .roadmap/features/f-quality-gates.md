@@ -15,8 +15,10 @@ merge-conflict risk). Scoped from a brainstorm
 (#105), unused deps (#106), and the crate-level dependency rule as an
 architecture fitness function enforcing the hexagonal inward-only invariant
 (#107) all landed. **P2 follow-ups — shipped** as the intra-crate refactor
-cluster #167–#173, now complete: the intra-crate architecture gate
-(`intra-crate-arch`) is #173 — a module-boundary check
+cluster #167–#173, now complete: the intra-crate architecture gate (#173,
+consolidated with `rustfmt` into `rustfmt & arch` in #393, while `cargo-deny`,
+`cargo-machete`, and the crate dependency rule + toolchain lockstep run in
+`cargo-checks`) — a module-boundary check
 (`scripts/check-module-boundaries.sh`: leaf modules stay leaves, renderers
 don't reach the executor, `core::app` submodules go through the parent
 registry), an OS-cfg containment check (`scripts/check-os-cfg-containment.sh`:
@@ -30,7 +32,7 @@ split + `Sessions` registry + `Sidebar`/`FontState` field-flatten, A1–A4 —
 `F-antigravity-sessions` #160/#161 build on), #171 (F, json_store —
 **shipped**) and #172 (pty →
 `input`/`grid`/`events`/`status`/`session`/`kill`/`manager` — **shipped**, the
-seam #143 foreground-process detection and #155 vim mouse build on).
+seam #143 foreground-process detection and #155 mouse buttons build on).
 Cognitive-complexity (signal C) stays unfiled. **Report-only** (was blocked on
 a quality-report home): file length (signal A) now ships **inside #173's gate**
 as a job-summary report; churn×size hotspots (signal J) stays unfiled. Dropped:

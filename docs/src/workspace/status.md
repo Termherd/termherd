@@ -30,7 +30,9 @@ needed for that stream to exist, and TermHerd arranges both:
   would silence it entirely, and that `env` block outranks the environment
   TermHerd spawns with. So a Claude launch passes a private `--settings`
   overlay, which outranks it in turn and *merges with* — never replaces — your
-  settings. This is why the CLI floor is **1.0.61**.
+  settings. The flag needs Claude Code **1.0.61**; the CLI floor sits higher
+  still, at **2.0.73**, for `--session-id` (see
+  [Installation](../guide/installation.md)).
 
 The CLI's own product name (`✳ Claude Code`), which it reports until it has
 something session-specific to say, is ignored: a tab would otherwise trade its
@@ -60,6 +62,42 @@ good by the first real mark or Claude signal, so it can never contradict what
 the terminal says about itself. Windows ConPTY exposes no foreground process
 group, so a shell with neither route stays on `starting` there.
 
+## Desktop notifications
+
+When a session asks for you (Claude's OSC 9 notification), TermHerd posts a
+desktop notification titled with the session's tab name and carrying Claude's
+message. None is posted for the pane you are already looking at while the
+TermHerd window has focus.
+
+**Clicking the notification brings you back to that session**:
+TermHerd comes to the front — restored first if it was minimised — and
+activates the tab and pane that raised it, the same reveal the MCP
+[`focus_pane`](../mcp/live-bridge.md) tool performs. The notification
+remembers the session, not the tab title, so two tabs with the same name are
+never confused. If the tab was closed in the meantime, or a prompt is open (a
+close or quit confirmation, the settings panel, the document editor), the
+click brings TermHerd forward and changes nothing else; an inline rename is
+dismissed, as any click elsewhere dismisses it. Dismissing the notification
+does nothing.
+
+> **Confirmed on macOS only.** A real click brought the right tab forward. The
+> minimised-window and open-prompt cases, and the Linux and Windows rows, are
+> read from the notification libraries' sources.
+
+| OS | Click reaches TermHerd | Window comes forward |
+| --- | --- | --- |
+| macOS | ✅ while the banner is still in the notification centre | ✅ |
+| Linux | ⚠️ only if the notification server supports actions | ❓ Wayland may refuse |
+| Windows | ⚠️ only while the toast is on screen — once it times out into the action centre, the click is lost | ❓ may only flash the taskbar |
+
+On Linux a session's new notification replaces its previous one, so each
+session shows one banner. On Windows the toast is attributed to PowerShell
+until TermHerd registers its own application id.
+
+At most 16 notifications wait for a click at once; past that, a new one still
+appears but clicking it does nothing, until earlier ones are clicked or
+dismissed.
+
 ## Close confirmation
 
 Closing is governed per action — `tab` and `app` — by one of three policies:
@@ -70,13 +108,25 @@ Closing is governed per action — `tab` and `app` — by one of three policies:
 | `confirmWhenActive` | **default** — ask only while a session runs a foreground process |
 | `noConfirmation` | never ask |
 
-Under the default, "runs a foreground process" means `busy` or `attention`.
-That is why the status work matters beyond the badges: while every shell sat on
-`starting`, a shell running a long command closed without asking.
+Under the default, "runs a foreground process" means:
+
+| Session | Runs a foreground process while |
+| --- | --- |
+| Claude | it has not exited, an idle prompt included |
+| shell, macOS and Linux | it is `busy` or `attention`, or a program other than the shell has the terminal (`vim`, `less`, `htop`, a long `make`) |
+| shell, Windows | it is `busy` or `attention`, or a program is on the alternate screen (`vim`, `less`) |
+
+On macOS and Linux TermHerd reads which process owns the terminal, so a
+program in front of the shell counts even when the status reads `idle`: after
+a `claude` typed by hand has exited, for instance, Claude's last title can
+leave the shell reading `idle` while `vim` runs. Windows has no such reading,
+so there only full-screen programs count beyond the status; a long command a
+shell without integration runs closes without asking.
 
 Quitting names the cost: *"Quit TermHerd? 3 open session(s) will be
 force-stopped — any running work is lost."* Every non-exited session dies on
-quit, Claude or shell.
+quit, Claude or shell. A doc with unsaved changes is named in the same prompt,
+and makes the quit ask under every policy, `noConfirmation` included.
 
 Every confirmation is answerable from the keyboard — <kbd>Escape</kbd> to
 cancel, <kbd>Enter</kbd> to confirm — which is also what makes them reachable

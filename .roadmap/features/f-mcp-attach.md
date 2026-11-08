@@ -22,7 +22,8 @@ the launcher — was the one process with no way to speak to it. `press_keys`,
 `screenshot` and `wait_for_status` were all there, all unreachable.
 
 So the missing piece is **discovery, not capability**. No new tool: the same
-thirteen, reached by a client that was not spawned as a child.
+tool set the spawned session gets, reached by a client that was not spawned
+as a child.
 
 **The shape, as shipped.** The pieces are small and their arrangement was not:
 
@@ -44,9 +45,9 @@ thirteen, reached by a client that was not spawned as a child.
   refuses every real call; probing with the operation actually intended cannot.
   A refused token (401) is reported apart from a dead port, since the two send
   the caller to opposite places.
-- **The surface is the same thirteen.** A narrower read-only variant would be a
-  second contract to keep true, and the interesting uses (drive, wait,
-  screenshot) are the mutating ones.
+- **The surface is the same tool set a spawned session gets.** A narrower
+  read-only variant would be a second contract to keep true, and the
+  interesting uses (drive, wait, screenshot) are the mutating ones.
 
 **The security delta was the real design question, and it is not zero.** A
 spawned session's token reaches it through a file only that session's process

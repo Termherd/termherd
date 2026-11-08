@@ -14,9 +14,12 @@ use iced::widget::{
 };
 use iced::{Element, Fill};
 use termherd_core::browser::{ProjectGroup, project_label, relative_age};
-use termherd_core::{SessionRecord, SessionStatus, SidebarFold};
+use termherd_core::{SessionKind, SessionRecord, SessionStatus, SidebarFold};
 
-use super::{clip, session_card, sidebar_secondary_text, status_color};
+use super::{
+    Backdrop, CardFacts, clip, color_bar, kind_glyph, session_card, sidebar_secondary_text,
+    status_dot,
+};
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
 use crate::strings;
 
@@ -116,25 +119,83 @@ impl Shell {
         }
         // A handle to collapse the sidebar, mirroring the one that
         // restores it from the main pane.
-        let hide = button(text("◀ Masquer le panneau").size(11))
+        let hide = button(text(strings::SIDEBAR_HIDE).size(11))
             .on_press(Message::ToggleSidebar)
             .style(button::text)
             .padding(0);
-        let chrome = column![hide, search, titles_only, show_archived].spacing(8);
+        // Adding a repo sits with the sidebar's own chrome, not inside the
+        // project list: it is how the list gets a row it could not discover.
+        let add_repo = tooltip(
+            button(text(strings::SIDEBAR_ADD_REPO).size(11))
+                .on_press(Message::PickRepoFolder)
+                .style(button::text)
+                .padding(0),
+            container(text(strings::SIDEBAR_ADD_REPO_HINT).size(11))
+                .padding(6)
+                .style(container::rounded_box),
+            tooltip::Position::Bottom,
+        );
+        let settings = tooltip(
+            button(text(strings::SIDEBAR_SETTINGS).size(13))
+                .on_press(Message::ToggleSettings)
+                .style(button::text)
+                .padding(0),
+            container(text(strings::SIDEBAR_SETTINGS_HINT).size(11))
+                .padding(6)
+                .style(container::rounded_box),
+            tooltip::Position::Bottom,
+        );
+        let mut chrome = column![].spacing(8);
+        if !self.load_problems.is_empty() {
+            let mut notes = column![].spacing(4);
+            for problem in &self.load_problems {
+                notes = notes.push(
+                    text(strings::config_unusable(
+                        &problem.file,
+                        problem.kept_as.as_deref(),
+                    ))
+                    .size(11),
+                );
+            }
+            let dismiss = button(text(strings::DISMISS).size(11))
+                .on_press(Message::DismissLoadProblems)
+                .style(button::text)
+                .padding(0);
+            chrome = chrome.push(
+                container(row![notes.width(Fill), dismiss].spacing(6))
+                    .padding(6)
+                    .style(container::bordered_box),
+            );
+        }
+        let chrome = chrome.extend([column![
+            row![
+                hide,
+                iced::widget::Space::new().width(Fill),
+                add_repo,
+                settings
+            ]
+            .spacing(6)
+            .align_y(iced::Center),
+            search,
+            titles_only,
+            show_archived
+        ]
+        .spacing(8)
+        .into()]);
         container(chrome.push(scrollable(list).height(Fill)).padding(8))
             .width(300)
             .style(container::rounded_box)
             .into()
     }
 
-    /// Live activity, keyed by the Claude session id each terminal resumed, so a
+    /// Live activity, keyed by the Claude session id of each terminal, so a
     /// browsed row can show its current status (FR8). If the same session is
     /// open twice, the most urgent status wins.
     fn live_statuses(&self) -> HashMap<&str, SessionStatus> {
         let mut live: HashMap<&str, SessionStatus> = HashMap::new();
         for s in self.core.sessions.values() {
-            if let Some(resume) = s.launch.resume_id() {
-                live.entry(resume)
+            if let Some(claude_id) = s.claude_session_id() {
+                live.entry(claude_id)
                     .and_modify(|cur| {
                         if s.status.urgency() > cur.urgency() {
                             *cur = s.status;
@@ -176,7 +237,7 @@ impl Shell {
                     .padding(0);
                 let mut label_row = row![].spacing(6).align_y(iced::Center);
                 if let Some(status) = live.get(id) {
-                    label_row = label_row.push(text("●").size(9).color(status_color(*status)));
+                    label_row = label_row.push(status_dot(*status, Backdrop::Chrome));
                 }
                 let title = self.core.session_title(s);
                 // The project label tells cross-project favourites apart.
@@ -236,12 +297,27 @@ impl Shell {
         live: &HashMap<&str, SessionStatus>,
         now: SystemTime,
     ) -> Element<'_, Message> {
-        let collapsed = self.core.is_collapsed(&group.path);
+        // A repo declared by hand and not yet used has nothing to fold and
+        // nothing to list: its row exists to be launched from (`F-repo-add`).
+        // Both predicates live in `core`, so the snapshot reports the fold the
+        // screen is drawing rather than the raw flag behind it.
+        let empty = self
+            .core
+            .sidebar_row_empty(&group.path, group.sessions.len());
+        let collapsed = self
+            .core
+            .sidebar_row_collapsed(&group.path, group.sessions.len());
         // The disclosure triangle and the name both fold the session list —
         // a tree header should fold, not launch. Launching moved
-        // to two explicit buttons beside it: `$` opens a plain shell, 🤖 a
+        // to two explicit buttons beside it: `❯` opens a plain shell, `✳` a
         // fresh Claude session, both in the repo dir (FR4a).
-        let fold = fold_toggle(&group.path, collapsed);
+        let fold: Element<'_, Message> = if empty {
+            // Aligned with the triangles above and below it, so an empty row
+            // does not shift its whole group left.
+            iced::widget::Space::new().width(12).into()
+        } else {
+            fold_toggle(&group.path, collapsed)
+        };
         // A repo star pins the whole project group to the top of the sidebar
         // (F-favorites), mirroring the per-session star below.
         let repo_starred = self.core.is_repo_starred(&group.path);
@@ -249,25 +325,48 @@ impl Shell {
             .on_press(Message::ToggleRepoStar(group.path.clone()))
             .style(button::text)
             .padding(0);
-        let name = button(text(project_label(&group.path).to_owned()).size(14))
-            .on_press(Message::ToggleCollapsed(group.path.clone()))
+        let mut name = button(text(project_label(&group.path).to_owned()).size(14))
             .style(button::text)
             .padding(0)
             .width(Fill);
+        // An empty row has no list to fold, so the click is not merely
+        // ineffective — it would store a fold nothing shows, to surface the day
+        // the repo gains its first session.
+        if !empty {
+            name = name.on_press(Message::ToggleCollapsed(group.path.clone()));
+        }
         let launch_shell = launch_button(
-            "$",
+            kind_glyph(SessionKind::Shell),
             strings::SIDEBAR_LAUNCH_SHELL,
             Message::LaunchProject(group.path.clone()),
         );
         let launch_claude = launch_button(
-            "🤖",
+            kind_glyph(SessionKind::Claude),
             strings::SIDEBAR_LAUNCH_CLAUDE,
             Message::LaunchClaude(group.path.clone()),
         );
-        let header = row![fold, repo_star, name, launch_shell, launch_claude]
+        let mut header = row![fold, repo_star, name, launch_shell, launch_claude]
             .spacing(6)
             .align_y(iced::Center);
+        // Only a declared repo can be taken back out; a discovered project has
+        // no declaration to drop, and the button must not promise one.
+        if self.core.is_repo_declared(&group.path) {
+            header = header.push(launch_button(
+                "✕",
+                strings::SIDEBAR_FORGET_REPO,
+                Message::ForgetRepo(group.path.clone()),
+            ));
+        }
         let mut g = column![header].spacing(4);
+        if empty {
+            return g
+                .push(
+                    text(strings::SIDEBAR_REPO_NO_SESSIONS)
+                        .size(11)
+                        .style(sidebar_secondary_text),
+                )
+                .into();
+        }
         // A folded project shows only its header, hiding the session list.
         if collapsed {
             return g.into();
@@ -321,10 +420,13 @@ impl Shell {
             .padding(0);
 
         let mut content = row![].spacing(6).align_y(iced::Center);
+        if let Some(bar) = s.digest.agent_color.and_then(color_bar) {
+            content = content.push(bar);
+        }
         // A coloured dot marks a session already open in TermHerd and
         // carries its live activity (FR8).
         if let Some(status) = live.get(id) {
-            content = content.push(text("●").size(9).color(status_color(*status)));
+            content = content.push(status_dot(*status, Backdrop::Chrome));
         }
         let title = self.core.session_title(s);
         let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);
@@ -333,7 +435,9 @@ impl Shell {
         // clickable title that resumes the session.
         let middle: Element<'_, Message> = if renaming_this {
             let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
-            text_input(strings::RENAME_PLACEHOLDER, buffer)
+            // The hint is what a blank commit leaves: it clears only the
+            // sidebar's own name.
+            text_input(&self.core.session_title_unnamed_here(s), buffer)
                 .id(rename_id())
                 .on_input(Message::RenameInput)
                 .on_submit(Message::CommitRename)
@@ -374,7 +478,15 @@ impl Shell {
             // without opening it.
             tooltip(
                 launch,
-                session_card(title.clone(), s, now),
+                session_card(
+                    title.clone(),
+                    &CardFacts {
+                        color: s.digest.agent_color,
+                        ..CardFacts::default()
+                    },
+                    s,
+                    now,
+                ),
                 tooltip::Position::Right,
             )
             .into()
@@ -479,7 +591,7 @@ fn section_header(key: &str, collapsed: bool, label: &str) -> Element<'static, M
 
 /// An icon button beside a project header that launches a session in the repo
 /// dir (FR4a): the glyph is the affordance, the tooltip spells it out.
-/// Built once so the `$` (shell) and 🤖 (Claude) buttons can't drift in style.
+/// Built once so the shell and Claude buttons can't drift in style.
 fn launch_button(
     icon: &'static str,
     tip: &'static str,

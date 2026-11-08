@@ -31,9 +31,11 @@ all testable headlessly; a window-less run answers with the reason as a
 the recorder) and the PNG encoder (from the capture dump) moved into one pure
 `app::image` module rather than being copied a third time. Depends on #212/#193.
 **#196 + #229 + #215 are one capability in three parts** — drive the UI, see
-the pixels, read the terminal — the loop that lets an agent *verify* a gesture
-fix instead of only proposing it. With #229 shipped, #196 is what remains of
-*that* trio. The loop it completes used to be out of reach for anything
-termherd did not spawn — the launcher that most wants to verify a fix was the
-one caller with no way in — which [F-mcp-attach](#f-mcp-attach) (#267) has
-since closed, opt-in, by publishing the endpoint rather than by adding a tool
+the pixels, read the terminal — and with #229 shipped, #196 is what remains of
+*that* trio. The **gesture** gap the three parts left — the surface pressed
+keys and could not click, so #155 was proposable and unverifiable — closed
+when [F-mcp-pointer-terminal](#f-mcp-pointer-terminal) (#300) landed and #155
+followed. The loop used to be out of reach entirely for anything termherd did
+not spawn — the launcher that most wants to verify a fix was the one caller
+with no way in — which [F-mcp-attach](#f-mcp-attach) (#267) has since closed,
+opt-in, by publishing the endpoint rather than by adding a tool

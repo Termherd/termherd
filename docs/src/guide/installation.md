@@ -2,15 +2,23 @@
 
 ## Requirements
 
-A shell — and, to launch **Claude** sessions, the **Claude Code CLI 1.0.61 or
+A shell — and, to launch **Claude** sessions, the **Claude Code CLI 2.0.73 or
 newer** on your `PATH`.
 
-That floor is the CLI's `--settings` flag, which TermHerd puts on every Claude
-launch. It re-enables the CLI's terminal title *for that session only*, and the
-title is where a Claude session's activity status comes from: without it, a
+That floor is the CLI's `--session-id` flag. TermHerd starts every fresh Claude
+session under an id it chooses itself, so a new tab knows its conversation from
+the first keystroke. Claude Code's changelog never records when the flag
+arrived, so the floor is an **estimate**: 2.0.73 is the oldest release whose
+notes show the flag working. An older CLI may well accept it too; one that does
+not refuses the launch, and TermHerd has no fallback for it.
+
+The next flag down is `--settings` (1.0.61), which TermHerd also puts on every
+Claude launch. It re-enables the CLI's terminal title *for that session
+only*, and the title is where a Claude session's activity status comes from:
+without it, a
 `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` anywhere in your own settings would leave
-every session reading `starting` forever. An older CLI rejects the flag and the
-launch fails. TermHerd's other flag, `--mcp-config` (the
+every session reading `starting` forever. An older CLI rejects either flag and
+the launch fails. TermHerd's other flag, `--mcp-config` (the
 [live bridge](../mcp/live-bridge.md)), has been available since 0.2.75.
 
 A **plain shell** needs nothing installed — see
@@ -40,17 +48,21 @@ On Windows, SmartScreen may warn — choose **More info → Run anyway**.
 ## Bare command-line binary
 
 The same releases carry one-line installers that drop `termherd` into your
-Cargo bin directory:
+Cargo bin directory. Every release so far is a **pre-release**, which GitHub's
+`/releases/latest/` shortcut skips, so name the tag — the newest one is at the
+top of the [Releases](https://github.com/Termherd/termherd/releases) page:
 
 ```bash
 # macOS / Linux
+TAG=v0.1.0-prerelease.4
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.sh | sh
+  "https://github.com/Termherd/termherd/releases/download/$TAG/termherd-app-installer.sh" | sh
 ```
 
 ```powershell
 # Windows
-powershell -c "irm https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.ps1 | iex"
+$Tag = "v0.1.0-prerelease.4"
+irm "https://github.com/Termherd/termherd/releases/download/$Tag/termherd-app-installer.ps1" | iex
 ```
 
 ## Verifying a Linux download
@@ -60,12 +72,15 @@ attestation — no signing key; the signer is the release workflow itself, via
 GitHub OIDC, logged in the public Rekor transparency log.
 
 ```bash
-gh attestation verify termherd-x86_64-unknown-linux-gnu.tar.xz \
+gh attestation verify termherd-app-x86_64-unknown-linux-gnu.tar.xz \
   --repo Termherd/termherd
 ```
 
 A passing check proves both integrity and that the artifact was built by this
-repository's CI. A `SHA256SUMS` file is attached to each release as well.
+repository's CI. The attestation and its `SHA256SUMS` file come from a signing
+step added after `v0.1.0-prerelease.4`, so that pre-release has neither — only
+per-file `.sha256` checksums and a combined `sha256.sum`, which every release
+carries.
 
 ## From source
 
@@ -87,13 +102,22 @@ Never under `~/.claude`. Everything it owns lives in `~/.termherd`
 | --- | --- |
 | `~/.termherd/settings.json` | your settings — [reference](../reference/settings.md) |
 | `~/.termherd/window.json` | window size and position |
-| `~/.termherd/metadata.json` | stars, archives, custom session titles |
+| `~/.termherd/metadata.json` | stars, archives, custom session titles, hand-added repositories |
 | `~/.termherd/captures/` | `capture-<ts>.json` / `.png` / `.gif` — see [Capture and record](../workspace/capture.md) |
+| `~/.termherd/inbox/` | `termherd://` links waiting for the running window — see [Opening a tab from a link](../workspace/tabs-and-splits.md#opening-a-tab-from-a-link) |
 
 TermHerd is **single-instance**: an advisory lock file under the system temp
-directory. To run a second build alongside one that already holds the lock,
-point it at a throwaway temp dir so its lock path differs:
+directory. A second launch carrying a `termherd://` link hands it to the
+running window and exits; without one, it exits with code 2. To run a second
+build alongside one that already holds the lock, point it at a throwaway temp
+dir so its lock differs. On macOS and Linux:
 
 ```bash
 TMPDIR=$(mktemp -d) cargo run -p termherd-app
+```
+
+On Windows, `TMP` decides the temp dir:
+
+```powershell
+$env:TMP = (New-Item -ItemType Directory "$env:TEMP\termherd-2").FullName; cargo run -p termherd-app
 ```

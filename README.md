@@ -32,15 +32,20 @@ This is an early scaffold. Status, scope, and design live in:
 
 ### Requirements
 
-A shell, and — to launch Claude sessions — the **Claude Code CLI, 1.0.61 or
+A shell, and — to launch Claude sessions — the **Claude Code CLI, 2.0.73 or
 newer**, on your `PATH`.
 
-That floor is the `--settings` flag, which arrived in 1.0.61 and which termherd
-puts on every Claude launch. It re-enables the CLI's terminal title for that
-session only, and the title is where a Claude session's activity comes from —
-without it, a `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` anywhere in your own settings
-would leave every session reading `starting` forever. An older CLI would reject
-the flag and fail to start; termherd's other flag, `--mcp-config` (the live
+That floor is the `--session-id` flag: termherd starts every fresh Claude
+session under an id it mints, so a new tab knows its conversation from the
+first keystroke. Claude Code's changelog never records when the flag arrived,
+so the floor is an estimate: 2.0.73 is the oldest release whose notes show it
+in use, and an older CLI without it fails the launch. Below it sits
+`--settings` (1.0.61), which termherd also puts on every Claude launch. It
+re-enables the CLI's terminal title for that session only, and the title is
+where a Claude session's activity comes from — without it, a
+`CLAUDE_CODE_DISABLE_TERMINAL_TITLE` anywhere in your own settings would leave
+every session reading `starting` forever. An older CLI would reject
+either flag and fail to start; termherd's other flag, `--mcp-config` (the live
 bridge), has been available since 0.2.75.
 
 A plain shell needs nothing: its activity comes from an OSC 133
@@ -69,17 +74,22 @@ one for your platform:
   `.AppImage`, `chmod +x` it, and run it directly.
 
 Prefer a bare command-line binary? The same releases carry one-line installers
-that drop `termherd` into your Cargo bin directory:
+that drop `termherd` into your Cargo bin directory. Every release so far is a
+**pre-release**, which GitHub's `/releases/latest/` shortcut skips, so name the
+tag — the newest one is at the top of the
+[Releases](https://github.com/Termherd/termherd/releases) page:
 
 ```bash
 # macOS / Linux
+TAG=v0.1.0-prerelease.4
 curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.sh | sh
+  "https://github.com/Termherd/termherd/releases/download/$TAG/termherd-app-installer.sh" | sh
 ```
 
 ```powershell
 # Windows
-powershell -c "irm https://github.com/Termherd/termherd/releases/latest/download/termherd-installer.ps1 | iex"
+$Tag = "v0.1.0-prerelease.4"
+irm "https://github.com/Termherd/termherd/releases/download/$Tag/termherd-app-installer.ps1" | iex
 ```
 
 ### Verify a Linux download
@@ -89,12 +99,15 @@ Linux release binaries carry a sigstore *keyless* build-provenance attestation
 in the public Rekor transparency log). Verify a download with the `gh` CLI:
 
 ```bash
-gh attestation verify termherd-x86_64-unknown-linux-gnu.tar.xz \
+gh attestation verify termherd-app-x86_64-unknown-linux-gnu.tar.xz \
   --repo Termherd/termherd
 ```
 
 A successful check proves both integrity and that the artifact was built by
-this repository's CI. A `SHA256SUMS` file is also attached to each release.
+this repository's CI. The attestation and its `SHA256SUMS` file come from a
+signing step added after `v0.1.0-prerelease.4`, so that pre-release has
+neither — only per-file `.sha256` checksums and a combined `sha256.sum`, which
+every release carries.
 
 ## Run from source
 
@@ -105,12 +118,15 @@ cargo run -p termherd-app
 ## Configuration
 
 Optional user settings live in `~/.termherd/settings.json` (on Windows,
-`%USERPROFILE%\.termherd\settings.json`). The file is read at startup; if it
-is missing or invalid, TermHerd falls back to defaults rather than refusing
-to start — out-of-range values clamp, and a single bad value (a typo'd
-colour, an unknown key action) degrades alone with a logged warning instead
-of resetting the rest of the file. There is no in-app settings panel yet —
-edit the file and restart.
+`%USERPROFILE%\.termherd\settings.json`). A change **applies as soon as
+the file is saved** — no restart; a save that does not parse changes
+nothing. If the file is invalid at startup, TermHerd falls back to defaults
+rather than refusing to start (the file is first set aside as
+`settings.json.corrupt-1`, and the sidebar says so). Out-of-range values
+clamp, and a single bad value (a typo'd colour, an unknown key action)
+degrades alone with a logged warning instead of resetting the rest of the
+file. The appearance (chrome theme and terminal colours) can also be set
+from the settings panel — ⚙ in the sidebar, or `Cmd`/`Ctrl`+`,`.
 
 The annotated reference template is
 [`docs/settings.example.jsonc`](docs/settings.example.jsonc): every option
@@ -119,36 +135,44 @@ you want and strip the comments (the real file is strict JSON). In short:
 
 - `shell` — program + args launched for each session (default: the platform
   login shell).
-- `theme` — `"dark"` (default) or `"light"` GUI chrome; the terminal grid
-  keeps its own colours.
+- `theme` — GUI chrome: any of iced's 22 themes, `"dark"` by default; the
+  terminal grid keeps its own colours.
 - `close` — per-action close confirmation (`tab`, `app`): always, only while
   a foreground process runs (default), or never.
 - `terminal` — base `font_size` (the zoom shortcuts step from it), grid
-  `colors` (a named scheme — Solarized / Gruvbox, dark or light — plus
+  `colors` (one of 18 schemes, each named like its chrome theme, plus
   per-slot overrides), and the two clipboard mouse gestures
-  (`copy_on_select`, `paste_on_right_click`), both off by default.
+  (`copy_on_select`, `paste_on_right_click`), both off by default, and on
+  macOS which Option key is Meta (`option_as_meta`, the left one by default).
 - `sidebar` — sessions listed per project before the tail folds behind an
   expander (`0` shows all).
 - `record` — the GIF screencast budget (fps, duration cap, frame scale).
+- `capture` — `redact`: whether a state capture masks the secrets its
+  terminal text shows (default `true`).
 - `open` — the editor command a Ctrl/Cmd-clicked file path opens in, with
   `{path}` / `{line}` / `{col}` templates (default: the OS default handler,
   which cannot honour a line number).
-- `mcp` — whether a running instance publishes its live bridge for a client it
-  did not spawn: `false` (default), `true`, or `"never"`, which also refuses
-  the `TERMHERD_MCP_ATTACH` override.
+- `mcp` — `allow_claude_nesting`: whether `prompt_in_session` may prompt
+  another *Claude* session over the live bridge (default `false`; a shell is
+  never gated); `attach`: whether a running instance publishes its live bridge
+  for a client it did not spawn — `false` (default), `true`, or `"never"`,
+  which also refuses the `TERMHERD_MCP_ATTACH` override.
 - `keys` — keyboard overrides, one chord or a list per action; the full
   action vocabulary and its default chords are listed in the template.
 
-Some of these are also readable and writable from inside a Claude session via
-the MCP control surface (below) — the catalogue there is narrower than this
-list, and widening it is tracked separately.
+Some of these are also readable from inside a Claude session via the MCP
+control surface (below), and a narrower set is writable there — `shell.program`
+/ `shell.args` are read-only over MCP, since they name what the next launch
+runs. Widening the catalogue is tracked separately.
 
 Window size and position persist separately to `~/.termherd/window.json` (a
 position left off every connected monitor — e.g. on a screen since unplugged —
 is dropped so the window re-centers instead of opening out of reach), and
-session stars / archives / custom titles to `~/.termherd/metadata.json` (an
-overlay — TermHerd never writes under `~/.claude`). Star (★), archive (⊟) and
-rename (✎) are buttons on each sidebar row.
+session stars / archives / custom titles — and the repositories you added by
+hand — to `~/.termherd/metadata.json` (an overlay — TermHerd never writes under
+`~/.claude`). Star (★), archive (⊟) and rename (✎) are buttons on each sidebar
+row; a hand-added repository also carries a ✕ that takes it back out.
+Renaming a session open in a Claude tab asks Claude itself, with `/rename`.
 
 ## Shortcuts
 
@@ -158,18 +182,20 @@ All shortcuts are configurable via the `keys` section of the config file
 | Action             | Windows / Linux            | macOS         |
 | ------------------ | -------------------------- | ------------- |
 | Copy selection     | `Ctrl+Shift+C`             | `Cmd+C`       |
-| Paste              | `Ctrl+V` / `Ctrl+Shift+V`  | `Cmd+V`       |
+| Paste              | `Ctrl+Shift+V`; also `Ctrl+V` on Windows | `Cmd+V` |
 | Next / prev tab    | `Ctrl+Tab` / `Ctrl+Shift+Tab` | (same)     |
-| Jump to tab 1–9    | `Ctrl+1` … `Ctrl+9`        | `Cmd+1` … `Cmd+9` |
-| Scroll top/bottom  | `Ctrl+Up` / `Ctrl+Down`    | `Cmd+Up` / `Cmd+Down` |
-| New shell here     | `Ctrl+T`                   | `Cmd+T`       |
+| Jump to tab 1–9    | `Alt+1` … `Alt+9`          | `Cmd+1` … `Cmd+9` |
+| Scroll top/bottom  | `Ctrl+Shift+Home` / `End`  | `Cmd+Up` / `Cmd+Down` |
+| New shell here     | `Ctrl+Shift+T`             | `Cmd+T`       |
 | New Claude here    | `Ctrl+Alt+T`               | `Cmd+Alt+T`   |
-| Reopen closed tab  | `Ctrl+Shift+T`             | `Cmd+Shift+T` |
-| Close tab / pane   | `Ctrl+W`                   | `Cmd+W`       |
-| Split vert. / horiz. | `Ctrl+D` / `Ctrl+Shift+D` | `Cmd+D` / `Cmd+Shift+D` |
+| Reopen closed tab  | `Ctrl+Alt+Shift+T`         | `Cmd+Shift+T` |
+| Close tab / pane   | `Ctrl+Shift+W`             | `Cmd+W`       |
+| Rename tab         | `Ctrl+Shift+I`             | `Cmd+Shift+I` |
+| Tab menu (or right-click a tab) | `Ctrl+Shift+M` | `Cmd+Shift+M` |
+| Split vert. / horiz. | `Alt+Shift+Plus` / `Alt+Shift+Minus` or `D` | `Cmd+D` / `Cmd+Shift+D` |
 | Focus pane         | `Ctrl+Shift+←↑↓→`          | `Cmd+Shift+←↑↓→` |
 | Zoom in / out / reset | `Ctrl` + `+` / `-` / `0` | `Cmd` + `+` / `-` / `0` |
-| Focus search       | `Ctrl+F`                   | `Cmd+F`       |
+| Focus search       | `Ctrl+Shift+F`             | `Cmd+F`       |
 | Capture state dump | `Ctrl+Shift+S`             | `Cmd+Shift+S` |
 | Record GIF (start/stop) | `Ctrl+Shift+R`        | `Cmd+Shift+R` |
 | Interrupt (SIGINT) | `Ctrl+C`                   | `Ctrl+C`      |
@@ -178,17 +204,33 @@ Jump-to-tab (`Ctrl`/`Cmd`+`1`–`9`) is matched by physical key position, so it
 lands on the same number-row keys on every layout — including AZERTY and QWERTZ,
 where those keys produce `&`, `é`, … without Shift.
 
+On macOS the left Option key is Meta (`⌥B` / `⌥F` move by word) and the right
+one types what the layout composes, such as `|` with `⌥⇧L` on a French layout;
+`terminal.option_as_meta` picks the side.
+
 Dragging with the mouse selects, and the wheel scrolls back through history.
 The two classic terminal clipboard gestures are off until you ask for them:
 `terminal.copy_on_select` makes a drag release (or a double-click) copy
-outright, and `terminal.paste_on_right_click` makes a right-click paste into
-the pane under the pointer. Left off, the copy chord reads whatever is
-highlighted on screen. In the sidebar, click a project or session to
+outright, and `terminal.paste_on_right_click` makes a right-click paste into the
+pane under the pointer. Left off, the copy chord copies the terminal's current
+selection, even one scrolled out of view. A full-screen program that reads the
+mouse — Claude Code's `/diff` and `/resume`, vim, lazygit, less — owns it while
+it runs: clicks, drags and the wheel go to the program, nothing is selected or
+pasted locally, and <kbd>Shift</kbd>+drag takes the mouse back for a selection.
+The copy chord does nothing in such a pane unless a <kbd>Shift</kbd> selection
+exists, so a program's own clipboard write (Claude Code copies a drag on
+release) is never overwritten. In the sidebar, click a project or session to
 open it; a tab's `×` also closes it. Hovering a tab shows the session's fuller
-description (the same card the sidebar shows).
+description (the sidebar's card, plus the agent name, model and effort,
+Claude Code version and running time of its first pane, and the colour its
+outline shows).
+**+ Add a repo** puts a repository in the sidebar before it has any session — or
+drop its folder on the window, which does the same thing (a dropped *file* is ignored).
 
 Holding `Ctrl` — or `Cmd`/`Super`, either one, on every platform — underlines
-the URL or **file path** under the pointer, and clicking it opens it. A path
+the URL, hidden link or **file path** under the pointer, and clicking it
+opens it. A hidden link is a label printed over a URL it never shows (`#76`
+over an issue URL, the OSC 8 form `gh` and rendered markdown emit). A path
 is underlined only once the filesystem confirms it exists — resolved against
 the session's live directory,
 then the repository holding it, then the launch directory, because `cargo`,
@@ -216,15 +258,22 @@ nothing to configure. It exposes the running workspace:
 | --- | --- |
 | `list_sessions` | every live session with its stable `handle` |
 | `snapshot` | the whole state — config, sidebar, tabs and panes; filterable, no terminal text by default |
-| `open_session` · `split_pane` · `focus_pane` · `rename_tab` · `close_pane` | workspace actions, each reporting the resulting focus |
+| `open_session` · `split_pane` · `focus_pane` · `rename_tab` · `close_pane` | workspace actions, each reporting the resulting focus; open and close can run in the background, leaving focus alone, and renaming a Claude tab asks Claude, with `/rename` |
 | `run_in_session` | type into a terminal (returns immediately) |
 | `wait_for_status` | block until a session goes idle / wants attention |
 | `read_terminal` | one pane's visible text |
 | `screenshot` | the window as a PNG — for what only pixels show |
 | `press_keys` · `run_action` | drive termherd's own interface — chords through the live keymap, or actions by name |
+| `mouse_in_session` | a mouse event at a cell of a terminal — forwarded to a program reading the mouse, else the terminal's own selection |
+| `add_repo` · `forget_repo` | put a repository in the sidebar before it has any session, and drop that addition |
+| `claude_command` | ask to type `/rename`, `/color` or `/desktop` into an idle Claude session — behind a confirmation the caller or the user answers |
+| `prompt_in_session` | type, wait and read in one round trip — prompting another Claude session is opt-in |
+| `list_options` · `set_option` | read and change `settings.json` — the same catalogue as the stdio server; a running TermHerd applies a change at once |
 
 The loop that makes it useful is **act → wait → observe**: `run_in_session`,
-then `wait_for_status`, then `read_terminal`. Sessions are addressed by a
+then `wait_for_status` (for `busy`, then for `idle`: just after typing, the
+session still shows the status from before the prompt), then `read_terminal`.
+`prompt_in_session` does that wait for you. Sessions are addressed by a
 stable `handle` that survives a Claude-side session re-key.
 
 `press_keys` and `run_action` reach the app itself, not a terminal — typing
@@ -236,22 +285,25 @@ with "it worked".
 
 `escape` leaves **every** prompt, which is what keeps an agent from parking the
 app on one it cannot answer; a sidebar rename used to be the exception
-([#237]). `enter` confirms the confirmation prompts, but commits neither
-rename — those go through a widget callback no synthesised event reaches
+([#237]). `enter` confirms confirmation prompts and commits both inline
+renames. The rename fields use the same commit path for MCP and widget submit
 ([#246]).
 
-Four follow-ups remain: a composed prompt→wait→read in one round trip
-([#196]), `enter` on the renames ([#246]), and a doc editor that discards
-unsaved edits when it closes ([#248]). A client TermHerd did *not* spawn can
-now reach the bridge too, once `mcp.attach` is turned on ([#267]).
+One follow-up remains: the pointer at TermHerd's own interface ([#301]): it
+reaches a session's terminal, and through it a program reading the mouse, but
+not yet the sidebar, tabs or gutters. A client TermHerd did *not* spawn can now
+reach the bridge too, once `mcp.attach` is turned on ([#267]).
 
 ### The stdio server (manual)
 
 `termherd-mcp` is a separate small binary that exposes termherd's own
 **configuration** — so you can ask "what can I configure here?", or "switch me
-to a light theme", from any Claude session. Two tools, `list_options` (read)
-and `set_option` (write), plus the option **schema** as a resource, all
-reflecting `~/.termherd/settings.json`.
+to a light theme", from a Claude session termherd did **not** launch (one it
+launched already has the same tools on the live bridge). Two tools,
+`list_options` (read) and `set_option` (write), plus the option **schema** as
+a resource, all reflecting `~/.termherd/settings.json`. The two options that
+name what termherd executes — `shell.program`, `shell.args` — are readable but
+never writable over MCP.
 
 It speaks JSON-RPC over stdio. Register it with Claude Code by adding it to your
 `mcpServers` config (point `command` at the built binary):
@@ -267,11 +319,10 @@ It speaks JSON-RPC over stdio. Register it with Claude Code by adding it to your
 Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 
 [#90]: https://github.com/Termherd/termherd/issues/90
-[#196]: https://github.com/Termherd/termherd/issues/196
 [#237]: https://github.com/Termherd/termherd/issues/237
 [#246]: https://github.com/Termherd/termherd/issues/246
-[#248]: https://github.com/Termherd/termherd/issues/248
 [#267]: https://github.com/Termherd/termherd/issues/267
+[#301]: https://github.com/Termherd/termherd/issues/301
 
 ## Test
 

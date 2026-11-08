@@ -9,11 +9,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use termherd_claude::digest::digest_session;
+use termherd_claude::session_id::is_valid as is_valid_session_id;
 use termherd_core::SessionRecord;
 use termherd_core::ports::ScanError;
 
 use crate::cache::{CachedCwd, CachedDigest, ScanCache, file_sig};
-use crate::derive::{cached_cwd, derive_cwd, jsonl_files, resolve_worktree};
+use crate::derive::{cached_cwd, derive_cwd, jsonl_files};
+use crate::entry::{is_dir, read_transcript};
+use crate::repo::sidebar_key;
 
 /// Result of walking a projects root: the derived session records, plus the
 /// folders whose project path could not be derived (kept so the caller —
@@ -36,7 +39,7 @@ pub(crate) fn scan_root(root: &Path, cache: &mut ScanCache) -> Result<ScanOutcom
     let mut next = ScanCache::default();
     for folder in folders.flatten() {
         let dir = folder.path();
-        if !dir.is_dir() {
+        if !is_dir(&dir) {
             continue;
         }
         match scan_folder(&dir, cache, &mut next) {
@@ -70,7 +73,7 @@ fn scan_folder(dir: &Path, old: &ScanCache, next: &mut ScanCache) -> Option<Vec<
     }
     // The worktree collapse re-runs every scan: it depends on the parent
     // existing on disk *now*, not on the transcript the cwd came from.
-    let project_path = resolve_worktree(&cwd);
+    let project_path = sidebar_key(&cwd);
 
     // Pass 2 — digest the direct session files, re-reading only the ones
     // whose signature changed since the previous scan.
@@ -79,12 +82,15 @@ fn scan_folder(dir: &Path, old: &ScanCache, next: &mut ScanCache) -> Option<Vec<
         let Some(session_id) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else {
             continue;
         };
+        // Refused at the same per-file tier as an unparseable transcript below;
+        // see `termherd_claude::session_id::is_valid` for why the stem is untrusted.
+        if !is_valid_session_id(&session_id) {
+            continue;
+        }
         let sig = file_sig(&path);
         let digest = match (sig, old.digests.get(&path)) {
             (Some(sig), Some(hit)) if hit.sig == sig => hit.digest.clone(),
-            _ => fs::read_to_string(&path)
-                .ok()
-                .and_then(|c| digest_session(&c)),
+            _ => read_transcript(&path).and_then(|c| digest_session(&c)),
         };
         if let Some(sig) = sig {
             next.digests.insert(
@@ -147,6 +153,76 @@ mod tests {
     }
 
     #[test]
+    fn a_session_id_carrying_shell_metacharacters_is_refused_at_the_scan_boundary() {
+        // A `.jsonl` filename becomes the `--resume <id>` termherd types into the
+        // freshly spawned shell. A real Claude session id is `[A-Za-z0-9_-]+`, so
+        // any other character is refused here — before it can reach that line —
+        // rather than trusted and quoted downstream in a shell grammar that
+        // differs per platform (zsh/bash vs PowerShell/cmd).
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("C--proj");
+        fs::create_dir(&folder).unwrap();
+        write_session(
+            &folder,
+            "9f8e7d6c-4b2a-4c1d-8e3f-0123456789ab.jsonl",
+            "/real/proj",
+            "real",
+        );
+        write_session(&folder, "evil; touch pwned.jsonl", "/real/proj", "attack");
+
+        let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
+
+        assert!(
+            records.iter().all(|r| {
+                r.session_id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            }),
+            "no scanned session id may carry a shell metacharacter"
+        );
+        assert!(
+            records
+                .iter()
+                .any(|r| r.session_id == "9f8e7d6c-4b2a-4c1d-8e3f-0123456789ab"),
+            "the well-formed session id is still scanned"
+        );
+    }
+
+    #[test]
+    fn a_command_substitution_filename_never_becomes_a_session() {
+        // The classic payload: `$(...)` in the stem. Distinct from `;` above so a
+        // fix that only strips one metacharacter still fails this.
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("C--proj");
+        fs::create_dir(&folder).unwrap();
+        write_session(&folder, "x$(touch owned).jsonl", "/real/proj", "attack");
+
+        let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
+
+        assert!(
+            records.is_empty(),
+            "a command-substitution filename must yield no session, got {records:?}"
+        );
+    }
+
+    #[test]
+    fn a_flag_shaped_filename_never_becomes_a_session() {
+        // `--help.jsonl` is all-charset but `claude --resume --help` would read
+        // the stem as a flag, not the resume value. Refused at the boundary.
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("C--proj");
+        fs::create_dir(&folder).unwrap();
+        write_session(&folder, "--help.jsonl", "/real/proj", "attack");
+
+        let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
+
+        assert!(
+            records.is_empty(),
+            "a flag-shaped filename must yield no session, got {records:?}"
+        );
+    }
+
+    #[test]
     fn falls_back_to_subagent_cwd_for_the_folder_path() {
         let tmp = tempfile::tempdir().unwrap();
         let folder = tmp.path().join("C--proj");
@@ -163,6 +239,20 @@ mod tests {
         let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].project_path, "/from/subagent");
+    }
+
+    #[test]
+    fn only_jsonl_files_are_sessions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let folder = tmp.path().join("C--proj");
+        fs::create_dir(&folder).unwrap();
+        write_session(&folder, "abc.jsonl", "/real/proj", "kept");
+        write_session(&folder, "notes.txt", "/real/proj", "not a session");
+        fs::create_dir(folder.join("dir.jsonl")).unwrap();
+
+        let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
+        let ids: Vec<&str> = records.iter().map(|r| r.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["abc"]);
     }
 
     #[test]
@@ -229,8 +319,11 @@ mod tests {
 
         let records = FsScanner::new(tmp.path().to_owned()).scan().unwrap();
         assert_eq!(records.len(), 1);
+        // Compared in one spelling: the key takes the platform's own separator
+        // (that is what folds `C:/x` and `C:\x` onto one row), while this
+        // fixture writes the Unix one into the transcript.
         assert_eq!(
-            records[0].project_path,
+            records[0].project_path.replace('\\', "/"),
             main.display().to_string().replace('\\', "/")
         );
 

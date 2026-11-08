@@ -12,11 +12,18 @@
 //! reads the activity off the PTY's own foreground process group. It is a
 //! fallback, subordinate to the marks — see [`Activity`].
 
+use std::time::{Duration, Instant};
+
 use portable_pty::MasterPty;
 use termherd_claude::osc::OscSignal;
 use termherd_core::SessionStatus;
 
 use crate::prompt::PromptMark;
+
+/// How long Claude's idle title must stand, unbroken by work, before a busy
+/// session reads idle. Between two busy stretches Claude can show idle for
+/// about 20 ms, and a wait settling on that returns mid-turn.
+pub(crate) const IDLE_HOLD: Duration = Duration::from_millis(150);
 
 /// A session's activity and which source it is entitled to come from.
 ///
@@ -34,6 +41,9 @@ pub(crate) struct Activity {
     /// Whether the terminal has ever classified itself — a Claude OSC signal or
     /// a shell-integration mark. While false, the foreground poll stands in.
     self_reported: bool,
+    /// When Claude's idle title, held back while it may still be a blip
+    /// between two busy stretches, is to be published.
+    idle_due: Option<Instant>,
 }
 
 impl Activity {
@@ -42,18 +52,59 @@ impl Activity {
         Self {
             status: SessionStatus::Starting,
             self_reported: false,
+            idle_due: None,
         }
     }
 
     /// Fold one output chunk's signals and marks in. Marks are applied first:
     /// within a chunk, a shell's `133;C` is what *starts* the Claude CLI whose
     /// own signals follow it, so the more specific dialect must win the tie.
-    pub(crate) fn observe(&mut self, signals: &[OscSignal], marks: &[PromptMark]) {
-        self.status = fold_status(fold_marks(self.status, marks), signals);
+    pub(crate) fn observe(&mut self, signals: &[OscSignal], marks: &[PromptMark], now: Instant) {
+        let marked = fold_marks(self.underlying(), marks);
+        let folded = fold_status(marked, signals);
+        // Only Claude's own idle title is held: a shell's marks are explicit
+        // command boundaries, and nothing but work could make them a blip.
+        let held_title =
+            marks.is_empty() && self.status == SessionStatus::Busy && folded == SessionStatus::Idle;
+        // Work inside the chunk ends the idle that stood before it.
+        let worked = signals.contains(&OscSignal::Busy);
+        self.idle_due = match self.idle_due {
+            Some(due) if held_title && !worked => Some(due),
+            _ if held_title => Some(now + IDLE_HOLD),
+            _ => None,
+        };
+        if self.idle_due.is_none() {
+            self.status = folded;
+        }
         // A chunk that classified nothing — plain output, a bare title, a bell
         // — is not the terminal speaking for itself, so it must not retire the
         // stand-in.
         self.self_reported |= !marks.is_empty() || signals.iter().any(classifies);
+    }
+
+    /// When a held idle is due to be published, if one is held.
+    pub(crate) fn due(&self) -> Option<Instant> {
+        self.idle_due
+    }
+
+    /// Publish a held idle whose hold has run out by `now`, and report whether
+    /// it did. A held idle always moves the status: only a busy one is held.
+    pub(crate) fn settle(&mut self, now: Instant) -> bool {
+        if self.idle_due.is_none_or(|due| due > now) {
+            return false;
+        }
+        self.idle_due = None;
+        self.status = SessionStatus::Idle;
+        true
+    }
+
+    /// The status the terminal last reported, held idle included.
+    fn underlying(&self) -> SessionStatus {
+        if self.idle_due.is_some() {
+            SessionStatus::Idle
+        } else {
+            self.status
+        }
     }
 
     /// Fold a foreground-process-group reading in, and report whether it moved
@@ -156,6 +207,40 @@ pub(crate) fn foreground_status(leader: Option<i32>, shell: Option<u32>) -> Opti
     })
 }
 
+/// The process id of the job a PTY's shell is running in the foreground, or
+/// `None` while the shell itself is in front, or where the platform cannot
+/// say. A job's process-group leader is its first process, so for a Claude
+/// launched at the prompt this is Claude's own pid — the one naming its
+/// session file.
+pub(crate) fn foreground_job(leader: Option<i32>, shell: Option<u32>) -> Option<u32> {
+    let (leader, shell) = (u32::try_from(leader?).ok()?, shell?);
+    (leader != shell).then_some(leader)
+}
+
+/// When process `pid` started, in the form Claude Code stamps its session
+/// file with (`procStart`): `ps`'s `lstart` column, in UTC and the C locale.
+/// `None` when `ps` cannot say: the process is gone, or there is no `ps`.
+pub(crate) fn process_start(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("ps")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .env("TZ", "UTC")
+        .env("LC_ALL", "C")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    lstart(&output.stdout)
+}
+
+/// The stamp in `ps -o lstart=` output, which pads it with trailing blanks.
+fn lstart(stdout: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(stdout).ok()?.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,8 +251,9 @@ mod tests {
         let mut activity = Activity {
             status: from,
             self_reported: false,
+            idle_due: None,
         };
-        activity.observe(signals, marks);
+        activity.observe(signals, marks, Instant::now());
         activity.status
     }
 
@@ -286,6 +372,53 @@ mod tests {
     }
 
     #[test]
+    fn a_job_in_front_of_the_shell_is_reported_by_its_pid() {
+        assert_eq!(foreground_job(Some(4399), Some(4321)), Some(4399));
+    }
+
+    #[test]
+    fn the_shell_in_front_means_no_job() {
+        assert_eq!(foreground_job(Some(4321), Some(4321)), None);
+    }
+
+    #[test]
+    fn no_job_is_invented_where_the_platform_cannot_report_one() {
+        assert_eq!(foreground_job(None, Some(4321)), None);
+        // Without the shell's own pid there is nothing to tell a job from the
+        // shell by.
+        assert_eq!(foreground_job(Some(4399), None), None);
+        // A leader is a pid, and no pid is negative.
+        assert_eq!(foreground_job(Some(-1), Some(4321)), None);
+    }
+
+    #[test]
+    fn the_lstart_column_is_read_without_its_padding() {
+        assert_eq!(
+            lstart(b"Wed Oct  7 06:48:07 2026    \n").as_deref(),
+            Some("Wed Oct  7 06:48:07 2026")
+        );
+        assert_eq!(lstart(b"   \n"), None);
+        assert_eq!(lstart(&[0xff, 0xfe]), None);
+    }
+
+    #[test]
+    fn a_live_process_has_a_start_stamp_and_a_missing_one_has_none() {
+        if cfg!(windows) {
+            return;
+        }
+        let stamp = process_start(std::process::id()).expect("this test's own process");
+        let year = stamp
+            .rsplit(' ')
+            .next()
+            .and_then(|year| year.parse::<u32>().ok());
+        assert!(
+            year.is_some_and(|year| year >= 2024),
+            "an lstart stamp, got {stamp:?}"
+        );
+        assert_eq!(process_start(u32::MAX), None);
+    }
+
+    #[test]
     fn a_poll_moves_an_unintegrated_session_and_reports_that_it_did() {
         let mut activity = Activity::starting();
         assert!(activity.poll(Some(Busy)), "the status moved");
@@ -307,7 +440,7 @@ mod tests {
         // able to contradict it — a backgrounded job would otherwise flip the
         // session to idle while the shell is still busy, or the reverse.
         let mut activity = Activity::starting();
-        activity.observe(&[], &[PromptMark::Running]);
+        activity.observe(&[], &[PromptMark::Running], Instant::now());
         assert_eq!(activity.status, Busy);
         assert!(
             !activity.poll(Some(Idle)),
@@ -322,7 +455,11 @@ mod tests {
         // Claude session busy forever — including one blocked on a permission
         // prompt, whose badge the user needs.
         let mut activity = Activity::starting();
-        activity.observe(&[OscSignal::Notification("allow?".into())], &[]);
+        activity.observe(
+            &[OscSignal::Notification("allow?".into())],
+            &[],
+            Instant::now(),
+        );
         assert_eq!(activity.status, Attention);
         assert!(!activity.poll(Some(Busy)));
         assert_eq!(activity.status, Attention);
@@ -333,8 +470,202 @@ mod tests {
         // Plain output, a bare title, a bell: none of them is the terminal
         // saying what it is doing, so the stand-in must survive them.
         let mut activity = Activity::starting();
-        activity.observe(&[OscSignal::Title("zsh".into()), OscSignal::Bell], &[]);
+        activity.observe(
+            &[OscSignal::Title("zsh".into()), OscSignal::Bell],
+            &[],
+            Instant::now(),
+        );
         assert!(activity.poll(Some(Busy)), "the poll still stands in");
         assert_eq!(activity.status, Busy);
+    }
+
+    // --- Claude's idle title, held until it stands ---
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    /// A session Claude put to work at `at`.
+    fn working(at: Instant) -> Activity {
+        let mut activity = Activity::starting();
+        activity.observe(&[OscSignal::Busy], &[], at);
+        activity
+    }
+
+    #[test]
+    fn claude_going_idle_from_busy_is_held_back() {
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        assert_eq!(activity.status, Busy);
+        assert_eq!(activity.due(), Some(t0 + IDLE_HOLD));
+    }
+
+    #[test]
+    fn a_held_idle_is_not_published_before_the_hold_ends() {
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        assert!(!activity.settle(t0 + IDLE_HOLD - ms(1)));
+        assert_eq!(activity.status, Busy);
+    }
+
+    #[test]
+    fn a_held_idle_is_published_once_the_hold_ends() {
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        assert!(activity.settle(t0 + IDLE_HOLD), "the status moved");
+        assert_eq!(activity.status, Idle);
+        assert_eq!(activity.due(), None);
+    }
+
+    #[test]
+    fn work_resuming_within_the_hold_drops_the_held_idle() {
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        activity.observe(&[OscSignal::Busy], &[], t0 + ms(20));
+        assert_eq!(activity.due(), None);
+        assert!(!activity.settle(t0 + IDLE_HOLD));
+        assert_eq!(activity.status, Busy);
+    }
+
+    #[test]
+    fn a_repeated_idle_does_not_push_the_hold_back() {
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        activity.observe(&[OscSignal::Idle], &[], t0 + ms(100));
+        assert_eq!(activity.due(), Some(t0 + IDLE_HOLD));
+    }
+
+    #[test]
+    fn a_notification_during_the_hold_raises_attention_at_once() {
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        activity.observe(
+            &[OscSignal::Notification("allow?".into())],
+            &[],
+            t0 + ms(10),
+        );
+        assert_eq!(activity.status, Attention);
+        assert_eq!(activity.due(), None);
+    }
+
+    #[test]
+    fn an_idle_with_no_work_before_it_is_published_at_once() {
+        let mut activity = Activity::starting();
+        activity.observe(&[OscSignal::Idle], &[], Instant::now());
+        assert_eq!(activity.status, Idle);
+        assert_eq!(activity.due(), None);
+    }
+
+    #[test]
+    fn a_shell_finishing_its_command_is_idle_at_once() {
+        // Prompt marks are explicit command boundaries, not a redrawn title.
+        let t0 = Instant::now();
+        let mut activity = Activity::starting();
+        activity.observe(&[], &[PromptMark::Running], t0);
+        activity.observe(&[], &[PromptMark::Done], t0);
+        assert_eq!(activity.status, Idle);
+        assert_eq!(activity.due(), None);
+    }
+
+    #[test]
+    fn a_shell_mark_during_a_held_idle_is_published_at_once() {
+        // Claude exits inside the hold and the shell reports its prompt.
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        activity.observe(&[], &[PromptMark::Done, PromptMark::Ready], t0 + ms(10));
+        assert_eq!(activity.status, Idle);
+        assert_eq!(activity.due(), None);
+    }
+
+    #[test]
+    fn work_inside_a_chunk_restarts_the_hold() {
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        activity.observe(&[OscSignal::Busy, OscSignal::Idle], &[], t0 + ms(100));
+        assert_eq!(activity.due(), Some(t0 + ms(100) + IDLE_HOLD));
+    }
+
+    #[test]
+    fn plain_output_during_the_hold_keeps_it_running() {
+        let t0 = Instant::now();
+        let mut activity = working(t0);
+        activity.observe(&[OscSignal::Idle], &[], t0);
+        activity.observe(&[OscSignal::Title("x".into())], &[], t0 + ms(50));
+        assert_eq!(activity.due(), Some(t0 + IDLE_HOLD));
+    }
+
+    #[test]
+    fn the_hold_outlasts_the_observed_blip_with_room_to_spare() {
+        // The blip measured on Windows lasted about 20 ms.
+        assert!(IDLE_HOLD >= 5 * ms(20), "{IDLE_HOLD:?}");
+    }
+
+    mod idle_hold {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn hold_ms() -> u64 {
+            u64::try_from(IDLE_HOLD.as_millis()).expect("a short hold")
+        }
+
+        /// Drive `activity` as the terminal thread does: a held idle falls due
+        /// on its own timer, before the next chunk is read.
+        fn feed(
+            activity: &mut Activity,
+            steps: &[(OscSignal, u64)],
+            start: Instant,
+        ) -> (Vec<SessionStatus>, Instant) {
+            let mut now = start;
+            let mut seen = vec![activity.status];
+            for (signal, gap) in steps {
+                now += ms(*gap);
+                if let Some(due) = activity.due().filter(|due| *due <= now) {
+                    activity.settle(due);
+                    seen.push(activity.status);
+                }
+                activity.observe(std::slice::from_ref(signal), &[], now);
+                seen.push(activity.status);
+            }
+            (seen, now)
+        }
+
+        proptest! {
+            #[test]
+            fn an_idle_shorter_than_the_hold_between_two_busy_stretches_is_never_read(
+                stretches in prop::collection::vec((0..400u64, 0..hold_ms()), 1..20)
+            ) {
+                let steps: Vec<_> = stretches
+                    .iter()
+                    .flat_map(|&(busy, idle)| [(OscSignal::Idle, busy), (OscSignal::Busy, idle)])
+                    .collect();
+                let t0 = Instant::now();
+                let mut activity = working(t0);
+                let (seen, _) = feed(&mut activity, &steps, t0);
+                prop_assert!(!seen.contains(&Idle), "read idle: {:?}", seen);
+            }
+
+            #[test]
+            fn once_the_hold_has_passed_the_status_is_the_plain_fold(
+                steps in prop::collection::vec(
+                    (prop_oneof![Just(OscSignal::Busy), Just(OscSignal::Idle)], 0..400u64),
+                    1..40,
+                )
+            ) {
+                let t0 = Instant::now();
+                let mut activity = working(t0);
+                let (_, end) = feed(&mut activity, &steps, t0);
+                activity.settle(end + IDLE_HOLD);
+                let signals: Vec<_> = steps.iter().map(|(signal, _)| signal.clone()).collect();
+                prop_assert_eq!(activity.status, fold_status(Busy, &signals));
+            }
+        }
     }
 }

@@ -37,7 +37,9 @@ empty close stack, `scroll_focused` with nothing focused, `cycle_tab` with
 nothing open, `toggle_record` mid-drain, `close_focused_pane` with no tab at
 all, `copy_selection` with nothing selected) and every one of them reported
 `ran`. The last two are the ones a caller would be hurt by soonest: a false
-`ran` on `copy` has an agent paste stale clipboard content, and `close-focused`
+`ran` on `copy` has an agent paste stale clipboard content (a second way to
+that false `ran`, through a filled copy cache in a pane with nothing selected,
+was #316), and `close-focused`
 is the very action the overlay behaviour rests on. So `inert` carries a
 `reason` — `no-surface` (wired to nothing, retrying is pointless) or
 `no-context` (a precondition the caller can create) — since the two call for
@@ -70,13 +72,11 @@ because inventing a stricter gesture for the key alone would have left the
 button's identical hole standing while looking closed. Discarding a modified
 doc without asking is a real defect on *both* paths and is filed as its own
 (#248) — widened here, not created here, and not half-fixed inside a keyboard
-PR. It also accumulates rather than stopping at the first
+PR. (Since fixed: both paths ask before discarding, in #386, and so does a
+quit, in #392.) It also accumulates rather than stopping at the first
 failure: a sweep that names one offender reads as *and the rest are fine*,
 which is the assumption that let this one through. Tidy-first prerequisite:
 `PaneRename` announced itself as `session-rename` in its own `label()`, in the
-MCP reply, and in the tests — the code was the only name that disagreed. Left
-open on purpose: `enter` reaches neither rename over MCP, since both commit
-through the widget's `on_submit`, which no synthesised key event touches. That
-is a missing capability, not a parked surface — `escape` always gets the
-keyboard back — so it is a separate ticket (#246) rather than a passenger on
-this fix
+MCP reply, and in the tests — the code was the only name that disagreed. Both
+rename handlers now route `enter` to their existing commit messages, while
+the widget submit callbacks remain in place for human input (#246).

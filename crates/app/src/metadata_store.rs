@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use termherd_core::{Overlay, RepoMeta, SessionMeta};
 
+use crate::paths::DataDir;
+
 /// On-disk shape of one session entry. Default fields are skipped so the file
 /// only records what the user actually set.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -23,6 +25,8 @@ struct MetaDto {
     archived: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title_over: Option<String>,
 }
 
 /// On-disk shape of one repo entry.
@@ -30,6 +34,8 @@ struct MetaDto {
 struct RepoDto {
     #[serde(default, skip_serializing_if = "is_false")]
     starred: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    declared: bool,
 }
 
 /// On-disk shape of the whole file: the two keyings under named wrappers.
@@ -72,15 +78,18 @@ impl<'de> Deserialize<'de> for StoredOverlay {
 }
 
 /// Load the overlay; any problem (no file, bad JSON) yields an empty overlay —
-/// metadata must never block startup.
+/// metadata must never block startup. An unparseable file is set aside and
+/// reported: stars, titles and added repos are the user's own work, and the
+/// next save would otherwise overwrite them with the empty overlay.
 #[must_use]
-pub fn load() -> Overlay {
-    from_dto(crate::json_store::load_json::<StoredOverlay>(FILE).0)
+pub fn load(dir: &DataDir) -> (Overlay, Option<crate::json_store::LoadProblem>) {
+    let (stored, problem) = crate::json_store::load_json_checked::<StoredOverlay>(&dir.file(FILE));
+    (from_dto(stored.0), problem)
 }
 
 /// Persist the overlay. Failures are logged, never fatal.
-pub fn save(overlay: &Overlay) {
-    crate::json_store::save_json(FILE, &to_dto(overlay));
+pub fn save(dir: &DataDir, overlay: &Overlay) {
+    crate::json_store::save_json(&dir.file(FILE), &to_dto(overlay));
 }
 
 fn from_dto(dto: OverlayDto) -> Overlay {
@@ -95,6 +104,7 @@ fn from_dto(dto: OverlayDto) -> Overlay {
                         starred: m.starred,
                         archived: m.archived,
                         title: m.title,
+                        title_over: m.title_over,
                     },
                 )
             })
@@ -102,7 +112,15 @@ fn from_dto(dto: OverlayDto) -> Overlay {
         repos: dto
             .repos
             .into_iter()
-            .map(|(path, m)| (path, RepoMeta { starred: m.starred }))
+            .map(|(path, m)| {
+                (
+                    path,
+                    RepoMeta {
+                        starred: m.starred,
+                        declared: m.declared,
+                    },
+                )
+            })
             .collect(),
     }
 }
@@ -119,6 +137,7 @@ fn to_dto(overlay: &Overlay) -> OverlayDto {
                         starred: m.starred,
                         archived: m.archived,
                         title: m.title.clone(),
+                        title_over: m.title_over.clone(),
                     },
                 )
             })
@@ -126,12 +145,20 @@ fn to_dto(overlay: &Overlay) -> OverlayDto {
         repos: overlay
             .repos
             .iter()
-            .map(|(path, m)| (path.clone(), RepoDto { starred: m.starred }))
+            .map(|(path, m)| {
+                (
+                    path.clone(),
+                    RepoDto {
+                        starred: m.starred,
+                        declared: m.declared,
+                    },
+                )
+            })
             .collect(),
     }
 }
 
-/// `~/.termherd/metadata.json` — the app data dir from the PRD (§7).
+/// The file's name within the data dir (PRD §7).
 const FILE: &str = "metadata.json";
 
 #[cfg(test)]
@@ -184,16 +211,31 @@ mod tests {
             "s1".into(),
             SessionMeta {
                 starred: true,
+                title: Some("mine".into()),
+                title_over: Some("claude's".into()),
                 ..Default::default()
             },
         );
-        overlay
-            .repos
-            .insert("/p".into(), RepoMeta { starred: true });
+        overlay.repos.insert(
+            "/p".into(),
+            RepoMeta {
+                starred: true,
+                declared: true,
+            },
+        );
         let json = serde_json::to_string(&to_dto(&overlay)).unwrap();
         let back = parse(&json).unwrap();
         assert!(back.sessions["s1"].starred);
+        assert_eq!(
+            back.sessions["s1"].title_over.as_deref(),
+            Some("claude's"),
+            "without it, a name given over Claude's loses to it at restart"
+        );
         assert!(back.repos["/p"].starred);
+        assert!(
+            back.repos["/p"].declared,
+            "a hand-declared repo must survive the round trip, or it is gone at restart"
+        );
     }
 
     #[test]

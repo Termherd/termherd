@@ -6,15 +6,15 @@
 use iced::advanced::widget::{operate, operation::focusable};
 use iced::keyboard::{Key, key::Named};
 use iced::{Task, keyboard};
-use termherd_core::workspace::{Direction, SplitDir};
-use termherd_core::{Action, ScrollTarget};
-use termherd_pty::TermKey;
+use termherd_core::workspace::{Direction, SplitDir, Step};
+use termherd_core::{Action, ClaudeCommand, ScrollTarget, keymap};
+use termherd_pty::{KeyMods, TermKey};
 
-use super::input::{chord_of, key_mods, numpad_char, to_term_key};
+use super::input::{chord_of, key_mods, numpad_char, sends_meta, to_term_key};
 use super::{Focus, Message, Shell, search_id};
 
 /// How a confirmation overlay reads a key — the shared shape behind the quit,
-/// tab-close and archive prompts.
+/// tab-close, archive and paste prompts.
 enum ConfirmKey {
     Confirm,
     Cancel,
@@ -42,6 +42,20 @@ pub(super) enum KeyboardOwner {
     TabClose(usize),
     /// The archive confirmation.
     Archive,
+    /// The confirmation naming a slash command about to be typed into Claude.
+    ClaudeCommand,
+    /// The confirmation before a paste a terminal would run line by line.
+    Paste,
+    /// The confirmation before a modified doc's edits are discarded.
+    DocDiscard,
+    /// The tab context menu, which answers the arrows and Enter itself rather
+    /// than through a widget's submit, which a synthesised key never reaches.
+    TabMenu,
+    /// The tab colour picker, which answers the arrows and Enter itself, as
+    /// the tab menu does.
+    ColorPicker,
+    /// The settings panel.
+    Settings,
     /// The document editor, which handles its own keys.
     Doc,
 }
@@ -54,12 +68,18 @@ impl KeyboardOwner {
     /// `match` below: a new variant fails to compile there, in this file, where
     /// this array is the next thing the author reads.
     #[cfg(test)]
-    pub(super) const ALL: [Self; 6] = [
+    pub(super) const ALL: [Self; 12] = [
         Self::TabRename,
         Self::SessionRename,
         Self::Quit,
         Self::TabClose(0),
         Self::Archive,
+        Self::ClaudeCommand,
+        Self::Paste,
+        Self::DocDiscard,
+        Self::TabMenu,
+        Self::ColorPicker,
+        Self::Settings,
         Self::Doc,
     ];
 
@@ -71,6 +91,12 @@ impl KeyboardOwner {
             Self::Quit => "quit-confirm",
             Self::TabClose(_) => "tab-close-confirm",
             Self::Archive => "archive-confirm",
+            Self::ClaudeCommand => "claude-command-confirm",
+            Self::Paste => "paste-confirm",
+            Self::DocDiscard => "doc-discard-confirm",
+            Self::TabMenu => "tab-menu",
+            Self::ColorPicker => "tab-color-picker",
+            Self::Settings => "settings",
             Self::Doc => "doc-editor",
         }
     }
@@ -87,7 +113,9 @@ pub(super) enum Inertia {
     NoSurface,
     /// The action is wired, but refused before acting because a precondition was
     /// absent — no focused session to derive a repo from, no closed tab to
-    /// reopen, nothing to scroll.
+    /// reopen, no tab to rename, colour or open a menu on, nothing to scroll,
+    /// nothing selected to copy, no agent name, no idle Claude to send a
+    /// command to.
     ///
     /// Deliberately narrower than "had no visible effect": an action whose event
     /// `core` applies and absorbs (a tab index past the open tabs) *did* run, and
@@ -119,6 +147,10 @@ pub(super) enum KeyVerdict {
     /// An open overlay consumed it — acted on it or swallowed it. Carries
     /// [`KeyboardOwner::label`].
     Overlay(&'static str),
+    /// An overlay's confirmation was refused, so the prompt stays open and
+    /// nothing it promised happened. Carries the label and the reason — told
+    /// `overlay` instead, a caller would believe the confirmed action ran.
+    Refused(&'static str, String),
     /// A bound keymap action ran; carries its config name.
     Ran(String),
     /// A bound keymap action changed nothing, and why. Kept apart from
@@ -137,15 +169,23 @@ pub(super) enum KeyVerdict {
 /// swallowed so it can't reach the terminal beneath the prompt.
 fn classify_confirm(event: &keyboard::Event) -> ConfirmKey {
     if is_escape(event) {
-        return ConfirmKey::Cancel;
+        ConfirmKey::Cancel
+    } else if is_enter(event) {
+        ConfirmKey::Confirm
+    } else {
+        ConfirmKey::Swallow
     }
-    match event {
+}
+
+/// Enter, the key every confirmation answers yes to.
+pub(super) fn is_enter(event: &keyboard::Event) -> bool {
+    matches!(
+        event,
         keyboard::Event::KeyPressed {
             key: Key::Named(Named::Enter),
             ..
-        } => ConfirmKey::Confirm,
-        _ => ConfirmKey::Swallow,
-    }
+        }
+    )
 }
 
 /// Escape, the one key every overlay must answer: it is how a caller with no
@@ -154,7 +194,7 @@ fn classify_confirm(event: &keyboard::Event) -> ConfirmKey {
 /// Modifiers are ignored, so `Shift+Escape` and `Cmd+Escape` leave too. No
 /// platform binds them to anything an overlay could mean, and a caller
 /// fumbling a modifier while trying to escape should still escape.
-fn is_escape(event: &keyboard::Event) -> bool {
+pub(super) fn is_escape(event: &keyboard::Event) -> bool {
     matches!(
         event,
         keyboard::Event::KeyPressed {
@@ -180,15 +220,35 @@ impl Shell {
     pub(super) fn run_action(&mut self, action: Action) -> Result<Task<Message>, Inertia> {
         Ok(match action {
             Action::Copy => self.copy_selection().ok_or(Inertia::NoContext)?,
+            Action::CopyAgentName => self
+                .focused_agent_name()
+                .map(iced::clipboard::write)
+                .ok_or(Inertia::NoContext)?,
             Action::Paste => iced::clipboard::read().map(Message::Paste),
-            Action::NextTab => self.cycle_tab(1).ok_or(Inertia::NoContext)?,
-            Action::PrevTab => self.cycle_tab(-1).ok_or(Inertia::NoContext)?,
+            Action::SendToDesktop => self
+                .arm_focused_claude_command(ClaudeCommand::Desktop)
+                .ok_or(Inertia::NoContext)?,
+            Action::NextTab => self.cycle_tab(Step::Next).ok_or(Inertia::NoContext)?,
+            Action::PrevTab => self.cycle_tab(Step::Prev).ok_or(Inertia::NoContext)?,
             Action::CloseFocused => self.close_focused_pane().ok_or(Inertia::NoContext)?,
+            Action::RenameTab => self
+                .start_tab_rename(self.core.workspace.active)
+                .ok_or(Inertia::NoContext)?,
+            Action::OpenTabMenu => {
+                self.open_tab_menu().ok_or(Inertia::NoContext)?;
+                Task::none()
+            }
+            Action::PickTabColor => {
+                self.open_color_picker().ok_or(Inertia::NoContext)?;
+                Task::none()
+            }
+            Action::TogglePark => self.toggle_park_active_tab().ok_or(Inertia::NoContext)?,
             Action::FocusSearch => {
                 self.focus = Focus::Search;
                 operate(focusable::focus(search_id()))
             }
             Action::ToggleSidebar => self.toggle_sidebar(),
+            Action::OpenSettings => self.update(Message::ToggleSettings),
             Action::ScrollTop => self
                 .scroll_focused(ScrollTarget::Top)
                 .ok_or(Inertia::NoContext)?,
@@ -260,8 +320,7 @@ impl Shell {
             .get(self.core.workspace.active)
             .is_some_and(|tab| tab.sessions().len() > 1);
         if in_split {
-            let effects = self.core.apply(termherd_core::Event::CloseFocusedPane);
-            Some(Task::batch([self.perform(effects), self.resize_panes()]))
+            Some(self.close_focused_pane_after(Vec::new()))
         } else {
             self.request_close(self.core.workspace.active)
         }
@@ -291,10 +350,7 @@ impl Shell {
     /// alongside the work it produced — see [`KeyVerdict`].
     pub(super) fn on_key(&mut self, event: keyboard::Event) -> (KeyVerdict, Task<Message>) {
         match self.keyboard_owner() {
-            Some(owner) => (
-                KeyVerdict::Overlay(owner.label()),
-                self.overlay_key(owner, &event),
-            ),
+            Some(owner) => self.overlay_key(owner, &event),
             None => self.terminal_key(event),
         }
     }
@@ -317,6 +373,24 @@ impl Shell {
         if self.archiving.is_some() {
             return Some(KeyboardOwner::Archive);
         }
+        if self.claude_command.is_some() {
+            return Some(KeyboardOwner::ClaudeCommand);
+        }
+        if self.core.pending_paste().is_some() {
+            return Some(KeyboardOwner::Paste);
+        }
+        if self.discarding_doc.is_some() {
+            return Some(KeyboardOwner::DocDiscard);
+        }
+        if self.live_tab_menu().is_some() {
+            return Some(KeyboardOwner::TabMenu);
+        }
+        if self.live_color_picker().is_some() {
+            return Some(KeyboardOwner::ColorPicker);
+        }
+        if self.settings_open {
+            return Some(KeyboardOwner::Settings);
+        }
         if self.open_doc.is_some() {
             return Some(KeyboardOwner::Doc);
         }
@@ -325,33 +399,50 @@ impl Shell {
 
     /// Hand one key press to the overlay that owns the keyboard. The key is
     /// consumed either way — acted on or swallowed — and never leaks to the
-    /// terminal beneath the prompt.
-    fn overlay_key(&mut self, owner: KeyboardOwner, event: &keyboard::Event) -> Task<Message> {
-        match owner {
-            KeyboardOwner::TabRename => self.tab_rename_key(event),
-            KeyboardOwner::SessionRename => self.session_rename_key(event),
-            KeyboardOwner::Quit => self.quit_confirm_key(event),
-            KeyboardOwner::TabClose(index) => self.tab_close_confirm_key(event, index),
-            KeyboardOwner::Archive => self.archive_confirm_key(event),
-            KeyboardOwner::Doc => self.open_doc_key(event),
-        }
+    /// terminal beneath the prompt. Reported as the overlay's unless the
+    /// overlay ran an action and answers with that action's own verdict.
+    fn overlay_key(
+        &mut self,
+        owner: KeyboardOwner,
+        event: &keyboard::Event,
+    ) -> (KeyVerdict, Task<Message>) {
+        let (verdict, task) = match owner {
+            KeyboardOwner::TabRename => (
+                None,
+                self.rename_key(event, Message::CancelTabRename, Message::CommitTabRename),
+            ),
+            KeyboardOwner::SessionRename => (
+                None,
+                self.rename_key(event, Message::CancelRename, Message::CommitRename),
+            ),
+            KeyboardOwner::Quit => (None, self.quit_confirm_key(event)),
+            KeyboardOwner::TabClose(index) => (None, self.tab_close_confirm_key(event, index)),
+            KeyboardOwner::Archive => (None, self.archive_confirm_key(event)),
+            KeyboardOwner::ClaudeCommand => {
+                let (verdict, task) = self.claude_command_key(event);
+                (Some(verdict), task)
+            }
+            KeyboardOwner::Paste => (None, self.paste_confirm_key(event)),
+            KeyboardOwner::DocDiscard => (None, self.doc_discard_confirm_key(event)),
+            KeyboardOwner::TabMenu => self.tab_menu_key(event),
+            KeyboardOwner::ColorPicker => self.color_picker_key(event),
+            KeyboardOwner::Settings => (None, self.settings_key(event)),
+            KeyboardOwner::Doc => (None, self.open_doc_key(event)),
+        };
+        (verdict.unwrap_or(KeyVerdict::Overlay(owner.label())), task)
     }
 
-    /// Escape abandons a tab rename; Enter and a blur commit it elsewhere, so
-    /// every other key is swallowed.
-    fn tab_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+    fn rename_key(
+        &mut self,
+        event: &keyboard::Event,
+        cancel: Message,
+        commit: Message,
+    ) -> Task<Message> {
         if is_escape(event) {
-            return self.update(Message::CancelTabRename);
+            return self.update(cancel);
         }
-        Task::none()
-    }
-
-    /// Escape abandons a session rename — the outcome a blur already gives it,
-    /// where a tab rename commits. The field owns every other key: it is a live
-    /// text input, and Enter reaches it through the widget.
-    fn session_rename_key(&mut self, event: &keyboard::Event) -> Task<Message> {
-        if is_escape(event) {
-            return self.update(Message::CancelRename);
+        if is_enter(event) {
+            return self.update(commit);
         }
         Task::none()
     }
@@ -389,12 +480,56 @@ impl Shell {
         }
     }
 
+    /// Enter types the armed command and Escape drops it, both answered here
+    /// rather than by a widget, so a synthesised key event reaches them too.
+    /// A confirmation that typed nothing answers [`KeyVerdict::Refused`]; the
+    /// prompt stays open.
+    fn claude_command_key(&mut self, event: &keyboard::Event) -> (KeyVerdict, Task<Message>) {
+        let label = KeyboardOwner::ClaudeCommand.label();
+        let task = match classify_confirm(event) {
+            ConfirmKey::Confirm => match self.confirm_claude_command() {
+                Ok(task) => task,
+                Err(refusal) => {
+                    return (
+                        KeyVerdict::Refused(label, refusal.to_string()),
+                        Task::none(),
+                    );
+                }
+            },
+            ConfirmKey::Cancel => self.cancel_claude_command(),
+            ConfirmKey::Swallow => Task::none(),
+        };
+        (KeyVerdict::Overlay(label), task)
+    }
+
+    /// Escape closes the settings panel; it has no text field, so every other
+    /// key is swallowed rather than typed into the terminal beneath it.
+    fn settings_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        if is_escape(event) {
+            return self.update(Message::CloseSettings);
+        }
+        Task::none()
+    }
+
+    fn paste_confirm_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        match classify_confirm(event) {
+            ConfirmKey::Confirm => self.update(Message::ConfirmPaste),
+            ConfirmKey::Cancel => self.update(Message::CancelPaste),
+            ConfirmKey::Swallow => Task::none(),
+        }
+    }
+
+    fn doc_discard_confirm_key(&mut self, event: &keyboard::Event) -> Task<Message> {
+        match classify_confirm(event) {
+            ConfirmKey::Confirm => self.update(Message::ConfirmDocDiscard),
+            ConfirmKey::Cancel => self.update(Message::CancelDocDiscard),
+            ConfirmKey::Swallow => Task::none(),
+        }
+    }
+
     /// The doc editor handles its own keys; only the save chord (Cmd/Ctrl+S)
-    /// and Escape are intercepted. Escape closes the editor exactly as its own
-    /// close button does — unsaved edits included, since a stricter gesture for
-    /// the key alone would leave the button's identical hole standing while
-    /// looking closed. Discarding a modified doc without asking is a defect on
-    /// both paths, tracked on its own.
+    /// and Escape are intercepted. Escape goes through the same close as the
+    /// editor's button, so a modified doc asks before either discards it.
     fn open_doc_key(&mut self, event: &keyboard::Event) -> Task<Message> {
         if is_escape(event) {
             return self.update(Message::CloseDoc);
@@ -424,10 +559,16 @@ impl Shell {
         else {
             return (KeyVerdict::Ignored, Task::none());
         };
-        if let Some(chord) = chord_of(&key, &physical_key, modifiers)
-            && let Some(action) = self.keymap.lookup(&chord)
-        {
-            return self.dispatch_action(action);
+        if let Some(chord) = chord_of(&key, &physical_key, modifiers) {
+            if let Some(action) = self.keymap.lookup(&chord) {
+                return self.dispatch_action(action);
+            }
+            // A shortcut that does nothing is otherwise silent, and the chord a
+            // press produces is not always the one its keycap suggests: Shift
+            // never changes the key named, so Cmd+Shift+`;` stays `;`.
+            if chord.mods & !keymap::MOD_SHIFT != 0 {
+                tracing::debug!(key = %chord.key, mods = chord.mods, "chord bound to no action");
+            }
         }
         if self.focus != Focus::Terminal {
             return (KeyVerdict::Ignored, Task::none());
@@ -444,14 +585,29 @@ impl Shell {
         let Some(term_key) = term_key else {
             return (KeyVerdict::Ignored, Task::none());
         };
-        let Some(bytes) = termherd_pty::key_bytes(term_key, key_mods(modifiers), text.as_deref())
-        else {
+        let mods = self.pty_mods(term_key, modifiers);
+        let cursor = self
+            .screens
+            .get(&session)
+            .map(|screen| screen.cursor_keys)
+            .unwrap_or_default();
+        let Some(bytes) = termherd_pty::key_bytes(term_key, mods, text.as_deref(), cursor) else {
             return (KeyVerdict::Ignored, Task::none());
         };
         let effects = self
             .core
             .apply(termherd_core::Event::TerminalInput { session, bytes });
         (KeyVerdict::Typed, self.perform(effects))
+    }
+
+    /// The modifiers the PTY codec encodes `term_key` with. Only a character
+    /// or Space composes, so ⌥Enter, ⌥⌫ and ⌥←/→ stay Meta on either side.
+    fn pty_mods(&self, term_key: TermKey, modifiers: keyboard::Modifiers) -> KeyMods {
+        let mut mods = key_mods(modifiers);
+        if matches!(term_key, TermKey::Char(_) | TermKey::Space) {
+            mods.alt &= sends_meta(self.option_as_meta, self.alt_sides);
+        }
+        mods
     }
 
     /// Whether raw keyboard / IME input should reach the focused terminal: it

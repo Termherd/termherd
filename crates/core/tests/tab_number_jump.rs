@@ -5,8 +5,8 @@
 //! — without any GUI/PTY. It is the closest headless proxy for "press ⌘3, land
 //! on the third tab".
 
-use termherd_core::keymap::primary_mod;
-use termherd_core::{Action, App, Effect, Event, KeyChord, Keymap, Launch, LaunchSpec};
+use termherd_core::keymap::tab_jump_mod;
+use termherd_core::{Action, App, Effect, Event, KeyChord, Keymap, Launch, LaunchSpec, Placement};
 
 /// Open a session as a new (active) tab.
 fn launch(app: &mut App, title: &str) {
@@ -14,16 +14,20 @@ fn launch(app: &mut App, title: &str) {
         cwd: None,
         launch: Launch::Shell,
         title: title.into(),
+        placement: Placement::Foreground,
     }));
     assert!(
-        matches!(effects.as_slice(), [Effect::Spawn(_)]),
+        matches!(
+            effects.as_slice(),
+            [Effect::Spawn(_)] | [Effect::Spawn(_), Effect::TabShown]
+        ),
         "launching a session should request a spawn",
     );
 }
 
 /// Resolve a number-row chord, then apply whatever tab jump it names.
 fn press_number(app: &mut App, keymap: &Keymap, digit: u8) -> Option<Action> {
-    let action = keymap.lookup(&KeyChord::new(digit.to_string(), primary_mod()));
+    let action = keymap.lookup(&KeyChord::new(digit.to_string(), tab_jump_mod()));
     if let Some(Action::ActivateTab(index)) = action {
         app.apply(Event::ActivateTab(index));
     }
@@ -42,10 +46,7 @@ fn primary_three_jumps_to_the_third_tab() {
     let action = press_number(&mut app, &keymap, 3);
 
     assert_eq!(action, Some(Action::ActivateTab(2)));
-    assert_eq!(
-        app.workspace.active, 2,
-        "⌘3 / Ctrl+3 lands on the third tab"
-    );
+    assert_eq!(app.workspace.active, 2, "⌘3 / Alt+3 lands on the third tab");
 }
 
 #[test]

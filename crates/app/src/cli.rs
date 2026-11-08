@@ -11,6 +11,8 @@
 //! opened a second window while asking would be answering a different question
 //! from the one asked.
 
+use std::path::Path;
+
 use crate::attach::{self, AttachError};
 
 /// What this invocation was asked to do.
@@ -39,20 +41,13 @@ pub(crate) fn parse<I: IntoIterator<Item = String>>(args: I) -> Command {
     }
 }
 
-/// Answer `termherd mcp-config`: read what the running instance published,
-/// prove it is live, and render the snippet.
-pub(crate) fn mcp_config() -> Result<String, AttachError> {
-    let path = attach::bridge_path().ok_or(AttachError::NotPublished)?;
-    mcp_config_at(&path)
-}
-
-/// The three steps, over an explicit path so the composition itself is testable
-/// — the home directory is the one part of it that cannot be pointed elsewhere.
+/// Answer `termherd mcp-config` for the instance publishing into `path`: read
+/// what it published, prove it is live, and render the snippet.
 ///
 /// Order matters: read, *then* prove, then render. Rendering a config from a
 /// file that has outlived its instance would fail on the caller's first tool
 /// call instead of here, where the failure can still say what to do about it.
-fn mcp_config_at(path: &std::path::Path) -> Result<String, AttachError> {
+pub(crate) fn mcp_config(path: &Path) -> Result<String, AttachError> {
     let published = attach::read(path)?;
     attach::probe(&published)?;
     Ok(attach::mcp_servers(&published))
@@ -61,7 +56,7 @@ fn mcp_config_at(path: &std::path::Path) -> Result<String, AttachError> {
 /// What to tell the user when there is no config to print. Each case names the
 /// thing to *do* about it, since the four failures call for four different
 /// responses and "failed to get config" would send them all to the same place.
-pub(crate) fn explain(error: &AttachError) -> String {
+pub(crate) fn explain(error: &AttachError, path: &Path) -> String {
     match error {
         AttachError::NotPublished => format!(
             "no running termherd is publishing its live bridge. \
@@ -74,9 +69,7 @@ pub(crate) fn explain(error: &AttachError) -> String {
         AttachError::Unreadable => format!(
             "the published bridge file could not be read — wrong permissions, or not the \
              expected JSON. Delete {} and restart termherd.",
-            attach::bridge_path()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "~/.termherd/bridge.json".to_owned())
+            path.display()
         ),
         AttachError::Stale => {
             "the published bridge is no longer answering: the instance that wrote it has exited. \
@@ -136,7 +129,7 @@ mod tests {
     async fn a_published_live_endpoint_yields_the_snippet_for_it() {
         let (bridge, _requests) = crate::shell::bridge::channel();
         let tokens = crate::mcp::Tokens::default();
-        let endpoint = crate::mcp::serve(bridge, tokens.clone())
+        let endpoint = crate::mcp::serve(bridge, tokens.clone(), None)
             .await
             .expect("bind the loopback server");
         let published = attach::Published {
@@ -147,7 +140,7 @@ mod tests {
         let path = dir.path().join("bridge.json");
         attach::publish(&path, &published).expect("publish");
 
-        let snippet = tokio::task::spawn_blocking(move || mcp_config_at(&path))
+        let snippet = tokio::task::spawn_blocking(move || mcp_config(&path))
             .await
             .expect("join")
             .expect("a config for a live endpoint");
@@ -160,7 +153,7 @@ mod tests {
     fn no_published_file_is_reported_before_anything_is_dialled() {
         let dir = tempfile::tempdir().expect("temp dir");
         assert_eq!(
-            mcp_config_at(&dir.path().join("bridge.json")),
+            mcp_config(&dir.path().join("bridge.json")),
             Err(AttachError::NotPublished)
         );
     }
@@ -177,7 +170,7 @@ mod tests {
             AttachError::Unauthorized,
         ]
         .iter()
-        .map(explain)
+        .map(|error| explain(error, Path::new("/home/u/.termherd/bridge.json")))
         .collect();
 
         for message in &messages {
@@ -195,7 +188,7 @@ mod tests {
             messages[0]
         );
         assert!(
-            messages[1].contains("Delete"),
+            messages[1].contains("Delete /home/u/.termherd/bridge.json"),
             "an unreadable file may survive a restart, so the advice must be to remove it, got: {}",
             messages[1]
         );

@@ -27,8 +27,9 @@ try to be one you have to relearn.
 ## What makes it different
 
 **It reads Claude's own files, and never writes to them.** Sessions come from
-walking `~/.claude/projects`. Your stars, custom titles and archives live in an
-overlay at `~/.termherd/metadata.json` — TermHerd never writes under
+walking `~/.claude/projects`. Your stars, custom titles, archives and the
+repositories you added by hand live in an overlay at
+`~/.termherd/metadata.json` — TermHerd never writes under
 `~/.claude`. Run it beside another session manager if you want; nothing it does
 is destructive to the CLI's own state.
 
@@ -43,7 +44,8 @@ heuristic on top of output text.
 from TermHerd gets an in-process [MCP](https://modelcontextprotocol.io) server
 wired into its config at spawn — no setup. It can read the whole workspace,
 open and split panes, type into other sessions, wait for one to go idle,
-screenshot the window, and press TermHerd's own key chords. That loop is what
+screenshot the window, put a repository in the sidebar, and press TermHerd's
+own key chords. That loop is what
 lets an agent *verify* a change instead of only proposing one.
 
 **The quality bar is the reason it exists.** TermHerd is a replatform of an

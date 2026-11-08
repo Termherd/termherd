@@ -5,16 +5,17 @@
 //! live in [`modals`]. No state transitions live here — those are in the
 //! parent module.
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use iced::widget::canvas::Canvas;
-use iced::widget::{button, column, container, mouse_area, row, text};
-use iced::{Border, Color, Element, Fill, Length, Size};
-use termherd_core::SessionRecord;
-use termherd_core::browser::relative_age;
-use termherd_core::workspace::{Pane, SessionId, SplitDir};
+use iced::widget::{Column, Space, button, column, container, mouse_area, row, text};
+use iced::{Border, Color, Element, Fill, Length, Size, mouse};
+use termherd_claude::digest::SessionDigest;
+use termherd_core::browser::{compact_elapsed, relative_age};
+use termherd_core::workspace::{Branch, Pane, SessionId, SplitDir};
+use termherd_core::{ClaudeColor, SessionRecord};
 
-use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD};
+use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD, SPLIT_HANDLE};
 use super::ime::ime_area;
 use super::terminal::{TerminalView, cell_size};
 use super::{Message, Shell};
@@ -22,13 +23,17 @@ use crate::strings;
 
 mod doc_editor;
 mod modals;
+mod settings_panel;
 mod sidebar;
 mod style;
 mod tabs;
 
 use doc_editor::doc_editor;
 use modals::modal;
-use style::{card_secondary_text, card_style, clip, mix, sidebar_secondary_text, status_color};
+use style::{
+    Backdrop, COLOR_MARK_WIDTH, active_chip_fill, card_secondary_text, card_style, claude_color,
+    clip, color_bar, color_swatch, kind_glyph, kind_icon, mix, sidebar_secondary_text, status_dot,
+};
 
 impl Shell {
     pub(super) fn view(&self) -> Element<'_, Message> {
@@ -52,10 +57,23 @@ impl Shell {
         // Any armed confirmation — quit, tab-close or archive — overlays the
         // same centred modal, so the about-to-change sessions stay untouchable
         // until the user decides. `active_confirmation` picks the one in force.
-        match self.active_confirmation() {
-            Some((card, on_cancel)) => modal(base, card, on_cancel),
-            None => base,
+        // The settings panel sits under any confirmation, matching the
+        // keyboard ladder: a quit armed while it is open is answered first.
+        if let Some((card, on_cancel)) = self.active_confirmation() {
+            return modal(base, card, on_cancel);
         }
+        // Below the confirmations and above settings, as on the keyboard
+        // ladder, so the menu drawn is the one that answers the keys.
+        if let Some(menu) = self.tab_menu_card() {
+            return modal(base, menu, Message::CloseTabMenu);
+        }
+        if let Some(picker) = self.color_picker_card() {
+            return modal(base, picker, Message::CloseColorPicker);
+        }
+        if self.settings_open {
+            return modal(base, self.settings_panel(), Message::CloseSettings);
+        }
+        base
     }
 
     /// The focused terminal: its tab strip, then its grid drawn on a canvas.
@@ -64,7 +82,7 @@ impl Shell {
         // A plan / memory doc, when one is open, takes over the main pane for
         // viewing/editing (F-plans-memory).
         if let Some(doc) = &self.open_doc {
-            return doc_editor(doc);
+            return doc_editor(doc, self.doc_accepts_edits());
         }
 
         let focused = self.core.workspace.focused_session();
@@ -75,7 +93,7 @@ impl Shell {
                 // disambiguate — so only a split renders bordered.
                 Some(tab) => {
                     let split = matches!(tab.root, Pane::Split { .. });
-                    self.render_pane(&tab.root, focused, split)
+                    self.render_pane(&tab.root, focused, split, &mut Vec::new())
                 }
                 None => {
                     let total: usize = self
@@ -108,6 +126,9 @@ impl Shell {
         if let Some(bar) = self.tab_bar() {
             pane = pane.push(bar);
         }
+        if let Some(notice) = self.notice_bar() {
+            pane = pane.push(notice);
+        }
         if let Some(indicator) = self.recording_indicator() {
             pane = pane.push(indicator);
         }
@@ -122,27 +143,58 @@ impl Shell {
         pane: &Pane,
         focused: Option<SessionId>,
         bordered: bool,
+        path: &mut Vec<Branch>,
     ) -> Element<'_, Message> {
         match pane {
             Pane::Leaf(session) => {
                 self.terminal_leaf(*session, focused == Some(*session), bordered)
             }
             Pane::Split { dir, ratio, a, b } => {
-                let a_el = self.render_pane(a, focused, bordered);
-                let b_el = self.render_pane(b, focused, bordered);
-                let pa = ((ratio * 100.0).round() as u16).clamp(1, 99);
-                let pb = 100 - pa;
-                // No inter-pane spacing: the per-pane borders already separate
-                // them, and a gap here would be geometry `resize_panes` cannot
-                // see, drifting the PTY grid from the visible canvas.
+                path.push(Branch::A);
+                let a_el = self.render_pane(a, focused, bordered, path);
+                path.pop();
+                path.push(Branch::B);
+                let b_el = self.render_pane(b, focused, bordered, path);
+                path.pop();
+                let split_path = path.clone();
+                let pa = ((ratio * 1000.0).round() as u16).clamp(100, 900);
+                let pb = 1000 - pa;
+                // The handle's fixed layout extent is also reserved in pane
+                // geometry, keeping each terminal grid aligned with its view.
                 match dir {
                     SplitDir::Vertical => row![
                         container(a_el).width(Length::FillPortion(pa)),
+                        mouse_area(
+                            container(Space::new().width(Fill).height(Fill))
+                                .width(SPLIT_HANDLE)
+                                .height(Fill)
+                                .style(container::bordered_box),
+                        )
+                        .interaction(mouse::Interaction::ResizingHorizontally)
+                        .on_press(Message::SplitDragStart {
+                            tab: self.core.workspace.active,
+                            path: split_path,
+                            dir: *dir,
+                            ratio: *ratio,
+                        }),
                         container(b_el).width(Length::FillPortion(pb)),
                     ]
                     .into(),
                     SplitDir::Horizontal => column![
                         container(a_el).height(Length::FillPortion(pa)),
+                        mouse_area(
+                            container(Space::new().width(Fill).height(Fill))
+                                .width(Fill)
+                                .height(SPLIT_HANDLE)
+                                .style(container::bordered_box),
+                        )
+                        .interaction(mouse::Interaction::ResizingVertically)
+                        .on_press(Message::SplitDragStart {
+                            tab: self.core.workspace.active,
+                            path: split_path,
+                            dir: *dir,
+                            ratio: *ratio,
+                        }),
                         container(b_el).height(Length::FillPortion(pb)),
                     ]
                     .into(),
@@ -186,6 +238,7 @@ impl Shell {
                             let (cw, ch) = cell_size(self.core.font_size());
                             Size::new(cw, ch)
                         },
+                        self.core.font_size(),
                         Message::ImeCommit,
                     );
                     mouse_area(composed)
@@ -232,6 +285,22 @@ impl Shell {
             .into()
     }
 
+    /// The notice of a request that did not happen, with its dismiss button.
+    /// `None` when there is nothing to report.
+    fn notice_bar(&self) -> Option<Element<'_, Message>> {
+        let notice = self.notice.as_deref()?;
+        let dismiss = button(text(strings::DISMISS).size(11))
+            .on_press(Message::DismissNotice)
+            .style(button::text)
+            .padding(0);
+        Some(
+            container(row![text(notice).size(12).width(Fill), dismiss].spacing(6))
+                .padding([4, 8])
+                .style(container::bordered_box)
+                .into(),
+        )
+    }
+
     /// The `● REC n/cap` indicator shown while a GIF screencast records,
     /// so the recording state — and how close it is to the auto-stop cap — is
     /// unmistakable. `None` when not recording. Independent of the tab strip, so
@@ -253,11 +322,74 @@ impl Shell {
     }
 }
 
+/// What a hover card shows about a session beyond its transcript: the facts
+/// only a live pane can tell. The sidebar, which has no pane, passes the
+/// default.
+#[derive(Debug, Default)]
+pub(super) struct CardFacts {
+    /// The peer name other Claude sessions address the pane's Claude by.
+    pub agent: Option<String>,
+    /// The colour `/color` gave the session.
+    pub color: Option<ClaudeColor>,
+    /// The Claude Code version the running Claude reports
+    /// ([`termherd_core::App::live_claude_version`]).
+    pub version: Option<String>,
+    /// How long the pane's PTY has run.
+    pub running_for: Option<Duration>,
+}
+
+/// The dimmed detail lines both hover cards show under their title, in order:
+/// agent, colour, model and effort (from the transcript `digest`), version,
+/// running time. A fact nobody knows is a line left out rather than a blank one.
+///
+/// The version is the running Claude's when a pane knows it, else the one the
+/// transcript last recorded: the transcript is only as fresh as the last scan,
+/// and a fresh pane has none yet.
+pub(super) fn detail_lines(facts: &CardFacts, digest: Option<&SessionDigest>) -> Vec<String> {
+    let model = digest.and_then(|d| d.model.as_deref());
+    let effort = digest.and_then(|d| d.effort.as_deref());
+    let version = facts
+        .version
+        .as_deref()
+        .or_else(|| digest.and_then(|d| d.version.as_deref()));
+    [
+        facts.agent.as_deref().map(strings::agent_name),
+        facts
+            .color
+            .map(|color| strings::session_color(color.name())),
+        strings::model_and_effort(model, effort),
+        version.map(strings::claude_version),
+        facts
+            .running_for
+            .map(|span| strings::running_for(&compact_elapsed(span))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// One dimmed hover-card line. The title inherits the card's text colour;
+/// both colours come from the theme palette (see `card_style`).
+pub(super) fn card_secondary_line(line: String) -> Element<'static, Message> {
+    text(line).size(10).style(card_secondary_text).into()
+}
+
+/// The frame both hover cards share, so the two surfaces read alike.
+pub(super) fn card_frame(card: Column<'static, Message>) -> Element<'static, Message> {
+    container(card)
+        .padding(8)
+        .max_width(360.0)
+        .style(card_style)
+        .into()
+}
+
 /// The hover card for a session row: full title, a muted line with relative
-/// last activity and message count, then the last few transcript lines so a
-/// duplicate-looking session is recognisable without opening it.
+/// last activity and message count, the [`detail_lines`], then the last few
+/// transcript lines so a duplicate-looking session is recognisable without
+/// opening it.
 pub(super) fn session_card(
     title: String,
+    facts: &CardFacts,
     session: &SessionRecord,
     now: SystemTime,
 ) -> Element<'static, Message> {
@@ -269,23 +401,127 @@ pub(super) fn session_card(
         .map(relative_age);
     let meta = strings::session_meta(age.as_deref(), count);
 
-    // Title inherits the card's text colour; secondary lines are dimmed. Both
-    // colours come from the theme palette (see `card_style`), never hardcoded.
-    let mut card = column![
-        text(title).size(12),
-        text(meta).size(10).style(card_secondary_text)
-    ]
-    .spacing(4);
+    let mut card = column![text(title).size(12), card_secondary_line(meta)].spacing(4);
+    for line in detail_lines(facts, Some(&session.digest)) {
+        card = card.push(card_secondary_line(line));
+    }
     for line in &session.digest.tail {
-        card = card.push(
-            text(format!("› {line}"))
-                .size(10)
-                .style(card_secondary_text),
+        card = card.push(card_secondary_line(format!("› {line}")));
+    }
+    card_frame(card)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn digest(model: Option<&str>, effort: Option<&str>) -> SessionDigest {
+        SessionDigest {
+            model: model.map(str::to_owned),
+            effort: effort.map(str::to_owned),
+            ..SessionDigest::default()
+        }
+    }
+
+    fn every_fact() -> CardFacts {
+        CardFacts {
+            agent: Some("termherd-b0".to_owned()),
+            color: Some(ClaudeColor::Purple),
+            version: Some("2.1.294".to_owned()),
+            running_for: Some(Duration::from_secs(3600 + 12 * 60)),
+        }
+    }
+
+    #[test]
+    fn a_card_knowing_everything_shows_every_line_in_order() {
+        let known = digest(Some("claude-opus-5-5"), Some("medium"));
+        assert_eq!(
+            detail_lines(&every_fact(), Some(&known)),
+            vec![
+                strings::agent_name("termherd-b0"),
+                strings::session_color(ClaudeColor::Purple.name()),
+                strings::model_and_effort(Some("claude-opus-5-5"), Some("medium")).expect("a line"),
+                strings::claude_version("2.1.294"),
+                strings::running_for("1h 12m"),
+            ]
         );
     }
-    container(card)
-        .padding(8)
-        .max_width(360.0)
-        .style(card_style)
-        .into()
+
+    #[test]
+    fn each_unknown_fact_is_a_line_left_out() {
+        let known = || digest(Some("m"), Some("e"));
+        let all = detail_lines(&every_fact(), Some(&known()));
+        let cases = [
+            (
+                CardFacts {
+                    agent: None,
+                    ..every_fact()
+                },
+                known(),
+                0,
+            ),
+            (
+                CardFacts {
+                    color: None,
+                    ..every_fact()
+                },
+                known(),
+                1,
+            ),
+            (every_fact(), digest(None, None), 2),
+            (
+                CardFacts {
+                    version: None,
+                    ..every_fact()
+                },
+                known(),
+                3,
+            ),
+            (
+                CardFacts {
+                    running_for: None,
+                    ..every_fact()
+                },
+                known(),
+                4,
+            ),
+        ];
+        for (facts, digest, missing) in cases {
+            let mut expected = all.clone();
+            expected.remove(missing);
+            assert_eq!(
+                detail_lines(&facts, Some(&digest)),
+                expected,
+                "line {missing}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_running_claudes_version_outranks_the_transcripts() {
+        let recorded = SessionDigest {
+            version: Some("2.1.290".to_owned()),
+            ..SessionDigest::default()
+        };
+        let version_line = |facts: &CardFacts| {
+            detail_lines(facts, Some(&recorded))
+                .into_iter()
+                .find(|line| line.contains("2.1."))
+        };
+        assert_eq!(
+            version_line(&every_fact()),
+            Some(strings::claude_version("2.1.294"))
+        );
+        assert_eq!(
+            version_line(&CardFacts::default()),
+            Some(strings::claude_version("2.1.290")),
+            "with no pane, the transcript's version"
+        );
+    }
+
+    #[test]
+    fn a_card_with_no_transcript_still_shows_the_live_facts() {
+        assert_eq!(detail_lines(&every_fact(), None).len(), 4);
+        assert!(detail_lines(&CardFacts::default(), None).is_empty());
+    }
 }

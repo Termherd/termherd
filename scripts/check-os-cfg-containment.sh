@@ -30,14 +30,15 @@ set -euo pipefail
 # Files that MAY contain OS-conditional cfg, each with why it is a sanctioned
 # home. Keep this list minimal and justified.
 declare -A allowed=(
-    [crates/app/src/main.rs]="gates the macos module (mod macos) — the composition root wiring the AppKit glue in"
+    [crates/app/src/main.rs]="gates the macos module (mod macos) and its link relay — the composition root wiring the AppKit glue in"
     [crates/app/src/instance.rs]="single-instance lock naming differs per OS (path vs mutex-name vs abstract socket)"
     [crates/app/src/window_geometry.rs]="Linux window placement needs a fallback the other platforms don't"
     [crates/app/src/shell/effects/os.rs]="the OS effect handoffs — the shell's one sanctioned per-OS dispatch site"
     [crates/app/src/shell/session_ops.rs]="macOS-only quit reroute on window Opened (repoints Cmd+Q through the shell)"
     [crates/pty/src/kill.rs]="the kill reconciliation quarantine — Unix reaps, Windows does not"
     [crates/pty/src/status.rs]="the foreground process group is a Unix-only notion — portable_pty declares its accessor under cfg(unix), so the fork is compile-time"
-    [crates/pty/src/launch.rs]="the private mcp-config and settings files are written with Unix-only permissions (0600) via a cfg fork"
+    [crates/scan/src/open_file.rs]="a FIFO or symlink in place of a session file is refused at open (O_NONBLOCK, O_NOFOLLOW), flags Unix alone has"
+    [crates/private-fs/src/lib.rs]="owner-only files and directories (0600 / 0700) need Unix-only permission APIs — the one home of that fork"
 )
 
 # Attribute-form OS-cfg: `#[cfg(`, `#![cfg(`, `#[cfg_attr(` on a line naming a

@@ -2,6 +2,9 @@
 //! status / record read models.
 
 use crate::browser::{SessionRecord, project_label};
+use crate::claude_command::PromptInput;
+use crate::snapshot::SessionKind;
+use termherd_claude::color::ClaudeColor;
 
 use super::*;
 
@@ -22,7 +25,22 @@ pub struct ClosedTab {
     pub launch: Launch,
 }
 
+/// Who a pane's colour belongs to, and so how it is changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorKeeper {
+    /// Claude Code records it; termherd changes it by typing `/color`.
+    Claude,
+    /// Claude knows nothing of the pane; termherd stores it on the tab.
+    Termherd,
+}
+
 impl App {
+    /// Park or unpark a tab. Pure ordering: no effect to perform.
+    pub(super) fn toggle_park_tab(&mut self, index: usize) -> Vec<Effect> {
+        self.workspace.toggle_park(index);
+        Vec::new()
+    }
+
     /// Close a tab (FR5): drop its sessions from the live registry and ask the
     /// runtime to kill each PTY. An out-of-range index yields no effects.
     /// Snapshots the tab onto the reopen stack first, so the close can be
@@ -46,17 +64,15 @@ impl App {
         };
         let title = tab.title.clone();
         let custom_title = tab.custom_title.clone();
-        let Some(first) = tab.sessions().first().copied() else {
+        let Some(session) = self.sessions.get(&tab.first_session()) else {
             return;
         };
-        let Some(session) = self.sessions.get(&first) else {
-            return;
-        };
+        let launch = self.reopen_launch(session);
         self.closed_tabs.push(ClosedTab {
             title,
             custom_title,
             cwd: session.cwd.clone(),
-            launch: session.launch.clone(),
+            launch,
         });
         // Keep only the most recent entries; drop the oldest past the cap.
         if self.closed_tabs.len() > MAX_CLOSED_TABS {
@@ -64,18 +80,33 @@ impl App {
         }
     }
 
+    /// How a closed Claude tab comes back: resuming the conversation it held
+    /// last, re-key included, when the scan has its transcript; otherwise as it
+    /// was launched. A fresh tab whose transcript was never written then
+    /// starts a new conversation, since there is nothing to resume.
+    fn reopen_launch(&self, session: &LiveSession) -> Launch {
+        if let Launch::Claude(_) = session.launch
+            && let Some(id) = session.claude_session_id()
+            && self.record_for(id).is_some()
+        {
+            return Launch::Claude(ClaudeLaunch::Resume(id.to_owned()));
+        }
+        session.launch.clone()
+    }
+
     /// Reopen the most recently closed tab, relaunching it in the mode and
     /// directory it was closed in. Re-closing then reopening walks the stack in
     /// LIFO order. No effects when the stack is empty.
-    pub(super) fn reopen_closed_tab(&mut self) -> Vec<Effect> {
+    pub(super) fn reopen_closed_tab(&mut self, fresh_claude_id: String) -> Vec<Effect> {
         let Some(closed) = self.closed_tabs.pop() else {
             return Vec::new();
         };
         let custom_title = closed.custom_title;
         let effects = self.launch(LaunchSpec {
             cwd: closed.cwd,
-            launch: closed.launch,
+            launch: closed.launch.with_fresh_id(|| fresh_claude_id),
             title: closed.title,
+            placement: Placement::Foreground,
         });
         // Restore the manual name on top of the derived title. `launch` opens
         // the reopened tab as the new active one, so its index is `active` — but
@@ -93,43 +124,37 @@ impl App {
     /// resumed Claude session — current Claude renders status in-band and
     /// reports only its own product name as an OSC title, which the decoder
     /// discards as naming the program rather than the session, so without this
-    /// every resumed tab in a repo would read alike — else the kind label
-    /// `{project} {glyph}`. A fresh or unscanned
-    /// session keeps the kind label; an OSC title still wins later. The kind
-    /// glyphs are the caller's (view-side constants), so core carries no
-    /// presentation literals.
+    /// every resumed tab in a repo would read alike — else the project label.
+    /// A fresh or unscanned session keeps the project label. This is only the
+    /// label the tab opens with: the tab then follows its conversation's
+    /// scanned and live titles, as [`crate::title`] ranks them. The kind is
+    /// not part of the title: the tab chip shows it from [`App::tab_kind`], so
+    /// no retitle or rename can lose it.
     #[must_use]
-    pub fn tab_title(
-        &self,
-        cwd: &str,
-        launch: &Launch,
-        shell_glyph: &str,
-        claude_glyph: &str,
-    ) -> String {
-        let label = project_label(cwd);
-        match launch {
-            Launch::Shell => format!("{label} {shell_glyph}"),
-            Launch::Claude {
-                resume: Some(claude_id),
-            } => self
-                .record_for(claude_id)
-                .map(|record| self.session_title(record))
-                .filter(|name| !name.trim().is_empty())
-                .unwrap_or_else(|| format!("{label} {claude_glyph}")),
-            Launch::Claude { resume: None } => format!("{label} {claude_glyph}"),
-        }
+    pub fn tab_title(&self, cwd: &str, launch: &Launch) -> String {
+        launch
+            .claude_id()
+            .and_then(|claude_id| self.record_for(claude_id))
+            .map(|record| self.session_title(record))
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| project_label(cwd).to_owned())
     }
 
-    /// The browsed record for the tab at `index` — the sidebar entry its first
-    /// pane resumes, so a tab hover can show the same session card. `None`
-    /// for an out-of-range index, or a tab whose first pane is a shell or a
-    /// fresh, not-yet-scanned session (no resume id / no record).
+    /// The browsed record for the tab at `index` — the sidebar entry for its
+    /// Claude conversation, so a tab hover can show the same session card.
+    /// `None` for an out-of-range index, a tab with no Claude session id, or
+    /// one the last scan has not found yet.
     #[must_use]
     pub fn tab_record(&self, index: usize) -> Option<&SessionRecord> {
-        let tab = self.workspace.tabs.get(index)?;
-        let first = tab.sessions().first().copied()?;
-        let claude_id = self.sessions.get(&first)?.launch.resume_id()?;
-        self.record_for(claude_id)
+        self.record_for(self.tab_claude_session_id(index)?)
+    }
+
+    /// The Claude session id of the tab at `index`: its first pane's, as
+    /// [`LiveSession::claude_session_id`] decides it. A tab is named after its
+    /// first pane, so that pane's conversation is the one the tab stands for.
+    #[must_use]
+    pub fn tab_claude_session_id(&self, index: usize) -> Option<&str> {
+        self.claude_session_id(self.workspace.tabs.get(index)?.first_session())
     }
 
     /// The activity status to badge on the tab at `index` (FR8): the most
@@ -142,6 +167,107 @@ impl App {
             .into_iter()
             .filter_map(|id| self.sessions.get(&id).map(|s| s.status))
             .max_by_key(|status| status.urgency())
+    }
+
+    /// The kind of program the tab at `index` runs, read from its focused
+    /// pane's launch so a split mixing kinds shows the one being worked in.
+    #[must_use]
+    pub fn tab_kind(&self, index: usize) -> Option<SessionKind> {
+        let focused = self.tab_focused_session(index)?;
+        self.sessions.get(&focused).map(|s| s.launch.kind())
+    }
+
+    /// The focused pane of the tab at `index` — the one whose kind and colour
+    /// the tab shows.
+    #[must_use]
+    pub fn tab_focused_session(&self, index: usize) -> Option<SessionId> {
+        self.workspace.tabs.get(index)?.focused_session()
+    }
+
+    /// Who keeps the colour of the live pane `session`: Claude while the pane
+    /// runs the Claude it was launched for, termherd for a shell — including
+    /// the shell a Claude launch is left at once its Claude has exited. Decided
+    /// by [`LiveSession::runs_claude`], the rule that decides whether a Claude
+    /// command may be typed, so `/color` is never typed into a shell.
+    #[must_use]
+    pub fn color_keeper(&self, session: SessionId) -> Option<ColorKeeper> {
+        Some(if self.sessions.get(&session)?.runs_claude() {
+            ColorKeeper::Claude
+        } else {
+            ColorKeeper::Termherd
+        })
+    }
+
+    /// The colour the live pane `session` wears. A Claude pane wears the one
+    /// `/color` set, as the last scan read it from the transcript; a shell
+    /// pane wears its tab's picked colour, else that of a Claude run in it.
+    /// `None` when there is none.
+    #[must_use]
+    pub fn session_color(&self, session: SessionId) -> Option<ClaudeColor> {
+        let picked = self
+            .workspace
+            .tab_of(session)
+            .and_then(|index| self.workspace.tabs.get(index)?.color);
+        self.pane_color(session, picked)
+    }
+
+    /// [`Self::session_color`] for a pane whose tab's pick the caller already
+    /// holds, so a caller that knows the tab need not search for it.
+    fn pane_color(&self, session: SessionId, picked: Option<ClaudeColor>) -> Option<ClaudeColor> {
+        let transcript = || self.session_record(session)?.digest.agent_color;
+        let color = match self.color_keeper(session)? {
+            ColorKeeper::Claude => transcript(),
+            ColorKeeper::Termherd => picked.or_else(transcript),
+        };
+        color.filter(|color| *color != ClaudeColor::Default)
+    }
+
+    /// Whether a colour can be picked for `session` now, and who would keep
+    /// it: termherd always can; Claude only while it could take `/color`, its
+    /// prompt being `prompt` as the screen shows it.
+    ///
+    /// # Errors
+    ///
+    /// The [`CommandRefusal`] that keeps a Claude from taking `/color` now, or
+    /// [`CommandRefusal::UnknownSession`].
+    pub fn color_pick(
+        &self,
+        session: SessionId,
+        prompt: &PromptInput,
+    ) -> Result<ColorKeeper, CommandRefusal> {
+        match self
+            .color_keeper(session)
+            .ok_or(CommandRefusal::UnknownSession)?
+        {
+            ColorKeeper::Claude => self
+                .claude_command_check(session, prompt)
+                .map(|()| ColorKeeper::Claude),
+            ColorKeeper::Termherd => Ok(ColorKeeper::Termherd),
+        }
+    }
+
+    /// Store `color` on the tab at `index` if termherd keeps its focused
+    /// pane's colour; a Claude pane's is Claude's alone. A pure recolour: no
+    /// effect either way.
+    pub(super) fn set_tab_color(&mut self, index: usize, color: ClaudeColor) -> Vec<Effect> {
+        let keeper = self
+            .tab_focused_session(index)
+            .and_then(|focused| self.color_keeper(focused));
+        if keeper == Some(ColorKeeper::Termherd)
+            && let Some(tab) = self.workspace.tabs.get_mut(index)
+        {
+            tab.color = Some(color);
+        }
+        Vec::new()
+    }
+
+    /// The colour the tab at `index` wears: its focused pane's, so a split
+    /// shows the colour of the conversation being worked in — the rule
+    /// [`Self::tab_kind`] follows.
+    #[must_use]
+    pub fn tab_color(&self, index: usize) -> Option<ClaudeColor> {
+        let tab = self.workspace.tabs.get(index)?;
+        self.pane_color(tab.focused_session()?, tab.color)
     }
 
     /// Count of sessions whose PTY is still running — the ones a quit would
@@ -160,6 +286,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::app::testsupport::*;
+    use crate::workspace::{Pane, SplitDir};
 
     #[test]
     fn activate_tab_brings_an_earlier_session_to_focus() {
@@ -169,7 +296,7 @@ mod tests {
         assert_eq!(app.workspace.focused_session(), Some(_second));
 
         let effects = app.apply(Event::ActivateTab(0));
-        assert!(effects.is_empty());
+        assert!(matches!(effects.as_slice(), [Effect::TabShown]));
         assert_eq!(app.workspace.focused_session(), Some(first));
     }
 
@@ -184,7 +311,7 @@ mod tests {
         assert_eq!(app.workspace.active, 1);
 
         let effects = app.apply(Event::ActivateTab(4));
-        assert!(effects.is_empty());
+        assert!(matches!(effects.as_slice(), [Effect::TabShown]));
         assert_eq!(app.workspace.active, 1);
         assert_eq!(app.workspace.focused_session(), Some(second));
     }
@@ -196,7 +323,9 @@ mod tests {
         let second = launch(&mut app, "b");
 
         let effects = app.apply(Event::CloseTab(1));
-        assert!(matches!(effects.as_slice(), [Effect::Kill(id)] if *id == second));
+        assert!(
+            matches!(effects.as_slice(), [Effect::Kill(id), Effect::TabShown] if *id == second)
+        );
         assert_eq!(app.workspace.tabs.len(), 1);
         assert!(!app.sessions.contains_key(&second));
         // The surviving session stays live and focused.
@@ -211,16 +340,17 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/repo".into()),
-            launch: Launch::Claude {
-                resume: Some("abc".into()),
-            },
-            title: "repo 🤖".into(),
+            launch: Launch::Claude(ClaudeLaunch::Resume("abc".into())),
+            title: "repo".into(),
+            placement: Placement::Foreground,
         }));
         let original = app.workspace.focused_session().expect("focused");
         app.apply(Event::CloseTab(0));
         assert!(app.workspace.tabs.is_empty());
 
-        let effects = app.apply(Event::ReopenClosedTab);
+        let effects = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
         let spec = match effects.as_slice() {
             [Effect::Spawn(spec)] => spec,
             other => panic!("expected one Spawn, got {other:?}"),
@@ -229,12 +359,10 @@ mod tests {
         assert_eq!(spec.cwd.as_deref(), Some("/repo"));
         assert_eq!(
             spec.launch,
-            Launch::Claude {
-                resume: Some("abc".into())
-            }
+            Launch::Claude(ClaudeLaunch::Resume("abc".into()))
         );
         assert_eq!(app.workspace.tabs.len(), 1);
-        assert_eq!(app.workspace.tabs[0].title, "repo 🤖");
+        assert_eq!(app.workspace.tabs[0].title, "repo");
     }
 
     #[test]
@@ -247,7 +375,9 @@ mod tests {
         });
         app.apply(Event::CloseTab(0));
 
-        let effects = app.apply(Event::ReopenClosedTab);
+        let effects = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
         let new_id = match effects.as_slice() {
             [Effect::Spawn(spec)] => spec.session,
             other => panic!("expected one Spawn, got {other:?}"),
@@ -267,10 +397,20 @@ mod tests {
     #[test]
     fn reopen_with_nothing_closed_is_a_noop() {
         let mut app = App::new();
-        assert!(app.apply(Event::ReopenClosedTab).is_empty());
+        assert!(
+            app.apply(Event::ReopenClosedTab {
+                fresh_claude_id: "minted".into(),
+            })
+            .is_empty()
+        );
         // Even after a launch with no close, there is nothing on the stack.
         launch(&mut app, "a");
-        assert!(app.apply(Event::ReopenClosedTab).is_empty());
+        assert!(
+            app.apply(Event::ReopenClosedTab {
+                fresh_claude_id: "minted".into(),
+            })
+            .is_empty()
+        );
     }
 
     #[test]
@@ -282,6 +422,7 @@ mod tests {
                 cwd: Some(dir.into()),
                 launch: Launch::Shell,
                 title: dir.into(),
+                placement: Placement::Foreground,
             }));
         };
         open(&mut app, "/a");
@@ -291,17 +432,26 @@ mod tests {
         app.apply(Event::CloseTab(0));
         assert!(app.workspace.tabs.is_empty());
 
-        let first = app.apply(Event::ReopenClosedTab);
-        let second = app.apply(Event::ReopenClosedTab);
+        let first = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
+        let second = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
         let cwd_of = |effects: &[Effect]| match effects {
-            [Effect::Spawn(spec)] => spec.cwd.clone(),
+            [Effect::Spawn(spec)] | [Effect::Spawn(spec), Effect::TabShown] => spec.cwd.clone(),
             other => panic!("expected one Spawn, got {other:?}"),
         };
         // LIFO: the last close (/a) comes back first, then /b.
         assert_eq!(cwd_of(&first).as_deref(), Some("/a"));
         assert_eq!(cwd_of(&second).as_deref(), Some("/b"));
         // Stack drained.
-        assert!(app.apply(Event::ReopenClosedTab).is_empty());
+        assert!(
+            app.apply(Event::ReopenClosedTab {
+                fresh_claude_id: "minted".into(),
+            })
+            .is_empty()
+        );
     }
 
     #[test]
@@ -317,23 +467,48 @@ mod tests {
     }
 
     #[test]
-    fn tab_title_prefers_the_scanned_digest_name() {
-        // Glyphs are the caller's (view-side constants), passed in; core owns
-        // the digest-name-else-kind-label policy.
+    fn tab_kind_follows_the_focused_pane() {
         let mut app = App::new();
-        // A shell gets the project label with the shell glyph.
+        launch_claude(&mut app);
+        // A split opens a shell beside the Claude pane and focuses it.
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        assert_eq!(app.tab_kind(0), Some(SessionKind::Shell));
+        app.apply(Event::FocusPrevPane);
+        assert_eq!(app.tab_kind(0), Some(SessionKind::Claude));
+        assert_eq!(app.tab_kind(1), None, "no such tab");
+    }
+
+    #[test]
+    fn set_split_ratio_event_updates_the_workspace_without_effects() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+
+        let effects = app.apply(Event::SetSplitRatio {
+            tab: 0,
+            path: vec![],
+            ratio: 0.25,
+        });
+
+        assert!(effects.is_empty());
+        let Pane::Split { ratio, .. } = &app.workspace.tabs[0].root else {
+            panic!("expected a split tab");
+        };
+        assert_eq!(*ratio, 0.25);
+    }
+
+    #[test]
+    fn tab_title_prefers_the_scanned_digest_name() {
+        // The kind is shown beside the title, never written into it, so a
+        // shell and a fresh Claude session in one project share the label.
+        let mut app = App::new();
+        assert_eq!(app.tab_title("/home/me/proj", &Launch::Shell), "proj");
         assert_eq!(
-            app.tab_title("/home/me/proj", &Launch::Shell, "$", "🤖"),
-            "proj $"
+            app.tab_title("/home/me/proj", &Launch::Claude(ClaudeLaunch::Fresh(None))),
+            "proj"
         );
 
-        // A fresh Claude session (no resume) gets the Claude glyph.
-        assert_eq!(
-            app.tab_title("/home/me/proj", &Launch::Claude { resume: None }, "$", "🤖"),
-            "proj 🤖"
-        );
-
-        // Resuming a *scanned* session takes its digest name (no glyph), so two
+        // Resuming a *scanned* session takes its digest name, so two
         // resumed tabs in one repo don't read alike.
         app.apply(Event::ScanCompleted(vec![record(
             "abc-123",
@@ -343,26 +518,18 @@ mod tests {
         assert_eq!(
             app.tab_title(
                 "/home/me/proj",
-                &Launch::Claude {
-                    resume: Some("abc-123".into())
-                },
-                "$",
-                "🤖",
+                &Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
             ),
             "fix the login bug"
         );
 
-        // Resuming an *unscanned* session falls back to the kind label.
+        // Resuming an *unscanned* session falls back to the project label.
         assert_eq!(
             app.tab_title(
                 "/home/me/proj",
-                &Launch::Claude {
-                    resume: Some("not-scanned".into())
-                },
-                "$",
-                "🤖",
+                &Launch::Claude(ClaudeLaunch::Resume("not-scanned".into())),
             ),
-            "proj 🤖"
+            "proj"
         );
     }
 
@@ -379,16 +546,16 @@ mod tests {
         // Tab 0: a resumed Claude session that the scan knows.
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude {
-                resume: Some("abc-123".into()),
-            },
-            title: "proj 🤖".into(),
+            launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
+            title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         // Tab 1: a plain shell — no resume id, so no record.
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
             launch: Launch::Shell,
-            title: "proj $".into(),
+            title: "proj".into(),
+            placement: Placement::Foreground,
         }));
         assert_eq!(
             app.tab_record(0).map(|r| r.session_id.as_str()),
@@ -396,6 +563,396 @@ mod tests {
         );
         assert!(app.tab_record(1).is_none(), "a shell tab has no record");
         assert!(app.tab_record(9).is_none(), "an out-of-range index is None");
+    }
+
+    #[test]
+    fn tab_record_resolves_a_fresh_tab_by_its_minted_id() {
+        let minted = "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f9012";
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
+            title: "proj".into(),
+            placement: Placement::Foreground,
+        }));
+        assert!(app.tab_record(0).is_none(), "nothing scanned yet");
+        app.apply(Event::ScanCompleted(vec![record(
+            minted,
+            "/proj",
+            "first prompt",
+        )]));
+        assert_eq!(
+            app.tab_record(0).map(|r| r.session_id.as_str()),
+            Some(minted)
+        );
+    }
+
+    #[test]
+    fn reopening_a_claude_tab_resumes_the_conversation_it_held_last() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/repo".into()),
+            launch: Launch::Claude(ClaudeLaunch::Resume("before".into())),
+            title: "repo".into(),
+            placement: Placement::Foreground,
+        }));
+        let id = app.workspace.focused_session().expect("focused");
+        let started = Some("Wed Oct  7 06:48:07 2026".to_owned());
+        app.apply(Event::ForegroundJobChanged {
+            session: id,
+            job: Some(ForegroundJob {
+                pid: 42,
+                started: started.clone(),
+            }),
+        });
+        app.apply(Event::SessionFileRead {
+            session: id,
+            file: Some(termherd_claude::session_file::SessionFile {
+                pid: 42,
+                name: None,
+                session_id: Some("after".into()),
+                proc_start: started,
+                version: None,
+            }),
+        });
+        app.apply(Event::ScanCompleted(vec![record("after", "/repo", "x")]));
+        app.apply(Event::CloseTab(0));
+        let effects = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "unused".into(),
+        });
+        let [Effect::Spawn(spec)] = effects.as_slice() else {
+            panic!("expected one Spawn, got {effects:?}");
+        };
+        assert_eq!(
+            spec.launch,
+            Launch::Claude(ClaudeLaunch::Resume("after".into())),
+            "the re-keyed conversation, whose transcript the scan has"
+        );
+    }
+
+    #[test]
+    fn reopening_a_fresh_claude_tab_starts_a_new_conversation_under_the_given_id() {
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/repo".into()),
+            launch: Launch::Claude(ClaudeLaunch::Fresh(Some("first".into()))),
+            title: "repo".into(),
+            placement: Placement::Foreground,
+        }));
+        app.apply(Event::CloseTab(0));
+        let effects = app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "second".into(),
+        });
+        let [Effect::Spawn(spec)] = effects.as_slice() else {
+            panic!("expected one Spawn, got {effects:?}");
+        };
+        assert_eq!(
+            spec.launch,
+            Launch::Claude(ClaudeLaunch::Fresh(Some("second".into()))),
+            "the closed tab's id already names a transcript"
+        );
+        assert_eq!(app.tab_claude_session_id(0), Some("second"));
+    }
+
+    /// A scanned record for `id` whose transcript last set `color`.
+    fn coloured(id: &str, color: Option<ClaudeColor>) -> SessionRecord {
+        let mut r = record(id, "/proj", "prompt");
+        r.digest.agent_color = color;
+        r
+    }
+
+    fn resume(app: &mut App, id: &str) -> SessionId {
+        match app
+            .apply(Event::LaunchSession(LaunchSpec {
+                cwd: Some("/proj".into()),
+                launch: Launch::Claude(ClaudeLaunch::Resume(id.into())),
+                title: "proj".into(),
+                placement: Placement::Foreground,
+            }))
+            .as_slice()
+        {
+            [Effect::Spawn(spec)] => spec.session,
+            other => panic!("expected Spawn, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_claude_tab_wears_the_colour_its_transcript_set() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "abc",
+            Some(ClaudeColor::Green),
+        )]));
+        let pane = resume(&mut app, "abc");
+        assert_eq!(app.session_color(pane), Some(ClaudeColor::Green));
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Green));
+    }
+
+    #[test]
+    fn a_rescan_recolours_an_open_tab() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![coloured("abc", None)]));
+        resume(&mut app, "abc");
+        assert_eq!(app.tab_color(0), None, "not coloured yet");
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "abc",
+            Some(ClaudeColor::Purple),
+        )]));
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Purple));
+        app.apply(Event::ScanCompleted(vec![coloured("abc", None)]));
+        assert_eq!(app.tab_color(0), None, "/color default clears it");
+    }
+
+    #[test]
+    fn a_fresh_tab_is_coloured_through_its_minted_id() {
+        let minted = "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f9012";
+        let mut app = App::new();
+        app.apply(Event::LaunchSession(LaunchSpec {
+            cwd: Some("/proj".into()),
+            launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
+            title: "proj".into(),
+            placement: Placement::Foreground,
+        }));
+        app.apply(Event::ScanCompleted(vec![coloured(
+            minted,
+            Some(ClaudeColor::Cyan),
+        )]));
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Cyan));
+    }
+
+    #[test]
+    fn the_focused_pane_decides_a_split_tabs_colour() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "abc",
+            Some(ClaudeColor::Red),
+        )]));
+        resume(&mut app, "abc");
+        // A split opens a shell beside the Claude pane and focuses it.
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        assert_eq!(app.tab_color(0), None, "the focused shell has no colour");
+        app.apply(Event::FocusPrevPane);
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Red));
+    }
+
+    #[test]
+    fn a_split_tabs_colour_is_its_focused_panes_even_when_its_record_is_coloured() {
+        // The hover card describes the first pane's record but must name the
+        // colour the outline shows, which is the focused pane's.
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "abc",
+            Some(ClaudeColor::Red),
+        )]));
+        let first = resume(&mut app, "abc");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        assert_eq!(app.workspace.tabs[0].first_session(), first);
+        assert_eq!(
+            app.tab_record(0).and_then(|r| r.digest.agent_color),
+            Some(ClaudeColor::Red)
+        );
+        assert_eq!(app.tab_color(0), None);
+    }
+
+    #[test]
+    fn a_shell_an_unknown_pane_and_an_unknown_tab_have_no_colour() {
+        let mut app = App::new();
+        let shell = launch(&mut app, "sh");
+        assert_eq!(app.session_color(shell), None);
+        assert_eq!(app.session_color(sid(99)), None);
+        assert_eq!(app.tab_color(0), None);
+        assert_eq!(app.tab_color(9), None);
+    }
+
+    fn pick(app: &mut App, index: usize, color: ClaudeColor) {
+        let effects = app.apply(Event::SetTabColor { index, color });
+        assert!(effects.is_empty(), "a pure recolour touches no PTY");
+    }
+
+    #[test]
+    fn claude_keeps_a_claude_panes_colour_and_termherd_a_shells() {
+        let mut app = App::new();
+        let claude = launch_claude(&mut app);
+        let shell = launch(&mut app, "sh");
+        assert_eq!(app.color_keeper(claude), Some(ColorKeeper::Claude));
+        assert_eq!(app.color_keeper(shell), Some(ColorKeeper::Termherd));
+        assert_eq!(app.color_keeper(sid(99)), None);
+    }
+
+    #[test]
+    fn a_claude_launch_whose_claude_exited_is_coloured_like_a_shell() {
+        // Its pane is back at the shell `claude` ran in: `/color` typed there
+        // would run as a command, so termherd keeps the colour instead.
+        let mut app = App::new();
+        let pane = launch_claude(&mut app);
+        let job = ForegroundJob {
+            pid: 42,
+            started: None,
+        };
+        app.apply(Event::ForegroundJobChanged {
+            session: pane,
+            job: Some(job),
+        });
+        assert_eq!(app.color_keeper(pane), Some(ColorKeeper::Claude));
+        pick(&mut app, 0, ClaudeColor::Green);
+        assert_eq!(app.tab_color(0), None, "refused while Claude runs");
+
+        app.apply(Event::ForegroundJobChanged {
+            session: pane,
+            job: None,
+        });
+        assert_eq!(app.color_keeper(pane), Some(ColorKeeper::Termherd));
+        pick(&mut app, 0, ClaudeColor::Green);
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Green));
+    }
+
+    #[test]
+    fn a_colour_can_be_picked_for_a_shell_always_and_a_claude_only_when_it_takes_commands() {
+        let mut app = App::new();
+        let shell = launch(&mut app, "sh");
+        let claude = launch_claude(&mut app);
+        let empty = PromptInput::Empty;
+        assert_eq!(app.color_pick(shell, &empty), Ok(ColorKeeper::Termherd));
+        assert_eq!(
+            app.color_pick(claude, &empty),
+            Err(CommandRefusal::NotIdle(SessionStatus::Starting))
+        );
+        app.apply(Event::StatusChanged {
+            session: claude,
+            status: SessionStatus::Idle,
+        });
+        assert_eq!(app.color_pick(claude, &empty), Ok(ColorKeeper::Claude));
+        assert_eq!(
+            app.color_pick(sid(99), &empty),
+            Err(CommandRefusal::UnknownSession)
+        );
+    }
+
+    #[test]
+    fn a_claude_launch_never_seen_in_front_still_counts_as_claude() {
+        // ConPTY reports no foreground job at all, so an absent one proves
+        // nothing until one has been reported.
+        let mut app = App::new();
+        let pane = launch_claude(&mut app);
+        app.apply(Event::ForegroundJobChanged {
+            session: pane,
+            job: None,
+        });
+        assert_eq!(app.color_keeper(pane), Some(ColorKeeper::Claude));
+    }
+
+    #[test]
+    fn a_shell_tab_wears_the_colour_picked_for_it_until_default_clears_it() {
+        let mut app = App::new();
+        let shell = launch(&mut app, "sh");
+        pick(&mut app, 0, ClaudeColor::Green);
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Green));
+        assert_eq!(app.session_color(shell), Some(ClaudeColor::Green));
+        pick(&mut app, 0, ClaudeColor::Default);
+        assert_eq!(app.tab_color(0), None);
+        assert_eq!(app.session_color(shell), None);
+    }
+
+    #[test]
+    fn a_claude_tab_is_never_given_a_colour_of_termherds_own() {
+        // Claude keeps it: a local copy would be a second truth that the next
+        // `/color` typed in the session contradicts.
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "abc",
+            Some(ClaudeColor::Red),
+        )]));
+        resume(&mut app, "abc");
+        pick(&mut app, 0, ClaudeColor::Blue);
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Red));
+        assert_eq!(app.workspace.tabs[0].color, None, "nothing stored");
+    }
+
+    #[test]
+    fn a_picked_colour_beats_the_transcript_of_a_claude_run_from_a_shell() {
+        // The shell tab is termherd's to colour even when a Claude runs in it,
+        // and picking "none" must clear it rather than reveal Claude's.
+        let mut app = App::new();
+        let shell = launch(&mut app, "sh");
+        let started = Some("Wed Oct  7 06:48:07 2026".to_owned());
+        app.apply(Event::ForegroundJobChanged {
+            session: shell,
+            job: Some(ForegroundJob {
+                pid: 42,
+                started: started.clone(),
+            }),
+        });
+        app.apply(Event::SessionFileRead {
+            session: shell,
+            file: Some(termherd_claude::session_file::SessionFile {
+                pid: 42,
+                name: None,
+                session_id: Some("inner".into()),
+                proc_start: started,
+                version: None,
+            }),
+        });
+        app.apply(Event::ScanCompleted(vec![coloured(
+            "inner",
+            Some(ClaudeColor::Pink),
+        )]));
+        assert_eq!(
+            app.tab_color(0),
+            Some(ClaudeColor::Pink),
+            "Claude's, unpicked"
+        );
+        pick(&mut app, 0, ClaudeColor::Cyan);
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Cyan));
+        pick(&mut app, 0, ClaudeColor::Default);
+        assert_eq!(app.tab_color(0), None);
+    }
+
+    #[test]
+    fn the_focused_pane_decides_between_a_shell_tabs_colour_and_claudes() {
+        let mut app = App::new();
+        launch_claude(&mut app);
+        // A split opens a shell beside the Claude pane and focuses it.
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        pick(&mut app, 0, ClaudeColor::Yellow);
+        assert_eq!(app.tab_color(0), Some(ClaudeColor::Yellow));
+        app.apply(Event::FocusPrevPane);
+        assert_eq!(
+            app.tab_color(0),
+            None,
+            "the focused Claude answers for itself"
+        );
+        pick(&mut app, 0, ClaudeColor::Red);
+        app.apply(Event::FocusNextPane);
+        assert_eq!(
+            app.tab_color(0),
+            Some(ClaudeColor::Yellow),
+            "a pick aimed at the Claude left the shell's colour alone"
+        );
+    }
+
+    #[test]
+    fn a_shell_tabs_colour_moves_with_it_and_is_lost_when_it_closes() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        launch(&mut app, "b");
+        pick(&mut app, 0, ClaudeColor::Orange);
+        app.apply(Event::MoveTab { from: 0, to: 1 });
+        assert_eq!(app.tab_color(1), Some(ClaudeColor::Orange));
+        assert_eq!(app.tab_color(0), None);
+
+        app.apply(Event::CloseTab(1));
+        app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "unused".into(),
+        });
+        assert_eq!(app.tab_color(1), None, "a reopened tab starts uncoloured");
+    }
+
+    #[test]
+    fn picking_a_colour_for_a_tab_that_is_not_there_changes_nothing() {
+        let mut app = App::new();
+        launch(&mut app, "sh");
+        pick(&mut app, 4, ClaudeColor::Red);
+        assert_eq!(app.tab_color(0), None);
     }
 
     #[test]
@@ -442,5 +999,105 @@ mod tests {
             1,
             "an exited session no longer counts"
         );
+    }
+
+    #[test]
+    fn toggling_park_parks_an_unparked_tab_then_unparks_it() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        let _second = launch(&mut app, "b");
+
+        assert!(
+            matches!(
+                app.apply(Event::ToggleParkTab(0)).as_slice(),
+                [Effect::TabShown]
+            ),
+            "parking touches no PTY"
+        );
+        let parked_at = app.workspace.tab_of(first).expect("still open");
+        assert_eq!(parked_at, 1, "a parked tab joins the strip's end");
+        assert!(app.workspace.tabs[parked_at].is_parked());
+
+        assert!(matches!(
+            app.apply(Event::ToggleParkTab(parked_at)).as_slice(),
+            [Effect::TabShown]
+        ));
+        let back = app.workspace.tab_of(first).expect("still open");
+        assert!(!app.workspace.tabs[back].is_parked());
+    }
+
+    #[test]
+    fn toggling_park_on_a_missing_tab_changes_nothing() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        assert!(matches!(
+            app.apply(Event::ToggleParkTab(5)).as_slice(),
+            [Effect::TabShown]
+        ));
+        assert!(!app.workspace.tabs[0].is_parked());
+    }
+
+    #[test]
+    fn attention_in_a_parked_tab_unparks_it_without_taking_focus() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        let second = launch(&mut app, "b");
+        app.apply(Event::ToggleParkTab(0));
+        let parked_at = app.workspace.tab_of(first).expect("still open");
+        assert!(
+            app.workspace.tabs[parked_at].is_parked(),
+            "precondition: parked"
+        );
+
+        app.apply(Event::StatusChanged {
+            session: first,
+            status: SessionStatus::Attention,
+        });
+        let back = app.workspace.tab_of(first).expect("still open");
+        assert!(!app.workspace.tabs[back].is_parked());
+        assert_eq!(
+            app.workspace.focused_session(),
+            Some(second),
+            "focus stays put"
+        );
+    }
+
+    #[test]
+    fn a_busy_session_leaves_its_parked_tab_parked() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        launch(&mut app, "b");
+        app.apply(Event::ToggleParkTab(0));
+        let parked_at = app.workspace.tab_of(first).expect("still open");
+        assert!(
+            app.workspace.tabs[parked_at].is_parked(),
+            "precondition: parked"
+        );
+
+        app.apply(Event::StatusChanged {
+            session: first,
+            status: SessionStatus::Busy,
+        });
+        assert!(app.workspace.tabs[parked_at].is_parked());
+    }
+
+    #[test]
+    fn a_reopened_tab_comes_back_unparked() {
+        let mut app = App::new();
+        launch(&mut app, "a");
+        let second = launch(&mut app, "b");
+        app.apply(Event::ToggleParkTab(1));
+        let parked_at = app.workspace.tab_of(second).expect("still open");
+        assert!(
+            app.workspace.tabs[parked_at].is_parked(),
+            "precondition: parked"
+        );
+        app.apply(Event::CloseTab(parked_at));
+
+        app.apply(Event::ReopenClosedTab {
+            fresh_claude_id: "minted".into(),
+        });
+        assert_eq!(app.workspace.tabs.len(), 2);
+        assert!(app.workspace.tabs.iter().all(|tab| !tab.is_parked()));
     }
 }

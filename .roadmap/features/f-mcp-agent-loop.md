@@ -2,7 +2,7 @@
 id = "F-mcp-agent-loop"
 type = "feature"
 area = ["mcp", "sessions"]
-status = "todo"
+status = "done"
 target = ["Could"]
 +++
 

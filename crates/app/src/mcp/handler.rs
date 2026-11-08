@@ -6,7 +6,13 @@
 //! the timeout-bounded [`Reply`], and shapes it back into an MCP result. No state
 //! and no `core` access live here; the shell owns `core::App` and answers on the
 //! bridge, so a tool can never touch it directly.
+//!
+//! The two options tools are the exception that proves it: `settings.json` is
+//! a file, not `core` state, so they read and write it directly — through the
+//! same pure catalogue as the stdio server — and the running shell picks the
+//! write up through its settings watch like any other edit.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use rmcp::{
@@ -20,17 +26,21 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
+use termherd_core::Placement;
 use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
 use termherd_core::{
-    Action as KeymapAction, KeyChord, Section, SessionStatus, SnapshotFilter, TerminalScope,
+    Action as KeymapAction, ClaudeColor, ClaudeCommand, KeyChord, PointerButton, PointerEvent,
+    PointerKind, PointerRoute, Section, SessionKind, SessionStatus, SnapshotFilter, TerminalScope,
 };
+use termherd_mcp::file::SetAtError;
 
 use crate::shell::bridge::{
-    Action, BridgeHandle, CallError, Press, PressStep, Reply, Request, SessionInfo, SessionKind,
+    Action, ActionDetail, ActionOutcome, BridgeHandle, CallError, Press, PressStep, Reply, Request,
+    SessionInfo, TerminalRead,
 };
-use crate::snapshot_dto::{SnapshotDto, status_str};
+use crate::snapshot_dto::{IdentityDto, SnapshotDto, kind_str, status_str};
 
 /// How long a tool waits for the shell to answer before failing the caller.
 /// Bounds the whole round-trip (enqueue + reply) via [`BridgeHandle::call`], so
@@ -65,11 +75,19 @@ const MAX_MAX_WIDTH: u32 = 4096;
 /// barely extend the wait it follows.
 const READ_BACK_TIMEOUT: Duration = Duration::from_millis(250);
 
+/// How long `prompt_in_session` waits for its prompt to start. Claude Code
+/// shows busy within a few hundred milliseconds; a command that finished
+/// sooner costs this much.
+const START_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// The live-bridge MCP server handler. Holds only the bridge into the shell —
 /// cloned fresh per session by the transport's service factory.
 #[derive(Clone)]
 pub struct TermherdMcp {
     bridge: BridgeHandle,
+    /// The `settings.json` the options tools read and write; `None` without a
+    /// home directory.
+    settings_file: Option<PathBuf>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -80,8 +98,59 @@ impl TermherdMcp {
     pub fn new(bridge: BridgeHandle) -> Self {
         Self {
             bridge,
+            settings_file: None,
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Point the options tools at `file`; without one they refuse, so only
+    /// `main()` decides which settings an agent may rewrite.
+    pub fn with_settings_file(mut self, file: Option<PathBuf>) -> Self {
+        self.settings_file = file;
+        self
+    }
+
+    /// Every configurable option with its current value — the same catalogue
+    /// and resolution as the stdio server's tool of the same name.
+    #[tool(
+        name = "list_options",
+        description = "List termherd's configurable options with their current values."
+    )]
+    async fn list_options(&self) -> Result<CallToolResult, ErrorData> {
+        let file = self.settings_file()?;
+        let settings = termherd_mcp::file::read_object(file)
+            .map_err(|reason| ErrorData::internal_error(reason, None))?;
+        structured(serde_json::json!({
+            "options": termherd_mcp::resolve_options(&settings),
+        }))
+    }
+
+    /// Set one writable option. Validated by the shared catalogue; the running
+    /// shell applies the write when its settings watch sees it.
+    #[tool(
+        name = "set_option",
+        description = "Set one writable termherd option by id (see `writable` in list_options); the change lands in settings.json, which a running termherd applies at once. A read-only option or an out-of-shape value is refused, nothing written."
+    )]
+    async fn set_option(
+        &self,
+        Parameters(args): Parameters<SetOptionArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let file = self.settings_file()?;
+        // A refusal by the catalogue is the caller's to fix; anything else is
+        // the file's. Told apart so a model reads which one it is.
+        termherd_mcp::file::set_option_at(file, &args.id, &args.value).map_err(
+            |error| match error {
+                SetAtError::Refused(_) => ErrorData::invalid_params(error.to_string(), None),
+                SetAtError::File(_) => ErrorData::internal_error(error.to_string(), None),
+            },
+        )?;
+        structured(serde_json::json!({ "id": args.id, "value": args.value }))
+    }
+
+    fn settings_file(&self) -> Result<&PathBuf, ErrorData> {
+        self.settings_file
+            .as_ref()
+            .ok_or_else(|| ErrorData::internal_error("no settings.json is configured", None))
     }
 
     /// The spike tool: list the live terminal sessions termherd is hosting, each
@@ -91,7 +160,10 @@ impl TermherdMcp {
         description = "List the live terminal sessions termherd is hosting. Each \
                        row carries a stable `handle` (address it in later calls), \
                        the tab title, working directory, kind (shell or claude), \
-                       the resumed Claude id if any, and current activity status."
+                       the resumed Claude id if any, current activity status, and \
+                       when a Claude runs in it its `pid`, `peer_name` (the name \
+                       other Claude sessions address it by) and `session_id` — \
+                       each null when unknown."
     )]
     async fn list_sessions(&self) -> Result<CallToolResult, ErrorData> {
         let reply = self
@@ -105,10 +177,8 @@ impl TermherdMcp {
                 None,
             ));
         };
-        let rows: Vec<SessionDto> = sessions.iter().map(SessionDto::from).collect();
-        let value = serde_json::to_value(&rows)
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        Ok(CallToolResult::structured(value))
+        let sessions = sessions.iter().map(SessionDto::from).collect();
+        structured(SessionListDto { sessions })
     }
 
     /// A filterable, read-only snapshot of the whole workspace — the structured
@@ -118,7 +188,10 @@ impl TermherdMcp {
         name = "snapshot",
         description = "A filterable snapshot of termherd's whole state: config, \
                        the session-browser sidebar, and the open tabs with their \
-                       panes (each pane's stable handle, kind, cwd, status). Light \
+                       panes (each pane's stable handle, kind, cwd, status, and \
+                       for a pane running Claude its pid, peer_name and \
+                       session_id, and the color its /color set — the \
+                       /color name, or null). Light \
                        by default — no terminal text. Args (all optional): \
                        `sections` (any of \"config\", \"sidebar\", \"tabs\"; omit \
                        for all), `terminals` (session handles to include screen \
@@ -141,18 +214,19 @@ impl TermherdMcp {
                 None,
             ));
         };
-        let value = serde_json::to_value(SnapshotDto::from(&snapshot))
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        Ok(CallToolResult::structured(value))
+        structured(SnapshotDto::from(&snapshot))
     }
 
-    /// Open a new terminal session and focus it. → `open_session`.
+    /// Open a new terminal session, focused unless `background`.
+    /// → `open_session`.
     #[tool(
         name = "open_session",
-        description = "Open a new terminal session and focus it. Args: `project` \
+        description = "Open a new terminal session, focused unless `background`. Args: `project` \
                        (working directory; omit for the home dir), `kind` \
-                       (\"shell\" or \"claude\", default \"shell\"). Returns the \
-                       new session's `focused_handle`."
+                       (\"shell\" or \"claude\", default \"shell\"), `background` \
+                       (true appends the tab without taking focus; default \
+                       false). Returns the new session's `opened_handle` and the \
+                       resulting `focused_handle`."
     )]
     async fn open_session(
         &self,
@@ -169,6 +243,11 @@ impl TermherdMcp {
                         None,
                     ));
                 }
+            },
+            placement: if args.background {
+                Placement::Background
+            } else {
+                Placement::Foreground
             },
         };
         self.act(action).await
@@ -221,7 +300,12 @@ impl TermherdMcp {
         name = "rename_tab",
         description = "Give the tab at `tab` (0-based index, as `snapshot` reports \
                        tab order) a manual name. A blank `title` reverts to the \
-                       derived title. Returns the current `focused_handle`."
+                       derived title. A Claude tab's name is Claude's: it arms \
+                       `/rename <title>` for confirmation instead, as \
+                       `claude_command` does, and is refused when that Claude \
+                       is not idle; there a blank `title`, or the name the tab \
+                       already shows, arms nothing and changes nothing. \
+                       Returns the current `focused_handle`."
     )]
     async fn rename_tab(
         &self,
@@ -234,12 +318,50 @@ impl TermherdMcp {
         .await
     }
 
+    /// Add a repo to the sidebar, before it has any session. → `add_repo`.
+    #[tool(
+        name = "add_repo",
+        description = "Add the repository at `path` to the sidebar, so it can be \
+                       launched from before it has any Claude session. `path` is \
+                       filed by the same rule the scan uses for a session's cwd: \
+                       a git worktree collapses onto its main checkout, a file \
+                       becomes its parent directory, anything else is kept as \
+                       given — symlinks included, and NOT climbed to a repository \
+                       root, so pass the directory you want the row for. The key \
+                       actually kept comes back as `repo_path`; address the row \
+                       with that, not with what you sent. A path that does not \
+                       exist, or a relative one, is rejected."
+    )]
+    async fn add_repo(
+        &self,
+        Parameters(args): Parameters<RepoArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.act(Action::DeclareRepo { path: args.path }).await
+    }
+
+    /// Drop a repo's declaration. → `forget_repo`.
+    #[tool(
+        name = "forget_repo",
+        description = "Remove a hand-added repository from the sidebar. The row \
+                       survives if the scan still reports sessions for it — \
+                       `in_sidebar` says which happened, and `session_count` why. \
+                       Forgetting a repo that was never added is not an error."
+    )]
+    async fn forget_repo(
+        &self,
+        Parameters(args): Parameters<RepoArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        self.act(Action::ForgetRepo { path: args.path }).await
+    }
+
     /// Close a pane; a lone pane closes its whole tab. → `close_pane`.
     #[tool(
         name = "close_pane",
         description = "Close a pane and kill its terminal. Args: `pane` (session \
-                       handle to close; omit for the focused pane). A lone pane is \
-                       its whole tab, which closes. Returns the resulting \
+                       handle to close; omit for the focused pane), `background` \
+                       (true closes `pane` where it lives without focusing it \
+                       first, and then requires `pane`; default false). A lone \
+                       pane is its whole tab, which closes. Returns the resulting \
                        `focused_handle` (null when the workspace is now empty)."
     )]
     async fn close_pane(
@@ -247,7 +369,11 @@ impl TermherdMcp {
         Parameters(args): Parameters<CloseArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let pane = parse_optional_handle(args.pane)?;
-        self.act(Action::Close { pane }).await
+        self.act(Action::Close {
+            pane,
+            background: args.background,
+        })
+        .await
     }
 
     /// Type text into a session's terminal; the wait is a separate call.
@@ -259,8 +385,10 @@ impl TermherdMcp {
                        not wait for the command to finish. To act on the result, \
                        follow with `wait_for_status` then `read_terminal`; do \
                        not poll `snapshot`, which races the transition you are \
-                       watching for. Include a trailing newline in `text` to \
-                       submit a command. Args: `session` (its stable handle), \
+                       watching for. A trailing newline in `text` is sent as \
+                       Enter and submits, in a shell or in Claude Code; earlier \
+                       newlines stay line breaks, so a multi-line prompt is \
+                       submitted once. Args: `session` (its stable handle), \
                        `text`. Returns the `focused_handle`."
     )]
     async fn run_in_session(
@@ -268,11 +396,66 @@ impl TermherdMcp {
         Parameters(args): Parameters<RunArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let session = parse_handle(&args.session)?;
-        self.act(Action::Run {
-            session,
-            bytes: args.text.into_bytes(),
-        })
-        .await
+        let focused = self.type_text(session, args.text).await?;
+        structured(serde_json::json!({ "focused_handle": focused }))
+    }
+
+    /// Arm the confirmation for a Claude slash command. → `claude_command`.
+    #[tool(
+        name = "claude_command",
+        description = "Ask termherd to type one of Claude Code's own slash \
+                       commands into a Claude session: `rename` (a name), \
+                       `color` (red, blue, green, yellow, purple, orange, pink, \
+                       cyan or default) or `desktop`. Nothing is typed yet: \
+                       this arms the confirmation prompt that shows the human \
+                       at the window the exact line; it holds the keyboard \
+                       until answered: `press_keys([\"enter\"])` types it \
+                       (a `refused` step means it typed nothing and says why), \
+                       `press_keys([\"escape\"])` drops it, or the user \
+                       answers. Refused unless the session is a Claude idle at \
+                       an empty input prompt on screen (no draft, no menu), and \
+                       no other prompt is open. Control \
+                       characters in a name become spaces. Args: `session` \
+                       (handle), `command`, `argument` (the name or colour). \
+                       Returns `{ line, overlay, focused_handle }`."
+    )]
+    async fn claude_command(
+        &self,
+        Parameters(args): Parameters<ClaudeCommandArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+        let command = parse_claude_command(&args.command, args.argument.as_deref())?;
+        self.act(Action::ClaudeCommand { session, command }).await
+    }
+
+    /// Place a pointer event at a cell of a session's terminal — the pointer
+    /// half of `run_in_session`. → `mouse_in_session`.
+    #[tool(
+        name = "mouse_in_session",
+        description = "Place a mouse event at a cell of a session's terminal — \
+                       the pointer counterpart of `run_in_session`. Args: \
+                       `session` (handle), `kind` (one of \"press\", \
+                       \"release\", \"click\", \"drag\", \"move\"), `col` and \
+                       `row` (0-based cells of the visible screen; out of the \
+                       pane's geometry rejects the call), `button` (\"left\" \
+                       default, \"middle\", \"right\"). Returns `focused_handle` \
+                       and `pointer`: \"forwarded\" when the program in the \
+                       session reads the mouse, as of its last rendered frame, \
+                       and was sent the event (follow with `wait_for_status` / \
+                       `read_terminal`), \"selection\" \
+                       when no program reads it and the event drove the \
+                       terminal's own text selection (read it back with the \
+                       `copy` action), \"ignored\" when it drove nothing. At a \
+                       shell, a drag is press at one cell, drag at another; a \
+                       bare click clears the selection."
+    )]
+    async fn mouse_in_session(
+        &self,
+        Parameters(args): Parameters<MouseArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+        let pointer = parse_pointer(&args)?;
+        self.act(Action::Pointer { session, pointer }).await
     }
 
     /// Block until a session's activity reaches one of the given statuses — the
@@ -282,7 +465,10 @@ impl TermherdMcp {
         description = "Wait until a session's activity reaches one of `statuses` \
                        (default: idle or attention), then report it. Pair it \
                        with `run_in_session`, which returns immediately: run, \
-                       wait, then `read_terminal`. Args: `session` (handle), \
+                       wait, then `read_terminal`. A status the session already \
+                       shows answers at once, and just after typing Claude \
+                       Code still shows the one from before: wait for `busy` \
+                       first. Args: `session` (handle), \
                        `statuses` (any of \"starting\", \"busy\", \"idle\", \
                        \"attention\", \"exited\"), `timeout_ms` (default 30000, \
                        capped at 300000). A session that exits settles the wait \
@@ -307,10 +493,10 @@ impl TermherdMcp {
                 if let Some(reason) = outcome.error {
                     return Err(ErrorData::invalid_params(reason, None));
                 }
-                Ok(CallToolResult::structured(serde_json::json!({
+                structured(serde_json::json!({
                     "status": outcome.status.map(status_str),
                     "timed_out": false,
-                })))
+                }))
             }
             Ok(_) => Err(ErrorData::internal_error(
                 "bridge answered the wrong reply kind",
@@ -321,10 +507,10 @@ impl TermherdMcp {
             // current status to decide whether to keep waiting or give up.
             Err(CallError::Timeout(_)) => {
                 let status = self.current_status(session).await;
-                Ok(CallToolResult::structured(serde_json::json!({
+                structured(serde_json::json!({
                     "status": status,
                     "timed_out": true,
-                })))
+                }))
             }
             Err(error) => Err(ErrorData::internal_error(error.to_string(), None)),
         }
@@ -346,25 +532,69 @@ impl TermherdMcp {
         Parameters(args): Parameters<ReadArgs>,
     ) -> Result<CallToolResult, ErrorData> {
         let session = parse_handle(&args.session)?;
-        let lines = args.lines.unwrap_or(DEFAULT_TEXT_LINES);
-        let reply = self
-            .bridge
-            .call(Request::ReadTerminal { session, lines }, CALL_TIMEOUT)
-            .await
-            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
-        let Reply::Terminal(read) = reply else {
-            return Err(ErrorData::internal_error(
-                "bridge answered the wrong reply kind",
-                None,
-            ));
-        };
-        if let Some(reason) = read.error {
-            return Err(ErrorData::invalid_params(reason, None));
-        }
-        Ok(CallToolResult::structured(serde_json::json!({
+        let read = self.read_session_terminal(session, args.lines).await?;
+        structured(serde_json::json!({
             "text": read.text.as_deref().unwrap_or_default(),
             "rendered": read.text.is_some(),
-        })))
+        }))
+    }
+
+    /// Composed agent-loop tool: prompt a session, wait for its activity status
+    /// to settle, and read back its terminal text in a single round trip.
+    #[tool(
+        name = "prompt_in_session",
+        description = "Prompt a session, wait until its activity leaves then reaches target \
+                       statuses (default: idle or attention; the leaving is awaited for up to \
+                       2 s), and read back its terminal text in a \
+                       single round trip. The composed form of `run_in_session` + \
+                       `wait_for_status` + `read_terminal`. Prompting a shell session is \
+                       enabled by default; prompting a nested Claude session requires opt-in \
+                       (via `allow_claude_nesting` setting or argument). Args: `session` \
+                       (handle), `text` (text to send; a trailing newline is sent as Enter and submits), \
+                       `statuses` (target statuses, default [\"idle\", \"attention\"]), \
+                       `lines` (trailing lines to read back, default 40), `timeout_ms` \
+                       (wait bound in ms, default 30000, capped at 300000), `allow_claude_nesting` \
+                       (per-call opt-in for nested Claude sessions, default false). Returns \
+                       `{ status, timed_out, text, rendered, focused_handle }`."
+    )]
+    async fn prompt_in_session(
+        &self,
+        Parameters(args): Parameters<PromptInSessionArgs>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let session = parse_handle(&args.session)?;
+        let targets = parse_statuses(args.statuses)?;
+
+        // 1. Session lookup & Nesting opt-in verification
+        let target_info = self.fetch_session_info(&args.session).await?;
+        let allow_setting = self
+            .settings_file
+            .as_deref()
+            .map(crate::settings::Settings::load)
+            .unwrap_or_default()
+            .mcp
+            .allow_claude_nesting;
+        check_claude_nesting(target_info.kind, allow_setting, args.allow_claude_nesting)?;
+
+        // 2. Step 1: Send text (run_in_session primitive)
+        let focused = self.type_text(session, args.text).await?;
+
+        // 3. Step 2: Wait for status (wait_for_status primitive)
+        self.wait_for_start(session, &targets, wait_timeout(args.timeout_ms))
+            .await;
+        let (status_str_val, timed_out) = self
+            .wait_for_session_status(session, targets, args.timeout_ms)
+            .await?;
+
+        // 4. Step 3: Read terminal (read_terminal primitive)
+        let read = self.read_session_terminal(session, args.lines).await?;
+
+        structured(serde_json::json!({
+            "status": status_str_val,
+            "timed_out": timed_out,
+            "text": read.text.as_deref().unwrap_or_default(),
+            "rendered": read.text.is_some(),
+            "focused_handle": focused,
+        }))
     }
 
     /// The window's pixels — what the text `snapshot` cannot show.
@@ -410,10 +640,10 @@ impl TermherdMcp {
         let mut result = CallToolResult::success(vec![ContentBlock::image(data, "image/png")]);
         // The size the caller *received*, which is not the size it asked for
         // when the window was smaller than the bound.
-        result.structured_content = Some(serde_json::json!({
+        result.structured_content = Some(structured_content(serde_json::json!({
             "width": shot.width,
             "height": shot.height,
-        }));
+        }))?);
         Ok(result)
     }
 
@@ -426,16 +656,17 @@ impl TermherdMcp {
                        Chords use the same syntax as the `keys` section of \
                        settings.json — \"cmd+shift+s\", \"ctrl+tab\", \
                        \"escape\" — and resolve through the *live* keymap, so \
-                       this exercises whatever the user rebound. Args: `keys` \
+                       this exercises whatever the user rebound. A key is one \
+                       character or one of tab, enter, escape, space, \
+                       backspace, delete, insert, up, down, left, right, home, \
+                       end, pageup, pagedown, f1–f12. Args: `keys` \
                        (chords, applied in order). Returns one `steps` entry per \
                        chord — `ran` (with the action's name), `inert` (the \
                        action exists but has no surface yet, so nothing \
                        happened; do not retry), `overlay` (an open prompt \
-                       consumed it; \"escape\" usually cancels and \"enter\" \
+                       consumed it; \"escape\" leaves any prompt and \"enter\" \
                        confirms — but on `quit-confirm` \"enter\" quits the app, \
-                       killing every session and this connection, and \
-                       `session-rename` answers to neither, so only a human can \
-                       clear that one), \
+                       killing every session and this connection), \
                        `typed` (bound to nothing, so it reached the focused \
                        terminal), `unbound` (nothing claimed it) — plus the \
                        resulting `focused_handle`. Use `run_action` instead \
@@ -492,6 +723,107 @@ impl TermherdMcp {
 }
 
 impl TermherdMcp {
+    /// Fetch the [`SessionInfo`] of a session by its string handle.
+    async fn fetch_session_info(&self, session_handle_str: &str) -> Result<SessionInfo, ErrorData> {
+        let list_reply = self
+            .bridge
+            .call(Request::ListSessions, CALL_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Sessions(sessions) = list_reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        sessions
+            .into_iter()
+            .find(|s| s.handle == session_handle_str)
+            .ok_or_else(|| {
+                ErrorData::invalid_params(
+                    format!("unknown session handle: {session_handle_str}"),
+                    None,
+                )
+            })
+    }
+
+    /// Wait until `session` leaves `targets`, within `bound`. Just after typing
+    /// it still shows the status from before the prompt, which would settle the
+    /// wait on `targets` at once. Best effort: a timeout or a rejection here
+    /// is reported by that wait instead.
+    async fn wait_for_start(&self, session: u64, targets: &[SessionStatus], bound: Duration) {
+        let others: Vec<SessionStatus> = [
+            SessionStatus::Starting,
+            SessionStatus::Busy,
+            SessionStatus::Idle,
+            SessionStatus::Attention,
+        ]
+        .into_iter()
+        .filter(|status| !targets.contains(status))
+        .collect();
+        let request = Request::WaitForStatus {
+            session,
+            targets: others,
+        };
+        let _ = self.bridge.call(request, bound.min(START_TIMEOUT)).await;
+    }
+
+    /// Block until `session` reaches one of `targets`.
+    /// Returns `(status_str, timed_out)`. On timeout, reads back the current status.
+    async fn wait_for_session_status(
+        &self,
+        session: u64,
+        targets: Vec<SessionStatus>,
+        timeout_ms: Option<u64>,
+    ) -> Result<(Option<&'static str>, bool), ErrorData> {
+        let timeout = wait_timeout(timeout_ms);
+        match self
+            .bridge
+            .call(Request::WaitForStatus { session, targets }, timeout)
+            .await
+        {
+            Ok(Reply::Waited(waited_outcome)) => {
+                if let Some(reason) = waited_outcome.error {
+                    return Err(ErrorData::invalid_params(reason, None));
+                }
+                Ok((waited_outcome.status.map(status_str), false))
+            }
+            Ok(_) => Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            )),
+            Err(CallError::Timeout(_)) => {
+                let status = self.current_status(session).await;
+                Ok((status, true))
+            }
+            Err(error) => Err(ErrorData::internal_error(error.to_string(), None)),
+        }
+    }
+
+    /// Read the visible terminal text of `session`.
+    async fn read_session_terminal(
+        &self,
+        session: u64,
+        lines: Option<usize>,
+    ) -> Result<TerminalRead, ErrorData> {
+        let lines = lines.unwrap_or(DEFAULT_TEXT_LINES);
+        let read_reply = self
+            .bridge
+            .call(Request::ReadTerminal { session, lines }, CALL_TIMEOUT)
+            .await
+            .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+        let Reply::Terminal(read) = read_reply else {
+            return Err(ErrorData::internal_error(
+                "bridge answered the wrong reply kind",
+                None,
+            ));
+        };
+        if let Some(reason) = read.error {
+            return Err(ErrorData::invalid_params(reason, None));
+        }
+        Ok(read)
+    }
+
     /// A session's current activity, read back after a wait timed out. Best
     /// effort by design: `None` covers a handle that no longer resolves *and* a
     /// read-back that failed. The likeliest cause of the original timeout is a
@@ -558,17 +890,30 @@ impl TermherdMcp {
             .zip(requested)
             .map(|(step, press)| PressStepDto::new(press, step))
             .collect();
-        let value = serde_json::json!({
+        structured(serde_json::json!({
             "steps": steps,
             "focused_handle": outcome.focused,
-        });
-        Ok(CallToolResult::structured(value))
+        }))
     }
 
-    /// Send an [`Action`] over the bridge and shape its [`ActionOutcome`] into a
-    /// tool result: a rejection (unknown handle / out-of-range tab) becomes an
-    /// `invalid_params` error, an applied action a `{ focused_handle }` object.
-    async fn act(&self, action: Action) -> Result<CallToolResult, ErrorData> {
+    /// Type `text` into `session`, submitting it when it ends in a newline, and
+    /// return the focused handle. The shell holds the submit's Enter back
+    /// until the text has been read apart from it.
+    async fn type_text(&self, session: u64, text: String) -> Result<Option<String>, ErrorData> {
+        let (bytes, submit) = split_submit(text);
+        let mut focused = None;
+        if !bytes.is_empty() || !submit {
+            focused = self.apply(Action::Run { session, bytes }).await?.focused;
+        }
+        if submit {
+            focused = self.apply(Action::Submit { session }).await?.focused;
+        }
+        Ok(focused)
+    }
+
+    /// Send an [`Action`] over the bridge; a rejection (unknown handle /
+    /// out-of-range tab) becomes an `invalid_params` error.
+    async fn apply(&self, action: Action) -> Result<ActionOutcome, ErrorData> {
         let reply = self
             .bridge
             .call(Request::Act(action), CALL_TIMEOUT)
@@ -583,8 +928,40 @@ impl TermherdMcp {
         if let Some(reason) = outcome.error {
             return Err(ErrorData::invalid_params(reason, None));
         }
-        let value = serde_json::json!({ "focused_handle": outcome.focused });
-        Ok(CallToolResult::structured(value))
+        Ok(outcome)
+    }
+
+    /// Send an [`Action`] over the bridge and shape its [`ActionOutcome`] into a
+    /// tool result: a rejection (unknown handle / out-of-range tab) becomes an
+    /// `invalid_params` error, an applied action a `{ focused_handle }` object.
+    async fn act(&self, action: Action) -> Result<CallToolResult, ErrorData> {
+        let outcome = self.apply(action).await?;
+        let mut value = serde_json::json!({ "focused_handle": outcome.focused });
+        // An action's detail rides alongside focus rather than in a second
+        // reply kind.
+        if let Some(detail) = outcome.detail
+            && let Some(object) = value.as_object_mut()
+        {
+            match detail {
+                ActionDetail::Repo(repo) => {
+                    object.insert("repo_path".into(), repo.path.into());
+                    object.insert("declared".into(), repo.declared.into());
+                    object.insert("session_count".into(), repo.session_count.into());
+                    object.insert("in_sidebar".into(), repo.visible.into());
+                }
+                ActionDetail::Pointer(pointer) => {
+                    object.insert("pointer".into(), pointer_str(pointer).into());
+                }
+                ActionDetail::Opened(handle) => {
+                    object.insert("opened_handle".into(), handle.into());
+                }
+                ActionDetail::ClaudeCommand { line, overlay } => {
+                    object.insert("line".into(), line.into());
+                    object.insert("overlay".into(), overlay.into());
+                }
+            }
+        }
+        structured(value)
     }
 }
 
@@ -602,12 +979,30 @@ impl ServerHandler for TermherdMcp {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = server;
         info.instructions = Some(
-            "termherd's live bridge: read and (later) drive the terminal \
-             sessions it is hosting."
+            "termherd's live bridge: read and drive the terminal sessions and \
+             the workspace of the termherd hosting you. Address a session by \
+             the `handle` `list_sessions` gives, never by Claude's resume id. \
+             Act, wait, observe: `run_in_session` returns at once, so follow \
+             it with `wait_for_status` — `busy` before `idle`, since just \
+             after typing a session still shows its old status — then \
+             `read_terminal`. `prompt_in_session` does all three for a \
+             prompt. Never poll `snapshot` to wait. `press_keys` and \
+             `run_action` drive termherd's own interface, not a terminal; an \
+             open prompt takes their keys, and `escape` leaves any prompt; \
+             `enter` on the quit prompt quits termherd and this connection. \
+             Take a `screenshot` last: it weighs hundreds of times a \
+             `snapshot`."
                 .into(),
         );
         info
     }
+}
+
+/// The `list_sessions` answer: the rows in an envelope, since
+/// [`structured_content`] admits only an object.
+#[derive(Serialize)]
+struct SessionListDto {
+    sessions: Vec<SessionDto>,
 }
 
 /// The on-the-wire shape of a session for the `list_sessions` tool: the stable
@@ -626,6 +1021,8 @@ struct SessionDto {
     resume_id: Option<String>,
     /// `"starting"`, `"busy"`, `"idle"`, `"attention"`, or `"exited"`.
     status: &'static str,
+    #[serde(flatten)]
+    identity: IdentityDto,
 }
 
 impl From<&SessionInfo> for SessionDto {
@@ -634,12 +1031,10 @@ impl From<&SessionInfo> for SessionDto {
             handle: info.handle.clone(),
             title: info.title.clone(),
             cwd: info.cwd.clone(),
-            kind: match info.kind {
-                SessionKind::Shell => "shell",
-                SessionKind::Claude => "claude",
-            },
+            kind: kind_str(info.kind),
             resume_id: info.resume_id.clone(),
             status: status_str(info.status),
+            identity: IdentityDto::from(&info.identity),
         }
     }
 }
@@ -709,6 +1104,9 @@ struct OpenArgs {
     /// `"shell"` (default) or `"claude"`.
     #[serde(default)]
     kind: Option<String>,
+    /// Append the tab without taking focus. Default false.
+    #[serde(default)]
+    background: bool,
 }
 
 /// Arguments for `split_pane`.
@@ -737,8 +1135,19 @@ struct FocusArgs {
 struct RenameArgs {
     /// 0-based tab index, as `snapshot` reports tab order.
     tab: usize,
-    /// The new manual title; blank reverts to the derived title.
+    /// The new manual title; blank reverts a shell tab to its derived title
+    /// and leaves a Claude tab as it is.
     title: String,
+}
+
+/// Arguments for `add_repo` and `forget_repo`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct RepoArgs {
+    /// An absolute directory. Filed by the scan's own key rule: a worktree
+    /// collapses onto its main checkout, a file becomes its parent, anything
+    /// else is kept as given — never climbed to a repository root.
+    path: String,
 }
 
 /// Arguments for `close_pane`.
@@ -748,6 +1157,50 @@ struct CloseArgs {
     /// Session handle to close. Omit for the focused pane.
     #[serde(default)]
     pane: Option<String>,
+    /// Close `pane` where it lives without focusing it. Requires `pane`.
+    /// Default false.
+    #[serde(default)]
+    background: bool,
+}
+
+/// Arguments for `claude_command`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct ClaudeCommandArgs {
+    /// The stable handle of the target Claude session.
+    session: String,
+    /// `rename`, `color` or `desktop`.
+    command: String,
+    /// The new name for `rename`, the colour for `color`; none for `desktop`.
+    argument: Option<String>,
+}
+
+/// The catalogue entry a caller named, with its argument checked. A command
+/// outside the catalogue, a missing or surplus argument, a colour outside the
+/// palette and a name with nothing typeable in it are all refused here, before
+/// anything reaches the shell.
+fn parse_claude_command(command: &str, argument: Option<&str>) -> Result<ClaudeCommand, ErrorData> {
+    let invalid = |message: String| ErrorData::invalid_params(message, None);
+    match (command, argument) {
+        ("rename", Some(name)) => {
+            ClaudeCommand::rename(name).map_err(|error| invalid(format!("rename: {error}")))
+        }
+        ("color", Some(name)) => ClaudeColor::from_name(name)
+            .map(ClaudeCommand::Color)
+            .ok_or_else(|| {
+                let palette: Vec<_> = ClaudeColor::ALL.iter().map(|c| c.name()).collect();
+                invalid(format!(
+                    "unknown colour {name:?}; expected one of {}",
+                    palette.join(", ")
+                ))
+            }),
+        ("desktop", None) => Ok(ClaudeCommand::Desktop),
+        ("rename" | "color", None) => Err(invalid(format!("{command} needs an `argument`"))),
+        ("desktop", Some(_)) => Err(invalid("desktop takes no `argument`".to_owned())),
+        (other, _) => Err(invalid(format!(
+            "unknown command {other:?}; expected rename, color or desktop"
+        ))),
+    }
 }
 
 /// Arguments for `run_in_session`.
@@ -756,8 +1209,94 @@ struct CloseArgs {
 struct RunArgs {
     /// The stable handle of the target session.
     session: String,
-    /// Text to type; include a trailing newline to submit a command.
+    /// Text to type; a trailing newline is sent as Enter, which submits.
     text: String,
+}
+
+/// Arguments for `mouse_in_session`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct MouseArgs {
+    /// The stable handle of the target session.
+    session: String,
+    /// One of `press`, `release`, `click`, `drag`, `move`.
+    kind: String,
+    /// 0-based column in the visible screen.
+    col: u16,
+    /// 0-based row in the visible screen.
+    row: u16,
+    /// `left` (default), `middle` or `right`.
+    #[serde(default)]
+    button: Option<String>,
+}
+
+/// The pointer event a `mouse_in_session` call describes, or the first word it
+/// got wrong — rejected before the bridge, so the whole call fails and nothing
+/// applies, as a malformed chord does for `press_keys`.
+fn parse_pointer(args: &MouseArgs) -> Result<PointerEvent, ErrorData> {
+    let unknown = |what: &str, word: &str| {
+        ErrorData::invalid_params(format!("unknown pointer {what} {word:?}"), None)
+    };
+    let kind = pointer_kind_from_str(&args.kind).ok_or_else(|| unknown("kind", &args.kind))?;
+    let mut pointer = PointerEvent::left(kind, args.col, args.row);
+    if let Some(word) = args.button.as_deref() {
+        pointer.button = pointer_button_from_str(word).ok_or_else(|| unknown("button", word))?;
+    }
+    Ok(pointer)
+}
+
+/// The external word for a pointer gesture, back to the type.
+fn pointer_kind_from_str(word: &str) -> Option<PointerKind> {
+    match word {
+        "press" => Some(PointerKind::Press),
+        "release" => Some(PointerKind::Release),
+        "click" => Some(PointerKind::Click),
+        "drag" => Some(PointerKind::Drag),
+        "move" => Some(PointerKind::Move),
+        _ => None,
+    }
+}
+
+/// The external word for a pointer button, back to the type.
+fn pointer_button_from_str(word: &str) -> Option<PointerButton> {
+    match word {
+        "left" => Some(PointerButton::Left),
+        "middle" => Some(PointerButton::Middle),
+        "right" => Some(PointerButton::Right),
+        _ => None,
+    }
+}
+
+/// The external word for what the terminal did with a pointer event.
+fn pointer_str(route: PointerRoute) -> &'static str {
+    match route {
+        PointerRoute::Forward => "forwarded",
+        PointerRoute::Select => "selection",
+        PointerRoute::Nothing => "ignored",
+    }
+}
+
+/// A tool result carrying `payload` as its `structuredContent`.
+fn structured<T: Serialize>(payload: T) -> Result<CallToolResult, ErrorData> {
+    Ok(CallToolResult::structured(structured_content(payload)?))
+}
+
+/// `payload` as `structuredContent`, refused unless it is a JSON object.
+///
+/// MCP clients reject an array or a scalar on their schema check, before the
+/// caller sees a byte — so every structured answer is shaped here, and a
+/// payload that cannot be one is a programming error, not a caller's.
+fn structured_content<T: Serialize>(payload: T) -> Result<serde_json::Value, ErrorData> {
+    let value = serde_json::to_value(payload)
+        .map_err(|error| ErrorData::internal_error(error.to_string(), None))?;
+    if value.is_object() {
+        Ok(value)
+    } else {
+        Err(ErrorData::internal_error(
+            "structuredContent must be a JSON object; wrap this payload in one",
+            None,
+        ))
+    }
 }
 
 /// A screenshot that produced no image, as a *tool-level* error: the caller
@@ -770,6 +1309,24 @@ fn no_pixels(reason: Option<String>) -> CallToolResult {
         "{reason}. Use `snapshot` or `read_terminal` instead — they read the \
          workspace without the window."
     ))])
+}
+
+/// `text` without its final line break, and whether it had one: whether it
+/// asks to be submitted.
+///
+/// A program reading raw keys (Claude Code, `PSReadLine`) takes `\n` as Ctrl+J,
+/// a new line in its input, so the final one is sent as Enter. Earlier line
+/// breaks stay, so a multi-line prompt is submitted once.
+fn split_submit(text: String) -> (Vec<u8>, bool) {
+    let mut bytes = text.into_bytes();
+    let line_break = [&b"\r\n"[..], b"\n", b"\r"]
+        .into_iter()
+        .find(|ending| bytes.ends_with(ending));
+    let Some(line_break) = line_break else {
+        return (bytes, false);
+    };
+    bytes.truncate(bytes.len() - line_break.len());
+    (bytes, true)
 }
 
 /// Parse a stable handle string (as `list_sessions` / `snapshot` report it) to
@@ -843,6 +1400,9 @@ struct PressStepDto {
     /// was absent, which the caller can go and create).
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
+    /// Why a confirmation typed nothing, for `"refused"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refusal: Option<String>,
 }
 
 impl PressStepDto {
@@ -850,14 +1410,21 @@ impl PressStepDto {
     /// fields are per-outcome, so each is omitted where it means nothing rather
     /// than sent as a null the caller has to interpret.
     fn new(press: &str, step: &PressStep) -> Self {
-        let (result, action, overlay, reason) = match step {
-            PressStep::Ran(name) => ("ran", Some(name.clone()), None, None),
+        let (result, action, overlay, reason, refusal) = match step {
+            PressStep::Ran(name) => ("ran", Some(name.clone()), None, None, None),
             PressStep::Inert { action, reason } => {
-                ("inert", Some(action.clone()), None, Some(*reason))
+                ("inert", Some(action.clone()), None, Some(*reason), None)
             }
-            PressStep::Overlay(name) => ("overlay", None, Some(name.clone()), None),
-            PressStep::Typed => ("typed", None, None, None),
-            PressStep::Unbound => ("unbound", None, None, None),
+            PressStep::Overlay(name) => ("overlay", None, Some(name.clone()), None, None),
+            PressStep::Refused { overlay, reason } => (
+                "refused",
+                None,
+                Some(overlay.clone()),
+                None,
+                Some(reason.clone()),
+            ),
+            PressStep::Typed => ("typed", None, None, None, None),
+            PressStep::Unbound => ("unbound", None, None, None, None),
         };
         Self {
             press: press.to_owned(),
@@ -865,6 +1432,7 @@ impl PressStepDto {
             action,
             overlay,
             reason,
+            refusal,
         }
     }
 }
@@ -896,6 +1464,16 @@ fn unknown_action(name: &str) -> ErrorData {
     )
 }
 
+/// Arguments for `set_option`.
+#[derive(Debug, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct SetOptionArgs {
+    /// The option id, e.g. "theme" — see `list_options`.
+    id: String,
+    /// The new value, typed per the option's `kind`; `null` unsets it.
+    value: serde_json::Value,
+}
+
 /// Arguments for `read_terminal`.
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(crate = "rmcp::schemars")]
@@ -905,6 +1483,28 @@ struct ReadArgs {
     /// Trailing lines to keep.
     #[serde(default)]
     lines: Option<usize>,
+}
+
+/// Arguments for `prompt_in_session`.
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(crate = "rmcp::schemars")]
+struct PromptInSessionArgs {
+    /// The session handle to prompt.
+    session: String,
+    /// Text to type; a trailing newline is sent as Enter, which submits.
+    text: String,
+    /// Target activity statuses to wait for (default: ["idle", "attention"]).
+    #[serde(default)]
+    statuses: Option<Vec<String>>,
+    /// Trailing terminal lines to read back (default: 40).
+    #[serde(default)]
+    lines: Option<usize>,
+    /// How long to wait before reporting the current status and terminal text instead.
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+    /// Per-call opt-in to prompt a nested Claude session (default: false).
+    #[serde(default)]
+    allow_claude_nesting: Option<bool>,
 }
 
 /// Map the named statuses onto the core enum. An empty or omitted list means
@@ -944,11 +1544,47 @@ fn status_from_str(name: &str) -> Option<SessionStatus> {
     }
 }
 
+/// Validate whether prompting a nested session of `kind` is permitted under
+/// `allow_setting` (from `settings.json`) or `allow_param` (per-call argument).
+/// `SessionKind::Shell` is always allowed; `SessionKind::Claude` requires opt-in.
+fn check_claude_nesting(
+    kind: SessionKind,
+    allow_setting: bool,
+    allow_param: Option<bool>,
+) -> Result<(), ErrorData> {
+    if kind == SessionKind::Claude {
+        let allowed = allow_setting || allow_param.unwrap_or(false);
+        if !allowed {
+            return Err(ErrorData::invalid_params(
+                "prompting a nested Claude session is disabled by default; enable it in \
+                 settings.json (`mcp.allow_claude_nesting: true`) or pass `allow_claude_nesting: true`",
+                None,
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shell::bridge::{Reply, Request, ShotResult, channel, spawn_test_shell};
-    use termherd_core::{App, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs};
+    use termherd_core::{
+        App, ClaudeIdentity, ClaudeLaunch, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs,
+    };
+
+    /// A `list_sessions` row for an idle shell, the bridge's plainest answer.
+    fn idle_shell(handle: &str, title: &str, cwd: &str) -> SessionInfo {
+        SessionInfo {
+            handle: handle.into(),
+            title: title.into(),
+            cwd: Some(cwd.into()),
+            kind: SessionKind::Shell,
+            resume_id: None,
+            status: SessionStatus::Idle,
+            identity: ClaudeIdentity::default(),
+        }
+    }
 
     #[tokio::test]
     async fn list_sessions_tool_shapes_the_bridge_reply_into_structured_json() {
@@ -963,6 +1599,7 @@ mod tests {
                 kind: SessionKind::Claude,
                 resume_id: Some("claude-xyz".into()),
                 status: SessionStatus::Busy,
+                identity: ClaudeIdentity::default(),
             }]),
         );
 
@@ -976,12 +1613,11 @@ mod tests {
             Request::ListSessions,
             "the tool asked the bridge for the session list"
         );
-        let rows = result
-            .structured_content
-            .expect("structured json content")
+        let value = result.structured_content.expect("structured json content");
+        let rows = value["sessions"]
             .as_array()
             .cloned()
-            .expect("an array of sessions");
+            .expect("the rows ride in a `sessions` field of the envelope");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["handle"], "7", "the stable handle is carried out");
         assert_eq!(rows[0]["kind"], "claude");
@@ -990,6 +1626,548 @@ mod tests {
             rows[0]["resume_id"], "claude-xyz",
             "the Claude id rides alongside the handle, not as it"
         );
+    }
+
+    #[tokio::test]
+    async fn list_sessions_carries_each_claude_identity_flat_and_null_when_unknown() {
+        let (handle, requests) = channel();
+        let row = |handle: &str, kind, identity| SessionInfo {
+            handle: handle.into(),
+            title: "proj".into(),
+            cwd: Some("/proj".into()),
+            kind,
+            resume_id: None,
+            status: SessionStatus::Idle,
+            identity,
+        };
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Sessions(vec![
+                row(
+                    "7",
+                    SessionKind::Claude,
+                    ClaudeIdentity {
+                        pid: Some(4399),
+                        peer_name: Some("proj-35".into()),
+                        session_id: Some("7eff".into()),
+                    },
+                ),
+                row("8", SessionKind::Shell, ClaudeIdentity::default()),
+            ]),
+        );
+
+        let result = TermherdMcp::new(handle)
+            .list_sessions()
+            .await
+            .expect("the tool returns a result");
+
+        let value = result.structured_content.expect("structured json content");
+        let rows = value["sessions"].as_array().cloned().expect("rows");
+        assert_eq!(rows[0]["pid"], 4399);
+        assert_eq!(rows[0]["peer_name"], "proj-35");
+        assert_eq!(rows[0]["session_id"], "7eff");
+        for key in ["pid", "peer_name", "session_id"] {
+            assert_eq!(
+                rows[1].get(key),
+                Some(&serde_json::Value::Null),
+                "{key} must be present and null on a shell row"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn list_sessions_answers_an_object_even_with_no_sessions() {
+        let (handle, requests) = channel();
+        let _shell = spawn_test_shell(requests, Reply::Sessions(Vec::new()));
+
+        let result = TermherdMcp::new(handle)
+            .list_sessions()
+            .await
+            .expect("the tool returns a result");
+
+        assert_eq!(
+            result.structured_content.expect("structured json content"),
+            serde_json::json!({ "sessions": [] }),
+        );
+    }
+
+    #[test]
+    fn claude_command_reads_the_catalogue_and_refuses_what_is_outside_it() {
+        let parsed = |command: &str, argument: Option<&str>| {
+            parse_claude_command(command, argument).map(|command| command.line())
+        };
+        assert_eq!(
+            parsed("rename", Some("api\nwork")).ok().as_deref(),
+            Some("/rename api work")
+        );
+        assert_eq!(
+            parsed("color", Some("Cyan")).ok().as_deref(),
+            Some("/color cyan")
+        );
+        assert_eq!(parsed("desktop", None).ok().as_deref(), Some("/desktop"));
+        for (command, argument) in [
+            ("rename", None),
+            ("rename", Some(" \t ")),
+            ("color", Some("magenta")),
+            ("color", None),
+            ("desktop", Some("now")),
+            ("exit", None),
+            ("clear", Some("x")),
+        ] {
+            assert!(
+                parse_claude_command(command, argument).is_err(),
+                "{command} {argument:?} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_confirmation_is_reported_apart_from_an_overlay() {
+        let refused = PressStepDto::new(
+            "enter",
+            &PressStep::Refused {
+                overlay: "claude-command-confirm".into(),
+                reason: "the session is busy, not idle at its prompt".into(),
+            },
+        );
+        assert_eq!(
+            serde_json::to_value(&refused).expect("json"),
+            serde_json::json!({
+                "press": "enter",
+                "result": "refused",
+                "overlay": "claude-command-confirm",
+                "refusal": "the session is busy, not idle at its prompt",
+            })
+        );
+        let consumed = PressStepDto::new("x", &PressStep::Overlay("settings".into()));
+        assert_eq!(
+            serde_json::to_value(&consumed).expect("json"),
+            serde_json::json!({ "press": "x", "result": "overlay", "overlay": "settings" }),
+            "no refusal field where nothing was refused"
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_command_arms_over_the_bridge_and_reports_the_line() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell(
+            requests,
+            Reply::Acted(ActionOutcome::applied(Some("3".into())).with_detail(
+                ActionDetail::ClaudeCommand {
+                    line: "/color red".into(),
+                    overlay: "claude-command-confirm",
+                },
+            )),
+        );
+        let result = TermherdMcp::new(handle)
+            .claude_command(Parameters(ClaudeCommandArgs {
+                session: "3".into(),
+                command: "color".into(),
+                argument: Some("red".into()),
+            }))
+            .await
+            .expect("the tool answers");
+        assert_eq!(
+            shell.await.expect("shell task"),
+            Request::Act(Action::ClaudeCommand {
+                session: 3,
+                command: ClaudeCommand::Color(ClaudeColor::Red),
+            })
+        );
+        assert_eq!(
+            result.structured_content.expect("structured json"),
+            serde_json::json!({
+                "focused_handle": "3",
+                "line": "/color red",
+                "overlay": "claude-command-confirm",
+            })
+        );
+    }
+
+    #[test]
+    fn structured_refuses_a_payload_that_is_not_an_object() {
+        let error = structured(serde_json::json!([1, 2, 3]))
+            .expect_err("a bare array is not valid structuredContent");
+        assert!(
+            error.message.contains("object"),
+            "the error names the rule it enforces, got: {}",
+            error.message
+        );
+    }
+
+    /// A tool call in flight, boxed so one `match` can return any of them.
+    type SweepCall<'a> =
+        std::pin::Pin<Box<dyn Future<Output = Result<CallToolResult, ErrorData>> + 'a>>;
+
+    /// The sweep's options tools: they read and write a file, so they need no
+    /// reply from the shell.
+    fn options_sweep_case<'a>(mcp: &'a TermherdMcp, tool: &str) -> Option<SweepCall<'a>> {
+        match tool {
+            "list_options" => Some(Box::pin(mcp.list_options())),
+            "set_option" => Some(Box::pin(mcp.set_option(Parameters(SetOptionArgs {
+                id: "theme".into(),
+                value: serde_json::json!("light"),
+            })))),
+            _ => None,
+        }
+    }
+
+    /// The sweep's Claude command tool, apart so the main table stays within
+    /// the function-length gate.
+    fn claude_command_sweep_case<'a>(
+        mcp: &'a TermherdMcp,
+        tool: &str,
+    ) -> Option<(Vec<Reply>, SweepCall<'a>)> {
+        use crate::shell::bridge::ActionOutcome;
+
+        (tool == "claude_command").then(|| {
+            (
+                vec![Reply::Acted(
+                    ActionOutcome::applied(Some("1".into())).with_detail(
+                        ActionDetail::ClaudeCommand {
+                            line: "/desktop".into(),
+                            overlay: "claude-command-confirm",
+                        },
+                    ),
+                )],
+                Box::pin(mcp.claude_command(Parameters(ClaudeCommandArgs {
+                    session: "1".into(),
+                    command: "desktop".into(),
+                    argument: None,
+                }))) as SweepCall<'a>,
+            )
+        })
+    }
+
+    /// The replies the shell must give for `tool`, and the call that drives it.
+    ///
+    /// Every tool lands in the `match` below or in one of the two pre-checks
+    /// above it, and anything else panics, so a tool the sweep does not know
+    /// fails here rather than being skipped in silence.
+    fn sweep_case<'a>(mcp: &'a TermherdMcp, tool: &str) -> (Vec<Reply>, SweepCall<'a>) {
+        use crate::shell::bridge::{ActionOutcome, ShotResult, TerminalRead, WaitOutcome};
+
+        if let Some(call) = options_sweep_case(mcp, tool) {
+            return (Vec::new(), call);
+        }
+        if let Some(case) = claude_command_sweep_case(mcp, tool) {
+            return case;
+        }
+
+        let acted = || Reply::Acted(ActionOutcome::applied(Some("1".into())));
+        match tool {
+            "list_sessions" => (
+                vec![Reply::Sessions(Vec::new())],
+                Box::pin(mcp.list_sessions()) as SweepCall<'a>,
+            ),
+            "snapshot" => (
+                vec![Reply::Snapshot(App::new().snapshot(
+                    &SnapshotFilter::default(),
+                    &SnapshotInputs::default(),
+                ))],
+                Box::pin(mcp.snapshot(Parameters(SnapshotArgs::default()))),
+            ),
+            "open_session" => (
+                vec![acted()],
+                Box::pin(mcp.open_session(Parameters(OpenArgs::default()))),
+            ),
+            "split_pane" => (
+                vec![acted()],
+                Box::pin(mcp.split_pane(Parameters(SplitArgs::default()))),
+            ),
+            "focus_pane" => (
+                vec![acted()],
+                Box::pin(mcp.focus_pane(Parameters(FocusArgs {
+                    session: "1".into(),
+                }))),
+            ),
+            "rename_tab" => (
+                vec![acted()],
+                Box::pin(mcp.rename_tab(Parameters(RenameArgs {
+                    tab: 0,
+                    title: "t".into(),
+                }))),
+            ),
+            "add_repo" => (
+                vec![acted()],
+                Box::pin(mcp.add_repo(Parameters(RepoArgs { path: "/p".into() }))),
+            ),
+            "forget_repo" => (
+                vec![acted()],
+                Box::pin(mcp.forget_repo(Parameters(RepoArgs { path: "/p".into() }))),
+            ),
+            "close_pane" => (
+                vec![acted()],
+                Box::pin(mcp.close_pane(Parameters(CloseArgs::default()))),
+            ),
+            "run_in_session" => (
+                vec![acted(), acted()],
+                Box::pin(mcp.run_in_session(Parameters(RunArgs {
+                    session: "1".into(),
+                    text: "ls\n".into(),
+                }))),
+            ),
+            "prompt_in_session" => (
+                vec![
+                    Reply::Sessions(vec![idle_shell("1", "tab 0", "/proj")]),
+                    acted(),
+                    acted(),
+                    Reply::Waited(WaitOutcome {
+                        status: Some(SessionStatus::Busy),
+                        error: None,
+                    }),
+                    Reply::Waited(WaitOutcome {
+                        status: Some(SessionStatus::Idle),
+                        error: None,
+                    }),
+                    Reply::Terminal(TerminalRead {
+                        text: Some("output".into()),
+                        error: None,
+                    }),
+                ],
+                Box::pin(mcp.prompt_in_session(Parameters(PromptInSessionArgs {
+                    session: "1".into(),
+                    text: "echo hi\n".into(),
+                    ..Default::default()
+                }))),
+            ),
+            "mouse_in_session" => (
+                vec![Reply::Acted(
+                    ActionOutcome::applied(Some("1".into()))
+                        .with_detail(ActionDetail::Pointer(PointerRoute::Select)),
+                )],
+                Box::pin(mcp.mouse_in_session(Parameters(MouseArgs {
+                    session: "1".into(),
+                    kind: "press".into(),
+                    col: 0,
+                    row: 0,
+                    ..MouseArgs::default()
+                }))),
+            ),
+            "wait_for_status" => (
+                vec![Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Idle),
+                    error: None,
+                })],
+                Box::pin(mcp.wait_for_status(Parameters(WaitArgs {
+                    session: "1".into(),
+                    ..WaitArgs::default()
+                }))),
+            ),
+            "read_terminal" => (
+                vec![Reply::Terminal(TerminalRead {
+                    text: Some("hello".into()),
+                    error: None,
+                })],
+                Box::pin(mcp.read_terminal(Parameters(ReadArgs {
+                    session: "1".into(),
+                    lines: None,
+                }))),
+            ),
+            "press_keys" => (
+                vec![Reply::Pressed(PressOutcome {
+                    steps: vec![PressStep::Unbound],
+                    focused: Some("1".into()),
+                    error: None,
+                })],
+                Box::pin(mcp.press_keys(Parameters(PressKeysArgs {
+                    keys: vec!["escape".into()],
+                }))),
+            ),
+            "run_action" => (
+                vec![Reply::Pressed(PressOutcome {
+                    steps: vec![PressStep::Ran("close-focused".into())],
+                    focused: Some("1".into()),
+                    error: None,
+                })],
+                Box::pin(mcp.run_action(Parameters(RunActionArgs {
+                    actions: vec!["close-focused".into()],
+                }))),
+            ),
+            "screenshot" => (
+                vec![Reply::Shot(ShotResult {
+                    png: Some(vec![0]),
+                    width: 8,
+                    height: 4,
+                    error: None,
+                })],
+                Box::pin(mcp.screenshot(Parameters(ScreenshotArgs::default()))),
+            ),
+            other => panic!("tool {other:?} is new: add it to the structuredContent sweep"),
+        }
+    }
+
+    #[test]
+    fn the_instructions_teach_the_wait_order_and_name_only_served_tools() {
+        let text = TermherdMcp::new(channel().0)
+            .get_info()
+            .instructions
+            .expect("the server states its instructions");
+        let served: Vec<String> = TermherdMcp::tool_router()
+            .list_all()
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+
+        let named: Vec<&str> = text
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .filter(|word| word.contains('_') && !word.contains(' '))
+            .collect();
+        assert!(
+            named.contains(&"wait_for_status"),
+            "the loop names its tools: {named:?}"
+        );
+        for tool in &named {
+            assert!(
+                served.iter().any(|name| name == tool),
+                "the instructions name `{tool}`, which the server does not serve"
+            );
+        }
+        assert!(
+            text.contains("`busy` before `idle`"),
+            "a wait placed just after typing answers on the old status"
+        );
+    }
+
+    #[tokio::test]
+    async fn every_tool_answers_its_structured_content_as_an_object() {
+        // The list comes from the router rather than from an enumeration typed
+        // here, so a tool added later fails this sweep instead of slipping past.
+        let tools: Vec<String> = TermherdMcp::tool_router()
+            .list_all()
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        assert!(!tools.is_empty(), "an empty router would pass vacuously");
+
+        // The options tools touch a file: never the user's.
+        let dir = tempfile::tempdir().expect("tempdir");
+        for tool in tools {
+            let (handle, requests) = channel();
+            let mcp =
+                TermherdMcp::new(handle).with_settings_file(Some(dir.path().join("settings.json")));
+            let (replies, call) = sweep_case(&mcp, &tool);
+            let _shell =
+                spawn_test_shell_seq(requests, replies.into_iter().map(Some).collect::<Vec<_>>());
+            let result = call.await.unwrap_or_else(|error| {
+                panic!("{tool} answered an error: {}", error.message);
+            });
+            let value = result
+                .structured_content
+                .unwrap_or_else(|| panic!("{tool} answers with structured content"));
+            assert!(
+                value.is_object(),
+                "{tool} must answer a JSON object, got: {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_options_tools_say_what_the_stdio_server_says() {
+        // `#[tool]` takes only a literal, so the text is spelled here and in
+        // `termherd_mcp`; this keeps the two surfaces from drifting apart.
+        let router = TermherdMcp::tool_router();
+        for (name, expected) in [
+            ("list_options", termherd_mcp::LIST_OPTIONS_DESCRIPTION),
+            ("set_option", termherd_mcp::SET_OPTION_DESCRIPTION),
+        ] {
+            let tool = router
+                .list_all()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap_or_else(|| panic!("{name} is on the bridge"));
+            assert_eq!(tool.description.as_deref(), Some(expected), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_handler_finds_no_settings_file_on_its_own() {
+        // A home-resolved default would let any test rewrite the user's settings.
+        assert_eq!(TermherdMcp::new(channel().0).settings_file, None);
+    }
+
+    fn options_mcp(dir: &tempfile::TempDir) -> TermherdMcp {
+        TermherdMcp::new(channel().0).with_settings_file(Some(dir.path().join("settings.json")))
+    }
+
+    #[tokio::test]
+    async fn set_option_writes_one_key_and_list_options_reads_it_back() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("settings.json");
+        std::fs::write(&file, r#"{ "keys": { "copy": "ctrl+c" } }"#).expect("write");
+        let mcp = options_mcp(&dir);
+
+        mcp.set_option(Parameters(SetOptionArgs {
+            id: "terminal.colors.scheme".into(),
+            value: serde_json::json!("solarized-light"),
+        }))
+        .await
+        .expect("a writable option is set");
+
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).expect("read")).expect("json");
+        assert_eq!(
+            written,
+            serde_json::json!({
+                "keys": { "copy": "ctrl+c" },
+                "terminal": { "colors": { "scheme": "solarized-light" } }
+            }),
+            "the rest of the file is kept"
+        );
+        let listed = mcp
+            .list_options()
+            .await
+            .expect("listed")
+            .structured_content
+            .expect("structured");
+        let scheme = listed["options"]
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|o| o["id"] == "terminal.colors.scheme")
+            .expect("scheme option");
+        assert_eq!(scheme["value"], "solarized-light");
+    }
+
+    #[tokio::test]
+    async fn set_option_refuses_what_the_catalogue_refuses_and_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mcp = options_mcp(&dir);
+        for (id, value) in [
+            ("theme", serde_json::json!("banana")),
+            ("shell.program", serde_json::json!("/bin/evil")),
+            ("no.such", serde_json::json!(1)),
+        ] {
+            let error = mcp
+                .set_option(Parameters(SetOptionArgs {
+                    id: id.into(),
+                    value,
+                }))
+                .await
+                .expect_err("refused");
+            assert_eq!(error.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{id}");
+        }
+        assert!(!dir.path().join("settings.json").exists());
+    }
+
+    #[tokio::test]
+    async fn set_option_will_not_write_over_a_file_it_cannot_parse() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("settings.json");
+        std::fs::write(&file, "{ broken").expect("write");
+
+        let error = options_mcp(&dir)
+            .set_option(Parameters(SetOptionArgs {
+                id: "theme".into(),
+                value: serde_json::json!("light"),
+            }))
+            .await
+            .expect_err("refused");
+
+        assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "{ broken");
     }
 
     #[tokio::test]
@@ -1068,8 +2246,9 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude { resume: None },
+            launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
             title: "work".into(),
+            placement: termherd_core::Placement::Foreground,
         }));
         let filter = SnapshotFilter::default();
         let snapshot = app.snapshot(&filter, &SnapshotInputs::default());
@@ -1144,6 +2323,7 @@ mod tests {
             mcp.open_session(Parameters(OpenArgs {
                 project: Some("/proj".into()),
                 kind: Some("claude".into()),
+                background: true,
             }))
             .await
         })
@@ -1153,6 +2333,7 @@ mod tests {
             Action::Open {
                 project: Some("/proj".into()),
                 kind: SessionKind::Claude,
+                placement: Placement::Background,
             }
         );
     }
@@ -1167,6 +2348,7 @@ mod tests {
             Action::Open {
                 project: None,
                 kind: SessionKind::Shell,
+                placement: Placement::Foreground,
             }
         );
     }
@@ -1179,6 +2361,7 @@ mod tests {
             .open_session(Parameters(OpenArgs {
                 project: None,
                 kind: Some("wizard".into()),
+                background: false,
             }))
             .await
             .expect_err("an unknown kind is an invalid_params error");
@@ -1232,7 +2415,7 @@ mod tests {
         let run = action_of(|mcp| async move {
             mcp.run_in_session(Parameters(RunArgs {
                 session: "3".into(),
-                text: "ls\n".into(),
+                text: "ls".into(),
             }))
             .await
         })
@@ -1241,9 +2424,183 @@ mod tests {
             run,
             Action::Run {
                 session: 3,
-                bytes: b"ls\n".to_vec(),
+                bytes: b"ls".to_vec(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn run_in_session_presses_enter_as_a_submit_of_its_own() {
+        let (handle, requests) = channel();
+        let acted = || Some(Reply::Acted(ActionOutcome::applied(Some("3".into()))));
+        let shell = spawn_test_shell_seq(requests, vec![acted(), acted()]);
+        let long = "a prompt long enough that Claude Code would read it as a paste burst";
+        TermherdMcp::new(handle)
+            .run_in_session(Parameters(RunArgs {
+                session: "3".into(),
+                text: format!("{long}\n"),
+            }))
+            .await
+            .expect("the tool returns a result");
+        assert_eq!(
+            shell.await.expect("shell task"),
+            vec![
+                Request::Act(Action::Run {
+                    session: 3,
+                    bytes: long.as_bytes().to_vec(),
+                }),
+                Request::Act(Action::Submit { session: 3 }),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lone_line_break_is_only_a_submit() {
+        let (handle, requests) = channel();
+        let acted = || Some(Reply::Acted(ActionOutcome::applied(Some("3".into()))));
+        let shell = spawn_test_shell_seq(requests, vec![acted()]);
+        TermherdMcp::new(handle)
+            .run_in_session(Parameters(RunArgs {
+                session: "3".into(),
+                text: "\n".into(),
+            }))
+            .await
+            .expect("the tool returns a result");
+        assert_eq!(
+            shell.await.expect("shell task"),
+            vec![Request::Act(Action::Submit { session: 3 })]
+        );
+    }
+
+    #[test]
+    fn a_final_line_break_asks_for_a_submit() {
+        for (text, typed, submit) in [
+            ("ls\n", &b"ls"[..], true),
+            ("ls\r\n", b"ls", true),
+            ("ls\r", b"ls", true),
+            ("\n", b"", true),
+            ("one\ntwo\n", b"one\ntwo", true),
+            ("no submit", b"no submit", false),
+            ("", b"", false),
+        ] {
+            assert_eq!(
+                split_submit(text.into()),
+                (typed.to_vec(), submit),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mouse_in_session_tool_builds_a_pointer_action_from_its_words() {
+        let action = action_of(|mcp| async move {
+            mcp.mouse_in_session(Parameters(MouseArgs {
+                session: "3".into(),
+                kind: "drag".into(),
+                col: 7,
+                row: 2,
+                button: Some("right".into()),
+            }))
+            .await
+        })
+        .await;
+        assert_eq!(
+            action,
+            Action::Pointer {
+                session: 3,
+                pointer: PointerEvent {
+                    button: PointerButton::Right,
+                    ..PointerEvent::left(PointerKind::Drag, 7, 2)
+                },
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn mouse_in_session_tool_defaults_to_the_left_button() {
+        let action = action_of(|mcp| async move {
+            mcp.mouse_in_session(Parameters(MouseArgs {
+                session: "3".into(),
+                kind: "click".into(),
+                col: 0,
+                row: 0,
+                ..MouseArgs::default()
+            }))
+            .await
+        })
+        .await;
+        let Action::Pointer { pointer, .. } = action else {
+            panic!("expected a pointer action, got {action:?}");
+        };
+        assert_eq!(pointer, PointerEvent::left(PointerKind::Click, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn mouse_in_session_tool_rejects_an_unknown_word_before_the_bridge() {
+        // Two vocabularies, one rejection each — before the bridge, so the
+        // whole call fails and nothing applies, as a malformed chord does.
+        let bad = [
+            (
+                "tap",
+                MouseArgs {
+                    session: "1".into(),
+                    kind: "tap".into(),
+                    ..MouseArgs::default()
+                },
+            ),
+            (
+                "wheel",
+                MouseArgs {
+                    session: "1".into(),
+                    kind: "press".into(),
+                    button: Some("wheel".into()),
+                    ..MouseArgs::default()
+                },
+            ),
+        ];
+        for (word, args) in bad {
+            let (handle, requests) = channel();
+            drop(requests);
+            let error = TermherdMcp::new(handle)
+                .mouse_in_session(Parameters(args))
+                .await
+                .expect_err("an unknown word is rejected before the bridge");
+            assert!(
+                error.message.contains(word),
+                "the rejection names the word: {}",
+                error.message
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mouse_in_session_tool_reports_what_the_terminal_did() {
+        for (outcome, word) in [
+            (PointerRoute::Forward, "forwarded"),
+            (PointerRoute::Select, "selection"),
+            (PointerRoute::Nothing, "ignored"),
+        ] {
+            let (handle, requests) = channel();
+            let shell = spawn_test_shell(
+                requests,
+                Reply::Acted(
+                    ActionOutcome::applied(Some("1".into()))
+                        .with_detail(ActionDetail::Pointer(outcome)),
+                ),
+            );
+            let result = TermherdMcp::new(handle)
+                .mouse_in_session(Parameters(MouseArgs {
+                    session: "1".into(),
+                    kind: "press".into(),
+                    ..MouseArgs::default()
+                }))
+                .await
+                .expect("the tool returns a result");
+            let _ = shell.await.expect("shell task");
+            let value = result.structured_content.expect("structured json content");
+            assert_eq!(value["pointer"], word, "{outcome:?}");
+            assert_eq!(value["focused_handle"], "1");
+        }
     }
 
     #[tokio::test]
@@ -1285,11 +2642,39 @@ mod tests {
         let close = action_of(|mcp| async move {
             mcp.close_pane(Parameters(CloseArgs {
                 pane: Some("4".into()),
+                background: true,
             }))
             .await
         })
         .await;
-        assert_eq!(close, Action::Close { pane: Some(4) });
+        assert_eq!(
+            close,
+            Action::Close {
+                pane: Some(4),
+                background: true,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn an_open_reports_the_opened_handle_beside_the_focus() {
+        // A background open leaves focus where it was, so the new session is
+        // named by its own field rather than read off `focused_handle`.
+        let (handle, requests) = channel();
+        let _shell = spawn_test_shell(
+            requests,
+            Reply::Acted(
+                ActionOutcome::applied(Some("1".into()))
+                    .with_detail(ActionDetail::Opened(Some("3".into()))),
+            ),
+        );
+        let result = TermherdMcp::new(handle)
+            .open_session(Parameters(OpenArgs::default()))
+            .await
+            .expect("the tool returns a result");
+        let value = result.structured_content.expect("structured json content");
+        assert_eq!(value["opened_handle"], "3");
+        assert_eq!(value["focused_handle"], "1");
     }
 
     #[tokio::test]
@@ -1475,6 +2860,7 @@ mod tests {
                     kind: SessionKind::Shell,
                     resume_id: None,
                     status: SessionStatus::Busy,
+                    identity: ClaudeIdentity::default(),
                 }])),
             ],
         );
@@ -1634,6 +3020,192 @@ mod tests {
             "got: {}",
             error.message
         );
+    }
+
+    #[tokio::test]
+    async fn prompt_in_session_happy_path_for_shell_session() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell_seq(
+            requests,
+            vec![
+                Some(Reply::Sessions(vec![idle_shell("7", "shell", "/tmp")])),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                Some(Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Busy),
+                    error: None,
+                })),
+                Some(Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Idle),
+                    error: None,
+                })),
+                Some(Reply::Terminal(TerminalRead {
+                    text: Some("build ok\n".into()),
+                    error: None,
+                })),
+            ],
+        );
+        let result = TermherdMcp::new(handle)
+            .prompt_in_session(Parameters(PromptInSessionArgs {
+                session: "7".into(),
+                text: "cargo test\n".into(),
+                ..Default::default()
+            }))
+            .await
+            .expect("prompt_in_session succeeds");
+        let value = result.structured_content.expect("structured content");
+        assert_eq!(value["status"], "idle");
+        assert_eq!(value["timed_out"], false);
+        assert_eq!(value["text"], "build ok\n");
+        assert_eq!(value["rendered"], true);
+        assert_eq!(value["focused_handle"], "7");
+        let waits: Vec<Vec<SessionStatus>> = shell
+            .await
+            .expect("shell task")
+            .into_iter()
+            .filter_map(|request| match request {
+                Request::WaitForStatus { targets, .. } => Some(targets),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            waits,
+            vec![
+                vec![SessionStatus::Starting, SessionStatus::Busy],
+                vec![SessionStatus::Idle, SessionStatus::Attention],
+            ],
+            "it waits for the prompt to leave idle before waiting for idle"
+        );
+    }
+
+    #[tokio::test]
+    async fn prompt_in_session_still_waits_when_the_prompt_never_shows_busy() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell_seq(
+            requests,
+            vec![
+                Some(Reply::Sessions(vec![idle_shell("7", "shell", "/tmp")])),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                None,
+                Some(Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Idle),
+                    error: None,
+                })),
+                Some(Reply::Terminal(TerminalRead {
+                    text: Some("done\n".into()),
+                    error: None,
+                })),
+            ],
+        );
+        let result = TermherdMcp::new(handle)
+            .prompt_in_session(Parameters(PromptInSessionArgs {
+                session: "7".into(),
+                text: "true\n".into(),
+                timeout_ms: Some(50),
+                ..Default::default()
+            }))
+            .await
+            .expect("prompt_in_session succeeds");
+        let value = result.structured_content.expect("structured content");
+        assert_eq!(value["status"], "idle");
+        assert_eq!(value["timed_out"], false);
+        let _ = shell.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_in_session_rejects_nested_claude_without_opt_in() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell_seq(
+            requests,
+            vec![Some(Reply::Sessions(vec![SessionInfo {
+                handle: "7".into(),
+                title: "claude".into(),
+                cwd: Some("/tmp".into()),
+                kind: SessionKind::Claude,
+                resume_id: Some("id1".into()),
+                status: SessionStatus::Idle,
+                identity: ClaudeIdentity::default(),
+            }]))],
+        );
+        let error = TermherdMcp::new(handle)
+            .prompt_in_session(Parameters(PromptInSessionArgs {
+                session: "7".into(),
+                text: "hi\n".into(),
+                allow_claude_nesting: None,
+                ..Default::default()
+            }))
+            .await
+            .expect_err("nested claude without opt-in is rejected");
+        assert!(
+            error
+                .message
+                .contains("prompting a nested Claude session is disabled by default"),
+            "got: {}",
+            error.message
+        );
+        let _ = shell.await;
+    }
+
+    #[tokio::test]
+    async fn prompt_in_session_allows_nested_claude_with_per_call_opt_in() {
+        let (handle, requests) = channel();
+        let shell = spawn_test_shell_seq(
+            requests,
+            vec![
+                Some(Reply::Sessions(vec![SessionInfo {
+                    handle: "7".into(),
+                    title: "claude".into(),
+                    cwd: Some("/tmp".into()),
+                    kind: SessionKind::Claude,
+                    resume_id: Some("id1".into()),
+                    status: SessionStatus::Idle,
+                    identity: ClaudeIdentity::default(),
+                }])),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                Some(Reply::Acted(ActionOutcome::applied(Some("7".into())))),
+                Some(Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Busy),
+                    error: None,
+                })),
+                Some(Reply::Waited(WaitOutcome {
+                    status: Some(SessionStatus::Idle),
+                    error: None,
+                })),
+                Some(Reply::Terminal(TerminalRead {
+                    text: Some("ready\n".into()),
+                    error: None,
+                })),
+            ],
+        );
+        let result = TermherdMcp::new(handle)
+            .prompt_in_session(Parameters(PromptInSessionArgs {
+                session: "7".into(),
+                text: "hello\n".into(),
+                allow_claude_nesting: Some(true),
+                ..Default::default()
+            }))
+            .await
+            .expect("opted-in nested claude succeeds");
+        let value = result.structured_content.expect("structured content");
+        assert_eq!(value["text"], "ready\n");
+        let _ = shell.await;
+    }
+
+    #[test]
+    fn check_claude_nesting_allows_shell_sessions_unconditionally() {
+        assert!(check_claude_nesting(SessionKind::Shell, false, None).is_ok());
+        assert!(check_claude_nesting(SessionKind::Shell, false, Some(false)).is_ok());
+        assert!(check_claude_nesting(SessionKind::Shell, true, None).is_ok());
+    }
+
+    #[test]
+    fn check_claude_nesting_gates_claude_sessions_on_setting_or_param() {
+        assert!(check_claude_nesting(SessionKind::Claude, false, None).is_err());
+        assert!(check_claude_nesting(SessionKind::Claude, false, Some(false)).is_err());
+        assert!(check_claude_nesting(SessionKind::Claude, true, None).is_ok());
+        assert!(check_claude_nesting(SessionKind::Claude, true, Some(false)).is_ok());
+        assert!(check_claude_nesting(SessionKind::Claude, false, Some(true)).is_ok());
     }
 
     // ---- screenshot: the pixel companion to `snapshot` ----
@@ -1944,7 +3516,7 @@ mod tests {
                         "cmd+w".into(),
                         "cmd+d".into(),
                         "x".into(),
-                        "f2".into(),
+                        "f13".into(),
                         "cmd+n".into(),
                         "cmd+shift+t".into(),
                     ],
@@ -1977,7 +3549,7 @@ mod tests {
                     { "press": "cmd+w", "result": "ran", "action": "close-focused" },
                     { "press": "cmd+d", "result": "overlay", "overlay": "tab-close-confirm" },
                     { "press": "x", "result": "typed" },
-                    { "press": "f2", "result": "unbound" },
+                    { "press": "f13", "result": "unbound" },
                     { "press": "cmd+n", "result": "inert",
                       "action": "open-new-session", "reason": "no-surface" },
                     { "press": "cmd+shift+t", "result": "inert",

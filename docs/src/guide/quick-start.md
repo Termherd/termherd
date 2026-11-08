@@ -25,8 +25,8 @@ If you have not installed it yet, see [Installation](./installation.md).
 
 The window opens on the workspace: the **sidebar** on the left, listing every
 Claude session TermHerd found by walking `~/.claude/projects`, grouped by
-project; the **tab strip** across the top; the focused **terminal** filling the
-rest.
+project — plus any repository you added by hand; the **tab strip** across the
+top; the focused **terminal** filling the rest.
 
 Nothing is scanned from your source trees and nothing under `~/.claude` is
 written. A first run on a large history takes a moment to walk the tree — the
@@ -47,9 +47,9 @@ From the keyboard, with a terminal focused:
 
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |
-| New **shell** in the focused session's directory | <kbd>Cmd</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>T</kbd> |
+| New **shell** in the focused session's directory | <kbd>Cmd</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 | New **Claude** session in that directory | <kbd>Cmd</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> |
-| Focus the sidebar search box | <kbd>Cmd</kbd>+<kbd>F</kbd> | <kbd>Ctrl</kbd>+<kbd>F</kbd> |
+| Focus the sidebar search box | <kbd>Cmd</kbd>+<kbd>F</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> |
 
 Search matches session titles *and* indexed transcript content; a content hit
 shows the matched line under the row so you can tell *why* it matched. See
@@ -59,16 +59,18 @@ shows the matched line under the row so you can tell *why* it matched. See
 
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |
-| Split **vertically** (side by side) | <kbd>Cmd</kbd>+<kbd>D</kbd> | <kbd>Ctrl</kbd>+<kbd>D</kbd> |
-| Split **horizontally** (stacked) | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> |
+| Split **vertically** (side by side) | <kbd>Cmd</kbd>+<kbd>D</kbd> | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>+</kbd> |
+| Split **horizontally** (stacked) | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> | <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd> or <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> |
 | Move focus between panes | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>←↑↓→</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>←↑↓→</kbd> |
 | Next / previous tab | <kbd>Ctrl</kbd>+<kbd>Tab</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Tab</kbd> | same |
-| Jump straight to tab 1–9 | <kbd>Cmd</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> |
-| Close the focused pane (a lone pane closes its tab) | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>W</kbd> |
-| Reopen the tab you just closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
+| Jump straight to tab 1–9 | <kbd>Cmd</kbd>+<kbd>1</kbd>…<kbd>9</kbd> | <kbd>Alt</kbd>+<kbd>1</kbd>…<kbd>9</kbd> |
+| Close the focused pane (a lone pane closes its tab) | <kbd>Cmd</kbd>+<kbd>W</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> |
+| Reopen the tab you just closed | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 
-Tabs also reorder by drag-and-drop. Splits resize by keyboard focus only for
-now — drag-resize is the remaining piece of `F-terminal-split`.
+Tabs also reorder by drag-and-drop. Drag the divider between split panes to
+resize them: the ratio updates as you drag, stays between 10% and 90% of the
+split's usable space, and the terminal grids resize on release. See
+[Tabs and splits](../workspace/tabs-and-splits.md) for details.
 
 ## 4. Watch what needs you
 

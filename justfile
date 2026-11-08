@@ -10,25 +10,30 @@ default:
 run:
     cargo run -p termherd-app
 
-# The single-instance guard keys off a lock file at `$TMPDIR/dev.termherd.lock`;
-# a private TMPDIR gives this build its own lock, so it neither sees nor is
-# blocked by an installed TermHerd.app's lock.
-[doc("Run a dev copy alongside an installed TermHerd.app (own lock via private TMPDIR)")]
+# The instance lock follows the temp dir: `TMPDIR`, or `TMP` as a Windows path.
+[doc("Run a dev copy alongside the installed app (own lock via a private temp dir)")]
 run-isolated:
-    TMPDIR="$(mktemp -d)" cargo run -p termherd-app
+    d="$(mktemp -d)"; TMPDIR="$d" TMP="$(cygpath -w "$d" 2>/dev/null || echo "$d")" cargo run -p termherd-app
 
-# Assert the hexagonal crate dependency rule (deps point inward only). Mirrors
-# the `deps` CI job; run before pushing a new crate or cross-crate dependency.
+# Assert the hexagonal crate dependency rule (deps point inward only) and
+# toolchain lockstep across config/workflow files. Mirrors the `cargo-checks`
+# CI job; run before pushing a new crate, cross-crate dependency, or toolchain bump.
 check-deps:
     ./scripts/check-crate-deps.sh
+    ./scripts/test-check-crate-deps.sh
 
 # Assert the intra-crate architecture rules (module boundaries + OS-cfg
 # containment), then print the report-only file-length signal. Mirrors the
-# `intra-arch` CI job; run before pushing a new module or an OS-conditional cfg.
+# `rustfmt & arch` CI job; run before pushing a new module or an OS-conditional cfg.
 check-arch:
     ./scripts/check-module-boundaries.sh
     ./scripts/check-os-cfg-containment.sh
     ./scripts/report-file-length.sh
+
+# Exercise the Claude Code hooks in scripts/hooks/ (AI signature, Markdown lint)
+# with real payloads. Not a CI gate; run after editing a hook.
+test-hooks:
+    ./scripts/hooks/test-hooks.sh
 
 # Report board/issue drift: an open issue absent from the board, one missing a
 # field its issue type owes, or an item whose Status and Horizon disagree about
@@ -61,8 +66,8 @@ roadmap-check:
     roadmark validate
 
 # Build the documentation book into docs/book (mdbook required; not a Rust
-# crate, so it stays out of the dependency graph the `deny`/`machete` gates
-# scan). Mirrors the `book` CI job. `create-missing = false` in book.toml means
+# crate, so it stays out of the dependency graph `cargo-checks` scans). Mirrors
+# the `book` CI job. `create-missing = false` in book.toml means
 # a link to a missing page fails the build instead of minting an empty page.
 [doc("Build the documentation book into docs/book")]
 docs:
@@ -97,3 +102,11 @@ package: build-release
 package: build-release
     # NSIS only — WiX/MSI rejects the non-numeric `-prerelease.N` suffix.
     cargo packager -p termherd-app --release --formats nsis
+
+[doc("Build benchmark images (docs/BENCH.md); all adapters when none is named")]
+bench-build *tools:
+    ./bench/build-all.sh {{tools}}
+
+[doc("Run the S1-S5 benchmark for one adapter (docs/BENCH.md)")]
+bench tool reps="3":
+    ./bench/run-all.sh {{reps}} {{tool}}

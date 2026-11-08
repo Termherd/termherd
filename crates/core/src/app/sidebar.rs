@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use crate::browser::{MatchSnippet, ProjectGroup, SessionRecord, content_snippet, filter_projects};
+use crate::browser::{MatchSnippet, ProjectGroup, SessionRecord, content_snippet, filter_rows};
 
 use super::*;
 
@@ -47,18 +47,150 @@ pub enum SidebarFold {
 }
 
 impl App {
-    /// The sidebar's view of the projects: search matches (FR3) with the
-    /// metadata overlay applied (`F-session-metadata`) — archived sessions
-    /// hidden unless [`Sidebar::show_archived`], starred sessions pinned to the
-    /// top of their group, starred repos pinned to the top of the sidebar
-    /// (`F-favorites`), and emptied groups dropped.
+    /// Every project the sidebar could show: the scan's groups, plus an empty
+    /// group for each hand-declared repo the scan does not report
+    /// (`F-repo-add`). The union is keyed on the path, so a declared repo that
+    /// gains its first session stops being empty rather than doubling — the
+    /// duplicate-sidebar class FR1 pins.
+    ///
+    /// Declared paths are sorted before they are appended: they come from a
+    /// `HashMap`, whose iteration order would otherwise decide the tie-breaks
+    /// of the sort below and make the sidebar reshuffle between two identical
+    /// states.
+    /// Borrowed form, so the snapshot can walk the same union without cloning
+    /// the digests only the rendering path needs.
+    pub(super) fn merged_rows(&self) -> Vec<(&str, &[SessionRecord])> {
+        let scanned: HashSet<&str> = self
+            .sidebar
+            .projects
+            .iter()
+            .map(|group| group.path.as_str())
+            .collect();
+        let mut declared: Vec<&str> = self
+            .repos
+            .iter()
+            .filter(|(path, meta)| meta.declared && !scanned.contains(path.as_str()))
+            .map(|(path, _)| path.as_str())
+            .collect();
+        declared.sort_unstable();
+
+        let mut rows: Vec<(&str, &[SessionRecord])> = self
+            .sidebar
+            .projects
+            .iter()
+            .map(|group| (group.path.as_str(), group.sessions.as_slice()))
+            .collect();
+        rows.extend(declared.into_iter().map(|path| (path, &[][..])));
+        rows
+    }
+
+    /// Every repo path the sidebar knows, scanned or declared, before the
+    /// search box or the archive toggle narrows anything: membership, not
+    /// visibility. Whoever asks "which repos are there" asks here, so the
+    /// answer cannot differ from the sidebar's.
+    #[must_use]
+    pub fn repo_paths(&self) -> Vec<&str> {
+        self.merged_rows()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect()
+    }
+
+    /// Whether a sidebar row survives once its sessions have been filtered:
+    /// something to show, or a declaration that justifies an empty row
+    /// (`F-repo-add`).
+    pub(super) fn sidebar_row_shown(&self, path: &str, shown_sessions: usize) -> bool {
+        shown_sessions > 0 || self.is_repo_declared(path)
+    }
+
+    /// The sidebar's row order as **one** key: a starred repo (`F-favorites`)
+    /// outranks a declaration still waiting for its first session, which
+    /// outranks recency. Both the rendered list and the snapshot ask for it
+    /// here — the two used to hold hand-written copies of this rule, with a
+    /// doc-comment asking the next reader to keep them in step.
+    ///
+    /// `sessions` is the row's **unfiltered** session list, deliberately. Keyed
+    /// on the filtered one, typing in the search box would reorder the projects
+    /// under the cursor — a search narrows a list, it does not rearrange it —
+    /// and a repo whose sessions are merely all archived would be mistaken for
+    /// one that never had any, and pinned to the top as if freshly added.
+    pub(super) fn sidebar_row_order(
+        &self,
+        path: &str,
+        sessions: &[SessionRecord],
+    ) -> (bool, bool, std::cmp::Reverse<Option<std::time::SystemTime>>) {
+        (
+            !self.is_repo_starred(path),
+            !(sessions.is_empty() && self.is_repo_declared(path)),
+            std::cmp::Reverse(crate::browser::last_activity(sessions)),
+        )
+    }
+
+    /// Whether a row has nothing to fold: no session shown *and* none in the
+    /// scan at all, which is a declaration waiting for its first session
+    /// (`F-repo-add`). A repo whose every session is merely archived has a
+    /// history, and calling it empty would be a lie the user can act on.
+    #[must_use]
+    pub fn sidebar_row_empty(&self, path: &str, shown_sessions: usize) -> bool {
+        shown_sessions == 0 && !self.repo_has_sessions(path)
+    }
+
+    /// A row's fold state **as it is presented**: an empty row has no session
+    /// list, so it cannot be folded whatever the stored flag says.
+    ///
+    /// Asked here by the renderer and the snapshot alike. Masked in the view
+    /// alone, the snapshot reported a fold the screen contradicted, and the
+    /// flag went on being toggled invisibly — to surface the day the repo
+    /// gained its first session.
+    #[must_use]
+    pub fn sidebar_row_collapsed(&self, path: &str, shown_sessions: usize) -> bool {
+        self.is_collapsed(path) && !self.sidebar_row_empty(path, shown_sessions)
+    }
+
+    /// The row for `path` as **membership** sees it — the scan united with the
+    /// declarations — carrying its unfiltered session count. `None` when no row
+    /// exists at all.
+    ///
+    /// Deliberately blind to the search box and the archive knob: this answers
+    /// "is this repository in the sidebar", which is what an MCP caller asks
+    /// after adding one. Read off the filtered list, a search the user happened
+    /// to leave in the box reported a successful `add_repo` as a failure.
+    #[must_use]
+    pub fn sidebar_row(&self, path: &str) -> Option<usize> {
+        let sessions = self
+            .merged_rows()
+            .into_iter()
+            .find(|(row, _)| *row == path)
+            .map(|(_, sessions)| sessions.len())?;
+        self.sidebar_row_shown(path, sessions).then_some(sessions)
+    }
+
+    /// Whether the scan reports any session at all for `path`, archived or not
+    /// — what tells "added, never used" apart from "everything is filtered out"
+    /// for a row the filters emptied.
+    #[must_use]
+    pub fn repo_has_sessions(&self, path: &str) -> bool {
+        self.sidebar
+            .projects
+            .iter()
+            .any(|group| group.path == path && !group.sessions.is_empty())
+    }
+
+    /// The sidebar's view of the projects: the scan's groups united with the
+    /// declared repos (`F-repo-add`), narrowed to the search matches (FR3),
+    /// with the metadata overlay applied (`F-session-metadata`) — archived
+    /// sessions hidden unless [`Sidebar::show_archived`], starred sessions
+    /// pinned to the top of their group, and groups left with nothing to show
+    /// dropped unless a declaration justifies them.
+    ///
+    /// The order is **one key**, not three sorts: a starred repo
+    /// (`F-favorites`) outranks a declaration still waiting for its first
+    /// session, which outranks recency. Written as separate sorts, the second
+    /// would silently undo the first.
     #[must_use]
     pub fn visible_projects(&self) -> Vec<ProjectGroup> {
-        let mut groups = filter_projects(
-            &self.sidebar.projects,
-            &self.sidebar.search,
-            self.sidebar.search_titles_only,
-        );
+        let rows = self.merged_rows();
+        let mut groups = filter_rows(&rows, &self.sidebar.search, self.sidebar.search_titles_only);
         for group in &mut groups {
             if !self.sidebar.show_archived {
                 group.sessions.retain(|s| !self.is_archived(&s.session_id));
@@ -68,9 +200,21 @@ impl App {
                 .sessions
                 .sort_by_key(|s| !self.is_starred(&s.session_id));
         }
-        groups.retain(|group| !group.sessions.is_empty());
-        // Stable sort keeps activity order within each repo-star bucket.
-        groups.sort_by_key(|group| !self.is_repo_starred(&group.path));
+        groups.retain(|group| self.sidebar_row_shown(&group.path, group.sessions.len()));
+        // The order is keyed on the *unfiltered* rows, so a search narrows the
+        // list without rearranging it. Stable, so equal keys keep the path order
+        // `group_projects` gave them.
+        let unfiltered: HashMap<&str, &[SessionRecord]> = rows.iter().copied().collect();
+        // Cached: the key costs a map lookup plus a scan of the row's sessions,
+        // and this runs on every frame — `sort_by_key` would pay it per
+        // comparison rather than per row.
+        groups.sort_by_cached_key(|group| {
+            let sessions = unfiltered
+                .get(group.path.as_str())
+                .copied()
+                .unwrap_or_default();
+            self.sidebar_row_order(&group.path, sessions)
+        });
         groups
     }
 
@@ -454,5 +598,271 @@ mod tests {
         // scan of the same project must keep it folded.
         app.apply(Event::ScanCompleted(vec![record("a", "/p", "only")]));
         assert!(app.is_collapsed("/p"));
+    }
+
+    /// The paths the sidebar shows, in order.
+    fn shown(app: &App) -> Vec<String> {
+        app.visible_projects()
+            .into_iter()
+            .map(|group| group.path)
+            .collect()
+    }
+
+    /// A record in `path` with an explicit activity time, so ordering tests
+    /// state their own recency instead of relying on `record`'s absent mtime.
+    fn active(id: &str, path: &str, at: u64) -> SessionRecord {
+        let mut r = record(id, path, "routine work");
+        r.modified =
+            Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1000 + at));
+        r
+    }
+
+    #[test]
+    fn a_declared_repo_appears_as_an_empty_group() {
+        let mut app = App::new();
+        // Nothing has ever been scanned for this path — the whole point.
+        app.apply(Event::DeclareRepo("/fresh".into()));
+
+        let groups = app.visible_projects();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].path, "/fresh");
+        assert!(
+            groups[0].sessions.is_empty(),
+            "a declared repo starts with no sessions; the row is a launch point"
+        );
+    }
+
+    #[test]
+    fn a_declared_repo_that_gains_a_session_stays_one_group() {
+        let mut app = App::new();
+        app.apply(Event::DeclareRepo("/fresh".into()));
+        // The user launches Claude there; the next scan reports it.
+        app.apply(Event::ScanCompleted(vec![record("s1", "/fresh", "hello")]));
+
+        // The duplicate-sidebar class FR1 pins: union on the path key, so the
+        // declaration and the discovery are the same row.
+        assert_eq!(shown(&app), vec!["/fresh"]);
+        assert_eq!(app.visible_projects()[0].sessions.len(), 1);
+        assert!(
+            app.is_repo_declared("/fresh"),
+            "a discovery does not undo a declaration"
+        );
+    }
+
+    #[test]
+    fn declaring_a_repo_the_scan_already_reports_is_idempotent() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record("s1", "/known", "hello")]));
+        let before = app.visible_projects();
+
+        app.apply(Event::DeclareRepo("/known".into()));
+        assert_eq!(app.visible_projects(), before, "nothing visible changes");
+        assert!(app.is_repo_declared("/known"), "but the flag is now set");
+    }
+
+    #[test]
+    fn forgetting_a_declared_repo_removes_its_empty_group() {
+        let mut app = App::new();
+        app.apply(Event::DeclareRepo("/fresh".into()));
+        assert_eq!(shown(&app), vec!["/fresh"]);
+
+        app.apply(Event::ForgetRepo("/fresh".into()));
+        assert!(
+            shown(&app).is_empty(),
+            "nothing else justified the row, so it goes"
+        );
+    }
+
+    #[test]
+    fn forgetting_a_repo_that_has_sessions_keeps_its_group() {
+        let mut app = App::new();
+        app.apply(Event::DeclareRepo("/fresh".into()));
+        app.apply(Event::ScanCompleted(vec![record("s1", "/fresh", "hello")]));
+
+        app.apply(Event::ForgetRepo("/fresh".into()));
+        assert_eq!(
+            shown(&app),
+            vec!["/fresh"],
+            "the scan still reports it; forgetting drops the declaration, not the project"
+        );
+        assert!(!app.is_repo_declared("/fresh"));
+    }
+
+    #[test]
+    fn the_sidebar_order_is_one_key_star_then_declared_then_activity() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![
+            active("s1", "/busy", 100),
+            active("s2", "/quiet", 1),
+            active("s3", "/starred", 50),
+        ]));
+        app.apply(Event::ToggleRepoStar("/starred".into()));
+        app.apply(Event::DeclareRepo("/fresh".into()));
+
+        // A starred repo outranks a fresh declaration, which outranks activity.
+        // Asserted as one order, because it is one sort key: three separate
+        // assertions would pass for three sorts that fight each other.
+        assert_eq!(shown(&app), vec!["/starred", "/fresh", "/busy", "/quiet"]);
+    }
+
+    #[test]
+    fn the_declared_pin_disarms_once_the_repo_has_a_session() {
+        let mut app = App::new();
+        app.apply(Event::DeclareRepo("/fresh".into()));
+        app.apply(Event::ScanCompleted(vec![
+            active("s1", "/busy", 100),
+            // The declared repo's first session is older than /busy's.
+            active("s2", "/fresh", 1),
+        ]));
+
+        assert_eq!(
+            shown(&app),
+            vec!["/busy", "/fresh"],
+            "the pin was scaffolding until the repo had a session; now recency rules"
+        );
+    }
+
+    #[test]
+    fn a_declared_empty_group_is_filtered_by_the_search_like_any_other() {
+        let mut app = App::new();
+        app.apply(Event::DeclareRepo("/dev/termherd".into()));
+
+        app.apply(Event::SearchChanged("termherd".into()));
+        assert_eq!(shown(&app), vec!["/dev/termherd"], "its path matches");
+
+        app.apply(Event::SearchChanged("nothing-here".into()));
+        assert!(
+            shown(&app).is_empty(),
+            "a declared repo is not exempt from the filter"
+        );
+    }
+
+    #[test]
+    fn declaring_and_forgetting_persist_the_overlay() {
+        let mut app = App::new();
+        let effects = app.apply(Event::DeclareRepo("/fresh".into()));
+        assert!(matches!(effects.as_slice(), [Effect::SaveMetadata(o)]
+                if o.repos.get("/fresh").is_some_and(|m| m.declared)));
+
+        let effects = app.apply(Event::ForgetRepo("/fresh".into()));
+        assert!(
+            matches!(effects.as_slice(), [Effect::SaveMetadata(o)]
+                if !o.repos.contains_key("/fresh")),
+            "back to defaults, so the entry is dropped rather than persisted as noise"
+        );
+    }
+
+    #[test]
+    fn repo_paths_unite_the_scan_with_declarations_once_each() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![
+            active("s1", "/scanned", 10),
+            active("s2", "/both", 20),
+        ]));
+        app.apply(Event::DeclareRepo("/declared-only".into()));
+        app.apply(Event::DeclareRepo("/both".into()));
+
+        let mut paths = app.repo_paths();
+        paths.sort_unstable();
+        assert_eq!(paths, vec!["/both", "/declared-only", "/scanned"]);
+    }
+
+    #[test]
+    fn repo_paths_ignore_the_search_box_and_the_archive_toggle() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![active("old", "/archived", 1)]));
+        app.apply(Event::ToggleArchive("old".into()));
+        app.apply(Event::DeclareRepo("/declared".into()));
+        app.apply(Event::SearchChanged("matches-nothing".into()));
+
+        let mut paths = app.repo_paths();
+        paths.sort_unstable();
+        assert_eq!(
+            paths,
+            vec!["/archived", "/declared"],
+            "membership, not visibility"
+        );
+    }
+
+    #[test]
+    fn a_declaration_survives_the_save_that_records_it() {
+        // `is_default` decides what gets written; a declaration that counted as
+        // default would be deleted by its own save and gone at restart.
+        let declared = crate::metadata::RepoMeta {
+            starred: false,
+            declared: true,
+        };
+        assert!(!declared.is_default());
+    }
+
+    #[test]
+    fn searching_narrows_the_sidebar_without_reordering_it() {
+        let mut app = App::new();
+        // `/busy` leads on its newest session, and that is the session the
+        // search excludes. Keyed on the *filtered* list, `/busy` would fall to
+        // 1 and drop below `/quiet` as the user types — rows moving under the
+        // cursor mid-search.
+        let with_summary = |id: &str, path: &str, at: u64, summary: &str| {
+            let mut r = active(id, path, at);
+            r.digest.summary = summary.to_owned();
+            r
+        };
+        app.apply(Event::ScanCompleted(vec![
+            with_summary("fresh", "/busy", 100, "unrelated work"),
+            with_summary("stale", "/busy", 1, "keepme, the old one"),
+            with_summary("mid", "/quiet", 50, "keepme, the middle one"),
+        ]));
+        let before = shown(&app);
+        assert_eq!(before, vec!["/busy", "/quiet"]);
+
+        app.apply(Event::SearchChanged("keepme".into()));
+        let filtered = app.visible_projects();
+        assert_eq!(
+            filtered.iter().map(|g| g.path.clone()).collect::<Vec<_>>(),
+            before,
+            "a search narrows the list, it does not rearrange it"
+        );
+        assert_eq!(filtered[0].sessions.len(), 1, "but it did narrow");
+    }
+
+    #[test]
+    fn a_declared_repo_whose_sessions_are_all_archived_is_not_treated_as_fresh() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![
+            active("old", "/declared", 1),
+            active("newer", "/other", 50),
+        ]));
+        app.apply(Event::DeclareRepo("/declared".into()));
+        app.apply(Event::ToggleArchive("old".into()));
+
+        // The row survives — it is declared — but it is a repo with a history,
+        // not one waiting for its first session, so it must not jump the queue.
+        assert_eq!(
+            shown(&app),
+            vec!["/other", "/declared"],
+            "an archived-away session is still a session"
+        );
+        assert!(
+            app.repo_has_sessions("/declared"),
+            "and the view can tell 'added, never used' from 'all filtered out'"
+        );
+    }
+
+    #[test]
+    fn a_declaration_and_a_star_are_independent() {
+        let mut app = App::new();
+        app.apply(Event::DeclareRepo("/fresh".into()));
+        app.apply(Event::ToggleRepoStar("/fresh".into()));
+        app.apply(Event::ForgetRepo("/fresh".into()));
+
+        assert!(
+            app.is_repo_starred("/fresh"),
+            "the star outlives the forget"
+        );
+        assert!(!app.is_repo_declared("/fresh"));
+        assert!(
+            shown(&app).is_empty(),
+            "a star is not a reason to show a repo with nothing in it"
+        );
     }
 }

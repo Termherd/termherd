@@ -7,11 +7,18 @@
 use std::time::SystemTime;
 
 use iced::widget::{button, column, container, mouse_area, row, text, text_input, tooltip};
-use iced::{Color, Element};
+use iced::{Color, Element, Fill};
 use termherd_core::workspace::Tab;
 
-use super::{card_secondary_text, card_style, clip, session_card, status_color};
+use termherd_core::ClaudeColor;
+
+use super::modals::modal_card;
+use super::{
+    Backdrop, COLOR_MARK_WIDTH, CardFacts, active_chip_fill, card_frame, card_secondary_line,
+    claude_color, clip, color_swatch, detail_lines, kind_icon, session_card, status_dot,
+};
 use crate::shell::{Message, Shell, tab_rename_id};
+use crate::strings;
 
 impl Shell {
     /// The tab strip (FR5): one chip per open session, the active one
@@ -35,12 +42,16 @@ impl Shell {
             std::cmp::Ordering::Less => Some(over),
             std::cmp::Ordering::Equal => None,
         });
+        let first_parked = self.core.workspace.first_parked();
+        let carried_parked =
+            drag.is_some_and(|(from, _)| tabs.get(from).is_some_and(Tab::is_parked));
         let mut bar = row![].spacing(4).align_y(iced::Center);
         for (index, tab) in tabs.iter().enumerate() {
             let active = index == self.core.workspace.active;
             // The carried tab fades to a ghost; the drop point is shown by the
             // insertion bar between chips, not on the chip itself.
             let dragging_this = drag.is_some_and(|(from, _)| from == index);
+            let color = self.core.tab_color(index);
 
             // Double-clicking a chip opens an inline field over it; while that
             // field is up the chip is the editor, not a draggable button — so it
@@ -48,15 +59,32 @@ impl Shell {
             let renaming_this = self
                 .tab_rename
                 .as_ref()
-                .is_some_and(|(anchor, _)| tab.sessions().contains(anchor));
+                .is_some_and(|(anchor, _)| tab.hosts(*anchor));
+            // The status dot, then the kind mark — shared by the chip and its
+            // rename editor so editing a title never hides what the tab runs.
+            let mut inner = row![].spacing(6).align_y(iced::Center);
+            if let Some(status) = self.core.tab_status(index) {
+                let backdrop = if active {
+                    Backdrop::ActiveChip
+                } else {
+                    Backdrop::Chrome
+                };
+                inner = inner.push(status_dot(status, backdrop));
+            }
+            if let Some(kind) = self.core.tab_kind(index) {
+                inner = inner.push(kind_icon(kind));
+            }
             let chip: Element<'_, Message> = if renaming_this {
                 let buffer = self.tab_rename.as_ref().map_or("", |(_, b)| b.as_str());
-                let mut inner = row![].spacing(6).align_y(iced::Center);
-                if let Some(status) = self.core.tab_status(index) {
-                    inner = inner.push(text("●").size(9).color(status_color(status)));
-                }
+                // The hint is what a blank commit leaves: a shell tab reverts
+                // to its derived name, a Claude tab is not renamed at all.
+                let blank_leaves = if self.core.tab_names_through_claude(index) {
+                    tab.display_title()
+                } else {
+                    &tab.title
+                };
                 inner = inner.push(
-                    text_input("", buffer)
+                    text_input(blank_leaves, buffer)
                         .id(tab_rename_id())
                         .on_input(Message::TabRenameInput)
                         .on_submit(Message::CommitTabRename)
@@ -66,52 +94,65 @@ impl Shell {
                 );
                 container(inner)
                     .padding(6)
-                    .style(move |theme: &iced::Theme| tab_chip_style(theme, active, false))
+                    .style(move |theme: &iced::Theme| tab_chip_style(theme, active, false, color))
                     .into()
             } else {
-                let mut inner = row![].spacing(6).align_y(iced::Center);
-                if let Some(status) = self.core.tab_status(index) {
-                    inner = inner.push(text("●").size(9).color(status_color(status)));
+                // A parked chip keeps only the dot and the kind mark; its
+                // title stays in the hover card.
+                if !tab.is_parked() {
+                    inner = inner.push(text(clip(tab.display_title(), 24)).size(12));
+                    // The × lives inside the chip so it sits on the active tab's
+                    // fill, and its colour follows the chip's text so it stays
+                    // legible there.
+                    inner = inner.push(
+                        button(text("×").size(14))
+                            .on_press(Message::RequestCloseTab(index))
+                            .style(move |theme: &iced::Theme, _status| button::Style {
+                                background: None,
+                                text_color: tab_chip_text(theme, active),
+                                ..button::Style::default()
+                            })
+                            .padding(0),
+                    );
                 }
-                inner = inner.push(text(clip(tab.display_title(), 24)).size(12));
-                // The × lives inside the chip so it sits on the active tab's fill,
-                // and its colour follows the chip's text so it stays legible there.
-                inner = inner.push(
-                    button(text("×").size(14))
-                        .on_press(Message::RequestCloseTab(index))
-                        .style(move |theme: &iced::Theme, _status| button::Style {
-                            background: None,
-                            text_color: tab_chip_text(theme, active),
-                            ..button::Style::default()
-                        })
-                        .padding(0),
-                );
                 let chip = container(inner)
                     .padding(6)
-                    .style(move |theme: &iced::Theme| tab_chip_style(theme, active, dragging_this));
+                    .style(move |theme: &iced::Theme| {
+                        tab_chip_style(theme, active, dragging_this, color)
+                    });
                 // A press starts a drag; entering another chip moves the drop
-                // slot; a double-click opens the inline rename. Release/cancel are
-                // handled by the strip below, so a plain click (press and release
-                // on the same chip) still just activates it. The × button captures
+                // slot; a double-click opens the inline rename. The release is
+                // heard by the shell's window-wide listener, which runs after this
+                // press, so a plain click still just activates it. The × captures
                 // its own click, so it never starts a drag.
                 let chip = mouse_area(chip)
                     .on_press(Message::TabDragStart(index))
                     .on_enter(Message::TabDragOver(index))
-                    .on_double_click(Message::StartTabRename {
-                        index,
-                        current: tab.display_title().to_owned(),
-                    });
+                    .on_double_click(Message::StartTabRename(index))
+                    .on_right_press(Message::OpenTabMenu(index));
                 // The chip clips the title; hovering reveals the fuller
-                // description — the very session card the sidebar shows when the
-                // tab resumes a browsed session, else a minimal title + cwd card.
+                // description — the sidebar's session card, plus the live pane facts,
+                // when the tab resumes a browsed session, else a minimal title +
+                // cwd card.
                 tooltip(
                     chip,
-                    self.tab_hover_card(index, tab, now),
+                    self.tab_hover_card(index, tab, color, now),
                     tooltip::Position::Bottom,
                 )
                 .into()
             };
-            if caret_at == Some(index) {
+            let caret_here = caret_at == Some(index);
+            if index == first_parked && index > 0 {
+                // A drop on the boundary keeps the carried tab's zone, so its
+                // caret sits on that zone's side of the gap.
+                if caret_here && !carried_parked {
+                    bar = bar.push(insertion_caret());
+                }
+                bar = bar.push(iced::widget::Space::new().width(12));
+                if caret_here && carried_parked {
+                    bar = bar.push(insertion_caret());
+                }
+            } else if caret_here {
                 bar = bar.push(insertion_caret());
             }
             bar = bar.push(chip);
@@ -120,40 +161,159 @@ impl Shell {
         if caret_at == Some(tabs.len()) {
             bar = bar.push(insertion_caret());
         }
-        // One release anywhere over the strip ends the drag (committing the
-        // reorder at the last-hovered slot); leaving the strip abandons it.
-        Some(
-            mouse_area(bar)
-                .on_release(Message::TabDragEnd)
-                .on_exit(Message::TabDragCancel)
-                .into(),
-        )
+        // The release that ends a drag is heard window-wide by the shell's
+        // subscription, so the strip carries no release or exit handler.
+        Some(bar.into())
     }
 
-    /// The hover card for a tab. A tab that resumes a browsed session
-    /// shows the *same* [`session_card`] the sidebar does — one derive (the core
-    /// resolves the record via [`termherd_core::App::tab_record`]), no divergent
-    /// formatting. A shell or a fresh, not-yet-scanned session has no record, so
-    /// it falls back to a minimal card with the full title and the working
-    /// directory it runs in.
+    /// The open tab menu's card: the focused tab's title, then one line per
+    /// entry, the selected one filled, a disabled one greyed with why beneath
+    /// its label. `None` when no menu is open.
+    pub(in crate::shell) fn tab_menu_card(&self) -> Option<Element<'_, Message>> {
+        let menu = self.live_tab_menu()?;
+        let lines = menu.lines().map(|line| {
+            let label = text(line.entry.label).size(12);
+            match line.refusal {
+                None => ListLine::runnable(label),
+                Some(refusal) => ListLine {
+                    content: column![
+                        label,
+                        card_secondary_line(strings::tab_menu_refusal(refusal).to_owned())
+                    ]
+                    .into(),
+                    runnable: false,
+                },
+            }
+        });
+        Some(list_card(
+            vec![list_heading(self.active_tab_title())],
+            lines,
+            menu.selected(),
+            Message::RunTabMenuEntry,
+            Message::HoverTabMenuEntry,
+        ))
+    }
+
+    /// The open colour picker's card: the focused tab's title, why the last
+    /// pick was refused when it was, then one line per colour with a swatch
+    /// of it beside its name. `None` when no picker is open.
+    pub(in crate::shell) fn color_picker_card(&self) -> Option<Element<'_, Message>> {
+        let picker = self.live_color_picker()?;
+        let mut heading = vec![list_heading(self.active_tab_title())];
+        if let Some(reason) = picker.refused() {
+            heading.push(card_secondary_line(strings::color_pick_refused(reason)));
+        }
+        let lines = ClaudeColor::ALL.into_iter().map(|color| {
+            ListLine::runnable(
+                row![
+                    color_swatch(color),
+                    text(strings::color_choice(color)).size(12)
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+            )
+        });
+        Some(list_card(
+            heading,
+            lines,
+            picker.selected(),
+            Message::PickColorPickerEntry,
+            Message::HoverColorPickerEntry,
+        ))
+    }
+
+    /// The focused tab's shown title, the heading of a list drawn over it.
+    fn active_tab_title(&self) -> &str {
+        self.core
+            .workspace
+            .tabs
+            .get(self.core.workspace.active)
+            .map_or("", Tab::display_title)
+    }
+
+    /// The hover card for a tab. A tab that resumes a browsed session shows the
+    /// [`session_card`] the sidebar does, with the live [`CardFacts`] of its first
+    /// pane — one derive (the core resolves the record via
+    /// [`termherd_core::App::tab_record`]), no divergent formatting. A shell or a
+    /// fresh, not-yet-scanned session has no record, so it falls back to a minimal
+    /// card with the full title and the working directory it runs in, under the
+    /// same live facts.
     fn tab_hover_card(
         &self,
         index: usize,
         tab: &Tab,
+        // The colour the outline shows (the focused pane's), not the record's:
+        // in a split the two can differ, and the name is the cue that must
+        // match what is drawn.
+        color: Option<ClaudeColor>,
         now: SystemTime,
     ) -> Element<'static, Message> {
+        let first = tab.first_session();
+        let facts = CardFacts {
+            agent: self.core.peer_name(first),
+            color,
+            version: self.core.live_claude_version(first).map(str::to_owned),
+            running_for: self
+                .core
+                .running_since(first)
+                .and_then(|spawned| now.duration_since(spawned).ok()),
+        };
         match self.core.tab_record(index) {
-            Some(record) => session_card(self.core.session_title(record), record, now),
+            Some(record) => session_card(self.core.session_title(record), &facts, record, now),
             None => {
-                let cwd = tab
-                    .sessions()
-                    .first()
-                    .and_then(|id| self.core.sessions.get(id))
-                    .and_then(|s| s.cwd.clone());
-                tab_card(tab.display_title().to_owned(), cwd)
+                let cwd = self.core.sessions.get(&first).and_then(|s| s.cwd.clone());
+                tab_card(tab.display_title().to_owned(), &facts, cwd)
             }
         }
     }
+}
+
+/// A list's heading: the title of the tab it acts on.
+fn list_heading<'a>(title: &str) -> Element<'a, Message> {
+    text(clip(title, 32)).size(11).into()
+}
+
+/// One line of a [`list_card`]: what it shows, and whether a click runs it.
+struct ListLine<'a> {
+    content: Element<'a, Message>,
+    runnable: bool,
+}
+
+impl<'a> ListLine<'a> {
+    fn runnable(content: impl Into<Element<'a, Message>>) -> Self {
+        Self {
+            content: content.into(),
+            runnable: true,
+        }
+    }
+}
+
+/// A list drawn over the window for the focused tab: its title, then one
+/// line per entry, the `selected` one filled. A click on a runnable line runs
+/// it and hovering any line selects it, so the pointer moves the selection
+/// the arrows move.
+fn list_card<'a>(
+    heading: Vec<Element<'a, Message>>,
+    lines: impl Iterator<Item = ListLine<'a>>,
+    selected: usize,
+    on_run: fn(usize) -> Message,
+    on_hover: fn(usize) -> Message,
+) -> Element<'a, Message> {
+    let mut card = column(heading).spacing(2).width(240);
+    for (position, line) in lines.enumerate() {
+        let style = if position == selected {
+            button::primary
+        } else {
+            button::text
+        };
+        let line = button(line.content)
+            .on_press_maybe(line.runnable.then(|| on_run(position)))
+            .style(style)
+            .width(Fill)
+            .padding([4, 8]);
+        card = card.push(mouse_area(line).on_enter(on_hover(position)));
+    }
+    modal_card(card)
 }
 
 /// A tab chip's text colour: the primary tier on the active (filled) chip, the
@@ -170,19 +330,31 @@ fn tab_chip_text(theme: &iced::Theme, active: bool) -> Color {
 /// A tab chip's look, now a styled container rather than a button (the
 /// drag needs `mouse_area` to see press *and* release, which a button would
 /// capture). `active` paints the primary fill; `dragging` fades the tab being
-/// carried to a ghost. All colours come from the theme palette — never
-/// hardcoded.
-fn tab_chip_style(theme: &iced::Theme, active: bool, dragging: bool) -> container::Style {
+/// carried to a ghost; `color`, the one `/color` set, outlines the chip — an
+/// outline rather than a fill, so it reads against the strip whichever fill the
+/// chip has. All colours but that one come from the theme palette.
+fn tab_chip_style(
+    theme: &iced::Theme,
+    active: bool,
+    dragging: bool,
+    color: Option<ClaudeColor>,
+) -> container::Style {
     let palette = theme.extended_palette();
-    let bg = active.then_some(palette.primary.base.color);
+    let outline = color.and_then(|c| claude_color(c, palette));
+    let bg = active.then(|| active_chip_fill(palette));
     let fg = tab_chip_text(theme, active);
     let fade = |c: Color| super::mix(c, palette.background.base.color, 0.55);
+    let (outline_color, outline_width) = match outline {
+        Some(c) => (if dragging { fade(c) } else { c }, COLOR_MARK_WIDTH),
+        None => (Color::TRANSPARENT, 0.0),
+    };
     container::Style {
         background: bg.map(|c| iced::Background::Color(if dragging { fade(c) } else { c })),
         text_color: Some(if dragging { fade(fg) } else { fg }),
         border: iced::Border {
+            color: outline_color,
+            width: outline_width,
             radius: 4.0.into(),
-            ..iced::Border::default()
         },
         ..container::Style::default()
     }
@@ -206,16 +378,34 @@ fn insertion_caret<'a>() -> Element<'a, Message> {
 }
 
 /// The minimal hover card for a tab with no browsed record — a shell or a fresh
-/// session: the full, untruncated title and the working directory it runs
-/// in. Styled like [`session_card`] so the two hover surfaces read alike.
-fn tab_card(title: String, cwd: Option<String>) -> Element<'static, Message> {
+/// session: the full, untruncated title, the live [`CardFacts`] and the
+/// working directory it runs in. Styled like [`session_card`] so the two
+/// hover surfaces read alike.
+fn tab_card(title: String, facts: &CardFacts, cwd: Option<String>) -> Element<'static, Message> {
     let mut card = column![text(title).size(12)].spacing(4);
-    if let Some(cwd) = cwd {
-        card = card.push(text(cwd).size(10).style(card_secondary_text));
+    for line in detail_lines(facts, None) {
+        card = card.push(card_secondary_line(line));
     }
-    container(card)
-        .padding(8)
-        .max_width(360.0)
-        .style(card_style)
-        .into()
+    if let Some(cwd) = cwd {
+        card = card.push(card_secondary_line(cwd));
+    }
+    card_frame(card)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_active_chip_paints_the_fill_its_status_dot_is_shaded_for() {
+        // The dot reads on the chip only if both name the same fill.
+        let theme = iced::Theme::Dracula;
+        let fill = active_chip_fill(theme.extended_palette());
+
+        let active = tab_chip_style(&theme, true, false, None);
+        let idle = tab_chip_style(&theme, false, false, None);
+
+        assert_eq!(active.background, Some(iced::Background::Color(fill)));
+        assert_eq!(idle.background, None);
+    }
 }

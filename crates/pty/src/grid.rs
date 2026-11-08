@@ -8,9 +8,11 @@ use alacritty_terminal::Term;
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::TermMode;
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Flags, Hyperlink};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
-use termherd_core::{SelectOp, SelectSide};
+use termherd_core::{MouseReporting, PointerEvent, SelectOp, SelectSide, pointer_select};
+
+use crate::mode::{CursorKeys, cursor_keys, mouse_reporting};
 
 /// A snapshot of the visible terminal grid handed to the GUI for rendering.
 /// Colours are resolved to RGB here so the shell needs no terminal knowledge.
@@ -33,12 +35,33 @@ pub struct Screen {
     /// the shell wraps a paste in `ESC[200~`…`ESC[201~` and a multi-line paste
     /// lands as one block instead of submitting line by line (FR4).
     pub bracketed_paste: bool,
+    /// The cursor-key encoding the application asked for (DECCKM, DECSET 1),
+    /// which the shell passes to [`crate::key_bytes`]. Read from the last
+    /// snapshot, so a key pressed in the frame the mode flips may use the old
+    /// encoding.
+    pub cursor_keys: CursorKeys,
+    /// The mouse reporting the application has switched on, if any — when set
+    /// the mouse is the child's, so a pointer event over the grid is forwarded
+    /// rather than driving the terminal's own selection.
+    pub mouse_reporting: Option<MouseReporting>,
     /// The highlighted selection as inclusive per-row column spans `(row, c0, c1)`
     /// in visible coordinates, one per on-screen row the selection covers, empty
     /// when nothing is selected. Derived from the terminal's own selection, which
     /// the emulator rotates on every grid scroll — so the highlight follows the
     /// text through both scrollback and application-driven (alt-screen) scroll.
     pub selection: Vec<(u16, u16, u16)>,
+    /// True while the terminal holds a non-empty selection over rows it still
+    /// has — on screen or scrolled into history, but not one whose rows fell
+    /// off the end of the scrollback, which the emulator keeps rotating and
+    /// can no longer read. `selection` above answers "what to highlight"; this
+    /// answers "is there anything to copy", which the spans cannot, since a
+    /// selection scrolled off the viewport has none.
+    pub has_selection: bool,
+    /// Every OSC 8 hyperlink on screen, as the runs of cells it covers. The
+    /// target rides beside the grid rather than in each cell so a link whose
+    /// label hides its URL (`#76` over an issue URL) still resolves, and
+    /// [`ScreenCell`] stays a plain `Copy` value.
+    pub hyperlinks: Vec<HyperlinkSpan>,
     /// The palette's default background — what the GUI paints behind the grid
     /// (and skips repainting per cell). Carried here so the shell needs no
     /// palette knowledge.
@@ -54,6 +77,62 @@ pub struct ScreenCell {
     pub fg: [u8; 3],
     pub bg: [u8; 3],
     pub bold: bool,
+}
+
+/// One contiguous run of cells sharing an OSC 8 hyperlink, in visible
+/// coordinates: columns `start..end` (exclusive) of `row`, and the URI they
+/// point at. The same link printed in two places is two spans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HyperlinkSpan {
+    pub row: u16,
+    pub start: u16,
+    pub end: u16,
+    pub uri: String,
+}
+
+/// Folds the grid's cells into [`HyperlinkSpan`]s: a cell carrying the same
+/// hyperlink as the cell before it extends the open span, anything else closes
+/// it. Cells must arrive in row-major order — the display iterator's — so a
+/// span's end column alone tells whether the next cell continues it: a new
+/// row starts at column 0, which no open span ends at.
+#[derive(Default)]
+struct HyperlinkRuns {
+    spans: Vec<HyperlinkSpan>,
+    open: Option<(HyperlinkSpan, Hyperlink)>,
+}
+
+impl HyperlinkRuns {
+    fn push(&mut self, row: u16, col: u16, link: Option<Hyperlink>) {
+        if let Some((span, current)) = &mut self.open
+            && let Some(link) = &link
+            && span.end == col
+            && current == link
+        {
+            span.end = col + 1;
+            return;
+        }
+        self.close();
+        if let Some(link) = link {
+            let span = HyperlinkSpan {
+                row,
+                start: col,
+                end: col + 1,
+                uri: link.uri().to_owned(),
+            };
+            self.open = Some((span, link));
+        }
+    }
+
+    fn close(&mut self) {
+        if let Some((span, _)) = self.open.take() {
+            self.spans.push(span);
+        }
+    }
+
+    fn finish(mut self) -> Vec<HyperlinkSpan> {
+        self.close();
+        self.spans
+    }
 }
 
 /// The terminal colour scheme: the default foreground/background, the cursor
@@ -94,95 +173,34 @@ impl Palette {
             bold: false,
         }
     }
-
-    /// A built-in scheme by its settings name (`terminal.colors.scheme`), or
-    /// `None` when unknown. The unnamed built-in default is
-    /// [`Palette::default`]. Values from the published Solarized (Ethan
-    /// Schoonover) and Gruvbox (Pavel Pertsev) specifications, both MIT.
-    #[must_use]
-    pub fn named(name: &str) -> Option<Self> {
-        let (foreground, background, ansi) = match name {
-            "solarized-dark" => (hex(0x839496), hex(0x002b36), SOLARIZED_ANSI),
-            "solarized-light" => (hex(0x657b83), hex(0xfdf6e3), SOLARIZED_ANSI),
-            "gruvbox-dark" => (hex(0xebdbb2), hex(0x282828), GRUVBOX_DARK_ANSI),
-            "gruvbox-light" => (hex(0x3c3836), hex(0xfbf1c7), GRUVBOX_LIGHT_ANSI),
-            _ => return None,
-        };
-        Some(Self {
-            foreground,
-            background,
-            cursor: foreground,
-            ansi,
-        })
-    }
 }
-
-/// Split a `0xrrggbb` literal into RGB — lets the scheme tables read as the
-/// hex values their specifications publish.
-const fn hex(c: u32) -> [u8; 3] {
-    [(c >> 16) as u8, (c >> 8) as u8, c as u8]
-}
-
-/// Solarized accents (shared by the dark and light variants, which differ
-/// only in the base tones the fg/bg pick).
-const SOLARIZED_ANSI: [[u8; 3]; 16] = [
-    hex(0x073642), // base02
-    hex(0xdc322f), // red
-    hex(0x859900), // green
-    hex(0xb58900), // yellow
-    hex(0x268bd2), // blue
-    hex(0xd33682), // magenta
-    hex(0x2aa198), // cyan
-    hex(0xeee8d5), // base2
-    hex(0x002b36), // base03
-    hex(0xcb4b16), // orange
-    hex(0x586e75), // base01
-    hex(0x657b83), // base00
-    hex(0x839496), // base0
-    hex(0x6c71c4), // violet
-    hex(0x93a1a1), // base1
-    hex(0xfdf6e3), // base3
-];
-
-const GRUVBOX_DARK_ANSI: [[u8; 3]; 16] = [
-    hex(0x282828),
-    hex(0xcc241d),
-    hex(0x98971a),
-    hex(0xd79921),
-    hex(0x458588),
-    hex(0xb16286),
-    hex(0x689d6a),
-    hex(0xa89984),
-    hex(0x928374),
-    hex(0xfb4934),
-    hex(0xb8bb26),
-    hex(0xfabd2f),
-    hex(0x83a598),
-    hex(0xd3869b),
-    hex(0x8ec07c),
-    hex(0xebdbb2),
-];
-
-const GRUVBOX_LIGHT_ANSI: [[u8; 3]; 16] = [
-    hex(0xfbf1c7),
-    hex(0xcc241d),
-    hex(0x98971a),
-    hex(0xd79921),
-    hex(0x458588),
-    hex(0xb16286),
-    hex(0x689d6a),
-    hex(0x7c6f64),
-    hex(0x928374),
-    hex(0x9d0006),
-    hex(0x79740e),
-    hex(0xb57614),
-    hex(0x076678),
-    hex(0x8f3f71),
-    hex(0x427b58),
-    hex(0x3c3836),
-];
 
 impl Screen {
+    /// An empty `cols`×`rows` screen in the default palette at the live tail:
+    /// nothing scrolled, selected, linked or negotiated. The base a fixture
+    /// overrides one field of, so a new `Screen` field costs one edit here
+    /// rather than one per hand-rolled literal.
+    #[must_use]
+    pub fn blank(cols: u16, rows: u16) -> Self {
+        let palette = Palette::default();
+        Self {
+            cols,
+            rows,
+            lines: vec![vec![palette.blank_cell(); usize::from(cols)]; usize::from(rows)],
+            cursor: None,
+            scrolled: false,
+            display_offset: 0,
+            bracketed_paste: false,
+            cursor_keys: CursorKeys::Normal,
+            mouse_reporting: None,
+            selection: Vec::new(),
+            has_selection: false,
+            hyperlinks: Vec::new(),
+            default_bg: palette.background,
+            cursor_color: palette.cursor,
+        }
+    }
+
     /// Flatten the visible grid to plain text (trailing blanks trimmed) — for
     /// logging and tests.
     #[must_use]
@@ -296,6 +314,16 @@ fn resolve(color: Color, palette: &Palette) -> [u8; 3] {
     }
 }
 
+/// Apply a cell-addressed pointer event to the terminal's own selection,
+/// placed with the *live* scroll offset — a caller's snapshot may lag it.
+/// Whether the event is the terminal's to apply at all — or the child's, when
+/// it reads the mouse — is decided by the terminal thread before it gets here.
+pub(crate) fn apply_pointer<T: EventListener>(term: &mut Term<T>, pointer: PointerEvent) {
+    if let Some(op) = pointer_select(&pointer, term.grid().display_offset()) {
+        apply_select(term, op);
+    }
+}
+
 /// Apply a selection change to the terminal's own grid-anchored selection. The
 /// grid `Point` is what the emulator rotates on every scroll, so the highlight
 /// (derived by [`selected_spans`]) follows the text; a bare click clears it.
@@ -386,6 +414,7 @@ pub(crate) fn snapshot<T: EventListener>(term: &Term<T>, palette: &Palette) -> S
     let first_line = -(content.display_offset as i32);
     let cursor_shape = content.cursor.shape;
     let cursor_point = content.cursor.point;
+    let mut hyperlinks = HyperlinkRuns::default();
 
     for indexed in content.display_iter {
         let row = indexed.point.line.0 - first_line;
@@ -394,6 +423,9 @@ pub(crate) fn snapshot<T: EventListener>(term: &Term<T>, palette: &Palette) -> S
             continue;
         }
         let cell = indexed.cell;
+        // A wide glyph's spacer carries the link too: read it before the
+        // spacer is dropped, or the span would break at every wide glyph.
+        hyperlinks.push(row as u16, col as u16, cell.hyperlink());
         if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
             continue;
         }
@@ -433,7 +465,14 @@ pub(crate) fn snapshot<T: EventListener>(term: &Term<T>, palette: &Palette) -> S
         scrolled: content.display_offset > 0,
         display_offset: content.display_offset,
         bracketed_paste: term.mode().contains(TermMode::BRACKETED_PASTE),
+        cursor_keys: cursor_keys(*term.mode()),
+        mouse_reporting: mouse_reporting(*term.mode()),
         selection: selected_spans(term, first_line, cols, rows),
+        has_selection: term
+            .selection
+            .as_ref()
+            .is_some_and(|s| !s.is_empty() && s.to_range(term).is_some()),
+        hyperlinks: hyperlinks.finish(),
         default_bg: palette.background,
         cursor_color: palette.cursor,
     }
@@ -446,25 +485,91 @@ mod tests {
     use alacritty_terminal::term::test::TermSize;
     use alacritty_terminal::vte::ansi::Processor;
 
+    /// The OSC 8 target rides the snapshot as a span over the cells it covers,
+    /// so a link whose label is `#76` can still resolve to its full URL — the
+    /// text alone has nothing to detect.
     #[test]
-    fn named_schemes_resolve_and_unknown_is_none() {
-        // Two darks, two lights — fg/bg from each published specification.
-        let sd = Palette::named("solarized-dark").expect("known scheme");
-        assert_eq!(sd.background, [0x00, 0x2b, 0x36]);
-        assert_eq!(sd.foreground, [0x83, 0x94, 0x96]);
-        let sl = Palette::named("solarized-light").expect("known scheme");
-        assert_eq!(sl.background, [0xfd, 0xf6, 0xe3]);
-        assert_eq!(sl.ansi, sd.ansi, "solarized variants share their accents");
-        let gd = Palette::named("gruvbox-dark").expect("known scheme");
-        assert_eq!(gd.background, [0x28, 0x28, 0x28]);
-        let gl = Palette::named("gruvbox-light").expect("known scheme");
-        assert_eq!(gl.background, [0xfb, 0xf1, 0xc7]);
-        assert_ne!(gl.ansi, gd.ansi, "gruvbox brights differ per variant");
-        // Every scheme keeps the cursor on its foreground.
-        for p in [&sd, &sl, &gd, &gl] {
-            assert_eq!(p.cursor, p.foreground);
-        }
-        assert_eq!(Palette::named("no-such-scheme"), None);
+    fn snapshot_carries_an_osc8_hyperlink_as_a_span_over_its_cells() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(
+            &mut term,
+            b"see \x1b]8;;https://ex.io/issues/76\x1b\\#76\x1b]8;;\x1b\\ now",
+        );
+        let screen = snapshot(&term, &Palette::default());
+        assert_eq!(
+            screen.hyperlinks,
+            vec![HyperlinkSpan {
+                row: 0,
+                start: 4,
+                end: 7,
+                uri: "https://ex.io/issues/76".into(),
+            }]
+        );
+        // The label is what the grid shows; the URI lives only on the span.
+        let text: String = screen.lines[0][4..7].iter().map(|c| c.c).collect();
+        assert_eq!(text, "#76");
+    }
+
+    /// One hyperlink id printed in two places is two spans: a click on either
+    /// run opens the same target, and neither underline bleeds across the gap.
+    #[test]
+    fn a_hyperlink_broken_by_plain_cells_is_two_spans() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(
+            &mut term,
+            b"\x1b]8;id=a;https://ex.io\x1b\\ab\x1b]8;;\x1b\\--\x1b]8;id=a;https://ex.io\x1b\\cd\x1b]8;;\x1b\\",
+        );
+        let spans = snapshot(&term, &Palette::default()).hyperlinks;
+        let cells: Vec<(u16, u16, u16)> = spans.iter().map(|s| (s.row, s.start, s.end)).collect();
+        assert_eq!(cells, vec![(0, 0, 2), (0, 4, 6)]);
+        assert!(spans.iter().all(|s| s.uri == "https://ex.io"));
+    }
+
+    /// A link that wraps at the right edge is one span per row: the underline
+    /// is drawn per row, and a span never crosses the line break.
+    #[test]
+    fn a_hyperlink_wrapping_the_row_edge_is_one_span_per_row() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(
+            &mut term,
+            b"\x1b]8;;https://ex.io\x1b\\abcdefghijkl\x1b]8;;\x1b\\",
+        );
+        let spans = snapshot(&term, &Palette::default()).hyperlinks;
+        let cells: Vec<(u16, u16, u16)> = spans.iter().map(|s| (s.row, s.start, s.end)).collect();
+        assert_eq!(cells, vec![(0, 0, 10), (1, 0, 2)]);
+    }
+
+    /// A wide glyph inside a link keeps the span whole: its spacer cell is not
+    /// rendered, but it is not a gap in the link either.
+    #[test]
+    fn a_wide_glyph_does_not_split_a_hyperlink_span() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(
+            &mut term,
+            "\x1b]8;;https://ex.io\x1b\\a日b\x1b]8;;\x1b\\".as_bytes(),
+        );
+        let spans = snapshot(&term, &Palette::default()).hyperlinks;
+        let cells: Vec<(u16, u16, u16)> = spans.iter().map(|s| (s.row, s.start, s.end)).collect();
+        assert_eq!(cells, vec![(0, 0, 4)]);
+    }
+
+    /// Plain text — a printed URL included — carries no OSC 8 span; finding
+    /// that URL stays the plaintext scan's job.
+    #[test]
+    fn plain_text_carries_no_hyperlink_span() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 2), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"see https://ex.io");
+        assert!(snapshot(&term, &Palette::default()).hyperlinks.is_empty());
     }
 
     #[test]
@@ -479,6 +584,23 @@ mod tests {
         assert!(snapshot(&term, &palette).bracketed_paste);
         parser.advance(&mut term, b"\x1b[?2004l");
         assert!(!snapshot(&term, &palette).bracketed_paste);
+    }
+
+    #[test]
+    fn snapshot_tracks_application_cursor_keys() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 5), VoidListener);
+        let mut parser: Processor = Processor::new();
+        let palette = Palette::default();
+        assert_eq!(snapshot(&term, &palette).cursor_keys, CursorKeys::Normal);
+        // DECSET 1 switches to SS3 cursor keys; DECRST 1 switches back.
+        parser.advance(&mut term, b"\x1b[?1h");
+        assert_eq!(
+            snapshot(&term, &palette).cursor_keys,
+            CursorKeys::Application
+        );
+        parser.advance(&mut term, b"\x1b[?1l");
+        assert_eq!(snapshot(&term, &palette).cursor_keys, CursorKeys::Normal);
     }
 
     /// The bug behind reopening the "selection follows scroll" work: in the
@@ -698,5 +820,191 @@ mod tests {
         assert_eq!(screen.cursor_color, [0x01, 0x02, 0x03]);
         assert_eq!(screen.lines[0][0].fg, [0x10, 0x20, 0x30]);
         assert_eq!(screen.lines[0][0].bg, [0xfa, 0xfb, 0xfc]);
+    }
+
+    // --- cell-addressed pointer over a real grid --------------------------
+
+    /// A press then a drag over the text leaves the terminal's own selection
+    /// holding exactly the dragged text — the observable this rung has before
+    /// the child can be handed the mouse.
+    #[test]
+    fn a_pointer_press_and_drag_select_the_text_between_them() {
+        use alacritty_terminal::event::VoidListener;
+        use termherd_core::PointerKind;
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"hello wide\r\nworld");
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Press, 6, 0));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Drag, 4, 1));
+        assert_eq!(
+            snapshot(&term, &Palette::default()).selection,
+            vec![(0, 6, 9), (1, 0, 4)],
+            "row 0 from the press to the edge, row 1 up to the drag cell"
+        );
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("wide\nworld"),
+            "the dragged text is what a copy reads"
+        );
+    }
+
+    /// A bare click drops the highlight, as it does under a real pointer, so an
+    /// agent can dismiss a selection it made without a second tool.
+    #[test]
+    fn a_pointer_click_clears_the_selection() {
+        use alacritty_terminal::event::VoidListener;
+        use termherd_core::PointerKind;
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut term, b"hello");
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Press, 0, 0));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Drag, 4, 0));
+        assert!(!snapshot(&term, &Palette::default()).selection.is_empty());
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Click, 2, 0));
+        assert!(
+            snapshot(&term, &Palette::default()).selection.is_empty(),
+            "the click cleared it"
+        );
+    }
+
+    /// The pointer is addressed in visible rows; with the viewport scrolled up
+    /// into history the terminal anchors the selection to the text under that
+    /// row, not to the live line the row number would name at the tail.
+    #[test]
+    fn a_pointer_over_a_scrolled_viewport_selects_the_text_under_the_row() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::grid::Scroll;
+        use termherd_core::PointerKind;
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        // Six rows into a three-row screen: three lines of scrollback.
+        parser.advance(&mut term, b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5");
+        // Scrolled up two lines, the visible rows show l1 / l2 / l3.
+        term.scroll_display(Scroll::Delta(2));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Press, 0, 1));
+        apply_pointer(&mut term, PointerEvent::left(PointerKind::Drag, 1, 1));
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("l2"),
+            "visible row 1 is l2 while scrolled, not l4"
+        );
+    }
+
+    // --- the child reads the mouse ------------------------------------------
+
+    /// The spans say what to highlight; `has_selection` says whether there is
+    /// anything to copy. They part ways exactly when a selection sits wholly
+    /// in history — highlighted nowhere, copyable still — and when a click
+    /// left an empty selection behind, which highlights nothing and copies
+    /// nothing.
+    #[test]
+    fn snapshot_reports_whether_a_selection_exists() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        let palette = Palette::default();
+        parser.advance(&mut term, b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5");
+        assert!(!snapshot(&term, &palette).has_selection, "nothing selected");
+
+        // A press with no drag: an empty range, not a selection.
+        term.selection = Some(Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(2)),
+            Side::Left,
+        ));
+        assert!(
+            !snapshot(&term, &palette).has_selection,
+            "a bare click leaves nothing to copy"
+        );
+
+        // A selection wholly in history: visible rows are l3..l5, so l1 is off.
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(-2), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(-2), Column(1)), Side::Right);
+        term.selection = Some(sel);
+        let screen = snapshot(&term, &palette);
+        assert!(
+            screen.selection.is_empty(),
+            "nothing to highlight on screen"
+        );
+        assert!(
+            screen.has_selection,
+            "the scrolled-out selection is still there to copy"
+        );
+
+        apply_select(&mut term, SelectOp::Clear);
+        assert!(!snapshot(&term, &palette).has_selection, "cleared");
+    }
+
+    /// The emulator rotates a selection into history on every scroll and never
+    /// clamps it to the scrollback it keeps, so a selection can outlive its
+    /// rows: still non-empty as geometry, but with no text behind it. Reporting
+    /// that as copyable would have the chord run and copy nothing.
+    #[test]
+    fn a_selection_whose_rows_fell_off_the_scrollback_is_nothing_to_copy() {
+        use alacritty_terminal::event::VoidListener;
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let config = Config {
+            scrolling_history: 5,
+            ..Config::default()
+        };
+        let mut term = Term::new(config, &TermSize::new(10, 3), VoidListener);
+        let mut parser: Processor = Processor::new();
+        let palette = Palette::default();
+        parser.advance(&mut term, b"hello");
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(Line(0), Column(4)), Side::Right);
+        term.selection = Some(sel);
+        assert!(
+            snapshot(&term, &palette).has_selection,
+            "selected on screen"
+        );
+        assert_eq!(term.selection_to_string().as_deref(), Some("hello"));
+
+        for _ in 0..20 {
+            parser.advance(&mut term, b"\r\nmore");
+        }
+        assert_eq!(
+            term.selection_to_string(),
+            None,
+            "the rows the selection covered are gone"
+        );
+        assert!(
+            !snapshot(&term, &palette).has_selection,
+            "so there is nothing to copy"
+        );
+    }
+
+    #[test]
+    fn snapshot_tracks_the_mouse_reporting_ladder() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(20, 5), VoidListener);
+        let mut parser: Processor = Processor::new();
+        let palette = Palette::default();
+        assert_eq!(snapshot(&term, &palette).mouse_reporting, None);
+        for (set, reset, expected) in [
+            (b"\x1b[?1000h", b"\x1b[?1000l", MouseReporting::Click),
+            (b"\x1b[?1002h", b"\x1b[?1002l", MouseReporting::Drag),
+            (b"\x1b[?1003h", b"\x1b[?1003l", MouseReporting::Motion),
+        ] {
+            parser.advance(&mut term, set);
+            assert_eq!(snapshot(&term, &palette).mouse_reporting, Some(expected));
+            parser.advance(&mut term, reset);
+            assert_eq!(
+                snapshot(&term, &palette).mouse_reporting,
+                None,
+                "{expected:?} reset"
+            );
+        }
     }
 }

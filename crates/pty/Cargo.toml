@@ -12,6 +12,7 @@ alacritty_terminal = "0.26.0"
 portable-pty = "0.9.0"
 termherd-core = { path = "../core" }
 termherd-claude = { path = "../claude" }
+termherd-private-fs = { path = "../private-fs" }
 tracing = "0.1"
 
 [dev-dependencies]
