@@ -711,8 +711,12 @@ enum Message {
         request: termherd_core::PathRequest,
         resolved: Option<termherd_core::ResolvedPath>,
     },
-    /// The pause before a submit's Enter has passed; press it now.
-    SubmitDue(termherd_core::SessionId),
+    /// The pause before the next of a paced run of writes has passed: write
+    /// the first of `writes` now, and pace the rest.
+    PacedDue {
+        session: termherd_core::SessionId,
+        writes: Vec<Vec<u8>>,
+    },
     /// The window screenshot for a capture finished; encode it to PNG at
     /// `png_path` (the companion of the already-written JSON dump). The encode
     /// runs off the UI thread, so this only spawns it.
@@ -1525,7 +1529,7 @@ impl Shell {
                     .apply(termherd_core::Event::PathResolved { request, resolved });
                 self.perform(effects)
             }
-            Message::SubmitDue(session) => self.press_enter(session),
+            Message::PacedDue { session, writes } => self.write_paced(session, writes),
             Message::CaptureScreenshot {
                 screenshot,
                 png_path,
@@ -2392,7 +2396,10 @@ mod key_routing {
         assert_eq!(outcome.error, None);
         assert!(pty.writes().is_empty(), "no Enter inside the pause");
 
-        let _ = shell.update(Message::SubmitDue(session));
+        let _ = shell.update(Message::PacedDue {
+            session,
+            writes: vec![b"\r".to_vec()],
+        });
         assert_eq!(pty.writes_seen(), vec![(session, b"\r".to_vec())]);
     }
 
@@ -2412,7 +2419,10 @@ mod key_routing {
             session,
             clean: true,
         });
-        let _ = shell.update(Message::SubmitDue(session));
+        let _ = shell.update(Message::PacedDue {
+            session,
+            writes: vec![b"\r".to_vec()],
+        });
         assert!(pty.writes().is_empty());
     }
 
@@ -5942,7 +5952,10 @@ mod key_routing {
         );
         assert!(shell.keyboard_owner().is_none(), "and the prompt lets go");
 
-        let _ = shell.update(Message::SubmitDue(session));
+        let _ = shell.update(Message::PacedDue {
+            session,
+            writes: vec![b"\r".to_vec()],
+        });
         assert_eq!(
             pty.writes_seen().last(),
             Some(&(session, b"\r".to_vec())),

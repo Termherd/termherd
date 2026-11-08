@@ -285,7 +285,7 @@ mod tests {
         assert!(
             effects
                 .iter()
-                .all(|e| matches!(e, Effect::Write { .. } | Effect::Submit { .. })),
+                .all(|e| matches!(e, Effect::Write { .. } | Effect::Paced { .. })),
             "only the keystrokes: {effects:?}"
         );
         assert_eq!(title(&app), "local");

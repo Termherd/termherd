@@ -103,7 +103,7 @@ impl App {
                 session,
                 bytes: command.typed(),
             },
-            Effect::Submit { session },
+            Effect::submit(session),
         ]
     }
 }
@@ -169,10 +169,10 @@ mod tests {
                 effects.as_slice(),
                 [
                     Effect::Write { session: typed_to, bytes },
-                    Effect::Submit { session: submitted_to },
+                    Effect::Paced { session: submitted_to, writes },
                 ] if *typed_to == session
                     && bytes == b"\x15/color pink"
-                    && *submitted_to == session
+                    && *submitted_to == session && *writes == [b"\r".to_vec()]
             ),
             "{effects:?}"
         );
@@ -196,8 +196,8 @@ mod tests {
         assert!(
             matches!(
                 effects.as_slice(),
-                [Effect::Write { bytes, .. }, Effect::Submit { session: to }]
-                    if *bytes == expected.as_bytes() && *to == session
+                [Effect::Write { bytes, .. }, Effect::Paced { session: to, writes }]
+                    if *bytes == expected.as_bytes() && *to == session && *writes == [b"\r".to_vec()]
             ),
             "{effects:?}"
         );

@@ -13,7 +13,6 @@ use std::num::NonZeroU64;
 use std::time::{Duration, SystemTime};
 
 use iced::{Task, window};
-use termherd_core::claude_command::SUBMIT;
 use termherd_core::{
     Effect, Launch, McpConfig, OpenTarget, Section, SessionId, SnapshotFilter, SnapshotInputs,
     SpawnSpec, TerminalScope, WorkspaceSnapshot, ports::PtyError,
@@ -27,7 +26,7 @@ use super::notify_click::Posting;
 use super::{Message, Shell};
 use os::{notify, notify_clickable, notify_replacing, open_path, open_url, spawn_editor};
 
-/// Pause before a submit's Enter. Claude Code takes a burst of about 64 bytes
+/// Pause before each paced write. Claude Code takes a burst of about 64 bytes
 /// or more for a paste, where Enter is a line break, so Enter must reach it in
 /// a read of its own.
 pub(super) const ENTER_GAP: Duration = Duration::from_millis(50);
@@ -36,6 +35,15 @@ pub(super) const ENTER_GAP: Duration = Duration::from_millis(50);
 /// the PNG encode do: iced's executor here has no tokio timer to await.
 pub(super) async fn enter_gap() {
     std::thread::sleep(ENTER_GAP);
+}
+
+/// Hand `writes` to [`Shell::write_paced`] once [`ENTER_GAP`] has passed, or
+/// nothing when none are left.
+fn pace(session: SessionId, writes: Vec<Vec<u8>>) -> Task<Message> {
+    if writes.is_empty() {
+        return Task::none();
+    }
+    Task::perform(enter_gap(), move |()| Message::PacedDue { session, writes })
 }
 
 /// Open a resolved file. The configured command fails *visibly* — a click
@@ -92,9 +100,7 @@ impl Shell {
             } => self
                 .pty
                 .write(session, &termherd_pty::paste_bytes(&text, bracketed)),
-            Effect::Submit { session } => {
-                return Task::perform(enter_gap(), move |()| Message::SubmitDue(session));
-            }
+            Effect::Paced { session, writes } => return pace(session, writes),
             Effect::Resize {
                 session,
                 cols,
@@ -170,14 +176,23 @@ impl Shell {
         Task::none()
     }
 
-    /// Press Enter in `session` once its submit's pause has passed. Through
-    /// `core`, so a session that exited during the pause is not written to.
-    pub(super) fn press_enter(&mut self, session: SessionId) -> Task<Message> {
+    /// Write the first of `writes` to `session` now that its pause has
+    /// passed, and pace the rest. Through `core`, so a session that exited
+    /// during the pause is not written to.
+    pub(super) fn write_paced(
+        &mut self,
+        session: SessionId,
+        mut writes: Vec<Vec<u8>>,
+    ) -> Task<Message> {
+        if writes.is_empty() {
+            return Task::none();
+        }
+        let due = writes.remove(0);
         let effects = self.core.apply(termherd_core::Event::TerminalInput {
             session,
-            bytes: SUBMIT.to_vec(),
+            bytes: due,
         });
-        self.perform(effects)
+        Task::batch([self.perform(effects), pace(session, writes)])
     }
 
     /// Tell `core` when `session`'s PTY started, by the wall clock it has no
