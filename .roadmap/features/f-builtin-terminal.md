@@ -71,4 +71,17 @@ longer carries a known failure. This entry used to call its failing sequence
 the one contract bug remaining on the surface (#102). It was f32 noise in the
 test's own reference sum, not a scrolling defect, and `b1d8045` had already
 fixed it the day after it was filed. The issue closed on 2026-09-24, and its
-seed now replays (#328)
+seed now replays (#328).
+
+The **key encoder** follows the xterm contract #321 listed. F1–F12 and Insert
+reach the PTY since #457. Since #474 the arrows and Home/End follow the
+program's cursor-key mode (DECCKM): the `Screen` snapshot carries it beside
+`bracketed_paste`, so a key typed on the GUI thread is encoded in the mode the
+child last set, accepting one frame of lag rather than moving key encoding
+onto the terminal thread. Meta is `ESC` before every printable ASCII key and
+Space, Ctrl included, and on macOS Space follows the Option side like a
+letter. Three limits remain: Shift reaches a Meta letter but not a symbol,
+whose shifted face depends on the layout and keeps its text; Ctrl+symbol
+chords (#327); and Home/End at a stock macOS zsh prompt (#325). The chord
+name table now has a spelled-out test beside its round trips, which a swap of
+two rows' iced keys used to pass.

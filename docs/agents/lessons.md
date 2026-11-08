@@ -217,6 +217,20 @@ on ext4 and on Windows. Two habits close it — make a fixture's identifier
 unique, and spell the expected value out *beside* the cross-check instead of
 only comparing the two sides, so a wrong fixture fails on any platform.
 
+The same holds when both sides are one table read in two directions. The
+chord name table maps a name, the key iced reports and the terminal key, and
+the round trips read it name → iced key → name. Swap the iced keys of the
+`f5` and `f6` rows and every test in `crates/app` still passed (640 of them):
+each lookup lands on the other's row, and the two wrong turns cancel. Even the
+test spelling every chord's *bytes* could not fail, because a synthesised
+press reaches the bytes through the same swapped row; only a real F6 would
+have sent F5's sequence. A round trip proves the table agrees with itself,
+not with the keyboard. Each column a round trip crosses needs a list written
+independently of the table, plus a check derived from the table that the list
+covers every row. Found while reworking #321:
+`a_real_named_key_resolves_to_its_spelled_name_and_terminal_key` is that
+list, and the same swap now fails it alone.
+
 ## A test that claims to be exhaustive
 
 **A test that claims to be exhaustive is worse than no test when it is not.**
