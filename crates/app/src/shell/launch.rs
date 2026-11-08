@@ -118,12 +118,17 @@ impl Shell {
     /// checkout, and open a fresh Claude in it once `git` is done. `None` when
     /// no repo holds the focused session.
     pub(super) fn new_claude_in_worktree(&mut self) -> Option<Task<Message>> {
-        let repo = self.focused_repo()?;
-        let name = crate::git_worktree::name_for(&mint_session_id());
+        let (repo, name) = self.worktree_request()?;
         Some(Task::perform(
             add_worktree(repo, name),
             std::convert::identity,
         ))
+    }
+
+    /// The repo a worktree launch adds to, and the fresh name it adds.
+    pub(super) fn worktree_request(&self) -> Option<(std::path::PathBuf, String)> {
+        let repo = self.focused_repo()?;
+        Some((repo, crate::git_worktree::name_for(&mint_session_id())))
     }
 
     /// Open the worktree `git` just added for `repo`, or say why there is none.

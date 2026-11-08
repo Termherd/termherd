@@ -7128,16 +7128,12 @@ mod key_routing {
             "nothing opens before git answers"
         );
 
-        let answer = iced::futures::executor::block_on(launch::add_worktree(
-            repo.clone(),
-            "claude-3f2a9c1b".to_owned(),
-        ));
+        let (asked, name) = shell.worktree_request().expect("a repo is in context");
+        assert_eq!(asked, repo);
+        let answer = iced::futures::executor::block_on(launch::add_worktree(asked, name.clone()));
         let _ = shell.update(answer);
 
-        let worktree = repo
-            .join(".claude")
-            .join("worktrees")
-            .join("claude-3f2a9c1b");
+        let worktree = repo.join(".claude").join("worktrees").join(&name);
         assert!(
             worktree.join(".git").is_file(),
             "git added a linked worktree"

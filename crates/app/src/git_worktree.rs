@@ -2,7 +2,7 @@
 //! by the shell: it runs the user's `git`, which `core` never sees.
 
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// A worktree about to be added: where it goes, and the branch it checks out.
@@ -40,6 +40,7 @@ pub fn name_for(id: &str) -> String {
 /// it as an option.
 fn is_plain_name(name: &str) -> bool {
     !name.starts_with('-')
+        && !name.ends_with('-')
         && !name.is_empty()
         && name
             .chars()
@@ -47,17 +48,35 @@ fn is_plain_name(name: &str) -> bool {
 }
 
 /// The checkout that owns the repository whose shared git dir is
-/// `common_dir`. A worktree started from a linked worktree still lands in the
+/// `common_dir`, as `git -C root` printed it: relative to `root` when git
+/// prints it so. A worktree started from a linked worktree still lands in the
 /// main one, where the others are. A shared dir not named `.git` (a bare
 /// repository, a separate git dir) names no checkout, so `root` stands in.
 #[must_use]
 pub fn main_checkout(common_dir: &Path, root: &Path) -> PathBuf {
-    // Re-joined, so git's forward slashes become the platform's own.
-    let common_dir: PathBuf = common_dir.components().collect();
+    let common_dir = lexical(&root.join(common_dir));
     match common_dir.parent() {
         Some(main) if common_dir.file_name() == Some(OsStr::new(".git")) => main.to_owned(),
         _ => root.to_owned(),
     }
+}
+
+/// `path` re-joined from its components with each `..` folded into its
+/// parent, so git's forward slashes become the platform's own and a relative
+/// answer names the same directory the scan sees. Lexical, as the scan's key
+/// is: no symlink is resolved.
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Where the worktree `name` of the checkout `main` goes: the folder
@@ -84,7 +103,9 @@ pub fn create(root: &Path, name: &str) -> Result<PathBuf, Error> {
     let common_dir = git(
         root,
         "rev-parse",
-        ["rev-parse", "--path-format=absolute", "--git-common-dir"].map(OsStr::new),
+        // Not `--path-format=absolute`: a git older than 2.31 prints the
+        // flag back as output instead of refusing it.
+        ["rev-parse", "--git-common-dir"].map(OsStr::new),
     )?;
     let plan = plan(&main_checkout(Path::new(&common_dir), root), name);
     git(
@@ -102,19 +123,34 @@ pub fn create(root: &Path, name: &str) -> Result<PathBuf, Error> {
     Ok(plan.path)
 }
 
+/// The variables that point git at a repository other than `-C`'s, which
+/// termherd inherits when started from inside a git hook.
+const REPO_OVERRIDES: [&str; 4] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+];
+
+/// `git -C dir`, deaf to [`REPO_OVERRIDES`], with its stdin closed: a git that
+/// wants to ask something fails rather than waits.
+fn git_in(dir: &Path) -> Command {
+    let mut command = Command::new("git");
+    for key in REPO_OVERRIDES {
+        command.env_remove(key);
+    }
+    command.arg("-C").arg(dir).stdin(Stdio::null());
+    command
+}
+
 /// Run `git -C dir args`, answering its trimmed output, or what it said on
-/// failure. Its stdin is closed: a git that wants to ask something fails.
+/// failure.
 fn git<'a>(
     dir: &Path,
     step: &'static str,
     args: impl IntoIterator<Item = &'a OsStr>,
 ) -> Result<String, Error> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()?;
+    let output = git_in(dir).args(args).output()?;
     let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim().to_owned();
     if output.status.success() {
         Ok(text(&output.stdout))
@@ -167,6 +203,35 @@ mod tests {
     }
 
     #[test]
+    fn a_relative_common_dir_is_read_from_the_checkout_git_ran_in() {
+        assert_eq!(
+            main_checkout(Path::new(".git"), Path::new("/dev/app")),
+            PathBuf::from("/dev/app")
+        );
+        assert_eq!(
+            main_checkout(
+                Path::new("../../../.git"),
+                Path::new("/dev/app/.claude/worktrees/x")
+            ),
+            PathBuf::from("/dev/app")
+        );
+    }
+
+    #[test]
+    fn git_never_reads_a_repository_from_the_environment() {
+        let command = git_in(Path::new("/dev/app"));
+        let removed: Vec<_> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(removed.len(), REPO_OVERRIDES.len(), "{removed:?}");
+        for key in REPO_OVERRIDES {
+            assert!(removed.iter().any(|r| r == key), "{key} is removed");
+        }
+    }
+
+    #[test]
     fn a_common_dir_not_named_dot_git_leaves_the_checkout_itself() {
         assert_eq!(
             main_checkout(Path::new("/srv/app.git"), Path::new("/dev/app")),
@@ -212,9 +277,7 @@ mod tests {
 
     /// Run git in `dir` with a fixed identity, failing the test on an error.
     pub(super) fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
+        let out = git_in(dir)
             .args([
                 "-c",
                 "user.name=t",
@@ -269,6 +332,16 @@ mod tests {
     }
 
     #[test]
+    fn a_created_worktree_is_filed_under_its_repo_by_the_scans_key() {
+        let (_tmp, repo) = repo();
+        let path = create(&repo, "claude-3f2a9c1b").expect("created");
+        assert_eq!(
+            termherd_scan::sidebar_key(&path.to_string_lossy()),
+            repo.to_string_lossy()
+        );
+    }
+
+    #[test]
     fn a_taken_name_is_refused_by_git() {
         let (_tmp, repo) = repo();
         create(&repo, "claude-3f2a9c1b").expect("first");
@@ -287,7 +360,7 @@ mod tests {
     #[test]
     fn a_name_git_would_read_as_an_option_never_reaches_it() {
         let (_tmp, repo) = repo();
-        for name in ["-b", "--force", "a b", "../escape", ""] {
+        for name in ["-b", "--force", "a b", "../escape", "", "claude-"] {
             let error = create(&repo, name).expect_err(name);
             assert!(matches!(error, Error::InvalidName(_)), "{name}: {error}");
         }
