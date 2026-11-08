@@ -141,6 +141,17 @@ the `--continue` again needs the user's terminal for the signature — plan for
 two hand-offs per rebase, not one. Seen rebasing #308 after six merges had
 landed under it.
 
+**A pull request whose branch is checked out in another worktree is updated
+from a scratch branch.** Git refuses to check the branch out twice, and a
+worktree-isolated session refused `git -C` into the other one. From your own
+worktree: `git switch -c merge-<N> origin/<branch>`, merge `origin/main`,
+resolve, then `git push origin merge-<N>:<branch>` and delete `merge-<N>`. The
+other worktree's local branch is then behind its upstream and needs a pull
+before anyone works there. Before syncing a branch again after a CI wait, read
+`gh pr view <N> --json state`: on 2026-11-08 #487 had been merged during the
+wait, and a second, local merge of `main` went into a branch that no longer
+had a pull request.
+
 ## Markdown lint
 
 **`markdownlint-cli2`'s summary counts files with findings, not files linted.**
