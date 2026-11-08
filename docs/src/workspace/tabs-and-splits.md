@@ -232,16 +232,19 @@ it.
 
 - The worktree goes in `.claude/worktrees/claude-<8 hex digits>` under the
   repo's main checkout, the folder `claude --worktree` uses, on a new branch
-  of the same name. It branches off what the focused pane's checkout has
-  checked out, a linked worktree included.
+  of the same name. The digits are the first eight of the session's id, so a
+  branch tells you which conversation wrote it. It branches off what the
+  focused pane's checkout has checked out, a linked worktree included.
 - The session joins the repo's row in the sidebar, as any worktree's does.
 - Nothing is removed for you: when you are done, merge the branch and run
   `git worktree remove` on the folder. Add `.claude/worktrees/` to the repo's
   `.gitignore` if `git status` lists it.
 
-The tab opens once `git` has finished. When it fails — no `git` on the
-`PATH`, or the name already taken — a notice under the tab strip says why, and
-no tab opens.
+The tab opens once `git` has finished, in front if you are still on the pane
+you asked from, behind it if you have moved on or opened a prompt since. When
+`git` fails — no `git` on the `PATH`, or the name already taken — a notice
+under the tab strip says why, and no tab opens; what `git` created before
+failing, a branch or a folder, is left for you to remove.
 
 ### Opening a tab from a link
 

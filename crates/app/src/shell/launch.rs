@@ -15,17 +15,26 @@ fn mint_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Add the worktree `name` to the checkout at `repo`, answering with the
-/// message that opens it. Runs `git` where it is polled: the caller hands it to
-/// a task, so the GUI thread never waits on it.
-pub(super) async fn add_worktree(repo: std::path::PathBuf, name: String) -> Message {
-    let added = crate::git_worktree::create(&repo, &name)
+/// A worktree launch waiting on `git`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeAsk {
+    /// The checkout the worktree branches off.
+    pub repo: std::path::PathBuf,
+    /// The Claude session id it opens under, which also names the worktree.
+    pub id: String,
+    /// The pane it was asked from: the new tab takes focus only if this one
+    /// still has it.
+    pub from: SessionId,
+}
+
+/// Add the worktree `ask` names, answering with the message that opens it.
+/// Runs `git` where it is polled: the caller hands it to a task, so the GUI
+/// thread never waits on it.
+pub(super) async fn add_worktree(ask: WorktreeAsk) -> Message {
+    let added = crate::git_worktree::create(&ask.repo, &crate::git_worktree::name_for(&ask.id))
         .map(|path| path.to_string_lossy().into_owned())
         .map_err(|error| error.to_string());
-    Message::WorktreeAdded {
-        repo: repo.to_string_lossy().into_owned(),
-        added,
-    }
+    Message::WorktreeAdded { ask, added }
 }
 
 impl Shell {
@@ -46,7 +55,18 @@ impl Shell {
         launch: Launch,
         placement: Placement,
     ) -> (Option<SessionId>, Task<Message>) {
-        let launch = launch.with_fresh_id(mint_session_id);
+        self.launch_minting(cwd, launch, placement, mint_session_id)
+    }
+
+    /// [`Self::launch_at`], a fresh Claude taking its id from `mint`.
+    fn launch_minting(
+        &mut self,
+        cwd: String,
+        launch: Launch,
+        placement: Placement,
+        mint: impl FnOnce() -> String,
+    ) -> (Option<SessionId>, Task<Message>) {
+        let launch = launch.with_fresh_id(mint);
         let title = self.core.tab_title(&cwd, &launch);
         let effects = self
             .core
@@ -118,28 +138,50 @@ impl Shell {
     /// checkout, and open a fresh Claude in it once `git` is done. `None` when
     /// no repo holds the focused session.
     pub(super) fn new_claude_in_worktree(&mut self) -> Option<Task<Message>> {
-        let (repo, name) = self.worktree_request()?;
-        Some(Task::perform(
-            add_worktree(repo, name),
-            std::convert::identity,
-        ))
+        let ask = self.worktree_request()?;
+        Some(Task::perform(add_worktree(ask), std::convert::identity))
     }
 
-    /// The repo a worktree launch adds to, and the fresh name it adds.
-    pub(super) fn worktree_request(&self) -> Option<(std::path::PathBuf, String)> {
-        let repo = self.focused_repo()?;
-        Some((repo, crate::git_worktree::name_for(&mint_session_id())))
+    /// What a worktree launch from the focused pane asks of `git`.
+    pub(super) fn worktree_request(&self) -> Option<WorktreeAsk> {
+        Some(WorktreeAsk {
+            repo: self.focused_repo()?,
+            id: mint_session_id(),
+            from: self.core.workspace.focused_session()?,
+        })
     }
 
-    /// Open the worktree `git` just added for `repo`, or say why there is none.
+    /// Open the worktree `git` just added, or say why there is none. The new
+    /// tab is brought forward only when the user is still where they asked
+    /// from: git may take seconds, and a tab taking focus meanwhile would
+    /// catch their keys and drop a prompt they opened since.
     pub(super) fn worktree_added(
         &mut self,
-        repo: String,
+        ask: WorktreeAsk,
         added: Result<String, String>,
     ) -> Task<Message> {
         match added {
-            Ok(path) => self.launch(path, Launch::Claude(ClaudeLaunch::Fresh(None))),
+            Ok(path) => {
+                self.notice = None;
+                let undisturbed = self.core.workspace.focused_session() == Some(ask.from)
+                    && self.closing.is_none()
+                    && self.archiving.is_none();
+                let placement = if undisturbed {
+                    Placement::Foreground
+                } else {
+                    Placement::Background
+                };
+                let id = ask.id;
+                self.launch_minting(
+                    path,
+                    Launch::Claude(ClaudeLaunch::Fresh(None)),
+                    placement,
+                    || id,
+                )
+                .1
+            }
             Err(why) => {
+                let repo = ask.repo.to_string_lossy();
                 self.notice = Some(crate::strings::worktree_failed(&repo, &why));
                 Task::none()
             }

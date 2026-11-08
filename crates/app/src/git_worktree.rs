@@ -2,7 +2,7 @@
 //! by the shell: it runs the user's `git`, which `core` never sees.
 
 use std::ffi::OsStr;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 /// A worktree about to be added: where it goes, and the branch it checks out.
@@ -54,29 +54,12 @@ fn is_plain_name(name: &str) -> bool {
 /// repository, a separate git dir) names no checkout, so `root` stands in.
 #[must_use]
 pub fn main_checkout(common_dir: &Path, root: &Path) -> PathBuf {
-    let common_dir = lexical(&root.join(common_dir));
+    // Re-joined, so git's forward slashes become the platform's own.
+    let common_dir: PathBuf = root.join(common_dir).components().collect();
     match common_dir.parent() {
         Some(main) if common_dir.file_name() == Some(OsStr::new(".git")) => main.to_owned(),
         _ => root.to_owned(),
     }
-}
-
-/// `path` re-joined from its components with each `..` folded into its
-/// parent, so git's forward slashes become the platform's own and a relative
-/// answer names the same directory the scan sees. Lexical, as the scan's key
-/// is: no symlink is resolved.
-fn lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 /// Where the worktree `name` of the checkout `main` goes: the folder
@@ -100,14 +83,7 @@ pub fn create(root: &Path, name: &str) -> Result<PathBuf, Error> {
     if !is_plain_name(name) {
         return Err(Error::InvalidName(name.to_owned()));
     }
-    let common_dir = git(
-        root,
-        "rev-parse",
-        // Not `--path-format=absolute`: a git older than 2.31 prints the
-        // flag back as output instead of refusing it.
-        ["rev-parse", "--git-common-dir"].map(OsStr::new),
-    )?;
-    let plan = plan(&main_checkout(Path::new(&common_dir), root), name);
+    let plan = plan(&main_of(root)?, name);
     git(
         root,
         "worktree add",
@@ -121,6 +97,28 @@ pub fn create(root: &Path, name: &str) -> Result<PathBuf, Error> {
         ],
     )?;
     Ok(plan.path)
+}
+
+/// The main checkout of the repo `root` is in, spelled as the user reached it
+/// whenever that can be known: git answers with symlinks resolved, and a
+/// different spelling of one repo is a second sidebar row.
+fn main_of(root: &Path) -> Result<PathBuf, Error> {
+    if root.join(".git").is_dir() {
+        return Ok(root.to_owned());
+    }
+    // A linked worktree in a folder the scan collapses: the scan's own key.
+    let key = PathBuf::from(termherd_scan::sidebar_key(&root.to_string_lossy()));
+    if key != root {
+        return Ok(key);
+    }
+    let common_dir = git(
+        root,
+        "rev-parse",
+        // Not `--path-format=absolute`: a git older than 2.31 prints the flag
+        // back as output instead of refusing it.
+        ["rev-parse", "--git-common-dir"].map(OsStr::new),
+    )?;
+    Ok(main_checkout(Path::new(&common_dir), root))
 }
 
 /// The variables that point git at a repository other than `-C`'s, which
@@ -151,15 +149,25 @@ fn git<'a>(
     args: impl IntoIterator<Item = &'a OsStr>,
 ) -> Result<String, Error> {
     let output = git_in(dir).args(args).output()?;
-    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).trim().to_owned();
     if output.status.success() {
-        Ok(text(&output.stdout))
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
     } else {
         Err(Error::Git {
             step,
-            stderr: text(&output.stderr),
+            stderr: said(&String::from_utf8_lossy(&output.stderr)),
         })
     }
+}
+
+/// What a failed git said, on one line: its `hint:` advice is left out, since
+/// a notice has room for the error alone.
+fn said(stderr: &str) -> String {
+    stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("hint:"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A repository with one commit, so `HEAD` names something to branch off.
@@ -208,13 +216,53 @@ mod tests {
             main_checkout(Path::new(".git"), Path::new("/dev/app")),
             PathBuf::from("/dev/app")
         );
+    }
+
+    #[test]
+    fn a_failure_is_said_on_one_line_without_gits_hints() {
         assert_eq!(
-            main_checkout(
-                Path::new("../../../.git"),
-                Path::new("/dev/app/.claude/worktrees/x")
-            ),
-            PathBuf::from("/dev/app")
+            said("hint: Using 'master'\nhint: ...\nfatal: a branch named 'x' already exists\n"),
+            "fatal: a branch named 'x' already exists"
         );
+        assert_eq!(said("error: one\nerror: two\n"), "error: one error: two");
+    }
+
+    #[test]
+    fn a_worktree_keeps_the_spelling_the_repo_was_reached_by() {
+        // Not canonicalised: on macOS the temp dir is reached through the
+        // `/var` symlink, and git would answer `/private/var`.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = tmp.path().join("app");
+        std::fs::create_dir(&repo).expect("mkdir");
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        let first = create(&repo, "claude-00000001").expect("first");
+        assert_eq!(first, repo.join(".claude/worktrees/claude-00000001"));
+        let second = create(&first, "claude-00000002").expect("second");
+        assert_eq!(second, repo.join(".claude/worktrees/claude-00000002"));
+    }
+
+    #[test]
+    fn a_linked_worktree_outside_the_scans_folders_asks_git_for_its_repo() {
+        let (tmp, repo) = repo();
+        let elsewhere = tmp
+            .path()
+            .canonicalize()
+            .expect("canonical")
+            .join("elsewhere");
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "side",
+                &elsewhere.to_string_lossy(),
+            ],
+        );
+        let made = create(&elsewhere, "claude-00000003").expect("made");
+        assert_eq!(made, repo.join(".claude/worktrees/claude-00000003"));
     }
 
     #[test]
