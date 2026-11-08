@@ -64,6 +64,7 @@ jobs:
               - 'deny.toml'
               - 'scripts/check-crate-deps.sh'
               - 'scripts/test-check-crate-deps.sh'
+              - 'AGENTS.md'
               - '.github/workflows/ci.yml'
               - '.github/workflows/codeql.yml'
             markdown:

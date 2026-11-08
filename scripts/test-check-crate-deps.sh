@@ -43,5 +43,22 @@ expect "empty crate list fails" 1 "$tmp/emptyjq" "no crate read"
 shim "$tmp/real" "${base[@]}" jq
 expect "real workspace passes" 0 "$tmp/real"
 
+# A cargo that answers with a doctored workspace, so an edge can go unused
+# without editing a Cargo.toml.
+metadata=$(cargo metadata --no-deps --format-version 1)
+shim "$tmp/unused" bash env rustc sort sed tr jq cat
+jq '(.packages[] | select(.name == "termherd-mcp") | .dependencies) |= []' \
+  <<<"$metadata" > "$tmp/unused/metadata.json"
+printf '#!/usr/bin/env bash\ncat "%s"\n' "$tmp/unused/metadata.json" > "$tmp/unused/cargo"
+chmod +x "$tmp/unused/cargo"
+expect "an allowed edge no crate uses fails" 1 "$tmp/unused" "may depend on 'termherd-core' but does not"
+
+# The crate list in AGENTS.md must name every workspace member, and nothing
+# else, so a crate cannot be added or dropped without its line.
+sed '/^- `crates\/private-fs`/d' AGENTS.md > "$tmp/agents-missing.md"
+AGENTS_MD="$tmp/agents-missing.md" expect "a crate AGENTS.md omits fails" 1 "$tmp/real" "'termherd-private-fs' is not listed"
+awk '/^- Unbuilt: /{print "- `crates/store` — gone."}1' AGENTS.md > "$tmp/agents-extra.md"
+AGENTS_MD="$tmp/agents-extra.md" expect "a crate AGENTS.md invents fails" 1 "$tmp/real" "lists 'crates/store'"
+
 rm -rf "$tmp"
 exit $fail
