@@ -374,3 +374,22 @@ Third time on #420 (`7b19f7f`): one trailer-free follow-up commit did not
 help, because the squash collects the co-author of *every* branch commit,
 and the auto-mode classifier refuses the amend + force-push that would fix
 it. Once a commit carrying it is pushed, only the squash dialog can drop it.
+
+## A GUI subsystem loses PowerShell redirects
+
+#405 asked for `#![cfg_attr(not(debug_assertions), windows_subsystem =
+"windows")]`, the textbook cure for a console window opening beside a Rust GUI
+on Windows. It was built and run, then dropped: the console went, and
+`termherd mcp-config > .mcp.json` in PowerShell then wrote a **0-byte file**
+with no error, because PowerShell does not redirect a GUI application's
+output. `cmd` redirects, pipes and `Start-Process -RedirectStandardOutput`
+all still worked, so a check through any of them would have passed. Typed bare,
+the snippet needed an `AttachConsole` FFI module and still printed after the
+next prompt.
+
+The fix kept the console subsystem and set `consoleAllocationPolicy` to
+`detached` in the manifest (#508): Windows 11 24H2 and later allocate no
+console when nothing hands one over, and a terminal still lends its own.
+`tests/windows_manifest.rs` reads the policy back out of the built binary. The
+general trap: a change to how a binary is linked is a change to every
+subcommand's streams, and the one shell to test is the one users have.

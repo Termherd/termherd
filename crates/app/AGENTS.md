@@ -60,6 +60,14 @@ code under `crates/app/`. The incidents behind them are in
   lists under *Keeping the book current*, and the server instructions in
   `get_info` when it changes how the tools combine.
 
+## Windows
+
+- **`termherd.exe` stays on the console subsystem.** `windows_subsystem =
+  "windows"` hides the console but makes `termherd mcp-config > file` write
+  an empty file in PowerShell; the manifest's `detached` console policy
+  (`build.rs`) hides it instead.
+  [Why](../../docs/agents/lessons.md#a-gui-subsystem-loses-powershell-redirects)
+
 ## macOS FFI
 
 `src/macos.rs` is the workspace's only `unsafe` module: the Cmd+Q quit path,
