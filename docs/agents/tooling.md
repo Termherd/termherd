@@ -189,3 +189,8 @@ regenerated. The user's `just roadmap` is one way; the other is the failed
 job's own log, which prints the `diff -u` between the committed file and the
 one it compiled. Applying that hunk is the regeneration, byte for byte, and
 turned the job green on #512.
+
+**A Python script on this machine writes CRLF.** `open(p, 'w')` translates
+every `\n` to `\r\n` on Windows, so a scripted edit of an LF file rewrites
+every line, and a later `assert old in s` written with `\n` stops matching.
+Read and write with `newline=''`.
