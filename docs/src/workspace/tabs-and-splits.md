@@ -155,7 +155,8 @@ menu open.
 *Copy agent name* is listed when the action would find a name at the moment
 the menu opens: a Claude runs in front of the focused pane and has written its
 session file, whether the pane was opened as a Claude session or as a shell.
-It never appears on Windows, where no Claude is ever named. The menu belongs
+On Windows that Claude must run as `claude.exe`: one an npm install runs as
+`node.exe` is never named, so the entry never appears for it. The menu belongs
 to the pane it opened over: if that pane closes or loses focus, the menu goes
 with it.
 

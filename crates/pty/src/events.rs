@@ -30,8 +30,8 @@ pub enum PtyEvent {
     /// The job in front of the shell changed, or `None` while the shell is in
     /// front. Sent on change only, from the same foreground poll that drives a
     /// shell's status, and once at the first reading, so the runtime can tell
-    /// the shell in front from a platform that cannot say (ConPTY, which
-    /// never sends it).
+    /// the shell in front from a platform that cannot say (which never sends
+    /// it).
     ForegroundJob {
         session: SessionId,
         job: Option<ForegroundJob>,

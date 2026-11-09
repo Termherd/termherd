@@ -17,8 +17,11 @@ pub struct SessionFile {
     pub name: Option<String>,
     /// The Claude session id (`sessionId`), the one `--resume` takes.
     pub session_id: Option<String>,
-    /// When the process that wrote the file started (`procStart`), in `ps`'s
-    /// `lstart` form and UTC, e.g. `Wed Oct  7 06:48:07 2026`. A file outlives
+    /// When the process that wrote the file started (`procStart`): on macOS
+    /// and Linux in `ps`'s `lstart` form and UTC, e.g.
+    /// `Wed Oct  7 06:48:07 2026`; on Windows the creation `FILETIME` as one
+    /// integer, e.g. `134386429107394753`. Compared as written, never parsed.
+    /// A file outlives
     /// a Claude that crashed, and its pid is then free for any process to
     /// reuse: this stamp is what tells the writer from its successor.
     pub proc_start: Option<String>,

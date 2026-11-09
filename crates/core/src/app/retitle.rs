@@ -336,7 +336,7 @@ mod tests {
 
     #[test]
     fn a_pane_that_never_reports_its_foreground_still_names_through_claude() {
-        // ConPTY reports no foreground at all, so the launch stands for it.
+        // No foreground read yet, so the launch stands for it.
         let mut app = App::new();
         open_claude(&mut app, ClaudeLaunch::Fresh(None));
         assert!(app.tab_names_through_claude(0));

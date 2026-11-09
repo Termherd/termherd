@@ -432,7 +432,9 @@ here so an exception is never a surprise:
   `crates/app/src/shell.rs::update` and `crates/core/src/app.rs::dispatch` —
   two flat dispatchers (one per `Message`, one per `Event`), refactor
   candidates rather than relaxations of the global threshold.
-- **`unsafe`**: the only sanctioned block is `crates/app/src/macos.rs` (AppKit
+- **`unsafe`**: the sanctioned blocks are `crates/pty/src/status/win_process.rs`
+  (the Win32 process listing and start time a ConPTY pane's job is read from)
+  and `crates/app/src/macos.rs` (AppKit
   FFI for Cmd+Q, the Edit menu giving Ctrl+Cmd+Space its *Emoji & Symbols*
   item, the Window menu giving Cmd+M its *Minimize*, the `insertText:` relay
   that turns Character Viewer text winit drops into an input-method commit,

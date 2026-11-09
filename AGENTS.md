@@ -155,11 +155,13 @@ exists). Do not relax them locally; the incident behind each linked rule is in
   `main()`'s alone.
   [Why](docs/agents/lessons.md#no-global-mutable-state-the-environment-included)
 - **One logging stack:** `tracing`. No `println!` outside tests.
-- **`unsafe_code = "deny"`** workspace-wide. The lone sanctioned exception is
-  `crates/app/src/macos.rs` (AppKit FFI): a `#![cfg(…)]` module with a
-  module-scoped `#![allow(unsafe_code)]` and a `// SAFETY:` note on every
-  block. Any further exception needs the same, never a relaxation scattered
-  through otherwise-safe code.
+- **`unsafe_code = "deny"`** workspace-wide. The two sanctioned exceptions
+  are `crates/app/src/macos.rs` (AppKit FFI) and
+  `crates/pty/src/status/win_process.rs` (the Win32 process listing ConPTY's
+  job is read from): each a `cfg`-gated module with a module-scoped
+  `#![allow(unsafe_code)]` and a `// SAFETY:` note on every block. Any
+  further exception needs the same, never a relaxation scattered through
+  otherwise-safe code.
 - **A `cfg`-gated API is not compiled by the PR gate.** When a diff touches a
   dependency's platform-conditional surface, run
   `cargo check --target x86_64-pc-windows-msvc` both ways: the change compiles,

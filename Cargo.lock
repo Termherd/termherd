@@ -3965,6 +3965,7 @@ dependencies = [
  "termherd-core",
  "termherd-private-fs",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

@@ -1293,10 +1293,13 @@ in the tab hover card, read from a cache refreshed when the foreground job
 changes and when the pointer enters the tab. The tab menu entry shipped
 with #340.
 
-Not shipped: Windows. ConPTY reports no foreground process, so no pid leads to
-a session file and nothing is ever named there; finding the Claude pid another
-way is #357. Nor does a build launched from inside a Claude session name
-anything, since its PTYs inherit that session's `CLAUDE*` environment (#356).
+Windows shipped with #357. ConPTY reports no foreground process, so the Claude
+pid is found by walking the process tree below the pane's shell to the
+nearest `claude.exe`, and its start time is read as the `FILETIME` Claude
+stamps into `procStart`. Not shipped: a Claude that runs there under another
+image (an npm install runs it as `node.exe`). Nor does a build launched
+from inside a Claude session name anything, since its PTYs inherit that
+session's `CLAUDE*` environment (#356).
 
 <a id="f-keymap-rename-tab"></a>
 

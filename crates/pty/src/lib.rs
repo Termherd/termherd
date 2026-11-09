@@ -29,7 +29,9 @@
 //!   makes a shell emit those marks; pure data, performed by `launch`.
 //! - `status` — where a session's activity comes from: the fold over Claude's
 //!   OSC signals and the shell's prompt marks, plus the foreground-process
-//!   fallback for a shell with no integration.
+//!   fallback for a shell with no integration, and the job in front of the
+//!   shell (under ConPTY, read off the process tree by `status::win_process`,
+//!   the crate's one `unsafe` module).
 //! - `kill` — the OS-cfg kill reconciliation, quarantined in one file.
 //! - `session` — the per-session actor: reader / waiter / terminal threads.
 //! - `manager` — [`PtyManager`], the [`PtyHost`](termherd_core::ports::PtyHost)

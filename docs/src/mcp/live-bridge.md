@@ -50,7 +50,8 @@ always present:
 
 - when no Claude is in front (a shell prompt, any other program);
 - when the file in place belongs to an earlier process with the same pid;
-- on Windows, which reports no foreground process to take the `pid` from;
+- on Windows, for a Claude that does not run as `claude.exe` (an npm install
+  runs it as `node.exe`), the image the process tree is searched for;
 - while Claude Code has written no session file, or one without `procStart`
   (an older CLI, a session still starting).
 
