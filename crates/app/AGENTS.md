@@ -68,6 +68,14 @@ code under `crates/app/`. The incidents behind them are in
   (`build.rs`) hides it instead.
   [Why](../../docs/agents/lessons.md#a-gui-subsystem-loses-powershell-redirects)
 
+## Paths
+
+- **A canonical path that leaves the process** (to git, a shell, a file
+  another tool reads) goes through `shell::links::resolved`, which drops
+  Windows's verbatim `\\?\` prefix; a bare `canonicalize` there breaks on
+  Windows only, after merge.
+  [Why](../../docs/agents/lessons.md#code-that-runs-differently-per-host)
+
 ## macOS FFI
 
 `src/macos.rs` is the workspace's only `unsafe` module: the Cmd+Q quit path,
