@@ -1,6 +1,8 @@
 //! Build script: embed the Windows application icon into `termherd.exe`, so the
 //! executable and the shortcuts the installer creates show the app icon in
-//! Explorer, the Start menu and the taskbar. A no-op on every non-Windows host.
+//! Explorer, the Start menu and the taskbar, and the manifest that keeps a
+//! console window from opening beside it ([`MANIFEST`]). A no-op on every
+//! non-Windows host.
 //!
 //! The `#[cfg(windows)]` here is the *host* platform (build scripts are
 //! compiled for the host), matching the host-evaluated
@@ -11,7 +13,7 @@
 fn main() {
     emit_build_date();
     #[cfg(windows)]
-    embed_windows_icon();
+    embed_windows_resources();
 }
 
 /// Stamp the wall-clock build time (UTC) into `TERMHERD_BUILD_DATE` so `main`
@@ -46,14 +48,33 @@ fn format_utc(secs: u64) -> String {
     format!("{year:04}-{month:02}-{day:02} {hour:02}:{min:02}:{sec:02} UTC")
 }
 
+/// The application manifest. `consoleAllocationPolicy` `detached` keeps the
+/// console subsystem — a terminal still lends the process its console, so
+/// `termherd mcp-config > file` works in every shell — but stops Windows from
+/// opening a console window when nothing hands one over (Explorer, the Start
+/// menu). Windows 11 24H2 and later read it; older versions ignore it and open
+/// the console as before.
 #[cfg(windows)]
-fn embed_windows_icon() {
+const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <consoleAllocationPolicy xmlns="http://schemas.microsoft.com/SMI/2024/WindowsSettings">detached</consoleAllocationPolicy>
+    </windowsSettings>
+  </application>
+</assembly>
+"#;
+
+#[cfg(windows)]
+fn embed_windows_resources() {
     println!("cargo:rerun-if-changed=icons/icon.ico");
     let mut res = winresource::WindowsResource::new();
     res.set_icon("icons/icon.ico");
+    res.set_manifest(MANIFEST);
     if let Err(error) = res.compile() {
-        // The icon is a nicety, not a correctness requirement: a missing RC
-        // toolchain must warn, never fail the build.
-        println!("cargo:warning=could not embed Windows icon: {error}");
+        // A missing RC toolchain must warn, never fail the build. The manifest
+        // is not a nicety like the icon, so `tests/windows_manifest.rs` fails
+        // a build that shipped without it.
+        println!("cargo:warning=could not embed Windows icon and manifest: {error}");
     }
 }
