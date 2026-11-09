@@ -50,8 +50,8 @@ renumbered. Cite issues in commit messages, PR bodies, and roadmap prose
 instead.
 
 **`ROADMAP.md` is generated — never edit it.** Edit the feature file under
-`.roadmap/features/`, run `just roadmap`, and commit both. CI rebuilds and
-diffs.
+`.roadmap/features/`; CI checks it. The release regenerates `ROADMAP.md`, so
+between two releases it can lag behind the feature files.
 
 **A user-visible change updates this book in the same PR.** If what a user
 sees, types or configures moves, the page describing it moves with it — not in

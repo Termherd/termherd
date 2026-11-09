@@ -54,8 +54,9 @@ board-check-selftest:
     {{python}} scripts/board_check.py --selftest
 
 # Recompile ROADMAP.md from `.roadmap/`. ROADMAP.md is an artifact — edit the
-# feature files, never it. Run this and commit both, or the `roadmap` CI job
-# fails on the diff. CI pins the version, so match it locally:
+# feature files, never it. The release branch runs this and commits the
+# result; CI's `roadmap` job diffs it there only. CI pins the version, so
+# match it locally:
 #   cargo install roadmark --version 0.8.1 --locked
 [doc("Recompile ROADMAP.md from .roadmap/, then validate the source")]
 roadmap:

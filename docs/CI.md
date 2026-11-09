@@ -21,7 +21,8 @@ every change, not by reviewer memory. They cluster on three axes:
 
 Four more gates keep the meta-layer honest: `actionlint` (the workflows
 themselves), `markdownlint` (the prose), `roadmap` (the generated
-`ROADMAP.md` against the `.roadmap/` sources it is compiled from), and
+`.roadmap/` sources, and on a release the generated `ROADMAP.md` against
+them), and
 `mdbook` (the user manual builds, and its chapter map resolves).
 
 ## Status (as of 2026-11-01)
@@ -68,7 +69,7 @@ themselves), `markdownlint` (the prose), `roadmap` (the generated
 | Cargo & crate arch | `ci` · `cargo-checks` (`cargo`) | `cargo-deny` (licences, RUSTSEC, sources) + `cargo-machete` (unused deps) + hexagonal crate dep rule & toolchain lockstep | PR, push→main | ubuntu | yes |
 | Workflow lint | `ci` · `actionlint` | Valid, shellcheck-clean workflow YAML | PR, push→main | ubuntu | yes |
 | Docs lint | `ci` · `markdownlint` | 80-col Markdown prose | PR, push→main | ubuntu | yes |
-| Roadmap | `ci` · `roadmap` | `.roadmap/` schema and cross-references; `ROADMAP.md` still matches its source | PR, push→main | ubuntu | yes |
+| Roadmap | `ci` · `roadmap` | `.roadmap/` schema and cross-references; on a `release/*` branch or a tag, `ROADMAP.md` still matches its source | PR, push→main, tag | ubuntu | yes |
 | Book | `ci` · `mdbook` | The manual builds, and every `SUMMARY.md` link resolves to a file on disk | PR, push→main | ubuntu | yes |
 | Merge gate | `ci` · `ci-success` | Aggregates every PR job into one required check | PR, push→main | ubuntu | yes (the one required check) |
 | SAST | `codeql` · `Analyze (Rust)` | Taint / cross-function security & quality | push→main (Rust paths), weekly | ubuntu | baseline |
@@ -156,6 +157,12 @@ Pushing a tag matching `**[0-9]+.[0-9]+.[0-9]+*` (e.g. `v0.1.0`,
 
 A version with a `-prerelease.N` suffix is published as a GitHub
 *prerelease*.
+
+The release branch (`release/v…`, the PR that bumps the version and dates the
+changelog) also runs `just roadmap` and commits `ROADMAP.md`. Feature PRs leave
+the artifact alone, and the `roadmap` job diffs it only on a `release/*`
+branch or a tag, so a stale `ROADMAP.md` fails the release PR rather than
+every PR that touched a feature file.
 
 `ci` also fires on the tag (its `push.tags` glob mirrors `release.yml`), so
 `cross-os` exercises macOS + Windows as the release is cut. It is a **signal**,
@@ -377,7 +384,7 @@ The toolchain is pinned to **Rust 1.95.0 / edition 2024**
 | `portable` | no local mirror — it is a *Windows* run. Nearest approximation: `cargo check -p termherd-pty --target x86_64-pc-windows-msvc`, which catches compile breakage but never behaviour |
 | `cargo-checks` (`deny` · `machete` · `deps`) | `cargo deny check && cargo machete && just check-deps` |
 | `markdownlint` | `markdownlint-cli2` (uses `.markdownlint-cli2.jsonc`) |
-| `roadmap` | `just roadmap` (needs the pinned `roadmark`; the version is in the job) |
+| `roadmap` | `just roadmap-check` (needs the pinned `roadmark`; the version is in the job); a release branch runs `just roadmap` and commits `ROADMAP.md` |
 | `mdbook` | `just docs` (needs `mdbook`; `just docs-serve` previews with live reload) |
 
 `actionlint` and `codeql` are not part of the routine local loop — they run

@@ -223,12 +223,14 @@ One issue runs through these steps:
           ▼
    ┌──────────────┐
    │ GATES + PR   │   Local gates, the book and CHANGELOG.md in the same
-   │              │   PR, then wait for `ci-success` to finish.
+   │              │   PR, then wait for `ci-success` to finish. Lessons
+   │              │   and the feature's `status` go on the branch now,
+   │              │   before the merge: no follow-up PR.
    └──────┬───────┘
           ▼
    ┌──────────────┐
-   │ CLOSE        │   After the merge: the feature's `status`, the board,
-   │              │   and `/wrap` when the work reached a milestone.
+   │ CLOSE        │   After the merge: the board, and the worktree
+   │              │   removed. Nothing left to commit.
    └──────────────┘
 ```
 
