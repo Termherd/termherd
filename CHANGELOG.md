@@ -12,8 +12,9 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Launching TermHerd from Explorer or the Start menu on Windows 11 24H2 or
   later no longer opens a console window next to it; older Windows versions
   still do. A release build on Windows now logs to
-  `%USERPROFILE%\.termherd\termherd.log`, set aside as `termherd.log.old` once
-  it reaches 5 MB. `termherd mcp-config` is unchanged, in every shell (#405).
+  `%USERPROFILE%\.termherd\termherd.log`, set aside as `termherd.log.old` at
+  the first launch after it reaches 5 MB. `termherd mcp-config` is unchanged,
+  in every shell (#405).
 
 ## [0.1.0-prerelease.6] - 2026-11-08
 

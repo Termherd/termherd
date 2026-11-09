@@ -2029,9 +2029,9 @@ bridge alone; a fifth, the app's own log, was filed since:
   its own loop only (#435). A wait for the next transition would make the
   rule unnecessary. Related open defect: #436.
 - **The app's own log** (#483, filed). A warning exists only on the stderr of
-  whoever launched termherd, which for a release build is no terminal at all,
-  so "this warning appears, or no longer does" cannot be checked over the
-  bridge.
+  whoever launched termherd, which for a release build is no terminal at all
+  (on Windows, a file in the data dir since #508), so "this warning appears,
+  or no longer does" cannot be checked over the bridge.
 
 <a id="f-favorites"></a>
 

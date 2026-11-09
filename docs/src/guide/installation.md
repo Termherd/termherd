@@ -122,8 +122,8 @@ Started from Explorer or the Start menu, TermHerd opens no console window
 beside its own on Windows 11 24H2 or later. Older Windows versions still open
 one; closing it closes TermHerd.
 
-`RUST_LOG` sets what is logged wherever it goes, for example
-`RUST_LOG=termherd=debug`.
+The `RUST_LOG` environment variable sets what is logged wherever it goes, for
+example `termherd=debug`.
 
 TermHerd is **single-instance**: an advisory lock file under the system temp
 directory. A second launch carrying a `termherd://` link hands it to the

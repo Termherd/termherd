@@ -146,7 +146,9 @@ teardown as well, for the clean exit; never let it be the only one.
 fatal the day the binary grows a subcommand whose output is meant to be piped:
 `termherd mcp-config > .mcp.json` would capture a warn line in the middle of
 the JSON. The app installs a stderr writer; `2>&1` recovers the old behaviour
-when reading logs.
+when reading logs. A release build on Windows writes to
+`~/.termherd/termherd.log` instead (#405), so there `2>&1` recovers nothing:
+read the file.
 
 ## A guard is unreachable or tested
 

@@ -79,8 +79,9 @@ claude --mcp-config <(termherd mcp-config)
 
 The subcommand prints to stdout and exits `0`; it answers *about* the running
 instance without disturbing it — no window opens and the single-instance lock is
-never touched. Every diagnostic TermHerd emits goes to stderr, so the redirect
-above captures the config and nothing else.
+never touched. Every diagnostic TermHerd emits goes to stderr (or, for a
+release build on Windows, to its [log file](../guide/installation.md#where-the-log-goes)),
+so the redirect above captures the config and nothing else.
 
 ### When there is nothing to print
 
