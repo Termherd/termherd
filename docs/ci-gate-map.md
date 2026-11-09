@@ -65,7 +65,7 @@ check.
 | `cargo-checks` | `cargo-deny`, `cargo-machete`, hexagonal crate dep rule + toolchain lockstep | cargo | ubuntu | required |
 | `actionlint` | valid, shellcheck-clean workflow YAML | workflows | ubuntu | required |
 | `markdownlint` | 80-col Markdown prose | markdown | ubuntu | required |
-| `roadmap` | `.roadmap/` schema; `ROADMAP.md` still matches its source | roadmap | ubuntu | required |
+| `roadmap` | `.roadmap/` schema; on a release, `ROADMAP.md` still matches its source | roadmap, `release/*`, tag | ubuntu | required |
 | `mdbook` | the book builds; every `SUMMARY.md` link resolves | book | ubuntu | required |
 | `ci-success` | aggregates the nine gates | always | ubuntu | the check |
 | `cross-os` | clippy + tests on mac and win | non-PR / tag | mac·win | signal |
@@ -102,7 +102,7 @@ cargo machete
 just check-deps                  # hexagonal dependency rule
 just check-arch                  # module boundaries + OS-cfg containment
 markdownlint-cli2                # uses .markdownlint-cli2.jsonc
-just roadmap                     # recompile ROADMAP.md, then validate
+just roadmap-check               # validate .roadmap/ (just roadmap: release only)
 just docs                        # the book builds (mdbook)
 ```
 

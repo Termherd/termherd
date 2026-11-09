@@ -260,8 +260,14 @@ exists). Do not relax them locally; the incident behind each linked rule is in
 - Status of every feature is tracked in `.roadmap/features/*.md` (MoSCoW from
   PRD §5), and compiled into `ROADMAP.md`. Check the `status =` line — or the
   glyph in the generated catalog — before assuming something is built.
-- **`ROADMAP.md` is generated. Never edit it.** Edit the feature file, then
-  run `just roadmap` and commit both. CI rebuilds and diffs.
+- **`ROADMAP.md` is generated. Never edit it.** A PR edits the feature file
+  only; CI checks the source (`roadmark validate --accept-drift`). The
+  release branch runs `just roadmap` and commits the result, and CI diffs it
+  there, so `ROADMAP.md` on `main` lags until the next release.
+- **Lessons and bookkeeping ride with the PR, before the merge.** A rule
+  learned, a lesson in `docs/agents/`, a feature's `status`: commit them on
+  the branch once CI is green, never as a follow-up PR. What only the merge
+  reveals waits for the next PR that touches the same file.
 
 ### Keeping the book current
 

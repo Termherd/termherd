@@ -349,7 +349,7 @@
           <tr class="req"><td><span class="jn">cargo-checks</span></td><td class="small"><code>cargo-deny</code> · <code>cargo-machete</code> · hexagonal crate dep rule · toolchain lockstep</td><td><span class="tag filter">cargo</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr class="req"><td><span class="jn">actionlint</span></td><td class="small">valid, shellcheck-clean workflow YAML</td><td><span class="tag filter">workflows</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr class="req"><td><span class="jn">markdownlint</span></td><td class="small">80-col Markdown prose</td><td><span class="tag filter">markdown</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
-          <tr class="req"><td><span class="jn">roadmap</span></td><td class="small"><code>.roadmap/</code> schema; <code>ROADMAP.md</code> still matches its source</td><td><span class="tag filter">roadmap</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
+          <tr class="req"><td><span class="jn">roadmap</span></td><td class="small"><code>.roadmap/</code> schema; on a release, <code>ROADMAP.md</code> still matches its source</td><td><span class="tag filter">roadmap</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr class="req"><td><span class="jn">mdbook</span></td><td class="small">the book builds; every <code>SUMMARY.md</code> link resolves</td><td><span class="tag filter">book</span></td><td class="os">ubuntu</td><td><span class="tag pass">required</span></td></tr>
           <tr><td><span class="jn">ci-success</span></td><td class="small">aggregates the nine gates into one check</td><td class="small">always</td><td class="os">ubuntu</td><td><span class="tag pass">the check</span></td></tr>
           <tr><td><span class="jn">cross-os</span></td><td class="small">clippy + tests on mac &amp; win</td><td class="small">non-PR · rust/tag</td><td class="os">mac · win</td><td><span class="tag signal">signal</span></td></tr>
@@ -411,7 +411,7 @@ cargo machete
 just check-deps                  <span class="c"># hexagonal dependency rule</span>
 just check-arch                  <span class="c"># module boundaries · OS-cfg containment</span>
 markdownlint-cli2                <span class="c"># uses .markdownlint-cli2.jsonc</span>
-just roadmap                     <span class="c"># recompile ROADMAP.md, then validate</span>
+just roadmap-check               <span class="c"># validate .roadmap/ (just roadmap: release only)</span>
 just docs                        <span class="c"># the book builds (mdbook)</span></pre>
     </div>
   </section>

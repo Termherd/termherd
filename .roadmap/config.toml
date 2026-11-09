@@ -1,6 +1,6 @@
-# The roadmap's source of truth. `roadmark generate -o ROADMAP.md` compiles it;
-# `roadmark validate` fails CI when the two disagree. Edit files here, never
-# ROADMAP.md.
+# The roadmap's source of truth. `roadmark generate -o ROADMAP.md` compiles it
+# at each release; `roadmark validate` fails CI on a broken source, and on a
+# release branch when the two disagree. Edit files here, never ROADMAP.md.
 #
 # Priority is deliberately absent from this schema. `horizon`, `class` and
 # `effort` live on Project #1 and nowhere else — a second copy here would be a

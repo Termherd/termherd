@@ -98,7 +98,7 @@ the board read as *unreachable*, which looks like a network fault.
 
 **A scripted edit can succeed and still eat the file.** The warning everyone
 repeats is the substitution that matches nothing and looks like a success; the
-one that cost an amend here was the opposite. Resolving a `.wrap.md` conflict
+one that cost an amend here was the opposite. Resolving a Markdown conflict
 with a Python slice — `s[:start] + resolved + after` — rebuilt the region
 correctly and **truncated everything past it**: one note cut mid-sentence, the
 next gone entirely. `markdownlint` reported exactly one problem — MD047, a
@@ -183,12 +183,11 @@ not installed, and `npx` is not on the path, so the book, the Markdown lint and
 the `ROADMAP.md` regeneration are CI's to verify. `just check-deps` is the
 dangerous one: without `jq` it prints `jq: command not found` twice, then
 `OK: all 0 crates respect the hexagonal dependency rule` and exits 0. Read the
-crate count, not the OK (#408). A pass here that edits `.roadmap/` leaves
-CI's `roadmap` job failing on the stale artifact until `ROADMAP.md` is
-regenerated. The user's `just roadmap` is one way; the other is the failed
-job's own log, which prints the `diff -u` between the committed file and the
-one it compiled. Applying that hunk is the regeneration, byte for byte, and
-turned the job green on #512.
+crate count, not the OK (#408). Editing `.roadmap/` here is fine: a feature
+PR no longer regenerates `ROADMAP.md`, only the release branch does. When a
+release branch's `roadmap` job fails on the stale artifact, its log prints the
+`diff -u` between the committed file and the one it compiled; applying that
+hunk is the regeneration, byte for byte (it turned the job green on #512).
 
 **A Python script on this machine writes CRLF.** `open(p, 'w')` translates
 every `\n` to `\r\n` on Windows, so a scripted edit of an LF file rewrites

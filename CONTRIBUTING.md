@@ -28,7 +28,8 @@ Where issue numbers **do** belong:
   freely. This is the durable link.
 - **`.roadmap/features/*.md` and `docs/PRD.md` prose** — feature epics
   reference their tracking issues so the roadmap and the board stay in sync.
-  Edit the feature file, not the generated `ROADMAP.md`, then `just roadmap`.
+  Edit the feature file, not the generated `ROADMAP.md`, which the release
+  regenerates.
 
 Where they **don't**:
 

@@ -199,7 +199,7 @@ permission** — an empty string never reaches the TCC check — so a poll built
 on it reported the permission granted while every real keystroke was still
 refused, and the pass was believed for a full turn. Same shape as a linter
 that exits 0 having linted nothing, and as `mutants.out/outcomes.json` read
-mid-run (see `.wrap.md`): success and vacuity are indistinguishable from the
+mid-run: success and vacuity are indistinguishable from the
 outside. Probe with the operation you actually intend to perform, and if that
 is destructive, assert on something the operation *must* have changed.
 
