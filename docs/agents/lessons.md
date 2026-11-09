@@ -377,7 +377,7 @@ it. Once a commit carrying it is pushed, only the squash dialog can drop it.
 
 ## A GUI subsystem loses PowerShell redirects
 
-#405 asked for `#![cfg_attr(not(debug_assertions), windows_subsystem =
+Issue #405 asked for `#![cfg_attr(not(debug_assertions), windows_subsystem =
 "windows")]`, the textbook cure for a console window opening beside a Rust GUI
 on Windows. It was built and run, then dropped: the console went, and
 `termherd mcp-config > .mcp.json` in PowerShell then wrote a **0-byte file**
