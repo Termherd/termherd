@@ -5134,8 +5134,8 @@ mod key_routing {
 
     #[test]
     fn a_shell_on_the_alternate_screen_confirms_its_close_until_it_leaves() {
-        // No foreground reading ever arrives, as on ConPTY: the alternate
-        // screen is then what says a program (an editor, a pager) is in front.
+        // No foreground reading ever arrives, as where the adapter cannot
+        // make one: the alternate screen is then what says a program (an editor, a pager) is in front.
         let (mut shell, _pty) = shell_with_terminal();
         shell.close_confirm.tab = ConfirmClose::ConfirmWhenActive;
         let session = shell.core.workspace.focused_session().expect("focused");

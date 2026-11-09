@@ -16,6 +16,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the first launch after it reaches 5 MB. `termherd mcp-config` is unchanged,
   in every shell (#405).
 
+### Fixed (Windows panes know their Claude)
+
+- On Windows, TermHerd now finds the Claude running in a pane, by walking the
+  process tree below the pane's shell. `copy-agent-name` copies its agent
+  name, the tab hover card shows its `Agent:` line, and `list_sessions` /
+  `snapshot` report its `pid`, peer name and session id instead of `null`.
+  Closing a shell tab there also asks first while a Claude typed into it by
+  hand still runs (#357).
+
 ## [0.1.0-prerelease.6] - 2026-11-08
 
 ### Fixed (a long Claude command submits on the first Enter)

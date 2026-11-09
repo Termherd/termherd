@@ -15,6 +15,15 @@ termherd-claude = { path = "../claude" }
 termherd-private-fs = { path = "../private-fs" }
 tracing = "0.1"
 
+# The ConPTY job and its start time are read off the process tree
+# (`status::win_process`), which only Win32 exposes.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 proptest = "1"
 tempfile = "3"

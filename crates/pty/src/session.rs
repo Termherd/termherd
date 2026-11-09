@@ -29,9 +29,7 @@ use crate::grid::{Palette, apply_pointer, apply_select, indexed_rgb, snapshot};
 use crate::input::{mouse_bytes, wheel_bytes};
 use crate::mode::{self, mouse_reporting};
 use crate::prompt::decode_marks;
-use crate::status::{
-    Activity, foreground_job, foreground_leader, foreground_status, process_start,
-};
+use crate::status::{Activity, foreground_leader, foreground_status, job_in_front, process_start};
 use crate::workdir::decode_cwd;
 
 /// Read buffer for the per-session reader thread.
@@ -128,7 +126,18 @@ fn current(palette: &SharedPalette) -> Palette {
 /// How often the watcher thread asks the PTY which process group owns it. Short
 /// enough that `wait_for_status` on an unintegrated shell settles promptly,
 /// long enough to be free: one `tcgetpgrp` per session per tick.
-const FOREGROUND_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+///
+/// Slower on Windows, where a tick lists every process on the machine (a few
+/// milliseconds each) and drives no status, only the job in front, which
+/// changes when a program starts or exits.
+///
+/// shortcut: one listing per pane per tick; a listing shared by every pane
+/// would cut it to one per tick, if many panes ever make it show.
+const FOREGROUND_POLL: std::time::Duration = if cfg!(windows) {
+    std::time::Duration::from_secs(1)
+} else {
+    std::time::Duration::from_millis(250)
+};
 
 /// Answers terminal queries the parser raises — chiefly the cursor-position
 /// report (`ESC[6n`). **ConPTY blocks startup until it gets that reply**, so
@@ -191,10 +200,12 @@ pub(crate) enum TermCmd {
     /// One reading of the PTY's foreground process group. `status` is what it
     /// implies about the session's activity — the stand-in source for a shell
     /// whose integration did not take (see [`crate::status`]) — and `job` the
-    /// job in front of the shell. Both `None` when the platform cannot say.
+    /// job in front of the shell, `Some(None)` while the shell itself is.
+    /// Each is `None` when the platform cannot say, and apart: ConPTY reads
+    /// the job off the process tree but has no status to give.
     Foreground {
         status: Option<SessionStatus>,
-        job: Option<ForegroundJob>,
+        job: Option<Option<ForegroundJob>>,
     },
     /// The shared palette changed: emit a fresh screen in the new colours.
     Repaint,
@@ -370,7 +381,9 @@ fn report_status(
 
 /// The foreground-watcher thread: reports which process group owns the PTY, so
 /// a shell whose integration did not take is not left mute (see
-/// [`crate::status::Activity`]). It stops as soon as the terminal thread is
+/// [`crate::status::Activity`]), and which job runs in front of the shell —
+/// under ConPTY, read off the process tree below it
+/// ([`crate::status::job_in_front`]). It stops as soon as the terminal thread is
 /// gone — the send fails — so it never outlives its session.
 ///
 /// A thread rather than a timer on the runtime: the read is a blocking `ioctl`
@@ -386,12 +399,6 @@ pub(crate) fn spawn_watcher(
     std::thread::Builder::new()
         .name(format!("pty-fg-{}", session.0.get()))
         .spawn(move || {
-            // Where the platform has no foreground process group there is
-            // nothing to watch; ticking forever to report `None` would cost a
-            // thread per session for no answer.
-            if !cfg!(unix) {
-                return;
-            }
             let mut job: Option<ForegroundJob> = None;
             loop {
                 std::thread::sleep(FOREGROUND_POLL);
@@ -401,10 +408,15 @@ pub(crate) fn spawn_watcher(
                     // the stand-in is optional, so end quietly.
                     Err(_) => break,
                 };
-                job = next_job(job, foreground_job(leader, shell), process_start);
+                let read = job_in_front(leader, shell);
+                // A reading that failed changes nothing: the job and its
+                // stamp stand until one succeeds.
+                if let Some(pid) = read {
+                    job = next_job(job, pid, process_start);
+                }
                 let reading = TermCmd::Foreground {
                     status: foreground_status(leader, shell),
-                    job: job.clone(),
+                    job: read.map(|_| job.clone()),
                 };
                 if ctrl.send(reading).is_err() {
                     break;
@@ -423,9 +435,10 @@ pub(crate) fn spawn_watcher(
         })
 }
 
-/// The job now in front, given the one before it. `ps` runs once per new job
-/// rather than on every poll, and again while a stamp is missing, since a
-/// lookup can lose the race with a process that is only just starting.
+/// The job now in front, given the one before it. Its start is looked up
+/// (`process_start`) once per new job rather than on every poll, and again
+/// while a stamp is missing, since a lookup can lose the race with a process
+/// that is only just starting.
 fn next_job(
     before: Option<ForegroundJob>,
     pid: Option<u32>,
@@ -617,8 +630,7 @@ pub(crate) fn spawn_term(
                                 pacer.publish_held(Instant::now(), || term_sink(screen(&term)));
                             });
                         }
-                        let read = status.map(|_| now);
-                        if let Some(job) = news(&mut in_front, read) {
+                        if let Some(job) = news(&mut in_front, now) {
                             term_sink(PtyEvent::ForegroundJob { session, job });
                         }
                         // A poll changes no pixels; falling through to the
@@ -1114,8 +1126,32 @@ mod tests {
     }
 
     fn reading(status: Option<SessionStatus>, pid: Option<u32>) -> (TermCmd, Then) {
-        let job = pid.map(|pid| ForegroundJob { pid, started: None });
+        let job = status.map(|_| pid.map(|pid| ForegroundJob { pid, started: None }));
         (TermCmd::Foreground { status, job }, Then::Go)
+    }
+
+    /// A reading with no status to give but a job read all the same, as
+    /// ConPTY makes them.
+    fn status_less_reading(pid: Option<u32>) -> (TermCmd, Then) {
+        let job = Some(pid.map(|pid| ForegroundJob { pid, started: None }));
+        let status = None;
+        (TermCmd::Foreground { status, job }, Then::Go)
+    }
+
+    #[test]
+    fn a_job_read_without_a_status_is_still_reported_in_front() {
+        let seen = events_seen_paced(
+            vec![
+                status_less_reading(None),
+                status_less_reading(Some(4399)),
+                status_less_reading(None),
+            ],
+            SCREEN_INTERVAL,
+        );
+        assert_eq!(
+            reports(seen),
+            [None, Some(4399), None].map(Seen::InFront).to_vec()
+        );
     }
 
     #[test]
