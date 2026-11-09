@@ -135,8 +135,8 @@ Off macOS, `scroll-top` and `scroll-bottom` take Windows Terminal's
 the name `/list-agents` shows and another Claude session addresses it by, such
 as `termherd-b0`. It reads Claude's session file at the moment you press it,
 and does nothing when no Claude runs there or it has not written one yet.
-Windows reports no foreground process to a terminal, so there it never finds
-one. Bind it yourself; it has no default.
+On Windows it finds a Claude that runs as `claude.exe`, and not one an npm
+install runs under `node.exe`. Bind it yourself; it has no default.
 
 `send-to-desktop` asks to type `/desktop` into the Claude in the focused pane,
 which hands the session to the Claude desktop app. A prompt shows the exact line
