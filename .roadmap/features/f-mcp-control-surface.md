@@ -63,15 +63,16 @@ shippable:
   text, and IME pre-edit / commit, which `press_keys` cannot build. Extends
   [F-mcp-keys](#f-mcp-keys).
 - [ ] The app's own log over the bridge (#483) — read termherd's `tracing`
-  output, so "this warning appears" becomes checkable. Part of
+  output, so "this warning appears" becomes checkable (the discover WARN of
+  #510 rides with it). Part of
   [F-mcp-self-diagnosis](#f-mcp-self-diagnosis).
-- [ ] Window focus loss and gain (#484) — feed the blur and focus events
-  without stealing the user's focus with OS tooling.
 - [ ] The docs editor (#485) — open, edit, save and read back a doc, none of
   which the bridge reaches today.
-- [ ] Double- and triple-click in a session (#492) — a `click_count` on
+- [x] Double- and triple-click in a session (#492) — a `click_count` on
   `mouse_in_session`, so a word or line selection can be reproduced. Extends
   [F-mcp-pointer-terminal](#f-mcp-pointer-terminal).
-- [ ] The open overlay in the snapshot (#493) — name the menu or confirmation
-  holding the keyboard, so a dialog is asserted without a screenshot. Extends
+- [ ] The open overlay in the snapshot, and window focus (#493, which absorbed
+  #484) — name the menu or confirmation holding the keyboard, so a dialog is
+  asserted without a screenshot, and feed the blur and focus events without
+  stealing the user's focus with OS tooling. Extends
   [F-mcp-snapshot](#f-mcp-snapshot).

@@ -22,7 +22,7 @@ pub mod workspace;
 
 pub use app::layout::{Layout, PaneLaunch, PaneLayout, TabLayout};
 pub use app::{
-    App, ClaudeLaunch, ColorKeeper, CommandRefusal, DEFAULT_FONT_SIZE, Effect, Event,
+    App, ClaudeLaunch, ClickCount, ColorKeeper, CommandRefusal, DEFAULT_FONT_SIZE, Effect, Event,
     ForegroundJob, HoverTarget, Launch, LaunchSpec, LiveSession, McpConfig, MouseReporting,
     PathPurpose, PathRequest, PathRoots, PendingPaste, Placement, PointerButton, PointerEvent,
     PointerKind, PointerRoute, ProbeKind, ResolvedPath, ScrollTarget, SelectOp, SelectSide,
@@ -31,7 +31,8 @@ pub use app::{
 };
 pub use browser::{ProjectGroup, SessionRecord};
 pub use claude_command::{
-    ClaudeColor, ClaudeCommand, CommandArgument, CommandError, PromptInput, read_prompt,
+    ClaudeColor, ClaudeCommand, CommandArgument, CommandError, CommandKind, PromptInput,
+    read_prompt,
 };
 pub use keymap::{
     Action, ActionBinding, ChordError, KeyChord, Keymap, Platform, action_catalog, default_bindings,

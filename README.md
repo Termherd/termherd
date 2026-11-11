@@ -212,10 +212,11 @@ one types what the layout composes, such as `|` with `⌥⇧L` on a French layou
 
 Dragging with the mouse selects, and the wheel scrolls back through history.
 The two classic terminal clipboard gestures are off until you ask for them:
-`terminal.copy_on_select` makes a drag release (or a double-click) copy
-outright, and `terminal.paste_on_right_click` makes a right-click paste into the
-pane under the pointer. Left off, the copy chord copies the terminal's current
-selection, even one scrolled out of view. A full-screen program that reads the
+`terminal.copy_on_select` makes a drag release (or a double- or triple-click)
+copy outright, and `terminal.paste_on_right_click` makes a right-click paste
+into the pane under the pointer. Left off, the copy chord copies the terminal's
+current selection, even one scrolled out of view. A full-screen program that
+reads the
 mouse — Claude Code's `/diff` and `/resume`, vim, lazygit, less — owns it while
 it runs: clicks, drags and the wheel go to the program, nothing is selected or
 pasted locally, and <kbd>Shift</kbd>+drag takes the mouse back for a selection.
@@ -266,9 +267,9 @@ nothing to configure. It exposes the running workspace:
 | `read_terminal` | one pane's visible text |
 | `screenshot` | the window as a PNG — for what only pixels show |
 | `press_keys` · `run_action` | drive termherd's own interface — chords through the live keymap, or actions by name |
-| `mouse_in_session` | a mouse event at a cell of a terminal — forwarded to a program reading the mouse, else the terminal's own selection |
+| `mouse_in_session` | a mouse event at a cell of a terminal, single, double or triple — forwarded to a program reading the mouse, else the terminal's own selection |
 | `add_repo` · `forget_repo` | put a repository in the sidebar before it has any session, and drop that addition |
-| `claude_command` | ask to type `/rename`, `/color` or `/desktop` into an idle Claude session — behind a confirmation the caller or the user answers |
+| `claude_command` | ask to type `/rename`, `/color` (idle or busy) or `/desktop` (idle) into a Claude session — behind a confirmation the caller or the user answers |
 | `prompt_in_session` | type, wait and read in one round trip — prompting another Claude session is opt-in |
 | `list_options` · `set_option` | read and change `settings.json` — the same catalogue as the stdio server; a running TermHerd applies a change at once |
 

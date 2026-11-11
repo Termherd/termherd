@@ -50,6 +50,42 @@ pub struct PointerEvent {
     pub button: PointerButton,
 }
 
+/// How many clicks a gesture landed in quick succession — what a terminal
+/// reads as a word (two) or a line (three) when nothing reads the mouse.
+/// Bounded at three: a fourth click selects nothing new — by hand it cycles
+/// back to a word (iced classifies it as a double), and a caller asks for the
+/// count it means.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClickCount {
+    #[default]
+    Single,
+    Double,
+    Triple,
+}
+
+impl ClickCount {
+    /// The count a caller spells as a number, or `None` outside `1..=3`.
+    #[must_use]
+    pub fn from_count(count: u8) -> Option<Self> {
+        match count {
+            1 => Some(Self::Single),
+            2 => Some(Self::Double),
+            3 => Some(Self::Triple),
+            _ => None,
+        }
+    }
+
+    /// The number of clicks, as a caller spells it.
+    #[must_use]
+    pub fn count(self) -> u8 {
+        match self {
+            Self::Single => 1,
+            Self::Double => 2,
+            Self::Triple => 3,
+        }
+    }
+}
+
 /// The mouse reporting a child has switched on — which events it asked the
 /// terminal to send it, in the xterm ladder of DECSET 1000 / 1002 / 1003.
 /// Each rung includes the ones below it.
@@ -189,6 +225,17 @@ mod tests {
         PointerKind::Drag,
         PointerKind::Move,
     ];
+
+    #[test]
+    fn a_click_count_is_one_to_three_and_round_trips() {
+        for count in 1..=3 {
+            let clicks = ClickCount::from_count(count).expect("in range");
+            assert_eq!(clicks.count(), count);
+        }
+        assert_eq!(ClickCount::from_count(0), None);
+        assert_eq!(ClickCount::from_count(4), None);
+        assert_eq!(ClickCount::default(), ClickCount::Single);
+    }
 
     #[test]
     fn a_left_press_starts_a_selection_at_the_cell() {

@@ -5,7 +5,7 @@
 //! the keymap, the MCP tool, the tab colour picker, and the rename to come.
 //! Nothing is typed until the prompt is confirmed, and the confirmation asks
 //! `core` again, against the screen as it is then: the session may have
-//! started work, or a draft may have appeared, while the prompt was up.
+//! raised a dialog, or a draft may have appeared, while the prompt was up.
 
 use std::fmt;
 use std::time::{Duration, Instant};
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use iced::Task;
 use iced::keyboard;
 use termherd_core::workspace::SessionId;
-use termherd_core::{ClaudeCommand, CommandRefusal, Event, PromptInput, read_prompt};
+use termherd_core::{ClaudeCommand, CommandKind, CommandRefusal, Event, PromptInput, read_prompt};
 
 use super::routing::is_enter;
 use super::{Message, Shell};
@@ -63,6 +63,17 @@ impl fmt::Display for ArmRefusal {
     }
 }
 
+/// What a prompt reading was, for a log line: never a draft's text, which is
+/// the user's and may hold anything they pasted.
+fn prompt_shape(prompt: &PromptInput) -> &'static str {
+    match prompt {
+        PromptInput::Empty => "empty",
+        PromptInput::Draft(_) => "draft",
+        PromptInput::Queued => "queued",
+        PromptInput::NotVisible => "not visible",
+    }
+}
+
 impl Shell {
     /// Arm the confirmation for typing `command` into `session`, returning the
     /// exact line the prompt shows. Nothing is typed yet.
@@ -74,11 +85,18 @@ impl Shell {
         if let Some(owner) = self.keyboard_owner() {
             return Err(ArmRefusal::PromptOpen(owner.label()));
         }
+        let prompt = self.prompt_input(session);
         self.core
-            .claude_command_check(session, &self.prompt_input(session))
+            .claude_command_check(session, command.kind(), &prompt)
             .map_err(ArmRefusal::Session)?;
         let line = command.line();
-        tracing::info!(session = session.0.get(), %line, "claude command armed");
+        tracing::info!(
+            session = session.0.get(),
+            %line,
+            status = ?self.core.sessions.get(&session).map(|live| live.status),
+            prompt = prompt_shape(&prompt),
+            "claude command armed"
+        );
         let enter_ignored_until = self
             .serving_remote_caller
             .then(|| Instant::now() + REMOTE_ARM_GRACE);
@@ -120,7 +138,7 @@ impl Shell {
         let claude = self.core.sessions.get(&session)?.runs_claude();
         (CLAUDE_DESKTOP_EXISTS && claude).then(|| {
             self.core
-                .claude_command_check(session, &self.prompt_input(session))
+                .claude_command_check(session, CommandKind::Desktop, &self.prompt_input(session))
                 .err()
         })
     }
@@ -138,16 +156,22 @@ impl Shell {
     /// keeps the prompt open and names why, so nothing vanishes unexplained;
     /// `escape` then dismisses it.
     pub(super) fn confirm_claude_command(&mut self) -> Result<Task<Message>, CommandRefusal> {
-        let Some(session) = self.claude_command.as_ref().map(|pending| pending.session) else {
+        let Some((session, kind)) = self
+            .claude_command
+            .as_ref()
+            .map(|pending| (pending.session, pending.command.kind()))
+        else {
             return Ok(Task::none());
         };
         let prompt = self.prompt_input(session);
-        if let Err(refusal) = self.core.claude_command_check(session, &prompt) {
+        if let Err(refusal) = self.core.claude_command_check(session, kind, &prompt) {
             if let Some(pending) = self.claude_command.as_mut() {
                 tracing::warn!(
                     session = session.0.get(),
                     line = %pending.command,
                     %refusal,
+                    status = ?self.core.sessions.get(&session).map(|live| live.status),
+                    prompt = prompt_shape(&prompt),
                     "claude command not typed"
                 );
                 pending.refused = Some(refusal.clone());

@@ -43,8 +43,10 @@ impl Shell {
             std::cmp::Ordering::Equal => None,
         });
         let first_parked = self.core.workspace.first_parked();
-        let carried_parked =
-            drag.is_some_and(|(from, _)| tabs.get(from).is_some_and(Tab::is_parked));
+        // The zone the carried tab would land in, by the rule `move_tab`
+        // applies on release.
+        let drop_parked = drag
+            .is_some_and(|(from, over)| self.core.workspace.lands_parked(from, over) == Some(true));
         let mut bar = row![].spacing(4).align_y(iced::Center);
         for (index, tab) in tabs.iter().enumerate() {
             let active = index == self.core.workspace.active;
@@ -143,13 +145,13 @@ impl Shell {
             };
             let caret_here = caret_at == Some(index);
             if index == first_parked && index > 0 {
-                // A drop on the boundary keeps the carried tab's zone, so its
-                // caret sits on that zone's side of the gap.
-                if caret_here && !carried_parked {
+                // The caret sits on the side of the gap whose zone the drop
+                // lands in: on the boundary, the carried tab keeps its own.
+                if caret_here && !drop_parked {
                     bar = bar.push(insertion_caret());
                 }
                 bar = bar.push(iced::widget::Space::new().width(12));
-                if caret_here && carried_parked {
+                if caret_here && drop_parked {
                     bar = bar.push(insertion_caret());
                 }
             } else if caret_here {

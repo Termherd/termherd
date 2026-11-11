@@ -14,7 +14,8 @@ use std::num::NonZeroU64;
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
 use termherd_core::{
-    ClaudeCommand, ClaudeLaunch, Event, Launch, Placement, PointerEvent, SessionKind,
+    ClaudeCommand, ClaudeLaunch, ClickCount, Event, Launch, Placement, PointerEvent, PointerKind,
+    PointerRoute, SessionKind,
 };
 
 use super::bridge::{
@@ -23,7 +24,8 @@ use super::bridge::{
 use super::input::event_of;
 use super::repos::RepoGesture;
 use super::routing::{KeyVerdict, KeyboardOwner};
-use super::{Focus, Message, Shell};
+use super::terminal::{ClickSelection, click_selection};
+use super::{Focus, Message, Shell, with_copy};
 
 impl Shell {
     /// Carry out one MCP [`Action`], returning the outcome to answer the caller
@@ -47,7 +49,11 @@ impl Shell {
             Action::Close { pane, background } => self.act_close(pane, background),
             Action::Run { session, bytes } => self.act_run(session, bytes),
             Action::Submit { session } => self.act_submit(session),
-            Action::Pointer { session, pointer } => self.act_pointer(session, pointer),
+            Action::Pointer {
+                session,
+                pointer,
+                clicks,
+            } => self.act_pointer(session, pointer, clicks),
             Action::DeclareRepo { path } => self.act_declare_repo(&path),
             Action::ForgetRepo { path } => self.act_forget_repo(&path),
             Action::ClaudeCommand { session, command } => {
@@ -286,6 +292,7 @@ impl Shell {
         &mut self,
         session: u64,
         pointer: PointerEvent,
+        clicks: ClickCount,
     ) -> (ActionOutcome, Task<Message>) {
         let Some(id) = self.resolve(session) else {
             return (unknown_handle(session), Task::none());
@@ -309,16 +316,38 @@ impl Shell {
             );
         }
         // Answered off the last screen's mouse mode, as the bounds are off its
-        // geometry; the terminal decides again on its live mode and offset.
+        // geometry. A single event goes down as is, and the terminal decides
+        // again on its live mode and offset.
         let route = pointer.route(screen.mouse_reporting);
-        let effects = self.core.apply(Event::TerminalPointer {
-            session: id,
-            pointer,
-        });
+        // A repeated click the terminal keeps selects what the canvas would,
+        // decided off the same screen, so it shares the canvas's lag: a mode
+        // switched on since that frame, or a scroll, is not seen.
+        let selection = if route == PointerRoute::Select {
+            click_selection(screen, pointer.col, pointer.row, clicks)
+        } else {
+            None
+        };
+        let copy_on_select = self.gestures.copy_on_select;
+        let task = match selection {
+            Some(ClickSelection { op, text }) => self
+                .select(id, op)
+                .map(|task| with_copy(task, copy_on_select.then_some(text))),
+            None => {
+                let effects: Vec<_> = repeated(pointer, clicks)
+                    .flat_map(|pointer| {
+                        self.core.apply(Event::TerminalPointer {
+                            session: id,
+                            pointer,
+                        })
+                    })
+                    .collect();
+                (!effects.is_empty()).then(|| self.perform(effects))
+            }
+        };
         // `core` absorbs an event for a session that has exited; a screen is
         // still there to bound against, but no terminal is behind it, and the
         // answer must not claim one did something.
-        if effects.is_empty() {
+        let Some(task) = task else {
             return (
                 ActionOutcome::rejected(format!(
                     "session {session} has exited, so there is no terminal to \
@@ -326,10 +355,10 @@ impl Shell {
                 )),
                 Task::none(),
             );
-        }
+        };
         (
             self.applied().with_detail(ActionDetail::Pointer(route)),
-            self.perform(effects),
+            task,
         )
     }
 
@@ -472,4 +501,15 @@ fn unhosted_handle(handle: u64) -> ActionOutcome {
 /// A session's stable handle as an external caller spells it.
 fn handle_of(id: SessionId) -> String {
     id.0.get().to_string()
+}
+
+/// The events `clicks` of `pointer` are, one at a time: the clicks before the
+/// last whole, then `pointer` itself — so a triple `press` is click, click,
+/// press, as a hand's buttons go, never three presses with no release.
+fn repeated(pointer: PointerEvent, clicks: ClickCount) -> impl Iterator<Item = PointerEvent> {
+    let before = PointerEvent {
+        kind: PointerKind::Click,
+        ..pointer
+    };
+    std::iter::repeat_n(before, usize::from(clicks.count()) - 1).chain(std::iter::once(pointer))
 }

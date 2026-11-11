@@ -7,7 +7,7 @@
 
 use iced::{Point, Rectangle, mouse};
 use termherd_core::paths::is_path_char;
-use termherd_core::{ProbeKind, SelectSide, TargetProbe};
+use termherd_core::{ClickCount, ProbeKind, SelectOp, SelectSide, TargetProbe, grid_line};
 use termherd_pty::Screen;
 
 /// The grid cell under the cursor, if any — `None` when the pointer is off the
@@ -123,17 +123,60 @@ pub(super) fn target_at(screen: &Screen, col: u16, row: u16) -> Option<TargetPro
     })
 }
 
+/// What a repeated click selects at once: the range for the terminal, and its
+/// text read off this screen, since the selection lands on a later frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::shell) struct ClickSelection {
+    pub(in crate::shell) op: SelectOp,
+    pub(in crate::shell) text: String,
+}
+
+/// What `clicks` on visible cell `(col, row)` select outright — a double-click
+/// the word, path or link ([`double_click_at`]), a triple-click the row — or
+/// `None` when it is a plain press: a single click, or a double-click on a
+/// blank. The one rule the canvas and the MCP bridge both read, so a click
+/// over the bridge selects what the same click by hand would.
+///
+/// A triple-click reads one grid row, as a double-click does: a line the
+/// terminal soft-wrapped selects only its part on the clicked row.
+pub(in crate::shell) fn click_selection(
+    screen: &Screen,
+    col: u16,
+    row: u16,
+    clicks: ClickCount,
+) -> Option<ClickSelection> {
+    let (anchor, head) = match clicks {
+        ClickCount::Single => return None,
+        ClickCount::Double => double_click_at(screen, col, row)?,
+        ClickCount::Triple => row_at(screen, row)?,
+    };
+    let off = screen.display_offset;
+    Some(ClickSelection {
+        op: SelectOp::Range {
+            line0: grid_line(anchor.1, off),
+            col0: usize::from(anchor.0),
+            line1: grid_line(head.1, off),
+            col1: usize::from(head.0),
+        },
+        text: word_text(screen, anchor, head),
+    })
+}
+
+/// The whole of visible row `row` as an inclusive cell range, or `None` when
+/// the screen has no such row.
+fn row_at(screen: &Screen, row: u16) -> Option<((u16, u16), (u16, u16))> {
+    let line = screen.lines.get(row as usize)?;
+    let last = u16::try_from(line.len().checked_sub(1)?).ok()?;
+    Some(((0, row), (last, row)))
+}
+
 /// What a double-click on grid cell `(col, row)` selects, as an inclusive cell
 /// range `(anchor, head)`: the span a link-modifier click there would open, so
 /// both gestures agree on where a path or URL ends, else the plain word.
 ///
 /// Both read one grid row: a path the terminal soft-wrapped onto the next row
 /// selects only its part on the clicked row, as it underlines.
-pub(super) fn double_click_at(
-    screen: &Screen,
-    col: u16,
-    row: u16,
-) -> Option<((u16, u16), (u16, u16))> {
+fn double_click_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16), (u16, u16))> {
     match target_at(screen, col, row) {
         Some(probe) => Some(((probe.start, row), (probe.end.saturating_sub(1), row))),
         None => word_at(screen, col, row),
@@ -160,9 +203,9 @@ fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16), (u16, u16
     Some(((start as u16, row), (end as u16, row)))
 }
 
-/// The text of a single-row word / filename range — what a double-click copies
+/// The text of a single-row range — what a double- or triple-click copies
 /// before its native selection has been echoed back on a snapshot.
-pub(super) fn word_text(screen: &Screen, anchor: (u16, u16), head: (u16, u16)) -> String {
+fn word_text(screen: &Screen, anchor: (u16, u16), head: (u16, u16)) -> String {
     spans_text(screen, &[(anchor.1, anchor.0, head.0)])
 }
 
@@ -440,6 +483,71 @@ mod tests {
         let screen = screen_from("hello world");
         assert_eq!(double_click_at(&screen, 1, 0), Some(((0, 0), (4, 0))));
         assert_eq!(double_click_at(&screen, 5, 0), None, "a blank is no word");
+    }
+
+    #[test]
+    fn a_single_click_selects_nothing_at_once() {
+        let screen = screen_from("hello world");
+        assert_eq!(click_selection(&screen, 1, 0, ClickCount::Single), None);
+    }
+
+    #[test]
+    fn a_double_click_selection_is_the_word_with_its_text() {
+        let screen = screen_from("see src/main.rs now");
+        assert_eq!(
+            click_selection(&screen, 8, 0, ClickCount::Double),
+            Some(ClickSelection {
+                op: SelectOp::Range {
+                    line0: 0,
+                    col0: 4,
+                    line1: 0,
+                    col1: 14,
+                },
+                text: "src/main.rs".to_string(),
+            })
+        );
+        assert_eq!(
+            click_selection(&screen, 3, 0, ClickCount::Double),
+            None,
+            "a blank is no word, so the press stays a plain one"
+        );
+    }
+
+    #[test]
+    fn a_triple_click_selects_the_whole_row_and_copies_it_without_trailing_blanks() {
+        let screen = screen_from("$ ls -la    ");
+        assert_eq!(
+            click_selection(&screen, 3, 0, ClickCount::Triple),
+            Some(ClickSelection {
+                op: SelectOp::Range {
+                    line0: 0,
+                    col0: 0,
+                    line1: 0,
+                    col1: 11,
+                },
+                text: "$ ls -la".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn a_click_selection_anchors_to_the_grid_line_under_scroll() {
+        // Scrolled two lines into history: visible row 0 is grid line -2, the
+        // coordinate the terminal rotates the selection with.
+        let screen = Screen {
+            display_offset: 2,
+            ..screen_from("hello world")
+        };
+        for clicks in [ClickCount::Double, ClickCount::Triple] {
+            let Some(ClickSelection {
+                op: SelectOp::Range { line0, line1, .. },
+                ..
+            }) = click_selection(&screen, 1, 0, clicks)
+            else {
+                panic!("{clicks:?} on a word selects a range");
+            };
+            assert_eq!((line0, line1), (-2, -2), "{clicks:?}");
+        }
     }
 
     proptest::proptest! {
