@@ -400,4 +400,5 @@ their job graphs.
   replaceable without touching tests or adapters.
 - **Claude format/OSC drift.** Mitigation: isolated, property-tested `claude`.
 - **The Unsure bet (IDE bridge/diff) returning later.** Mitigation: an
-  `IdeBridge` would be one more `core::ports` trait and adapter; additive, not a rework.
+  `IdeBridge` would be one more `core::ports` trait and adapter; additive,
+  not a rework.
