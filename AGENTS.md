@@ -166,7 +166,9 @@ exists). Do not relax them locally; the incident behind each linked rule is in
   dependency's platform-conditional surface, run
   `cargo check --target x86_64-pc-windows-msvc` both ways: the change compiles,
   and reverting it fails. A test needing an OS-only API goes in `tests/`, not
-  in the containment allow-list.
+  in the containment allow-list. A test branching on a `cfg!` constant runs
+  one half per OS, and the PR gate tests `app` on Linux only: run the other
+  half locally (`send-to-desktop` with `CLAUDE_DESKTOP_EXISTS`, #346).
   [Why](docs/agents/lessons.md#a-cfg-gated-api-is-not-compiled-by-the-pr-gate)
 - **A string destined for another grammar takes that grammar's separators**,
   not `std::path`'s. When `main` goes red on a Rust push, check whether the

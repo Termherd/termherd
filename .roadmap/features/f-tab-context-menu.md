@@ -27,7 +27,10 @@ menu is anchored on that pane: it closes when the pane loses focus. It is a
 `escape` itself, so MCP can drive it end to end; `enter` reports the verdict
 of the entry it ran. Entries today: rename tab, tab colour… (only where a pick
 can apply, added by #343), copy agent name (only when the action would find a
-name), new shell / new Claude session here, split right / down, close pane.
-The list is data in `shell::tab_menu`: each later entry (reveal, history, send
-to Claude Desktop) is one line there once its action exists. Not yet: the menu opens
+name), reveal directory / transcript and send to Claude Desktop (each only
+where it applies, added by #346), new shell / new Claude session here, new
+Claude session in a worktree (only in a git checkout), split right / down,
+park tab (only on an unparked tab), close pane. The list is data in
+`shell::tab_menu`: a later entry (history) is one line there once its action
+exists. Not yet: the menu opens
 centred rather than beside the tab, and a screen reader cannot see it.
