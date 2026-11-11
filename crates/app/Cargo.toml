@@ -103,7 +103,7 @@ tokio = { version = "1", features = [
 # hand-rolls it. Apache-2.0 (already allowed by cargo-deny), edition 2024, and
 # tokio-native so it reuses the substrate runtime above. Feature-frugal: only
 # the server half and its Streamable-HTTP transport, plus the `#[tool]` macros.
-rmcp = { version = "2", default-features = false, features = [
+rmcp = { version = "3", default-features = false, features = [
     "server",
     "transport-streamable-http-server",
     "macros",

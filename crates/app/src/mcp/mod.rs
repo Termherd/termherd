@@ -119,7 +119,7 @@ fn build_service(
     // self-contained, so no SSE session bookkeeping is needed. Many tools
     // mutate the workspace, which is why every request is gated first.
     let mut config = StreamableHttpServerConfig::default();
-    config.stateful_mode = false;
+    config.legacy_session_mode = false;
     config.json_response = true;
     StreamableHttpService::new(
         move || Ok(TermherdMcp::new(bridge.clone()).with_settings_file(settings_file.clone())),
