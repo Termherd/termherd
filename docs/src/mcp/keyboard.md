@@ -65,7 +65,7 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing here: `open-new-session` everywhere, `send-to-desktop` on Linux | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, colour or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to (or to colour), no known directory or no transcript a scan has found to reveal | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, colour or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no Claude able to take a command now (or a colour), no known directory or no transcript a scan has found to reveal | **create it**, then retry |
 
 Each handler that can refuse this way says so at its own refusal site.
 
@@ -100,12 +100,12 @@ selection, and `copy` runs on it.
   The entries and their order are on the
   [tabs page](../workspace/tabs-and-splits.md#tabs). *Tab colour…* is
   always listed, but disabled when no colour can be picked for the focused
-  pane (a busy Claude, a draft in its prompt, the prompt off screen): `enter`
-  on it runs nothing, leaves the menu open and reports `refused` with the
-  reason. *Send to Claude Desktop* is disabled the same way. *Copy agent
-  name*, *Reveal directory*, *Reveal transcript* and *Send to Claude Desktop*
-  are listed only where they apply (see the tabs page); one left out shifts
-  every entry below it by one.
+  pane (a Claude waiting on an answer, a draft in its prompt, the prompt off
+  screen): `enter` on it runs nothing, leaves the menu open and reports
+  `refused` with the reason. *Send to Claude Desktop* is disabled the same
+  way, and also while Claude is busy. *Copy agent name*, *Reveal directory*,
+  *Reveal transcript* and *Send to Claude Desktop* are listed only where they
+  apply (see the tabs page); one left out shifts every entry below it by one.
   The menu closes if its pane loses focus, so a `focus_pane` call while it is
   open dismisses it.
 - **`tab-color-picker`** (opened by `pick-tab-color`, or the tab menu's
@@ -119,7 +119,9 @@ selection, and `copy` runs on it.
   `enter` answers `refused` with the reason and the list stays open.
 - On **`claude-command-confirm`**, `enter` types the slash command the
   prompt names into its Claude session — or answers `refused` with the reason,
-  leaving the prompt open, when Claude went busy or a draft appeared meanwhile;
+  leaving the prompt open, when meanwhile Claude raised a dialog, exited or
+  is not in a state that takes the command, a draft appeared, or its prompt
+  left the screen;
   see [`claude_command`](./live-bridge.md#a-claude-slash-command-confirmed).
 - **`paste-confirm`** opens when the `paste` action, or a right-click paste,
   carries a line break into a terminal that did not turn bracketed paste on;

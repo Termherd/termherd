@@ -80,6 +80,15 @@ use input::{AltSides, event_modifiers};
 use record::RecordState;
 use streams::{PtyOutput, RESCAN_INTERVAL, pty_stream, rescan_tick_stream, watch_stream};
 
+/// `task`, followed by `copy` written to the clipboard unless it is empty —
+/// the one copy rule a gesture's selection follows, by hand or over the bridge.
+fn with_copy(task: Task<Message>, copy: Option<String>) -> Task<Message> {
+    match copy.filter(|text| !text.is_empty()) {
+        Some(text) => Task::batch([task, iced::clipboard::write(text)]),
+        None => task,
+    }
+}
+
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
 }
@@ -1009,6 +1018,18 @@ impl Shell {
             .collect()
     }
 
+    /// Change a session's selection — the one path a selection by hand and one
+    /// over the bridge share. `None` when `core` absorbed it: the session has
+    /// exited, so the bridge must refuse, though a hand may still copy from
+    /// the screen it left. Whether to copy is the caller's, through
+    /// [`with_copy`], once it knows which.
+    fn select(&mut self, session: SessionId, op: termherd_core::SelectOp) -> Option<Task<Message>> {
+        let effects = self
+            .core
+            .apply(termherd_core::Event::Select { session, op });
+        (!effects.is_empty()).then(|| self.perform(effects))
+    }
+
     // The iced `update`: a flat `match` over every `Message` variant — the
     // app's central event dispatcher, whose arms delegate to the domain modules (launch,
     // session_ops, effects, geometry, routing, …). The length here is breadth
@@ -1247,23 +1268,11 @@ impl Shell {
                     .apply(termherd_core::Event::TerminalPointer { session, pointer });
                 self.perform(effects)
             }
-            Message::Select { session, op } => {
-                let effects = self
-                    .core
-                    .apply(termherd_core::Event::Select { session, op });
-                self.perform(effects)
-            }
-            Message::SelectAndCopy { session, op, text } => {
-                let effects = self
-                    .core
-                    .apply(termherd_core::Event::Select { session, op });
-                let select = self.perform(effects);
-                if text.is_empty() {
-                    select
-                } else {
-                    Task::batch([select, iced::clipboard::write(text)])
-                }
-            }
+            Message::Select { session, op } => self.select(session, op).unwrap_or_else(Task::none),
+            Message::SelectAndCopy { session, op, text } => with_copy(
+                self.select(session, op).unwrap_or_else(Task::none),
+                Some(text),
+            ),
             Message::RequestCopySelection { session } => {
                 let effects = self
                     .core
@@ -1811,8 +1820,8 @@ mod key_routing {
     use std::sync::Mutex as StdMutex;
     use termherd_core::ports::{PtyError, ScanError};
     use termherd_core::{
-        Action, CommandRefusal, PointerEvent, PointerKind, PointerRoute, SelectSide, SessionKind,
-        SnapshotFilter, SpawnSpec,
+        Action, ClickCount, CommandRefusal, PointerEvent, PointerKind, PointerRoute, SelectSide,
+        SessionKind, SnapshotFilter, SpawnSpec,
     };
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
@@ -2508,6 +2517,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: 999,
             pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+            clicks: ClickCount::Single,
         });
         assert!(
             outcome.error.as_deref().is_some_and(|e| e.contains("999")),
@@ -2524,6 +2534,7 @@ mod key_routing {
             let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
                 session: handle,
                 pointer: PointerEvent::left(PointerKind::Press, col, row),
+                clicks: ClickCount::Single,
             });
             let error = outcome
                 .error
@@ -2549,6 +2560,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: handle,
             pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+            clicks: ClickCount::Single,
         });
         assert!(
             outcome.error.is_some(),
@@ -2564,6 +2576,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: handle,
             pointer,
+            clicks: ClickCount::Single,
         });
         assert_eq!(outcome.error, None, "the last cell is inside the pane");
         assert_eq!(outcome.pointer(), Some(PointerRoute::Select));
@@ -2584,6 +2597,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: handle,
             pointer: PointerEvent::left(PointerKind::Move, 3, 0),
+            clicks: ClickCount::Single,
         });
         assert_eq!(outcome.error, None);
         assert_eq!(outcome.pointer(), Some(PointerRoute::Nothing));
@@ -2604,6 +2618,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: handle,
             pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+            clicks: ClickCount::Single,
         });
         assert!(
             outcome
@@ -2637,6 +2652,7 @@ mod key_routing {
             let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
                 session: handle,
                 pointer: PointerEvent::left(kind, 2, 0),
+                clicks: ClickCount::Single,
             });
             assert_eq!(outcome.error, None, "{kind:?}");
             assert_eq!(outcome.pointer(), Some(expected), "{kind:?}");
@@ -2646,6 +2662,127 @@ mod key_routing {
             3,
             "every event still reaches the terminal, which decides on its live mode"
         );
+    }
+
+    /// A repeated click on the bridge at a cell of `text`, after `prepare` has
+    /// set the session up.
+    fn clicks_at(
+        text: &str,
+        col: u16,
+        clicks: ClickCount,
+        prepare: impl FnOnce(&mut Shell, SessionId),
+    ) -> (super::bridge::ActionOutcome, Arc<RecordingPty>, SessionId) {
+        let (mut shell, pty, handle) = shell_showing(text);
+        let session = shell.core.workspace.focused_session().expect("focused");
+        prepare(&mut shell, session);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: PointerEvent::left(PointerKind::Click, col, 0),
+            clicks,
+        });
+        (outcome, pty, session)
+    }
+
+    /// A double- or triple-click over the bridge selects what the same click
+    /// by hand selects: the canvas's range, as one `Select`, with no single
+    /// click reaching the terminal to clear it again.
+    #[test]
+    fn pointer_action_selects_the_word_or_row_a_repeated_click_would() {
+        for (clicks, expected) in [
+            (ClickCount::Double, (2, 6)),  // `cargo`
+            (ClickCount::Triple, (0, 11)), // the whole row
+        ] {
+            let (outcome, pty, _) = clicks_at("$ cargo test", 4, clicks, |_, _| {});
+            assert_eq!(outcome.error, None, "{clicks:?}");
+            assert_eq!(outcome.pointer(), Some(PointerRoute::Select), "{clicks:?}");
+            assert_eq!(
+                pty.selects(),
+                vec![SelectOp::Range {
+                    line0: 0,
+                    col0: expected.0,
+                    line1: 0,
+                    col1: expected.1,
+                }],
+                "{clicks:?}"
+            );
+            assert!(pty.pointers().is_empty(), "{clicks:?}");
+        }
+    }
+
+    #[test]
+    fn pointer_action_double_click_on_a_blank_is_that_many_plain_clicks() {
+        let (outcome, pty, session) = clicks_at("$ cargo test", 1, ClickCount::Double, |_, _| {});
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.pointer(), Some(PointerRoute::Select));
+        let click = PointerEvent::left(PointerKind::Click, 1, 0);
+        assert_eq!(pty.pointers(), vec![(session, click), (session, click)]);
+        assert!(pty.selects().is_empty());
+    }
+
+    /// A child reading the mouse tells a double-click by its timing, so it is
+    /// handed the clicks themselves, as the canvas hands it each press.
+    #[test]
+    fn pointer_action_forwards_a_repeated_click_as_that_many_clicks() {
+        use termherd_core::MouseReporting;
+        let (outcome, pty, session) =
+            clicks_at("$ vim", 2, ClickCount::Triple, |shell, session| {
+                shell
+                    .screens
+                    .get_mut(&session)
+                    .expect("the fixture rendered a screen")
+                    .mouse_reporting = Some(MouseReporting::Click);
+            });
+        assert_eq!(outcome.pointer(), Some(PointerRoute::Forward));
+        let click = PointerEvent::left(PointerKind::Click, 2, 0);
+        assert_eq!(pty.pointers(), vec![(session, click); 3]);
+        assert!(pty.selects().is_empty(), "the mouse is the child's");
+    }
+
+    /// A repeated press is the clicks before it, then the press: the child
+    /// sees each button released before the next goes down, and the last one
+    /// held, as from a hand — never presses stacked with no release.
+    #[test]
+    fn pointer_action_forwards_a_repeated_press_as_clicks_then_the_press() {
+        use termherd_core::MouseReporting;
+        let (mut shell, pty, handle) = shell_showing("$ vim");
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell
+            .screens
+            .get_mut(&session)
+            .expect("the fixture rendered a screen")
+            .mouse_reporting = Some(MouseReporting::Click);
+        let press = PointerEvent::left(PointerKind::Press, 2, 0);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: press,
+            clicks: ClickCount::Triple,
+        });
+        assert_eq!(outcome.pointer(), Some(PointerRoute::Forward));
+        let click = PointerEvent::left(PointerKind::Click, 2, 0);
+        assert_eq!(
+            pty.pointers(),
+            vec![(session, click), (session, click), (session, press)]
+        );
+    }
+
+    #[test]
+    fn pointer_action_rejects_a_repeated_click_on_an_exited_session() {
+        let (outcome, pty, _) =
+            clicks_at("$ cargo test", 4, ClickCount::Double, |shell, session| {
+                let _ = shell.update(Message::PtyExited {
+                    session,
+                    clean: false,
+                });
+            });
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("exited")),
+            "{outcome:?}"
+        );
+        assert!(pty.selects().is_empty());
+        assert!(pty.pointers().is_empty());
     }
 
     #[test]
@@ -3255,6 +3392,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: worker,
             pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+            clicks: ClickCount::Single,
         });
         assert_eq!(outcome.error, None);
         assert_eq!(pty.pointers().len(), 1, "the press reached the worker");
@@ -6081,14 +6219,14 @@ mod key_routing {
     }
 
     #[test]
-    fn a_command_confirmed_after_claude_turned_busy_is_not_typed() {
-        // The prompt can sit open while Claude starts work; typing then would
-        // queue the line behind it, so the confirmation asks again.
+    fn a_command_confirmed_after_claude_raised_a_dialog_is_not_typed() {
+        // The prompt can sit open while Claude asks for a permission; Enter
+        // would then answer that dialog, so the confirmation asks again.
         let (mut shell, pty, session) = shell_with_idle_claude();
         let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Color(ClaudeColor::Red));
         let _ = shell.update(Message::PtyStatus {
             session,
-            status: SessionStatus::Busy,
+            status: SessionStatus::Attention,
         });
 
         let _ = shell.update(Message::ConfirmClaudeCommand);
@@ -6098,9 +6236,25 @@ mod key_routing {
                 .claude_command
                 .as_ref()
                 .and_then(|p| p.refused.clone()),
-            Some(CommandRefusal::NotIdle(SessionStatus::Busy)),
+            Some(CommandRefusal::NotIdle(SessionStatus::Attention)),
             "the prompt stays open and says why"
         );
+    }
+
+    #[test]
+    fn a_colour_confirmed_after_claude_started_work_is_typed() {
+        // Claude Code applies `/color` during a turn, so starting work under
+        // the prompt is no reason to hold it back.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Color(ClaudeColor::Red));
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+
+        let _ = shell.update(Message::ConfirmClaudeCommand);
+        assert_eq!(pty.writes(), vec![b"\x15".to_vec()], "typing has begun");
+        assert!(shell.claude_command.is_none(), "the prompt lets go");
     }
 
     #[test]
@@ -6188,17 +6342,65 @@ mod key_routing {
         let (mut shell, _pty, session) = shell_with_idle_claude();
         let _ = shell.update(Message::PtyStatus {
             session,
-            status: SessionStatus::Busy,
+            status: SessionStatus::Attention,
         });
         rename_tab_by_hand(&mut shell, 0, "api work");
 
         assert_eq!(armed(&shell), None);
         let notice = shell.notice.clone().expect("the refusal is shown");
-        assert!(notice.contains("busy"), "it says why: {notice}");
+        assert!(
+            notice.contains("waiting for an answer"),
+            "it says why: {notice}"
+        );
         assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
 
         let _ = shell.update(Message::DismissNotice);
         assert_eq!(shell.notice, None);
+    }
+
+    #[test]
+    fn a_busy_claude_tab_renamed_by_hand_arms_the_rename() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+        assert_eq!(shell.notice, None);
+    }
+
+    #[test]
+    fn a_busy_claude_with_a_queued_message_takes_a_rename_typed_from_its_screen() {
+        // The screen as Claude Code 2.1.322 draws it once a message typed
+        // during the turn is queued: the prompt is empty but shows a hint.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        shell.screens.insert(
+            session,
+            screen_rows(&[
+                "│ 10:58 go W7 │",
+                "  ctrl+enter to send now",
+                RULE,
+                "❯ Press up to edit queued messages",
+                RULE,
+            ]),
+        );
+        rename_tab_by_hand(&mut shell, 0, "api work");
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+
+        let _ = shell.update(Message::ConfirmClaudeCommand);
+        assert_eq!(pty.writes(), vec![b"\x15".to_vec()], "typing has begun");
     }
 
     #[test]
@@ -6313,9 +6515,21 @@ mod key_routing {
             tab: 0,
             title: "api work".into(),
         });
+        assert_eq!(busy.error, None, "a working Claude takes a rename");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+
+        let _ = shell.update(Message::CancelClaudeCommand);
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Attention,
+        });
+        let (waiting, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
         assert_eq!(
-            busy.error.as_deref(),
-            Some("the session is busy, not idle at its prompt")
+            waiting.error.as_deref(),
+            Some("the session is waiting for an answer, not idle at its prompt")
         );
     }
 
@@ -9360,12 +9574,13 @@ mod key_routing {
             assert!(shell.core.workspace.tabs[index].is_parked());
         }
 
+        const WAITING: CommandRefusal = CommandRefusal::NotIdle(SessionStatus::Attention);
         const BUSY: CommandRefusal = CommandRefusal::NotIdle(SessionStatus::Busy);
 
         fn nothing() -> Offers {
             Offers {
                 agent_named: false,
-                color_refusal: Some(BUSY),
+                color_refusal: Some(WAITING),
                 unparked: false,
                 in_repo: false,
                 dir_known: false,
@@ -9436,7 +9651,10 @@ mod key_routing {
             assert_eq!(added_by(&desktop), vec![Action::SendToDesktop]);
             assert_eq!(
                 disabled(&desktop),
-                vec![(Action::PickTabColor, BUSY), (Action::SendToDesktop, BUSY)],
+                vec![
+                    (Action::PickTabColor, WAITING),
+                    (Action::SendToDesktop, BUSY)
+                ],
                 "a Claude that cannot take `/desktop` now lists it disabled"
             );
         }
@@ -9446,7 +9664,7 @@ mod key_routing {
             // Hidden, an entry that is unavailable right now reads as missing.
             let refused = nothing();
             assert!(lines(&refused).any(|line| line.entry.action == Action::PickTabColor));
-            assert_eq!(disabled(&refused), vec![(Action::PickTabColor, BUSY)]);
+            assert_eq!(disabled(&refused), vec![(Action::PickTabColor, WAITING)]);
             let pickable = Offers {
                 color_refusal: None,
                 ..nothing()
@@ -9748,12 +9966,13 @@ mod key_routing {
         }
 
         #[test]
-        fn a_busy_claude_is_offered_no_picker_from_the_keymap_and_a_disabled_menu_entry() {
-            // The line would queue behind its work.
+        fn a_claude_waiting_for_an_answer_is_offered_no_picker_from_the_keymap_and_a_disabled_menu_entry()
+         {
+            // Enter would answer its dialog instead of submitting the line.
             let (mut shell, _pty, session) = shell_with_idle_claude();
             let _ = shell.update(Message::PtyStatus {
                 session,
-                status: SessionStatus::Busy,
+                status: SessionStatus::Attention,
             });
 
             let (outcome, _task) =
@@ -9770,9 +9989,31 @@ mod key_routing {
                 .map(|line| line.refusal.cloned());
             assert_eq!(
                 colour,
-                Some(Some(CommandRefusal::NotIdle(SessionStatus::Busy))),
+                Some(Some(CommandRefusal::NotIdle(SessionStatus::Attention))),
                 "the menu lists the entry, disabled with why, rather than hide it"
             );
+        }
+
+        #[test]
+        fn a_busy_claude_gets_the_picker_from_the_keymap_and_an_enabled_menu_entry() {
+            let (mut shell, _pty, session) = shell_with_idle_claude();
+            let _ = shell.update(Message::PtyStatus {
+                session,
+                status: SessionStatus::Busy,
+            });
+
+            let _ = shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ColorPicker));
+
+            let _ = press_all(&mut shell, &["escape"]);
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let colour = shell
+                .live_tab_menu()
+                .expect("open")
+                .lines()
+                .find(|line| line.entry.action == Action::PickTabColor)
+                .map(|line| line.refusal.cloned());
+            assert_eq!(colour, Some(None), "the entry is enabled");
         }
 
         #[test]
@@ -9800,12 +10041,12 @@ mod key_routing {
         }
 
         #[test]
-        fn a_claude_that_went_busy_under_the_picker_refuses_the_pick_and_keeps_it_open() {
+        fn a_claude_that_raised_a_dialog_under_the_picker_refuses_the_pick_and_keeps_it_open() {
             let (mut shell, pty, session) = shell_with_idle_claude();
             let _ = shell.dispatch_action(Action::PickTabColor);
             let _ = shell.update(Message::PtyStatus {
                 session,
-                status: SessionStatus::Busy,
+                status: SessionStatus::Attention,
             });
 
             let steps = press_all(&mut shell, &["enter"]);
@@ -9814,7 +10055,8 @@ mod key_routing {
                 steps,
                 vec![PressStep::Refused {
                     overlay: "tab-color-picker".to_owned(),
-                    reason: "the session is busy, not idle at its prompt".to_owned(),
+                    reason: "the session is waiting for an answer, not idle at its prompt"
+                        .to_owned(),
                 }]
             );
             assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ColorPicker));

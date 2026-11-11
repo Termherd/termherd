@@ -103,7 +103,7 @@ tool-level error; the text reads keep working.
 | `rename_tab` | `tab`, `title` | `tab` is the 0-based index `snapshot` reports; a blank title reverts a shell tab to the derived one. A Claude tab is renamed by arming `/rename <title>` for confirmation, answered as `claude_command` is; a blank title, or the name it already shows, arms nothing and leaves it as it is |
 | `close_pane` | `pane`, `background` | a lone pane is its whole tab, which closes; `background: true` closes `pane` without focusing it first |
 | `run_in_session` | `session`, `text` | a trailing newline is sent as Enter and submits; see below |
-| `mouse_in_session` | `session`, `kind`, `col`, `row`, `button` | a mouse event at a **cell** of the terminal; see below |
+| `mouse_in_session` | `session`, `kind`, `col`, `row`, `button`, `click_count` | a mouse event at a **cell** of the terminal; see below |
 | `add_repo` | `path` | put a repository in the sidebar before it has any session |
 | `forget_repo` | `path` | drop an addition; the row survives on its sessions |
 | `claude_command` | `session`, `command`, `argument` | **arms** a confirmation to type a Claude slash command; see below |
@@ -204,8 +204,9 @@ It is **refused**, with nothing armed, when:
 
 - the session is not a Claude launch — a shell would run the line as a
   program;
-- Claude is not idle — busy, starting, or waiting on an answer such as a
-  permission prompt;
+- Claude is starting, exited, or waiting on an answer such as a permission
+  prompt; a busy Claude is refused `desktop` only, since Claude applies
+  `rename` and `color` mid-turn and leaves a queued message queued;
 - Claude's prompt holds a **draft** — the error quotes it; the command would
   be typed into it, and a draft of several lines would be submitted with it as
   a prompt to the model;
@@ -220,7 +221,9 @@ it, `enter` tries again.
 
 The prompt is read off the screen: the row starting with `❯` under a
 horizontal rule, down to the next rule. Its placeholder hint (`Try "…"`) reads
-as empty, so a draft spelling exactly that shape is the one case read wrong.
+as empty, and the hint Claude shows under a queued message (`Press up to edit
+queued messages`) reads as a queued message, which does not refuse. A draft
+spelling exactly one of those two shapes is read wrong.
 
 A prompt armed by this tool **ignores a physical Enter for 600 ms**: someone
 typing in another pane when it appears would otherwise confirm it with the
@@ -252,6 +255,7 @@ so an agent with no screen coordinates can still point.
 | `kind` | `press`, `release`, `click`, `drag`, `move` |
 | `col`, `row` | 0-based cells of the **visible** screen |
 | `button` | `left` (default), `middle`, `right` |
+| `click_count` | `1` (default), `2` for a double-click, `3` for a triple-click — on a `click` or a `press` only |
 
 The answer adds a `pointer` field saying what the terminal did:
 
@@ -279,6 +283,16 @@ selection on the clipboard. A bare `click` clears the selection. A cell outside
 the pane's geometry, or a session that has not rendered yet, **rejects the
 whole call** before anything applies, naming the geometry so you can retry
 inside it.
+
+`click_count` repeats the click as a human's double- or triple-click would.
+At a shell, `2` selects the word under the cell — or the whole URL or path
+there, the span a link click opens — and `3` the whole row, exactly as the
+same clicks by hand; with `terminal.copy_on_select` on, the selection is also
+copied. A double-click on a blank selects nothing and is two plain clicks. A
+program reading the mouse is sent that many clicks — for a `press`, the clicks
+before it and then the press, held — and tells them apart by their timing as
+it would a human's. A count outside `1` to `3`, or above `1` on
+a `release`, `drag` or `move`, rejects the call.
 
 The report carries no modifier keys: a `press` is a plain press whatever the
 human's keyboard is doing. The same split governs a human's mouse over the

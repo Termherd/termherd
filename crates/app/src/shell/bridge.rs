@@ -22,7 +22,7 @@ use std::time::Duration;
 use iced::futures::{SinkExt, Stream};
 use termherd_core::Placement;
 use termherd_core::{
-    Action as KeymapAction, App, ClaudeCommand, ClaudeIdentity, KeyChord, LiveSession,
+    Action as KeymapAction, App, ClaudeCommand, ClaudeIdentity, ClickCount, KeyChord, LiveSession,
     PointerEvent, PointerRoute, SessionKind, SessionStatus, SnapshotFilter, SnapshotInputs,
     WorkspaceSnapshot, claude_identity, workspace::SplitDir,
 };
@@ -279,8 +279,14 @@ pub enum Action {
     /// Place a pointer event at a cell of a session's terminal — the pointer
     /// half of what [`Self::Run`] does for text. Bounded by the session's last
     /// rendered geometry; out of range rejects before anything applies.
-    /// → `Event::TerminalPointer`.
-    Pointer { session: u64, pointer: PointerEvent },
+    /// `clicks` above one is a double- or triple-click: forwarded as that many
+    /// clicks to a child reading the mouse, else the word or row the canvas
+    /// would select. → `Event::TerminalPointer`, or `Event::Select`.
+    Pointer {
+        session: u64,
+        pointer: PointerEvent,
+        clicks: ClickCount,
+    },
     /// Add a repo to the sidebar by hand (`F-repo-add`). The path is normalised
     /// adapter-side first, so the caller may pass a subdirectory or a worktree.
     /// → `Event::DeclareRepo`.

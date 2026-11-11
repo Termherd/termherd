@@ -9,7 +9,8 @@ escape-sequence handling, scrollback, selection, colours.
 Drag with the mouse to select; a double-click selects the word under the
 pointer, or the whole URL or path when there is one — exactly the span a
 [link click](#clickable-links) opens, so a sentence's closing `.` is left out
-and a `:42` suffix kept; <kbd>Shift</kbd>+click extends the current selection.
+and a `:42` suffix kept; a triple-click selects the whole row;
+<kbd>Shift</kbd>+click extends the current selection.
 The chords that reach the clipboard:
 
 | | macOS | Windows / Linux |
@@ -85,10 +86,10 @@ so nothing reaches the clipboard unless you asked for it:
 "terminal": { "copy_on_select": true, "paste_on_right_click": true }
 ```
 
-- **`copy_on_select`** — releasing a drag, or double-clicking a word, copies
-  the selection outright. With it off the selection still highlights and waits
-  for the copy chord, which asks the terminal for its current selection — even
-  one scrolled out of view — so the text you copy is the text you just
+- **`copy_on_select`** — releasing a drag, or double- or triple-clicking,
+  copies the selection outright. With it off the selection still highlights and
+  waits for the copy chord, which asks the terminal for its current selection —
+  even one scrolled out of view — so the text you copy is the text you just
   selected, never what you copied last. With nothing selected the chord does
   nothing — in particular in a pane whose program owns the mouse (below), where
   the program's own copy of a drag stays on the clipboard untouched.

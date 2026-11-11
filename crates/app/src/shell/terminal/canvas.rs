@@ -10,8 +10,8 @@ use iced::widget::canvas::{self, Frame, Geometry, Text};
 use iced::{Color, Font, Pixels, Point, Rectangle, Renderer, Size, Theme, mouse};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    HoverTarget, PointerButton, PointerEvent, PointerKind, PointerRoute, ProbeKind, SelectOp,
-    SelectSide, TargetProbe, TermHover, grid_line,
+    ClickCount, HoverTarget, PointerButton, PointerEvent, PointerKind, PointerRoute, ProbeKind,
+    SelectOp, SelectSide, TargetProbe, TermHover, grid_line,
 };
 use termherd_pty::Screen;
 
@@ -19,7 +19,9 @@ use crate::settings::ClipboardGestures;
 use crate::shell::Message;
 
 use super::cell_size;
-use super::selection::{cell_at, cell_nearest, cell_side, double_click_at, target_at, word_text};
+use super::selection::{
+    ClickSelection, cell_at, cell_nearest, cell_side, click_selection, target_at,
+};
 
 /// A canvas program that draws the visible terminal grid with per-cell colour
 /// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
@@ -94,6 +96,15 @@ enum Held {
     /// The child: it was handed the press of this button, so the moves until
     /// its release are its drag rather than a hover.
     Child(PointerButton),
+}
+
+/// iced's click classification, as the count the selection rule reads.
+fn click_count(kind: click::Kind) -> ClickCount {
+    match kind {
+        click::Kind::Single => ClickCount::Single,
+        click::Kind::Double => ClickCount::Double,
+        click::Kind::Triple => ClickCount::Triple,
+    }
 }
 
 /// Converts a wheel delta into a number of terminal lines. Mice send discrete
@@ -352,31 +363,19 @@ impl canvas::Program<Message> for TerminalView<'_> {
                     }));
                 }
                 // A double-click selects the link, path or word under the
-                // pointer and copies it, like a terminal. iced's click
-                // tracker classifies the press from the previous one's time and
-                // distance. The word range drives a native selection so the
-                // highlight persists and rides scroll; the text is read now, off
-                // the current screen, since the selection lands on a later frame.
+                // pointer, a triple-click the row, and either copies it, like a
+                // terminal. iced's click tracker classifies the press from the
+                // previous one's time and distance. The range drives a native
+                // selection so the highlight persists and rides scroll.
                 let clicked = Click::new(position, mouse::Button::Left, state.last_click);
                 state.last_click = Some(clicked);
-                let off = self.screen.display_offset;
-                if clicked.kind() == click::Kind::Double
-                    && let Some((anchor, head)) = double_click_at(self.screen, col, row)
+                if let Some(ClickSelection { op, text }) =
+                    click_selection(self.screen, col, row, click_count(clicked.kind()))
                 {
                     state.held = None;
-                    let op = SelectOp::Range {
-                        line0: grid_line(anchor.1, off),
-                        col0: usize::from(anchor.0),
-                        line1: grid_line(head.1, off),
-                        col1: usize::from(head.0),
-                    };
                     let session = self.session;
                     return Some(canvas::Action::publish(if self.gestures.copy_on_select {
-                        Message::SelectAndCopy {
-                            session,
-                            op,
-                            text: word_text(self.screen, anchor, head),
-                        }
+                        Message::SelectAndCopy { session, op, text }
                     } else {
                         Message::Select { session, op }
                     }));
@@ -1034,6 +1033,37 @@ mod tests {
                 Some(Message::SelectAndCopy { .. })
             ),
             "with copy-on-select the word is copied as it is selected"
+        );
+    }
+
+    #[test]
+    fn a_triple_click_selects_and_copies_the_row() {
+        use canvas::Program;
+        let line = "see src/main.rs now";
+        let screen = screen_from(line);
+        let cursor = at_col(line.len(), 8);
+        let view = gesturing(&screen);
+        let mut state = TermState::default();
+        let _ = view.update(&mut state, &press(), test_bounds(), cursor);
+        let _ = view.update(&mut state, &press(), test_bounds(), cursor);
+        match published(view.update(&mut state, &press(), test_bounds(), cursor)) {
+            Some(Message::SelectAndCopy { op, text, .. }) => {
+                assert_eq!(text, line);
+                assert_eq!(
+                    op,
+                    SelectOp::Range {
+                        line0: 0,
+                        col0: 0,
+                        line1: 0,
+                        col1: line.len() - 1,
+                    }
+                );
+            }
+            other => panic!("expected the row selected and copied, got {other:?}"),
+        }
+        assert!(
+            state.held.is_none(),
+            "a row selection is settled, not a drag"
         );
     }
 

@@ -129,7 +129,7 @@ policy covers the sessions a quit stops, not text it would lose.
 | Key | Default | Notes |
 | --- | --- | --- |
 | `font_size` | `14` | pixels, clamped to 6–40. The zoom chords step from here at runtime without rewriting it. |
-| `copy_on_select` | `false` | a drag release or a double-click copies the selection outright, no chord needed |
+| `copy_on_select` | `false` | a drag release, a double-click or a triple-click copies the selection outright, no chord needed |
 | `paste_on_right_click` | `false` | a right-click pastes into the pane under the pointer, not necessarily the focused one |
 | `option_as_meta` | `"left"` | macOS only: which Option key is Meta — `"none"`, `"left"`, `"right"` or `"both"`; the other one types what the layout composes. Another value falls back to `"left"`. |
 | `colors.scheme` | built-in | every [`theme`](#theme) value marked ✓, e.g. `catppuccin-mocha` |

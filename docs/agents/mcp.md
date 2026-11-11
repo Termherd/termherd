@@ -142,11 +142,23 @@ check; the canvas routes on the same field to hand the bare press / drag /
 release / move to the child through `Message::TermPointer`, and keeps the
 event for the terminal when a modifier is held — Shift is the xterm override
 that lets a human select text out of a mouse-mode TUI, and the link modifier
-opens links. The content-dependent gestures (double-click word, shift-extend,
-link click) never left the canvas. *Where* a local gesture lands is still
+opens links. The content-dependent gestures (shift-extend, link click) never
+left the canvas. *Where* a local gesture lands is still
 `pointer_select` with the live offset; *whether* it is local at all is
 `route`'s alone, and the bridge carries `route`'s own answer rather than a
 renamed copy of it.
+
+**A repeated click is one rule, two readers** (#492). The word or row a
+double- or triple-click selects is `terminal::selection::click_selection`,
+read off the shell's `Screen`; the canvas calls it with iced's click
+classification and `mouse_in_session` with its `click_count`, so the bridge
+cannot select a different span than a hand would. It is decided in the shell,
+not on the terminal thread, because the word boundary is the link detector's
+(`target_at`), which lives app-side — the range then goes down as one
+`Event::Select`, as the canvas's does. When `route` forwards, the bridge sends
+the events one by one instead — for a `press`, the clicks before it, then the
+press (`orchestrate::repeated`), so no button goes down twice unreleased:
+xterm's report has no click count, and a TUI counts clicks by their timing.
 
 Three things the review pass after the merge added, each a rule worth
 keeping. **A gesture's owner is decided at its press and kept to its
@@ -205,10 +217,10 @@ To drive an isolated dev build from outside with plain `curl`, see
 [running.md](running.md#driving-an-isolated-build-from-outside).
 
 **Still open on the driving surface.** The pointer at termherd's own chrome
-(#301 — the sidebar, tabs and gutters still have no mouse), and six features
+(#301 — the sidebar, tabs and gutters still have no mouse), and four issues
 that would let an agent verify a fix it cannot reach today: layout and IME keys
-(#482), the app's own log (#483), window focus (#484), the docs editor (#485),
-double-click (#492) and the open overlay in the snapshot (#493).
+(#482), the app's own log (#483), the docs editor (#485), and the open overlay
+in the snapshot with window focus (#493).
 No defect is open beside them. The bridge's hardening is done: first #284,
 then #293, which moved the Host/Origin check from rmcp's defaults into
 termherd's own gate (403 before the token's 401). Four other defects are
