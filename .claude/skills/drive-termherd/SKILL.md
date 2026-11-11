@@ -17,6 +17,8 @@ rules; `docs/agents/mcp.md` holds the design and the open defects. The loop:
    typing, the status is still the one from before. Never poll `snapshot`.
 4. **Observe.** `read_terminal` for text; `screenshot` only for render,
    colour or glyph questions — it weighs hundreds of times a `snapshot`.
+   On a Claude pane pass `lines: 80` or more (to `prompt_in_session` too):
+   blank rows above the input box can push the reply out of the default 40.
 
 Diagnosing a live defect:
 
