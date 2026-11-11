@@ -55,7 +55,8 @@ fallback. Bash and fish need the snippet passed as a command-line argument,
 which termherd will not add to the platform's *default* program — it would
 demote your login shell to an ordinary one and change which startup files run —
 so they get the finer marks only when you name your shell in the settings; zsh
-needs no argument and is always integrated. And on Windows ConPTY exposes no
+needs no argument and is integrated by default, unless your `~/.zshenv` itself
+sets `ZDOTDIR` ([#569]). And on Windows ConPTY exposes no
 foreground process group, so a shell with neither route stays on `starting`.
 
 Each tagged release publishes desktop installers on the
@@ -332,6 +333,7 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 [#485]: https://github.com/Termherd/termherd/issues/485
 [#492]: https://github.com/Termherd/termherd/issues/492
 [#493]: https://github.com/Termherd/termherd/issues/493
+[#569]: https://github.com/Termherd/termherd/issues/569
 
 ## Test
 
