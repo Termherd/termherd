@@ -52,7 +52,9 @@ pub struct PointerEvent {
 
 /// How many clicks a gesture landed in quick succession — what a terminal
 /// reads as a word (two) or a line (three) when nothing reads the mouse.
-/// Bounded at three because no terminal tells a fourth click from a third.
+/// Bounded at three: a fourth click selects nothing new — by hand it cycles
+/// back to a word (iced classifies it as a double), and a caller asks for the
+/// count it means.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ClickCount {
     #[default]

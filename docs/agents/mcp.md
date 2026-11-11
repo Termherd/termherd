@@ -156,8 +156,9 @@ cannot select a different span than a hand would. It is decided in the shell,
 not on the terminal thread, because the word boundary is the link detector's
 (`target_at`), which lives app-side — the range then goes down as one
 `Event::Select`, as the canvas's does. When `route` forwards, the bridge sends
-the click that many times instead: xterm's report has no click count, and a
-TUI counts clicks by their timing.
+the events one by one instead — for a `press`, the clicks before it, then the
+press (`orchestrate::repeated`), so no button goes down twice unreleased:
+xterm's report has no click count, and a TUI counts clicks by their timing.
 
 Three things the review pass after the merge added, each a rule worth
 keeping. **A gesture's owner is decided at its press and kept to its

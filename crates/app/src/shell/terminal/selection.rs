@@ -514,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn a_triple_click_selects_the_whole_row_without_its_trailing_blanks() {
+    fn a_triple_click_selects_the_whole_row_and_copies_it_without_trailing_blanks() {
         let screen = screen_from("$ ls -la    ");
         assert_eq!(
             click_selection(&screen, 3, 0, ClickCount::Triple),

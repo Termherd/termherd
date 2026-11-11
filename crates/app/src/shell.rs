@@ -79,6 +79,15 @@ use input::{AltSides, event_modifiers};
 use record::RecordState;
 use streams::{PtyOutput, RESCAN_INTERVAL, pty_stream, rescan_tick_stream, watch_stream};
 
+/// `task`, followed by `copy` written to the clipboard unless it is empty —
+/// the one copy rule a gesture's selection follows, by hand or over the bridge.
+fn with_copy(task: Task<Message>, copy: Option<String>) -> Task<Message> {
+    match copy.filter(|text| !text.is_empty()) {
+        Some(text) => Task::batch([task, iced::clipboard::write(text)]),
+        None => task,
+    }
+}
+
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
 }
@@ -1004,26 +1013,16 @@ impl Shell {
             .collect()
     }
 
-    /// Change a session's selection, copying `copy` with it unless empty — the
-    /// one path a selection by hand and one over the bridge share. The flag says
-    /// whether `core` applied it: it absorbs a session that has exited, whose
-    /// screen a hand may still copy from, but which the bridge must refuse.
-    fn select(
-        &mut self,
-        session: SessionId,
-        op: termherd_core::SelectOp,
-        copy: Option<String>,
-    ) -> (bool, Task<Message>) {
+    /// Change a session's selection — the one path a selection by hand and one
+    /// over the bridge share. `None` when `core` absorbed it: the session has
+    /// exited, so the bridge must refuse, though a hand may still copy from
+    /// the screen it left. Whether to copy is the caller's, through
+    /// [`with_copy`], once it knows which.
+    fn select(&mut self, session: SessionId, op: termherd_core::SelectOp) -> Option<Task<Message>> {
         let effects = self
             .core
             .apply(termherd_core::Event::Select { session, op });
-        let applied = !effects.is_empty();
-        let select = self.perform(effects);
-        let task = match copy.filter(|text| !text.is_empty()) {
-            Some(text) => Task::batch([select, iced::clipboard::write(text)]),
-            None => select,
-        };
-        (applied, task)
+        (!effects.is_empty()).then(|| self.perform(effects))
     }
 
     // The iced `update`: a flat `match` over every `Message` variant — the
@@ -1264,8 +1263,11 @@ impl Shell {
                     .apply(termherd_core::Event::TerminalPointer { session, pointer });
                 self.perform(effects)
             }
-            Message::Select { session, op } => self.select(session, op, None).1,
-            Message::SelectAndCopy { session, op, text } => self.select(session, op, Some(text)).1,
+            Message::Select { session, op } => self.select(session, op).unwrap_or_else(Task::none),
+            Message::SelectAndCopy { session, op, text } => with_copy(
+                self.select(session, op).unwrap_or_else(Task::none),
+                Some(text),
+            ),
             Message::RequestCopySelection { session } => {
                 let effects = self
                     .core
@@ -2724,6 +2726,33 @@ mod key_routing {
         let click = PointerEvent::left(PointerKind::Click, 2, 0);
         assert_eq!(pty.pointers(), vec![(session, click); 3]);
         assert!(pty.selects().is_empty(), "the mouse is the child's");
+    }
+
+    /// A repeated press is the clicks before it, then the press: the child
+    /// sees each button released before the next goes down, and the last one
+    /// held, as from a hand — never presses stacked with no release.
+    #[test]
+    fn pointer_action_forwards_a_repeated_press_as_clicks_then_the_press() {
+        use termherd_core::MouseReporting;
+        let (mut shell, pty, handle) = shell_showing("$ vim");
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell
+            .screens
+            .get_mut(&session)
+            .expect("the fixture rendered a screen")
+            .mouse_reporting = Some(MouseReporting::Click);
+        let press = PointerEvent::left(PointerKind::Press, 2, 0);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: press,
+            clicks: ClickCount::Triple,
+        });
+        assert_eq!(outcome.pointer(), Some(PointerRoute::Forward));
+        let click = PointerEvent::left(PointerKind::Click, 2, 0);
+        assert_eq!(
+            pty.pointers(),
+            vec![(session, click), (session, click), (session, press)]
+        );
     }
 
     #[test]

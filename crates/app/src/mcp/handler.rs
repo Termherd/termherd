@@ -1242,7 +1242,7 @@ struct MouseArgs {
     /// `1` (default), `2` for a double-click, `3` for a triple-click. Only a
     /// `click` or a `press` can repeat.
     #[serde(default)]
-    click_count: Option<u8>,
+    click_count: Option<i64>,
 }
 
 /// How many clicks a `mouse_in_session` call lands. Out of `1..=3`, or above
@@ -1252,9 +1252,12 @@ fn parse_clicks(args: &MouseArgs, kind: PointerKind) -> Result<ClickCount, Error
     let Some(count) = args.click_count else {
         return Ok(ClickCount::Single);
     };
-    let clicks = ClickCount::from_count(count).ok_or_else(|| {
-        ErrorData::invalid_params(format!("click_count {count} is outside 1..=3"), None)
-    })?;
+    let clicks = u8::try_from(count)
+        .ok()
+        .and_then(ClickCount::from_count)
+        .ok_or_else(|| {
+            ErrorData::invalid_params(format!("click_count {count} is outside 1..=3"), None)
+        })?;
     let repeatable = matches!(kind, PointerKind::Click | PointerKind::Press);
     if clicks != ClickCount::Single && !repeatable {
         return Err(ErrorData::invalid_params(
@@ -2647,6 +2650,8 @@ mod tests {
             ("click", 0, "0"),
             ("click", 4, "4"),
             ("press", 9, "9"),
+            ("click", -1, "-1"),
+            ("click", 1000, "1000"),
             ("drag", 2, "drag"),
             ("release", 3, "release"),
             ("move", 2, "move"),
