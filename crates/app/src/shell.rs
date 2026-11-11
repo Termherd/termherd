@@ -1004,6 +1004,28 @@ impl Shell {
             .collect()
     }
 
+    /// Change a session's selection, copying `copy` with it unless empty — the
+    /// one path a selection by hand and one over the bridge share. The flag says
+    /// whether `core` applied it: it absorbs a session that has exited, whose
+    /// screen a hand may still copy from, but which the bridge must refuse.
+    fn select(
+        &mut self,
+        session: SessionId,
+        op: termherd_core::SelectOp,
+        copy: Option<String>,
+    ) -> (bool, Task<Message>) {
+        let effects = self
+            .core
+            .apply(termherd_core::Event::Select { session, op });
+        let applied = !effects.is_empty();
+        let select = self.perform(effects);
+        let task = match copy.filter(|text| !text.is_empty()) {
+            Some(text) => Task::batch([select, iced::clipboard::write(text)]),
+            None => select,
+        };
+        (applied, task)
+    }
+
     // The iced `update`: a flat `match` over every `Message` variant — the
     // app's central event dispatcher, whose arms delegate to the domain modules (launch,
     // session_ops, effects, geometry, routing, …). The length here is breadth
@@ -1242,23 +1264,8 @@ impl Shell {
                     .apply(termherd_core::Event::TerminalPointer { session, pointer });
                 self.perform(effects)
             }
-            Message::Select { session, op } => {
-                let effects = self
-                    .core
-                    .apply(termherd_core::Event::Select { session, op });
-                self.perform(effects)
-            }
-            Message::SelectAndCopy { session, op, text } => {
-                let effects = self
-                    .core
-                    .apply(termherd_core::Event::Select { session, op });
-                let select = self.perform(effects);
-                if text.is_empty() {
-                    select
-                } else {
-                    Task::batch([select, iced::clipboard::write(text)])
-                }
-            }
+            Message::Select { session, op } => self.select(session, op, None).1,
+            Message::SelectAndCopy { session, op, text } => self.select(session, op, Some(text)).1,
             Message::RequestCopySelection { session } => {
                 let effects = self
                     .core
@@ -2645,14 +2652,17 @@ mod key_routing {
         );
     }
 
-    /// A repeated click on the bridge at a cell of `text`.
+    /// A repeated click on the bridge at a cell of `text`, after `prepare` has
+    /// set the session up.
     fn clicks_at(
         text: &str,
         col: u16,
         clicks: ClickCount,
+        prepare: impl FnOnce(&mut Shell, SessionId),
     ) -> (super::bridge::ActionOutcome, Arc<RecordingPty>, SessionId) {
         let (mut shell, pty, handle) = shell_showing(text);
         let session = shell.core.workspace.focused_session().expect("focused");
+        prepare(&mut shell, session);
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: handle,
             pointer: PointerEvent::left(PointerKind::Click, col, 0),
@@ -2670,7 +2680,7 @@ mod key_routing {
             (ClickCount::Double, (2, 6)),  // `cargo`
             (ClickCount::Triple, (0, 11)), // the whole row
         ] {
-            let (outcome, pty, _) = clicks_at("$ cargo test", 4, clicks);
+            let (outcome, pty, _) = clicks_at("$ cargo test", 4, clicks, |_, _| {});
             assert_eq!(outcome.error, None, "{clicks:?}");
             assert_eq!(outcome.pointer(), Some(PointerRoute::Select), "{clicks:?}");
             assert_eq!(
@@ -2689,7 +2699,7 @@ mod key_routing {
 
     #[test]
     fn pointer_action_double_click_on_a_blank_is_that_many_plain_clicks() {
-        let (outcome, pty, session) = clicks_at("$ cargo test", 1, ClickCount::Double);
+        let (outcome, pty, session) = clicks_at("$ cargo test", 1, ClickCount::Double, |_, _| {});
         assert_eq!(outcome.error, None);
         assert_eq!(outcome.pointer(), Some(PointerRoute::Select));
         let click = PointerEvent::left(PointerKind::Click, 1, 0);
@@ -2702,37 +2712,29 @@ mod key_routing {
     #[test]
     fn pointer_action_forwards_a_repeated_click_as_that_many_clicks() {
         use termherd_core::MouseReporting;
-        let (mut shell, pty, handle) = shell_showing("$ vim");
-        let session = shell.core.workspace.focused_session().expect("focused");
-        shell
-            .screens
-            .get_mut(&session)
-            .expect("the fixture rendered a screen")
-            .mouse_reporting = Some(MouseReporting::Click);
-        let click = PointerEvent::left(PointerKind::Click, 2, 0);
-        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
-            session: handle,
-            pointer: click,
-            clicks: ClickCount::Triple,
-        });
+        let (outcome, pty, session) =
+            clicks_at("$ vim", 2, ClickCount::Triple, |shell, session| {
+                shell
+                    .screens
+                    .get_mut(&session)
+                    .expect("the fixture rendered a screen")
+                    .mouse_reporting = Some(MouseReporting::Click);
+            });
         assert_eq!(outcome.pointer(), Some(PointerRoute::Forward));
+        let click = PointerEvent::left(PointerKind::Click, 2, 0);
         assert_eq!(pty.pointers(), vec![(session, click); 3]);
         assert!(pty.selects().is_empty(), "the mouse is the child's");
     }
 
     #[test]
     fn pointer_action_rejects_a_repeated_click_on_an_exited_session() {
-        let (mut shell, pty, handle) = shell_showing("$ cargo test");
-        let session = shell.core.workspace.focused_session().expect("focused");
-        let _ = shell.update(Message::PtyExited {
-            session,
-            clean: false,
-        });
-        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
-            session: handle,
-            pointer: PointerEvent::left(PointerKind::Click, 4, 0),
-            clicks: ClickCount::Double,
-        });
+        let (outcome, pty, _) =
+            clicks_at("$ cargo test", 4, ClickCount::Double, |shell, session| {
+                let _ = shell.update(Message::PtyExited {
+                    session,
+                    clean: false,
+                });
+            });
         assert!(
             outcome
                 .error

@@ -205,7 +205,7 @@ fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16), (u16, u16
 
 /// The text of a single-row range — what a double- or triple-click copies
 /// before its native selection has been echoed back on a snapshot.
-pub(super) fn word_text(screen: &Screen, anchor: (u16, u16), head: (u16, u16)) -> String {
+fn word_text(screen: &Screen, anchor: (u16, u16), head: (u16, u16)) -> String {
     spans_text(screen, &[(anchor.1, anchor.0, head.0)])
 }
 

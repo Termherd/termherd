@@ -321,16 +321,18 @@ impl Shell {
         // A repeated click the terminal keeps selects what the canvas would,
         // off the same screen; anything else is that many single events — a
         // child reading the mouse tells a double-click by their timing.
-        let selection = (route == PointerRoute::Select)
-            .then(|| click_selection(screen, pointer.col, pointer.row, clicks))
-            .flatten();
-        let (effects, copied) = match selection {
-            Some(ClickSelection { op, text }) => (
-                self.core.apply(Event::Select { session: id, op }),
-                self.gestures.copy_on_select.then_some(text),
-            ),
+        let selection = if route == PointerRoute::Select {
+            click_selection(screen, pointer.col, pointer.row, clicks)
+        } else {
+            None
+        };
+        let (applied, task) = match selection {
+            Some(ClickSelection { op, text }) => {
+                let copy = self.gestures.copy_on_select.then_some(text);
+                self.select(id, op, copy)
+            }
             None => {
-                let effects = (0..clicks.count())
+                let effects: Vec<_> = (0..clicks.count())
                     .flat_map(|_| {
                         self.core.apply(Event::TerminalPointer {
                             session: id,
@@ -338,13 +340,13 @@ impl Shell {
                         })
                     })
                     .collect();
-                (effects, None)
+                (!effects.is_empty(), self.perform(effects))
             }
         };
         // `core` absorbs an event for a session that has exited; a screen is
         // still there to bound against, but no terminal is behind it, and the
         // answer must not claim one did something.
-        if effects.is_empty() {
+        if !applied {
             return (
                 ActionOutcome::rejected(format!(
                     "session {session} has exited, so there is no terminal to \
@@ -353,13 +355,6 @@ impl Shell {
                 Task::none(),
             );
         }
-        let performed = self.perform(effects);
-        let task = match copied {
-            Some(text) if !text.is_empty() => {
-                Task::batch([performed, iced::clipboard::write(text)])
-            }
-            _ => performed,
-        };
         (
             self.applied().with_detail(ActionDetail::Pointer(route)),
             task,
