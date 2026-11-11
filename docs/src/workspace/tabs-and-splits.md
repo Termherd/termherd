@@ -130,6 +130,9 @@ focused tab:
 | Rename tab | `rename-tab` | every tab |
 | Tab colour… | `pick-tab-color` | every tab; disabled, with why, when no colour can be picked now (below) |
 | Copy agent name | `copy-agent-name` | a tab whose focused pane has a named Claude in front |
+| Reveal directory | `reveal-session-dir` | a tab whose focused pane's directory is known |
+| Reveal transcript | `reveal-transcript` | a tab whose focused Claude's transcript the scan has found |
+| Send to Claude Desktop | `send-to-desktop` | a Claude tab on macOS or Windows; disabled, with why, when Claude cannot take the command now |
 | New shell here | `new-shell-here` | every tab |
 | New Claude session here | `new-claude-session-here` | every tab |
 | New Claude session in a worktree | `new-claude-session-in-worktree` | a tab whose focused pane is in a git checkout ([below](#a-claude-session-in-a-new-worktree)) |
@@ -156,7 +159,13 @@ menu open.
 the menu opens: a Claude runs in front of the focused pane and has written its
 session file, whether the pane was opened as a Claude session or as a shell.
 On Windows that Claude must run as `claude.exe`: one an npm install runs as
-`node.exe` is never named, so the entry never appears for it. The menu belongs
+`node.exe` is never named, so the entry never appears for it.
+
+*Reveal transcript* shows the conversation's `.jsonl` file selected in Finder
+or Explorer, and opens the folder holding it on Linux. A fresh Claude has no
+such entry until the sidebar's scan has found its file. *Send to Claude
+Desktop* is left out on Linux, where Claude Desktop does not run; elsewhere
+it is greyed out as *Tab colour…* is, and for the same reasons. The menu belongs
 to the pane it opened over: if that pane closes or loses focus, the menu goes
 with it.
 

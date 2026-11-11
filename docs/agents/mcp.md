@@ -29,7 +29,10 @@ immediately, so synchronise with `wait_for_status` and then `read_terminal`.
 Wait for `busy` before `idle`: just after typing, Claude still shows the
 status from before the prompt, and a wait on it answers at once (#435).
 Do **not** poll `snapshot` in a loop — it races the transition you are
-watching for, which is why the wait rung exists.
+watching for, which is why the wait rung exists. Read a Claude pane with
+`lines: 80` or more: Claude Code pads its screen with blank rows between the
+conversation and the input box, and the default 40 can hold none of the reply
+— a live run read a `PONG` reply as lost until the read was widened (#567).
 
 **That loop did not run until #236, and now does.** Every session used to sit
 on `starting`, so `wait_for_status` only ever settled by timing out. Two

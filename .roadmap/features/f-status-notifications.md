@@ -32,4 +32,7 @@ launched from a termherd shell read it as the user's home and generated a
 session sat on `starting`, the very symptom the paragraph above exists to
 remove. A generated directory is now recognised by name and never replayed
 from, and the recipe exports the home it displaced so a nesting level cannot
-lose it
+lose it. #569 is the remaining hole, the other way round: a `~/.zshenv` that
+itself exports `ZDOTDIR` takes zsh away from the generated files, so the hooks
+never install when TermHerd starts from an environment that never ran the
+user's shell (the Dock, a launcher).
