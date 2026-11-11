@@ -143,7 +143,8 @@ install runs under `node.exe`. Bind it yourself; it has no default.
 `send-to-desktop` asks to type `/desktop` into the Claude in the focused pane,
 which hands the session to the Claude desktop app. A prompt shows the exact line
 first: <kbd>Enter</kbd> types it, <kbd>Escape</kbd> drops it. It does nothing
-unless that Claude is idle with nothing typed in its prompt. Bind it yourself;
+unless that Claude is idle with nothing typed in its prompt. On Linux, where
+Claude Desktop does not run, it does nothing. Bind it yourself;
 it has no default.
 
 `reveal-session-dir` opens the focused pane's working directory in the file

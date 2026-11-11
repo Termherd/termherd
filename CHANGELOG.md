@@ -14,7 +14,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `reveal-transcript` shows the focused Claude's `.jsonl` transcript selected
   there (on Linux, its folder opens). Both are in the tab menu, and each
   sidebar row has a `↗` button that reveals its transcript. The tab menu also
-  gains *Send to Claude Desktop*, left out on Linux (#346).
+  gains *Send to Claude Desktop*. On Linux, where Claude Desktop does not run,
+  that entry is left out and `send-to-desktop` answers `no-surface` (#346).
 
 ### Fixed (no console window beside TermHerd on Windows)
 

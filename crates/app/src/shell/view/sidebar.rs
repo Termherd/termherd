@@ -523,7 +523,7 @@ impl Shell {
         // Shows the file this row was read from: the scan's own path, which a
         // worktree session's collapsed project path could not rebuild.
         let reveal = button(text("↗").size(12))
-            .on_press(Message::RevealTranscript(s.transcript.clone()))
+            .on_press(Message::RevealRowTranscript(s.transcript.clone()))
             .style(button::text)
             .padding(0);
 

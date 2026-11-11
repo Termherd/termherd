@@ -16,10 +16,6 @@ use super::routing::{KeyVerdict, KeyboardOwner, is_escape};
 use super::{Message, Shell};
 use crate::strings;
 
-/// Whether Claude Desktop runs on this platform: it ships for macOS and
-/// Windows only, so elsewhere its menu entry would only ever refuse.
-const CLAUDE_DESKTOP_EXISTS: bool = cfg!(any(target_os = "macos", target_os = "windows"));
-
 /// Which tabs an entry is offered on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Offered {
@@ -58,10 +54,9 @@ pub(super) struct Offers {
     pub(super) in_repo: bool,
     pub(super) dir_known: bool,
     pub(super) transcript_known: bool,
-    /// Whether the pane runs Claude on a platform Claude Desktop exists on.
-    pub(super) desktop_listed: bool,
-    /// Why the pane cannot take `/desktop` now; `None` when it can.
-    pub(super) desktop_refusal: Option<CommandRefusal>,
+    /// `None` where *Send to Claude Desktop* is not listed, else why the pane
+    /// cannot take `/desktop` now, if it cannot.
+    pub(super) desktop: Option<Option<CommandRefusal>>,
 }
 
 impl Offers {
@@ -82,9 +77,9 @@ impl Offers {
             Offered::InRepo => self.in_repo.then_some(enabled),
             Offered::WithDir => self.dir_known.then_some(enabled),
             Offered::WithTranscript => self.transcript_known.then_some(enabled),
-            Offered::WhenDesktopExists => self.desktop_listed.then_some(Line {
+            Offered::WhenDesktopExists => self.desktop.as_ref().map(|refusal| Line {
                 entry,
-                refusal: self.desktop_refusal.as_ref(),
+                refusal: refusal.as_ref(),
             }),
         }
     }
@@ -304,16 +299,7 @@ impl Shell {
             in_repo: self.focused_repo().is_some(),
             dir_known: self.focused_reveal(Reveal::Dir).is_some(),
             transcript_known: self.focused_reveal(Reveal::Transcript).is_some(),
-            desktop_listed: CLAUDE_DESKTOP_EXISTS
-                && self
-                    .core
-                    .sessions
-                    .get(&anchor)
-                    .is_some_and(|live| live.runs_claude()),
-            desktop_refusal: self
-                .core
-                .claude_command_check(anchor, &self.prompt_input(anchor))
-                .err(),
+            desktop: self.desktop_offer(anchor),
         };
         self.tab_menu = Some(TabMenu {
             anchor,

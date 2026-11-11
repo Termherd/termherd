@@ -624,8 +624,9 @@ enum Message {
     CancelCloseWindow,
     /// Toggle a browsed session's star (F-session-metadata).
     ToggleStar(String),
-    /// Show a browsed session's transcript selected in the OS file manager.
-    RevealTranscript(std::path::PathBuf),
+    /// Show a sidebar row's transcript, the file its scan read, selected in
+    /// the OS file manager.
+    RevealRowTranscript(std::path::PathBuf),
     /// Toggle a project's star, by real path (F-favorites, repo-level).
     ToggleRepoStar(String),
     /// Toggle a browsed session's archived flag (F-session-metadata). Used
@@ -785,7 +786,7 @@ impl Message {
                 | Self::RequestCloseTab(_)
                 | Self::CloseTab(_)
                 | Self::ToggleStar(_)
-                | Self::RevealTranscript(_)
+                | Self::RevealRowTranscript(_)
                 | Self::ToggleRepoStar(_)
                 | Self::PickRepoFolder
                 | Self::ForgetRepo(_)
@@ -1396,9 +1397,11 @@ impl Shell {
                 let effects = self.core.apply(termherd_core::Event::ToggleStar(session));
                 self.perform(effects)
             }
-            Message::RevealTranscript(path) => self.perform(vec![termherd_core::Effect::OpenPath(
-                termherd_core::OpenTarget::Reveal { path },
-            )]),
+            Message::RevealRowTranscript(path) => {
+                self.perform(vec![termherd_core::Effect::OpenPath(
+                    termherd_core::OpenTarget::Reveal { path },
+                )])
+            }
             Message::ToggleRepoStar(path) => {
                 let effects = self.core.apply(termherd_core::Event::ToggleRepoStar(path));
                 self.perform(effects)
@@ -3817,10 +3820,18 @@ mod key_routing {
             // No tab, so nothing to park.
             (Action::TogglePark, "toggle-park-tab"),
         ] {
+            // Without Claude Desktop, `send-to-desktop` is wired to nothing.
+            let reason = if action == Action::SendToDesktop
+                && !crate::shell::claude_command::CLAUDE_DESKTOP_EXISTS
+            {
+                "no-surface"
+            } else {
+                "no-context"
+            };
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
                 outcome.steps,
-                vec![inert(name, "no-context")],
+                vec![inert(name, reason)],
                 "{name} refused, so it must not report `ran`"
             );
         }
@@ -5929,19 +5940,23 @@ mod key_routing {
         let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
         let escape = press(Key::Named(Named::Escape), Modifiers::default(), None);
 
-        let (mut local, _pty, _session) = shell_with_idle_claude();
-        let _ = local.dispatch_action(Action::SendToDesktop);
-        assert!(
-            !local.enter_too_soon(&enter, Instant::now()),
-            "the user read it"
-        );
+        // `send-to-desktop` is the action that arms a command, where Claude
+        // Desktop exists to send to.
+        if crate::shell::claude_command::CLAUDE_DESKTOP_EXISTS {
+            let (mut local, _pty, _session) = shell_with_idle_claude();
+            let _ = local.dispatch_action(Action::SendToDesktop);
+            assert!(
+                !local.enter_too_soon(&enter, Instant::now()),
+                "the user read it"
+            );
 
-        let (mut pressed, _pty, _session) = shell_with_idle_claude();
-        let _ = pressed.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
-        assert!(
-            pressed.enter_too_soon(&enter, Instant::now()),
-            "an agent's press arms it as remotely as the tool does"
-        );
+            let (mut pressed, _pty, _session) = shell_with_idle_claude();
+            let _ = pressed.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+            assert!(
+                pressed.enter_too_soon(&enter, Instant::now()),
+                "an agent's press arms it as remotely as the tool does"
+            );
+        }
 
         let (mut remote, _pty, session) = shell_with_idle_claude();
         let _ = arm_over_bridge(&mut remote, session, ClaudeCommand::Desktop);
@@ -6306,7 +6321,18 @@ mod key_routing {
 
     #[test]
     fn send_to_desktop_arms_the_prompt_for_the_focused_claude_only() {
-        let (mut shell, pty, _session) = shell_with_idle_claude();
+        use crate::shell::claude_command::CLAUDE_DESKTOP_EXISTS;
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        if !CLAUDE_DESKTOP_EXISTS {
+            // The menu and the action read the one platform predicate.
+            assert_eq!(shell.desktop_offer(session), None, "not listed");
+            let (outcome, _task) =
+                shell.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+            assert_eq!(outcome.steps, vec![inert("send-to-desktop", "no-surface")]);
+            assert!(shell.keyboard_owner().is_none());
+            return;
+        }
+        assert_eq!(shell.desktop_offer(session), Some(None), "listed, enabled");
         let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
         assert_eq!(
             outcome.steps,
@@ -9344,8 +9370,7 @@ mod key_routing {
                 in_repo: false,
                 dir_known: false,
                 transcript_known: false,
-                desktop_listed: false,
-                desktop_refusal: Some(BUSY),
+                desktop: None,
             }
         }
 
@@ -9375,8 +9400,7 @@ mod key_routing {
                 in_repo: true,
                 dir_known: true,
                 transcript_known: true,
-                desktop_listed: true,
-                desktop_refusal: None,
+                desktop: Some(None),
             };
             assert_eq!(lines(&everything).count(), ENTRIES.len());
             assert_eq!(disabled(&everything), vec![]);
@@ -9406,7 +9430,7 @@ mod key_routing {
             };
             assert_eq!(added_by(&transcript), vec![Action::RevealTranscript]);
             let desktop = Offers {
-                desktop_listed: true,
+                desktop: Some(Some(BUSY)),
                 ..nothing()
             };
             assert_eq!(added_by(&desktop), vec![Action::SendToDesktop]);

@@ -10,6 +10,7 @@ use termherd_core::workspace::{Direction, SplitDir, Step};
 use termherd_core::{Action, ClaudeCommand, ScrollTarget, keymap};
 use termherd_pty::{KeyMods, TermKey};
 
+use super::claude_command::CLAUDE_DESKTOP_EXISTS;
 use super::input::{chord_of, key_mods, numpad_char, sends_meta, to_term_key};
 use super::reveal::Reveal;
 use super::{Focus, Message, Shell, search_id};
@@ -226,6 +227,8 @@ impl Shell {
                 .map(iced::clipboard::write)
                 .ok_or(Inertia::NoContext)?,
             Action::Paste => iced::clipboard::read().map(Message::Paste),
+            // No Claude Desktop to hand the session to on this platform.
+            Action::SendToDesktop if !CLAUDE_DESKTOP_EXISTS => return Err(Inertia::NoSurface),
             Action::SendToDesktop => self
                 .arm_focused_claude_command(ClaudeCommand::Desktop)
                 .ok_or(Inertia::NoContext)?,

@@ -29,31 +29,31 @@ pub(super) fn open_path(path: &std::path::Path) -> Result<(), PtyError> {
 /// but not the `"/select,C:\a b\f"` a quoted argument would become. A Windows
 /// path cannot hold a `"`, so the quotes written here are the only ones.
 pub(super) fn reveal(path: &std::path::Path) -> Result<(), PtyError> {
-    use std::process::Command;
-    let spawn = |mut cmd: Command| {
-        cmd.spawn()
-            .map(|_| ())
-            .map_err(|e| PtyError::Io(e.to_string()))
-    };
     #[cfg(target_os = "macos")]
     {
-        let mut cmd = Command::new("open");
+        let mut cmd = std::process::Command::new("open");
         cmd.arg("-R").arg(path);
-        spawn(cmd)
+        launch(cmd)
     }
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let mut cmd = Command::new("explorer");
+        let mut cmd = std::process::Command::new("explorer");
         cmd.raw_arg(format!("/select,\"{}\"", path.display()));
-        spawn(cmd)
+        launch(cmd)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        let mut cmd = Command::new("xdg-open");
-        cmd.arg(path.parent().unwrap_or(path));
-        spawn(cmd)
+        open_path(path.parent().unwrap_or(path))
     }
+}
+
+/// Start `cmd` and let it run: an OS opener returns at once, so it is never
+/// waited on, and only a failure to start is an error.
+fn launch(mut cmd: std::process::Command) -> Result<(), PtyError> {
+    cmd.spawn()
+        .map(drop)
+        .map_err(|e| PtyError::Io(e.to_string()))
 }
 
 /// Run the user's configured editor command. `core` already substituted the
@@ -103,16 +103,11 @@ pub(super) fn spawn_editor(program: &str, args: &[String]) -> Result<(), PtyErro
 /// never rendered into `cmd`'s grammar in the first place.
 pub(super) fn open_url(url: &str) -> Result<(), PtyError> {
     use std::process::Command;
-    let spawn = |mut cmd: Command| {
-        cmd.spawn()
-            .map(|_| ())
-            .map_err(|e| PtyError::Io(e.to_string()))
-    };
     #[cfg(target_os = "macos")]
     {
         let mut cmd = Command::new("open");
         cmd.arg(url);
-        spawn(cmd)
+        launch(cmd)
     }
     #[cfg(target_os = "windows")]
     {
@@ -122,13 +117,13 @@ pub(super) fn open_url(url: &str) -> Result<(), PtyError> {
         // fire-and-forget and never waited on.
         let mut cmd = Command::new("explorer");
         cmd.arg(url);
-        spawn(cmd)
+        launch(cmd)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let mut cmd = Command::new("xdg-open");
         cmd.arg(url);
-        spawn(cmd)
+        launch(cmd)
     }
 }
 

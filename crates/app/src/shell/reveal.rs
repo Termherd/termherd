@@ -21,25 +21,28 @@ impl Shell {
     /// show: no focused pane, a directory not known, or a transcript no scan
     /// has found.
     pub(super) fn reveal_focused(&mut self, what: Reveal) -> Option<Task<Message>> {
+        if what == Reveal::Transcript {
+            // The id a re-keyed conversation (`/clear`) now writes under is
+            // only as fresh as the last read of its session file.
+            self.refresh_session_file(self.core.workspace.focused_session()?);
+        }
         let target = self.focused_reveal(what)?;
         Some(self.perform(vec![Effect::OpenPath(target)]))
     }
 
-    /// Where revealing `what` of the focused session points.
-    pub(super) fn focused_reveal(&mut self, what: Reveal) -> Option<OpenTarget> {
-        let session = self.core.workspace.focused_session()?;
+    /// Where revealing `what` of the focused session points, as of the last
+    /// read of its session file.
+    pub(super) fn focused_reveal(&self, what: Reveal) -> Option<OpenTarget> {
         Some(match what {
             Reveal::Dir => OpenTarget::SystemHandler {
-                path: self.core.sessions.get(&session)?.cwd.clone()?.into(),
+                path: self.focused_cwd()?.into(),
             },
-            Reveal::Transcript => {
-                // The id a re-keyed conversation (`/clear`) now writes under is
-                // only as fresh as the last read of its session file.
-                self.refresh_session_file(session);
-                OpenTarget::Reveal {
-                    path: self.core.transcript_of(session)?.to_owned(),
-                }
-            }
+            Reveal::Transcript => OpenTarget::Reveal {
+                path: self
+                    .core
+                    .transcript_of(self.core.workspace.focused_session()?)?
+                    .to_owned(),
+            },
         })
     }
 }
