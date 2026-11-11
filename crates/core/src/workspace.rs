@@ -480,17 +480,30 @@ impl Workspace {
         if from >= self.tabs.len() || to >= self.tabs.len() {
             return None;
         }
+        let parked = self.lands_parked(from, to)?;
         if from != to {
-            let was_parked = self.tabs[from].parked;
-            let unparked_besides = self.first_parked() - usize::from(!was_parked);
-            let parked = match to.cmp(&unparked_besides) {
-                std::cmp::Ordering::Less => false,
-                std::cmp::Ordering::Equal => was_parked,
-                std::cmp::Ordering::Greater => true,
-            };
             self.relocate(from, to, parked);
         }
         Some(())
+    }
+
+    /// The drop-zone rule: whether the tab at `from`, moved to index `to` of
+    /// the resulting strip, ends up parked. Past the unparked tabs it parks,
+    /// before them it unparks, and on the boundary between the two it keeps
+    /// its own zone. `from == to` answers the tab's current zone. `None` when
+    /// either index is off the strip.
+    #[must_use]
+    pub fn lands_parked(&self, from: usize, to: usize) -> Option<bool> {
+        let was_parked = self.tabs.get(from)?.parked;
+        if to >= self.tabs.len() {
+            return None;
+        }
+        let unparked_besides = self.first_parked() - usize::from(!was_parked);
+        Some(match to.cmp(&unparked_besides) {
+            std::cmp::Ordering::Less => false,
+            std::cmp::Ordering::Equal => was_parked,
+            std::cmp::Ordering::Greater => true,
+        })
     }
 
     /// Move the tab at `from` to index `to` of the resulting strip with
@@ -1732,6 +1745,50 @@ mod tests {
             assert_eq!(ws.move_tab(0, 1), Some(()));
             assert_eq!(tab_order(&ws), vec![sid(2), sid(1), sid(3)]);
             assert_eq!(active_id(&ws), sid(3));
+        }
+
+        #[test]
+        fn a_drop_lands_in_the_zone_it_falls_in_and_the_boundary_keeps_its_own() {
+            // [1 2 3 | 4 5]: three unparked tabs, then two parked ones.
+            let ws = strip(3, 2);
+            assert_eq!(ws.lands_parked(0, 1), Some(false), "within unparked");
+            assert_eq!(ws.lands_parked(0, 2), Some(false), "boundary, unparked");
+            assert_eq!(ws.lands_parked(0, 3), Some(true), "into the parked zone");
+            assert_eq!(ws.lands_parked(4, 3), Some(true), "boundary, parked");
+            assert_eq!(ws.lands_parked(4, 2), Some(false), "into the unparked zone");
+            assert_eq!(ws.lands_parked(3, 3), Some(true), "a parked tab held still");
+            assert_eq!(
+                ws.lands_parked(1, 1),
+                Some(false),
+                "an unparked tab held still"
+            );
+        }
+
+        #[test]
+        fn lands_parked_refuses_an_index_off_the_strip() {
+            let ws = strip(2, 1);
+            assert_eq!(ws.lands_parked(3, 0), None);
+            assert_eq!(ws.lands_parked(0, 3), None);
+        }
+
+        proptest! {
+            /// The predicate is the rule `move_tab` applies: whatever it
+            /// answers is the zone the moved tab is in once the move is done.
+            #[test]
+            fn lands_parked_predicts_the_zone_move_tab_leaves_the_tab_in(
+                unparked in 0usize..5,
+                parked in 0usize..5,
+                from in 0usize..10,
+                to in 0usize..10,
+            ) {
+                let mut ws = strip(unparked, parked);
+                let predicted = ws.lands_parked(from, to);
+                let moved = ws.move_tab(from, to);
+                prop_assert_eq!(predicted.is_some(), moved.is_some());
+                if let Some(parked) = predicted {
+                    prop_assert_eq!(ws.tabs[to].is_parked(), parked);
+                }
+            }
         }
 
         #[derive(Debug, Clone)]
