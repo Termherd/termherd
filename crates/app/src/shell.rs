@@ -6212,6 +6212,35 @@ mod key_routing {
     }
 
     #[test]
+    fn a_busy_claude_with_a_queued_message_takes_a_rename_typed_from_its_screen() {
+        // The screen as Claude Code 2.1.322 draws it once a message typed
+        // during the turn is queued: the prompt is empty but shows a hint.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        shell.screens.insert(
+            session,
+            screen_rows(&[
+                "│ 10:58 go W7 │",
+                "  ctrl+enter to send now",
+                RULE,
+                "❯ Press up to edit queued messages",
+                RULE,
+            ]),
+        );
+        rename_tab_by_hand(&mut shell, 0, "api work");
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
+
+        let _ = shell.update(Message::ConfirmClaudeCommand);
+        assert_eq!(pty.writes(), vec![b"\x15".to_vec()], "typing has begun");
+    }
+
+    #[test]
     fn a_claude_tab_rename_over_a_draft_is_reported_with_the_draft() {
         let (mut shell, _pty, session) = shell_with_idle_claude();
         shell

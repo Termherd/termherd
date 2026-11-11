@@ -1,7 +1,7 @@
 //! Whether a [`ClaudeCommand`] may be typed into a session now, and the writes
 //! that type it. One predicate answers both the arming of a confirmation and
-//! the send after it, so a session that turned busy while the prompt was up is
-//! refused by the same rule that would have refused it at the start.
+//! the send after it, so a session that raised a dialog while the prompt was up
+//! is refused by the same rule that would have refused it at the start.
 //!
 //! The status alone does not prove the keyboard reaches Claude's text input: a
 //! picker or a dialog can be up while Claude reads as idle, and a draft can sit
@@ -85,9 +85,8 @@ impl App {
             return Err(CommandRefusal::NotIdle(live.status));
         }
         match prompt {
-            // A queue exists only during a turn, so a command that reaches
-            // here with one already accepts a busy Claude, which keeps the
-            // queued message queued.
+            // The queued message is Claude's, not text in the prompt: the
+            // prompt is empty, and the command leaves the queue as it is.
             PromptInput::Empty | PromptInput::Queued => Ok(()),
             PromptInput::Draft(draft) => Err(CommandRefusal::DraftPresent(draft.clone())),
             PromptInput::NotVisible => Err(CommandRefusal::PromptNotVisible),

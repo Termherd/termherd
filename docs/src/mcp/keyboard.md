@@ -101,10 +101,10 @@ selection, and `copy` runs on it.
   [tabs page](../workspace/tabs-and-splits.md#tabs). *Tab colour…* is
   always listed, but disabled when no colour can be picked for the focused
   pane (a Claude waiting on an answer, a draft in its prompt, the prompt off
-  screen): `enter`
-  on it runs nothing, leaves the menu open and reports `refused` with the
-  reason. *Copy agent name* is listed only when a named Claude is in front of
-  the pane; left out, it shifts every entry below it by one.
+  screen): `enter` on it runs nothing, leaves the menu open and reports
+  `refused` with the reason. *Copy agent name* is listed only when a named
+  Claude is in front of the pane; left out, it shifts every entry below it by
+  one.
   The menu closes if its pane loses focus, so a `focus_pane` call while it is
   open dismisses it.
 - **`tab-color-picker`** (opened by `pick-tab-color`, or the tab menu's

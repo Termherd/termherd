@@ -58,6 +58,17 @@ impl fmt::Display for ArmRefusal {
     }
 }
 
+/// What a prompt reading was, for a log line: never a draft's text, which is
+/// the user's and may hold anything they pasted.
+fn prompt_shape(prompt: &PromptInput) -> &'static str {
+    match prompt {
+        PromptInput::Empty => "empty",
+        PromptInput::Draft(_) => "draft",
+        PromptInput::Queued => "queued",
+        PromptInput::NotVisible => "not visible",
+    }
+}
+
 impl Shell {
     /// Arm the confirmation for typing `command` into `session`, returning the
     /// exact line the prompt shows. Nothing is typed yet.
@@ -78,7 +89,7 @@ impl Shell {
             session = session.0.get(),
             %line,
             status = ?self.core.sessions.get(&session).map(|live| live.status),
-            ?prompt,
+            prompt = prompt_shape(&prompt),
             "claude command armed"
         );
         let enter_ignored_until = self
@@ -143,7 +154,7 @@ impl Shell {
                     line = %pending.command,
                     %refusal,
                     status = ?self.core.sessions.get(&session).map(|live| live.status),
-                    ?prompt,
+                    prompt = prompt_shape(&prompt),
                     "claude command not typed"
                 );
                 pending.refused = Some(refusal.clone());
