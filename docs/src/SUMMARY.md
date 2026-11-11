@@ -20,6 +20,8 @@
 
 - [Keyboard shortcuts](./reference/keyboard.md)
 - [settings.json](./reference/settings.md)
+- [Environment variables](./reference/environment.md)
+- [Troubleshooting](./reference/troubleshooting.md)
 
 # Driving termherd over MCP
 
@@ -27,6 +29,7 @@
 - [The live bridge](./mcp/live-bridge.md)
 - [Driving the keyboard](./mcp/keyboard.md)
 - [Attaching from outside](./mcp/attach.md)
+- [Orchestrating sessions](./mcp/orchestrating.md)
 - [The stdio server](./mcp/stdio.md)
 
 # Project

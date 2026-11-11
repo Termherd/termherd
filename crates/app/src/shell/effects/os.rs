@@ -21,6 +21,59 @@ pub(super) fn open_path(path: &std::path::Path) -> Result<(), PtyError> {
     open_url(&path.to_string_lossy())
 }
 
+/// Show `path` selected in the OS file manager: `open -R` on macOS,
+/// `explorer /select,` on Windows. Linux has no portable selection, so its
+/// file manager opens on the folder holding the file instead.
+///
+/// Windows takes the argument raw: `explorer` reads `/select,"C:\a b\f"`
+/// but not the `"/select,C:\a b\f"` a quoted argument would become. A Windows
+/// path cannot hold a `"`, so the quotes written here are the only ones.
+pub(super) fn reveal(path: &std::path::Path) -> Result<(), PtyError> {
+    revealable(path)?;
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg("-R").arg(path);
+        launch(cmd)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new("explorer");
+        cmd.raw_arg(format!("/select,\"{}\"", path.display()));
+        launch(cmd)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        open_path(path.parent().unwrap_or(path))
+    }
+}
+
+/// Refuse a path no file manager should be handed. A missing file is not
+/// reported by any of them: `open -R` exits unread, and `explorer` opens
+/// Documents instead. A relative path is refused too, which also keeps a
+/// leading `-` from ever reaching an opener's argv as an option.
+fn revealable(path: &std::path::Path) -> Result<(), PtyError> {
+    if !path.is_absolute() {
+        return Err(PtyError::Io(format!(
+            "not an absolute path: {}",
+            path.display()
+        )));
+    }
+    if !path.exists() {
+        return Err(PtyError::Io(format!("no such file: {}", path.display())));
+    }
+    Ok(())
+}
+
+/// Start `cmd` and let it run: an OS opener returns at once, so it is never
+/// waited on, and only a failure to start is an error.
+fn launch(mut cmd: std::process::Command) -> Result<(), PtyError> {
+    cmd.spawn()
+        .map(drop)
+        .map_err(|e| PtyError::Io(e.to_string()))
+}
+
 /// Run the user's configured editor command. `core` already substituted the
 /// argv, so this spawns it as-is: a real executable with its arguments, never
 /// a line a shell re-parses — the same rule as [`open_url`], and here it is
@@ -68,16 +121,11 @@ pub(super) fn spawn_editor(program: &str, args: &[String]) -> Result<(), PtyErro
 /// never rendered into `cmd`'s grammar in the first place.
 pub(super) fn open_url(url: &str) -> Result<(), PtyError> {
     use std::process::Command;
-    let spawn = |mut cmd: Command| {
-        cmd.spawn()
-            .map(|_| ())
-            .map_err(|e| PtyError::Io(e.to_string()))
-    };
     #[cfg(target_os = "macos")]
     {
         let mut cmd = Command::new("open");
         cmd.arg(url);
-        spawn(cmd)
+        launch(cmd)
     }
     #[cfg(target_os = "windows")]
     {
@@ -87,13 +135,13 @@ pub(super) fn open_url(url: &str) -> Result<(), PtyError> {
         // fire-and-forget and never waited on.
         let mut cmd = Command::new("explorer");
         cmd.arg(url);
-        spawn(cmd)
+        launch(cmd)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let mut cmd = Command::new("xdg-open");
         cmd.arg(url);
-        spawn(cmd)
+        launch(cmd)
     }
 }
 
@@ -319,6 +367,25 @@ mod tests {
             "the arguments reached the program, in order"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reveal_refuses_a_missing_or_relative_path_before_any_spawn() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let present = dir.path().join("abc.jsonl");
+        std::fs::write(&present, b"{}").expect("write");
+        assert!(revealable(&present).is_ok());
+        for refused in [
+            dir.path().join("gone.jsonl"),
+            "-R".into(),
+            "abc.jsonl".into(),
+        ] {
+            assert!(
+                matches!(reveal(&refused), Err(PtyError::Io(_))),
+                "{} must not reach a file manager",
+                refused.display()
+            );
+        }
     }
 
     #[test]

@@ -128,6 +128,9 @@ pub fn session_color(name: &str) -> String {
 pub const TAB_MENU_RENAME: &str = "Rename tab";
 pub const TAB_MENU_COLOR: &str = "Tab colour…";
 pub const TAB_MENU_COPY_AGENT_NAME: &str = "Copy agent name";
+pub const TAB_MENU_REVEAL_DIR: &str = "Reveal directory";
+pub const TAB_MENU_REVEAL_TRANSCRIPT: &str = "Reveal transcript";
+pub const TAB_MENU_SEND_TO_DESKTOP: &str = "Send to Claude Desktop";
 pub const TAB_MENU_NEW_SHELL: &str = "New shell here";
 pub const TAB_MENU_NEW_CLAUDE: &str = "New Claude session here";
 pub const TAB_MENU_NEW_CLAUDE_WORKTREE: &str = "New Claude session in a worktree";

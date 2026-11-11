@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use iced::Task;
 use iced::keyboard;
 use termherd_core::workspace::SessionId;
-use termherd_core::{ClaudeCommand, CommandRefusal, Event, PromptInput, read_prompt};
+use termherd_core::{ClaudeCommand, CommandKind, CommandRefusal, Event, PromptInput, read_prompt};
 
 use super::routing::is_enter;
 use super::{Message, Shell};
@@ -23,6 +23,11 @@ use crate::strings;
 /// user may be typing in a pane when an agent arms the prompt; without this,
 /// the Enter that ends their own line would confirm a command they never read.
 const REMOTE_ARM_GRACE: Duration = Duration::from_millis(600);
+
+/// Whether Claude Desktop runs on this platform: it ships for macOS and
+/// Windows only, so elsewhere `/desktop` could only ever fail.
+pub(super) const CLAUDE_DESKTOP_EXISTS: bool =
+    cfg!(any(target_os = "macos", target_os = "windows"));
 
 /// A command waiting on the user's confirmation, and the session it is for.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +129,18 @@ impl Shell {
         self.arm_claude_command(session, command)
             .ok()
             .map(|_| Task::none())
+    }
+
+    /// How `session` is offered `/desktop`: `None` where it is not (a shell, or
+    /// a platform without Claude Desktop), else why it cannot take it now, if
+    /// it cannot.
+    pub(super) fn desktop_offer(&self, session: SessionId) -> Option<Option<CommandRefusal>> {
+        let claude = self.core.sessions.get(&session)?.runs_claude();
+        (CLAUDE_DESKTOP_EXISTS && claude).then(|| {
+            self.core
+                .claude_command_check(session, CommandKind::Desktop, &self.prompt_input(session))
+                .err()
+        })
     }
 
     /// What `session`'s screen shows of Claude's prompt. A session that has

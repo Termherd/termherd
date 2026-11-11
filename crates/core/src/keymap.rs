@@ -140,6 +140,13 @@ pub enum Action {
     /// termherd types into Claude. Inert unless the focused pane is a Claude
     /// idle at its prompt.
     SendToDesktop,
+    /// Open the focused session's working directory in the OS file manager.
+    /// Inert when the focused pane's directory is unknown.
+    RevealSessionDir,
+    /// Show the focused Claude's transcript selected in the OS file manager.
+    /// Inert for a shell, and for a fresh Claude until a scan has found its
+    /// transcript.
+    RevealTranscript,
     /// Open the focused tab's colour picker. A pick for a Claude pane is typed
     /// as `/color`, behind the same confirmation; a shell tab keeps it itself.
     /// Inert with no tab, or on a Claude pane that cannot take a command now.
@@ -277,6 +284,8 @@ const ACTIONS: &[ActionDef] = &[
         .windows(&["ctrl+shift+v", "ctrl+v"]),
     ActionDef::new(Action::CopyAgentName, "copy-agent-name", &[]),
     ActionDef::new(Action::SendToDesktop, "send-to-desktop", &[]),
+    ActionDef::new(Action::RevealSessionDir, "reveal-session-dir", &[]),
+    ActionDef::new(Action::RevealTranscript, "reveal-transcript", &[]),
     ActionDef::new(Action::PickTabColor, "pick-tab-color", &[]),
     ActionDef::new(Action::TogglePark, "toggle-park-tab", &[]),
     // Ctrl+Up / Down stay the program's; Windows Terminal's Home / End instead.

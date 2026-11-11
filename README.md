@@ -12,8 +12,9 @@ the full reasoning archive.
 
 **📖 [termherd.github.io/termherd](https://termherd.github.io/termherd/)** —
 the user manual: philosophy, install, quick start, the workspace surfaces
-(sidebar, tabs and splits, terminal, status, capture), the MCP control surface,
-the shortcut reference and the `settings.json` reference.
+(sidebar, tabs and splits, terminal, status, capture), the MCP control surface
+and orchestrating sessions over it, the shortcut reference, the
+`settings.json` reference, environment variables and troubleshooting.
 
 It is an [mdBook](https://rust-lang.github.io/mdBook/) whose sources live in
 [`docs/src/`](docs/src/); `just docs` builds it, `just docs-serve` previews it
@@ -55,7 +56,8 @@ fallback. Bash and fish need the snippet passed as a command-line argument,
 which termherd will not add to the platform's *default* program — it would
 demote your login shell to an ordinary one and change which startup files run —
 so they get the finer marks only when you name your shell in the settings; zsh
-needs no argument and is always integrated. And on Windows ConPTY exposes no
+needs no argument and is integrated by default, unless your `~/.zshenv` itself
+sets `ZDOTDIR` ([#569]). And on Windows ConPTY exposes no
 foreground process group, so a shell with neither route stays on `starting`.
 
 Each tagged release publishes desktop installers on the
@@ -289,13 +291,13 @@ app on one it cannot answer; a sidebar rename used to be the exception
 renames. The rename fields use the same commit path for MCP and widget submit
 ([#246]).
 
-Follow-ups remain. The pointer at TermHerd's own interface ([#301]) reaches a
-session's terminal, and through it a program reading the mouse, but not yet
-the sidebar, tabs or gutters. Six more would let an agent check what it cannot
-reach today: layout and IME keys, the app's own log, window focus, the docs
-editor, double-click, and the overlay that holds the keyboard ([#482],
-[#483], [#484], [#485], [#492], [#493]). A client TermHerd did *not* spawn can now
-reach the bridge too, once `mcp.attach` is turned on ([#267]).
+A client TermHerd did *not* spawn can reach the bridge too, once `mcp.attach`
+is turned on ([#267]). One session driving others through it — briefs, the
+wait loop, what not to submit — is the manual's
+[Orchestrating sessions](https://termherd.github.io/termherd/mcp/orchestrating.html)
+page. What is still open on the MCP surface is the issue list filtered on the
+[`area:mcp`](https://github.com/Termherd/termherd/issues?q=is%3Aissue%20is%3Aopen%20label%3Aarea%3Amcp)
+label.
 
 ### The stdio server (manual)
 
@@ -325,13 +327,7 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 [#237]: https://github.com/Termherd/termherd/issues/237
 [#246]: https://github.com/Termherd/termherd/issues/246
 [#267]: https://github.com/Termherd/termherd/issues/267
-[#301]: https://github.com/Termherd/termherd/issues/301
-[#482]: https://github.com/Termherd/termherd/issues/482
-[#483]: https://github.com/Termherd/termherd/issues/483
-[#484]: https://github.com/Termherd/termherd/issues/484
-[#485]: https://github.com/Termherd/termherd/issues/485
-[#492]: https://github.com/Termherd/termherd/issues/492
-[#493]: https://github.com/Termherd/termherd/issues/493
+[#569]: https://github.com/Termherd/termherd/issues/569
 
 ## Test
 

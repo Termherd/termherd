@@ -88,11 +88,11 @@ platform the server runs on.
 ## What it is not
 
 It does not reach the running app: no sessions, no tabs, no terminals, no
-keyboard. That is the [live bridge](./live-bridge.md), and it exists only
-inside a session TermHerd launched.
+keyboard. That is the [live bridge](./live-bridge.md), which reaches a session
+TermHerd launched, or a client [attached from outside](./attach.md).
 
 It is also **not** `F-mcp-ide-bridge` — a deferred, unbuilt feature that would
 run the other way round, with TermHerd as an MCP *client* of Claude's IDE
-bridge. `docs/ARCHITECTURE.md` §15 lists an `mcp` crate as deferred under that
-name; the server described here lives in the same repository but answers a
-different question.
+bridge. `docs/ARCHITECTURE.md` §7 sketches that bridge, and §15 lists it as a
+row of its own, apart from the `mcp` crate: the crate holds the server
+described here and the option catalogue both servers share.

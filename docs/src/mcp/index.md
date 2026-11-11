@@ -57,7 +57,8 @@ a terminal is a decision, not a default.
 ## Which one you want
 
 - *"Split this pane and run the tests"* → **live bridge**. It only exists
-  inside a session TermHerd started.
+  inside a session TermHerd started. One session driving others through it:
+  [Orchestrating sessions](./orchestrating.md).
 - *"Switch me to a light theme"* → either. Both carry `list_options` and
   `set_option`, over one shared catalogue; the write lands in `settings.json`
   and a running TermHerd applies it at once. From a session TermHerd started,

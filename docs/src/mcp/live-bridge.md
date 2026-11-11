@@ -393,10 +393,12 @@ A worked example, from inside a session TermHerd launched:
   unknown pointer word, is refused the same way.
 - A wedged shell surfaces as a tool error, never a hang.
 
-## What is still open
+## What has shipped, and what is open
 
-One follow-up:
-
-| Gap | Issue |
-| --- | --- |
-| No pointer at TermHerd's own interface: the sidebar, the tab strip, a split gutter. | [#301](https://github.com/Termherd/termherd/issues/301) |
+This page describes the bridge as it is built. What each release added is in
+the [release notes](https://github.com/Termherd/termherd/releases) and the
+project's
+[`CHANGELOG.md`](https://github.com/Termherd/termherd/blob/main/CHANGELOG.md);
+what is still open is the issue list filtered on the
+[`area:mcp`](https://github.com/Termherd/termherd/issues?q=is%3Aissue%20is%3Aopen%20label%3Aarea%3Amcp)
+label.
