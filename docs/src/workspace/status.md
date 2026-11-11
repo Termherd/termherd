@@ -43,7 +43,7 @@ prompt and command marks fold into the same status:
 
 | Shell | How | Always on? |
 | --- | --- | --- |
-| zsh | a private `ZDOTDIR` | ✅ yes |
+| zsh | a private `ZDOTDIR` | ✅ yes, unless `~/.zshenv` sets `ZDOTDIR` |
 | bash | `--rcfile` | only when named in `settings.shell` |
 | fish | `--init-command` | only when named in `settings.shell` |
 
@@ -54,7 +54,9 @@ Bash and fish need their snippet as a **command-line argument**, and TermHerd
 will not add one to the platform's *default* program — that would demote your
 login shell to an ordinary one and change which startup files run. So: name
 your shell explicitly in `settings.json` to get the finer marks. zsh needs no
-argument and is always integrated.
+argument and is integrated by default — unless your `~/.zshenv` itself sets
+`ZDOTDIR`, which takes zsh away from TermHerd's files: see
+[Environment variables](../reference/environment.md#termherd_orig_zdotdir).
 
 **Where injection cannot apply** — an unknown shell, an unwritable temp
 directory — the PTY's **foreground process group** stands in. It is retired for
