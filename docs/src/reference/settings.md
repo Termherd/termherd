@@ -177,7 +177,8 @@ Two keys, both off by default.
 `allow_claude_nesting`: whether the live bridge's `prompt_in_session` may
 prompt another **Claude** session — one agent driving another. A shell session
 is never gated. A single call can opt in on its own with
-`allow_claude_nesting: true` (see [The live bridge](../mcp/live-bridge.md)).
+`allow_claude_nesting: true` (see [The live bridge](../mcp/live-bridge.md),
+and [Orchestrating sessions](../mcp/orchestrating.md) for the whole loop).
 
 ```json
 "mcp": { "allow_claude_nesting": false }

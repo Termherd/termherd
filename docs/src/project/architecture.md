@@ -28,8 +28,13 @@ adapter.
 | `claude` | a pure codec for the Claude CLI's own formats — path encode/derive, JSONL digest, OSC decode | nothing |
 | `app` | the iced GUI shell; builds the adapters in `main()` and injects them; owns the one effect executor and the MCP control surface | `core` + adapters |
 | `scan` | filesystem discovery — walks `~/.claude/projects` | `core` |
-| `pty` | the terminal adapter (`portable-pty` + `alacritty_terminal`) | `core` |
-| `mcp` | the stdio settings server | `core` |
+| `pty` | the terminal adapter (`portable-pty` + `alacritty_terminal`) | `core`, `private-fs` |
+| `mcp` | the stdio settings server, and the option catalogue both MCP servers share | `core` |
+| `private-fs` | owner-only files and directories (`0600` / `0700`) | nothing |
+
+The live MCP bridge is not a crate: it lives in `app`, as a bridge *into* the
+shell. The IDE bridge — TermHerd as an MCP *client* of Claude's own — is
+deferred and unbuilt.
 
 When adding code the question is *which crate does this belong in?* If the
 answer is "the core should call this adapter directly", the answer is wrong —
@@ -67,9 +72,10 @@ Non-negotiable, and CI-enforced:
 
 - `unwrap`, `expect` and `panic` are **clippy-denied** in `core` and `claude`.
   Production paths return typed errors.
-- `unsafe_code` is **denied workspace-wide**. The one sanctioned exception is
-  the macOS AppKit FFI (the Cmd+Q quit path, the menus, the text and link
-  relays): a `cfg`-gated module with a `SAFETY:` note on every block.
+- `unsafe_code` is **denied workspace-wide**. The two sanctioned exceptions
+  are the macOS AppKit FFI (the Cmd+Q quit path, the menus, the text and link
+  relays) and the Win32 process listing a ConPTY pane's Claude is found
+  through: each a `cfg`-gated module with a `SAFETY:` note on every block.
 - **No global mutable state** — no `static mut`, no `lazy_static`, no
   require-time singletons. Dependencies are built in `main()` and injected.
 - **One logging stack**: `tracing`. No `println!` outside tests.

@@ -43,10 +43,11 @@ validated: a session workspace is squarely in pure-native-Rust territory.
 | PTY process | **portable-pty** | cross-platform spawn/resize, cleaned env | Must |
 | Storage | **rusqlite** (bundled) + FTS5 | embedded SQLite, WAL, full-text; no entitlement cost | Must |
 | FS scan/watch | **notify** + **rayon** | debounced watch + parallel scan off the UI thread | Must |
-| Async runtime | **tokio** | PTY read loops, fs watch, (later) MCP | Must |
+| Async runtime | **tokio** | PTY read loops, fs watch, the MCP servers | Must |
 | Errors / logging | **thiserror**/`anyhow` + **tracing** | typed errors, structured logs | Must |
 | Release/update | **dist** (CLI archives) + **cargo-packager** (installers) | one GitHub release; installers unsigned for now and no self-update yet (§14) | Must (update = Should) |
-| MCP/IDE server | tokio-tungstenite | per-session WS + JSON-RPC | **Deferred (Unsure)** |
+| IDE bridge (termherd as MCP client, §7) | tokio-tungstenite | per-session WS + JSON-RPC | **Deferred (Unsure)** |
+| MCP servers (live bridge, stdio) | `rmcp` (live bridge); `serde_json` only (stdio) | termherd as MCP *server* (§7, §15) | Shipped |
 | Diff / highlight | `similar` + `syntect` | diff + syntax for the panel | **Deferred (Unsure)** |
 
 Tabs, splits, and the keymap need **no new crates** — they are pure logic in
@@ -101,10 +102,12 @@ structurally prevents a new god-object.
   written, so a reader looking for it is not missing something, and the file
   read that would have used it goes through `ProjectScanner`.
 - ~~`mcp` exists in the workspace only if/when the Unsure bet is taken; nothing
-  in the v1 path imports it.~~ **Superseded.** This still holds for the `mcp`
-  *crate* below (§15, `IdeBridge` — termherd as a **client**). It does not hold
-  for the MCP **control surface** (`F-mcp-control-surface`, #90), which shipped
-  in the v1 path as a module inside `app` — see §8.
+  in the v1 path imports it.~~ **Superseded.** The name now belongs to the
+  shipped MCP **control surface** (`F-mcp-control-surface`, #90): its live
+  bridge is a module inside `app` (§7, §8), and `crates/mcp` holds its stdio
+  server and the option catalogue both servers share (§15). What stays
+  deferred is the IDE bridge (`IdeBridge`, termherd as an MCP **client**,
+  §7), which has no crate and no port yet.
 - The rule is CI-enforceable, so "main.js → 1,461 LOC" cannot recur.
 
 ## 5. The headless core (the quality keystone)
@@ -372,7 +375,7 @@ their job graphs.
 | `app` | iced GUI: sidebar, tabs, splits, terminal; live MCP bridge | `iced` | Must |
 | `mcp` | stdio MCP server binary + settings-option catalogue | `core` | Shipped |
 | `private-fs` | owner-only files and directories | — | Shipped |
-| IDE bridge | per-session IDE/MCP WS server (termherd as MCP client) | `tokio-tungstenite` | Deferred |
+| IDE bridge | per-session IDE/MCP WS server (termherd as MCP client, sketched in §7); no crate yet, and not `mcp` | `tokio-tungstenite` | Deferred |
 
 ## 16. Migration path from the Electron app
 
@@ -396,5 +399,7 @@ their job graphs.
 - **GUI framework churn.** Mitigation: logic is in `core`; the GUI crate is
   replaceable without touching tests or adapters.
 - **Claude format/OSC drift.** Mitigation: isolated, property-tested `claude`.
-- **The Unsure bet (MCP/diff) returning later.** Mitigation: the `IdeBridge`
-  port already exists in `core`; adding the adapter is additive, not a rework.
+- **The Unsure bet (IDE bridge/diff) returning later.** Mitigation: it would
+  enter as a new port in `core::ports` and an adapter implementing it —
+  additive, not a rework. No `IdeBridge` port exists yet; it is written when
+  the bet is taken, not ahead of it.
