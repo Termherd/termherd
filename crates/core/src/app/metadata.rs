@@ -138,6 +138,15 @@ impl App {
             .find(|record| record.session_id == claude_id)
     }
 
+    /// The transcript file of the conversation `session` hosts, as the last
+    /// scan found it. `None` for a shell, and for a fresh Claude until a scan
+    /// has seen the file of the id it was minted under.
+    #[must_use]
+    pub fn transcript_of(&self, session: SessionId) -> Option<&std::path::Path> {
+        self.session_record(session)
+            .map(|record| record.transcript.as_path())
+    }
+
     /// Whether a session id is still on the scanned project list — the guard
     /// the archive confirmation uses against a session a rescan removed while
     /// the prompt was up. Exactly "the last scan has a record for it", so it
@@ -245,6 +254,30 @@ mod tests {
         );
         // A shell / fresh session id has no browsed record.
         assert!(app.record_for("not-scanned").is_none());
+    }
+
+    #[test]
+    fn transcript_of_follows_the_pane_to_its_scanned_file() {
+        let mut app = App::new();
+        app.apply(Event::ScanCompleted(vec![record("abc-123", "/proj", "hi")]));
+        let mut open = |launch| {
+            app.apply(Event::LaunchSession(LaunchSpec {
+                cwd: Some("/proj".into()),
+                launch,
+                title: "proj".into(),
+                placement: Placement::Foreground,
+            }));
+            app.workspace.focused_session().expect("a focused session")
+        };
+        let resumed = open(Launch::Claude(ClaudeLaunch::Resume("abc-123".into())));
+        let fresh = open(Launch::Claude(ClaudeLaunch::Fresh(Some("not-yet".into()))));
+        let shell = open(Launch::Shell);
+        assert_eq!(
+            app.transcript_of(resumed),
+            Some(std::path::Path::new("/claude/projects/abc-123.jsonl"))
+        );
+        assert_eq!(app.transcript_of(fresh), None, "no scan has seen it yet");
+        assert_eq!(app.transcript_of(shell), None);
     }
 
     #[test]

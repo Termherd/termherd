@@ -149,6 +149,9 @@ pub enum OpenTarget {
     Editor { program: String, args: Vec<String> },
     /// The OS default handler (`open` / `explorer` / `xdg-open`).
     SystemHandler { path: PathBuf },
+    /// The OS file manager, opened on the folder holding `path` with `path`
+    /// selected: for a file no default handler suits, like a transcript.
+    Reveal { path: PathBuf },
 }
 
 impl OpenCommand {

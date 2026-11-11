@@ -50,6 +50,7 @@ mod notify_click;
 mod orchestrate;
 mod record;
 mod repos;
+mod reveal;
 mod routing;
 mod serve;
 mod session_ops;
@@ -623,6 +624,9 @@ enum Message {
     CancelCloseWindow,
     /// Toggle a browsed session's star (F-session-metadata).
     ToggleStar(String),
+    /// Show a sidebar row's transcript, the file its scan read, selected in
+    /// the OS file manager.
+    RevealRowTranscript(std::path::PathBuf),
     /// Toggle a project's star, by real path (F-favorites, repo-level).
     ToggleRepoStar(String),
     /// Toggle a browsed session's archived flag (F-session-metadata). Used
@@ -782,6 +786,7 @@ impl Message {
                 | Self::RequestCloseTab(_)
                 | Self::CloseTab(_)
                 | Self::ToggleStar(_)
+                | Self::RevealRowTranscript(_)
                 | Self::ToggleRepoStar(_)
                 | Self::PickRepoFolder
                 | Self::ForgetRepo(_)
@@ -1391,6 +1396,11 @@ impl Shell {
             Message::ToggleStar(session) => {
                 let effects = self.core.apply(termherd_core::Event::ToggleStar(session));
                 self.perform(effects)
+            }
+            Message::RevealRowTranscript(path) => {
+                self.perform(vec![termherd_core::Effect::OpenPath(
+                    termherd_core::OpenTarget::Reveal { path },
+                )])
             }
             Message::ToggleRepoStar(path) => {
                 let effects = self.core.apply(termherd_core::Event::ToggleRepoStar(path));
@@ -2738,6 +2748,7 @@ mod key_routing {
                 ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
+            transcript: std::path::PathBuf::new(),
         }
     }
 
@@ -3809,10 +3820,18 @@ mod key_routing {
             // No tab, so nothing to park.
             (Action::TogglePark, "toggle-park-tab"),
         ] {
+            // Without Claude Desktop, `send-to-desktop` is wired to nothing.
+            let reason = if action == Action::SendToDesktop
+                && !crate::shell::claude_command::CLAUDE_DESKTOP_EXISTS
+            {
+                "no-surface"
+            } else {
+                "no-context"
+            };
             let (outcome, _task) = shell.perform_presses(vec![Press::Command(action)]);
             assert_eq!(
                 outcome.steps,
-                vec![inert(name, "no-context")],
+                vec![inert(name, reason)],
                 "{name} refused, so it must not report `ran`"
             );
         }
@@ -4493,6 +4512,7 @@ mod key_routing {
                 ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
+            transcript: std::path::PathBuf::new(),
         };
         let _ = shell
             .core
@@ -4516,6 +4536,7 @@ mod key_routing {
                 ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
+            transcript: std::path::PathBuf::new(),
         };
         let _ = shell.core.apply(termherd_core::Event::ScanCompleted(vec![
             row("sess-a"),
@@ -5919,19 +5940,23 @@ mod key_routing {
         let enter = press(Key::Named(Named::Enter), Modifiers::default(), None);
         let escape = press(Key::Named(Named::Escape), Modifiers::default(), None);
 
-        let (mut local, _pty, _session) = shell_with_idle_claude();
-        let _ = local.dispatch_action(Action::SendToDesktop);
-        assert!(
-            !local.enter_too_soon(&enter, Instant::now()),
-            "the user read it"
-        );
+        // `send-to-desktop` is the action that arms a command, where Claude
+        // Desktop exists to send to.
+        if crate::shell::claude_command::CLAUDE_DESKTOP_EXISTS {
+            let (mut local, _pty, _session) = shell_with_idle_claude();
+            let _ = local.dispatch_action(Action::SendToDesktop);
+            assert!(
+                !local.enter_too_soon(&enter, Instant::now()),
+                "the user read it"
+            );
 
-        let (mut pressed, _pty, _session) = shell_with_idle_claude();
-        let _ = pressed.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
-        assert!(
-            pressed.enter_too_soon(&enter, Instant::now()),
-            "an agent's press arms it as remotely as the tool does"
-        );
+            let (mut pressed, _pty, _session) = shell_with_idle_claude();
+            let _ = pressed.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+            assert!(
+                pressed.enter_too_soon(&enter, Instant::now()),
+                "an agent's press arms it as remotely as the tool does"
+            );
+        }
 
         let (mut remote, _pty, session) = shell_with_idle_claude();
         let _ = arm_over_bridge(&mut remote, session, ClaudeCommand::Desktop);
@@ -6296,7 +6321,18 @@ mod key_routing {
 
     #[test]
     fn send_to_desktop_arms_the_prompt_for_the_focused_claude_only() {
-        let (mut shell, pty, _session) = shell_with_idle_claude();
+        use crate::shell::claude_command::CLAUDE_DESKTOP_EXISTS;
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        if !CLAUDE_DESKTOP_EXISTS {
+            // The menu and the action read the one platform predicate.
+            assert_eq!(shell.desktop_offer(session), None, "not listed");
+            let (outcome, _task) =
+                shell.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
+            assert_eq!(outcome.steps, vec![inert("send-to-desktop", "no-surface")]);
+            assert!(shell.keyboard_owner().is_none());
+            return;
+        }
+        assert_eq!(shell.desktop_offer(session), Some(None), "listed, enabled");
         let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::SendToDesktop)]);
         assert_eq!(
             outcome.steps,
@@ -6318,6 +6354,66 @@ mod key_routing {
             "a focused shell has no Claude to send"
         );
         assert!(plain.keyboard_owner().is_none());
+    }
+
+    #[test]
+    fn reveal_points_at_the_focused_directory_and_the_scanned_transcript() {
+        use crate::shell::reveal::Reveal;
+        use termherd_core::OpenTarget;
+        let (mut shell, _pty) = empty_shell();
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
+        );
+        assert_eq!(
+            shell.focused_reveal(Reveal::Dir),
+            Some(OpenTarget::SystemHandler {
+                path: "/tmp/claude".into()
+            })
+        );
+        assert_eq!(
+            shell.focused_reveal(Reveal::Transcript),
+            None,
+            "no scan has found the transcript yet"
+        );
+
+        // The scan's file, not one rebuilt from the project path.
+        let mut record = scan_record("abc-123", "/tmp/claude");
+        record.transcript = "/claude/projects/-tmp-claude-wt/abc-123.jsonl".into();
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(vec![record]));
+        assert_eq!(
+            shell.focused_reveal(Reveal::Transcript),
+            Some(OpenTarget::Reveal {
+                path: "/claude/projects/-tmp-claude-wt/abc-123.jsonl".into()
+            })
+        );
+    }
+
+    #[test]
+    fn reveal_is_inert_with_nothing_to_show() {
+        let (mut empty, _pty) = empty_shell();
+        let (outcome, _task) = empty.perform_presses(vec![
+            Press::Command(Action::RevealSessionDir),
+            Press::Command(Action::RevealTranscript),
+        ]);
+        assert_eq!(
+            outcome.steps,
+            vec![
+                inert("reveal-session-dir", "no-context"),
+                inert("reveal-transcript", "no-context"),
+            ]
+        );
+
+        let (mut plain, _pty) = shell_with_terminal();
+        let (outcome, _task) =
+            plain.perform_presses(vec![Press::Command(Action::RevealTranscript)]);
+        assert_eq!(
+            outcome.steps,
+            vec![inert("reveal-transcript", "no-context")],
+            "a shell has no transcript"
+        );
     }
 
     #[test]
@@ -7762,6 +7858,7 @@ mod key_routing {
                 ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
+            transcript: std::path::PathBuf::new(),
         };
         let _ = shell
             .core
@@ -9271,6 +9368,9 @@ mod key_routing {
                 color_refusal: Some(BUSY),
                 unparked: false,
                 in_repo: false,
+                dir_known: false,
+                transcript_known: false,
+                desktop: None,
             }
         }
 
@@ -9298,6 +9398,9 @@ mod key_routing {
                 color_refusal: None,
                 unparked: true,
                 in_repo: true,
+                dir_known: true,
+                transcript_known: true,
+                desktop: Some(None),
             };
             assert_eq!(lines(&everything).count(), ENTRIES.len());
             assert_eq!(disabled(&everything), vec![]);
@@ -9316,6 +9419,26 @@ mod key_routing {
                 ..nothing()
             };
             assert_eq!(added_by(&in_repo), vec![Action::NewClaudeSessionInWorktree]);
+            let dir = Offers {
+                dir_known: true,
+                ..nothing()
+            };
+            assert_eq!(added_by(&dir), vec![Action::RevealSessionDir]);
+            let transcript = Offers {
+                transcript_known: true,
+                ..nothing()
+            };
+            assert_eq!(added_by(&transcript), vec![Action::RevealTranscript]);
+            let desktop = Offers {
+                desktop: Some(Some(BUSY)),
+                ..nothing()
+            };
+            assert_eq!(added_by(&desktop), vec![Action::SendToDesktop]);
+            assert_eq!(
+                disabled(&desktop),
+                vec![(Action::PickTabColor, BUSY), (Action::SendToDesktop, BUSY)],
+                "a Claude that cannot take `/desktop` now lists it disabled"
+            );
         }
 
         #[test]
