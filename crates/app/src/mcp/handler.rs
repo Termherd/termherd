@@ -20,7 +20,7 @@ use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
         CallToolResult, ContentBlock, Implementation, ProtocolVersion, ServerCapabilities,
-        ServerInfo,
+        ServerConfig,
     },
     schemars::JsonSchema,
     tool, tool_handler, tool_router,
@@ -982,14 +982,14 @@ impl TermherdMcp {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TermherdMcp {
-    fn get_info(&self) -> ServerInfo {
-        // rmcp's `ServerInfo`/`Implementation` are `#[non_exhaustive]`, so build
+    fn get_info(&self) -> ServerConfig {
+        // rmcp's `ServerConfig`/`Implementation` are `#[non_exhaustive]`, so build
         // from a default and set the fields we care about rather than a literal.
         let mut server = Implementation::from_build_env();
         server.name = "termherd".into();
         server.version = env!("CARGO_PKG_VERSION").into();
 
-        let mut info = ServerInfo::default();
+        let mut info = ServerConfig::default();
         info.protocol_version = ProtocolVersion::LATEST;
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.server_info = server;
