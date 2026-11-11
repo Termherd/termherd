@@ -17,3 +17,7 @@ Shipped in #346: the scan keeps each record's transcript path, a reveal target
 selects it in Finder (`open -R`) or Explorer (`explorer /select,`, passed raw so
 a path with a space survives), and Linux opens the folder holding it. Both
 actions are in the tab menu; each sidebar row reveals its transcript.
+
+Not done, deliberately not ticketed: selecting the file on Linux. The
+freedesktop `FileManager1.ShowItems` D-Bus call would select it, at the price
+of a D-Bus dependency for one convenience; Linux opens the folder instead.
