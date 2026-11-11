@@ -6,7 +6,7 @@ status = "done"
 target = ["Could"]
 +++
 
-Send a confirmed slash command into an idle Claude session.
+Send a confirmed slash command into a Claude session at its prompt.
 
 One write path for every edit termherd makes to a Claude session (#337): a
 closed catalogue (`/rename`, `/color`, `/desktop`), sent only when the session
@@ -35,3 +35,10 @@ prompt; both read as "prompt not on screen" until #374. Not checked: whether the
 line and its Enter, written back to back, always submit rather than read as a
 paste, and whether an `@` in a name opens the file autocomplete. The rename and
 colour surfaces that use this path are #119 and #343.
+
+Busy rename and colour (#379): `CommandKind::accepts` decides per command
+which statuses can take it. `/rename` and `/color` are also typed into a busy
+Claude, which applies them mid-turn (live, Claude Code 2.1.322); `/desktop`
+stays idle-only. `read_prompt` reads the queued-message hint as
+`PromptInput::Queued`, which the check accepts. Design pass:
+`.personal/egm/379-rename-busy/concepts_brief.md`.

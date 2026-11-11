@@ -83,8 +83,10 @@ Claude — handing a session to the desktop app with `send-to-desktop`, or a
 Claude tab's colour from the colour list below — TermHerd types Claude's own
 slash command for you, behind a prompt that shows the exact line first.
 <kbd>Enter</kbd> types it and <kbd>Escape</kbd> drops it.
-It is offered only while that Claude is idle with nothing typed in its prompt; a
-draft that appears meanwhile keeps the prompt open and says so.
+`/desktop` is offered only while that Claude is idle with nothing typed in its
+prompt; a draft that appears meanwhile keeps the prompt open and says so.
+`/rename` and `/color` are also typed while Claude is at work, since Claude
+applies them mid-turn, and a message you queued during the turn stays queued.
 
 **A Claude tab goes by the name Claude gives its session.** The title is the
 first of these that exists:
@@ -114,8 +116,8 @@ shell tab, the name you type is the tab's own and stays until you clear it,
 which reverts the tab to the name it would have without one. For a Claude
 tab, TermHerd asks Claude instead: <kbd>Enter</kbd> arms `/rename <name>`
 behind the same prompt as any other command, and the tab takes the new name
-once Claude has recorded it. When Claude cannot take the command — busy,
-waiting on an answer, a draft in its prompt — the rename is not lost
+once Claude has recorded it, even mid-turn. When Claude cannot take the
+command — waiting on an answer, a draft in its prompt — the rename is not lost
 silently: a notice under the tab strip says why, until you dismiss it with
 `✕`. A blank name, or the name the tab already shows, asks nothing. Once the
 Claude in a tab has exited and its shell is back in front, the tab is
@@ -148,9 +150,9 @@ anything.
 
 *Tab colour…* is always listed. When no colour can be picked for the focused
 pane at the moment the menu opens, it is greyed out with the reason beneath
-it — *Claude busy*, *draft in prompt*, *prompt not on screen* (the view is
-scrolled back), and the like — and choosing it runs nothing and leaves the
-menu open.
+it — *Claude waiting for an answer*, *draft in prompt*, *prompt not on
+screen* (the view is scrolled back), and the like — and choosing it runs
+nothing and leaves the menu open.
 
 *Copy agent name* is listed when the action would find a name at the moment
 the menu opens: a Claude runs in front of the focused pane and has written its
@@ -179,13 +181,13 @@ pane:
 
 A Claude tab's colour is Claude's: TermHerd keeps no copy of it, so it never
 disagrees with Claude's own prompt bar, and a `/color` typed by hand changes
-it just the same. The list is not offered for a Claude that is busy, or
-waiting on an answer, or has something typed in its prompt — the action does
-nothing then, and the menu greys *Tab colour…* out, saying why — and if that
-Claude gets busy while the list is open, the pick is refused and the list
-stays, saying why. Once the Claude in a tab has exited, the tab is back at the
-shell it ran in, and TermHerd colours it as a shell: `/color` is never typed
-into a shell.
+it just the same. The list is offered while Claude is at work, but not for a
+Claude waiting on an answer, or with something typed in its prompt — the
+action does nothing then, and the menu greys *Tab colour…* out, saying why —
+and if a dialog or a draft appears while the list is open, the pick is
+refused and the list stays, saying why. Once the Claude in a tab has exited,
+the tab is back at the shell it ran in, and TermHerd colours it as a shell:
+`/color` is never typed into a shell.
 That needs the operating system to report what runs in front of the shell,
 which Windows does not, so there a Claude tab stays Claude's.
 

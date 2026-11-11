@@ -204,8 +204,9 @@ It is **refused**, with nothing armed, when:
 
 - the session is not a Claude launch — a shell would run the line as a
   program;
-- Claude is not idle — busy, starting, or waiting on an answer such as a
-  permission prompt;
+- Claude is starting, exited, or waiting on an answer such as a permission
+  prompt; a busy Claude is refused `desktop` only, since Claude applies
+  `rename` and `color` mid-turn and leaves a queued message queued;
 - Claude's prompt holds a **draft** — the error quotes it; the command would
   be typed into it, and a draft of several lines would be submitted with it as
   a prompt to the model;

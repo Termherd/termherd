@@ -65,7 +65,7 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing yet (`open-new-session` is the one) | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, colour or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to (or to colour) | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, colour or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no Claude able to take a command now (or a colour) | **create it**, then retry |
 
 Each handler that can refuse this way says so at its own refusal site.
 
@@ -100,7 +100,8 @@ selection, and `copy` runs on it.
   The entries and their order are on the
   [tabs page](../workspace/tabs-and-splits.md#tabs). *Tab colour…* is
   always listed, but disabled when no colour can be picked for the focused
-  pane (a busy Claude, a draft in its prompt, the prompt off screen): `enter`
+  pane (a Claude waiting on an answer, a draft in its prompt, the prompt off
+  screen): `enter`
   on it runs nothing, leaves the menu open and reports `refused` with the
   reason. *Copy agent name* is listed only when a named Claude is in front of
   the pane; left out, it shifts every entry below it by one.
@@ -117,7 +118,8 @@ selection, and `copy` runs on it.
   `enter` answers `refused` with the reason and the list stays open.
 - On **`claude-command-confirm`**, `enter` types the slash command the
   prompt names into its Claude session — or answers `refused` with the reason,
-  leaving the prompt open, when Claude went busy or a draft appeared meanwhile;
+  leaving the prompt open, when Claude raised a dialog or a draft appeared
+  meanwhile;
   see [`claude_command`](./live-bridge.md#a-claude-slash-command-confirmed).
 - **`paste-confirm`** opens when the `paste` action, or a right-click paste,
   carries a line break into a terminal that did not turn bracketed paste on;

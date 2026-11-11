@@ -59,9 +59,9 @@ is <kbd>Tab</kbd>, so claiming it takes nothing away from that program.
 and *None*, over the focused tab — the list the tab menu's *Tab colour…*
 opens. <kbd>↑</kbd> and <kbd>↓</kbd> move, <kbd>Enter</kbd> picks,
 <kbd>Escape</kbd> leaves. On a Claude tab the pick is typed as `/color` behind
-the usual prompt, and the action does nothing unless that Claude is idle with
-an empty prompt; on a shell tab, or one whose Claude has exited, TermHerd
-keeps the colour itself (see
+the usual prompt, and the action does nothing unless that Claude has an empty
+prompt and no dialog open (it may be at work); on a shell tab, or one whose
+Claude has exited, TermHerd keeps the colour itself (see
 [tabs](../workspace/tabs-and-splits.md#tabs)). Bind it yourself; it has no
 default.
 
