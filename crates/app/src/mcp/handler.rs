@@ -304,7 +304,9 @@ impl TermherdMcp {
                        derived title. A Claude tab's name is Claude's: it arms \
                        `/rename <title>` for confirmation instead, as \
                        `claude_command` does, and is refused when that Claude \
-                       is not idle; there a blank `title`, or the name the tab \
+                       cannot take it (a dialog, a draft, the prompt off \
+                       screen; a busy Claude takes it); there a blank \
+                       `title`, or the name the tab \
                        already shows, arms nothing and changes nothing. \
                        Returns the current `focused_handle`."
     )]
@@ -413,9 +415,11 @@ impl TermherdMcp {
                        until answered: `press_keys([\"enter\"])` types it \
                        (a `refused` step means it typed nothing and says why), \
                        `press_keys([\"escape\"])` drops it, or the user \
-                       answers. Refused unless the session is a Claude idle at \
-                       an empty input prompt on screen (no draft, no menu), and \
-                       no other prompt is open. Control \
+                       answers. Refused unless the session is a Claude at an \
+                       empty input prompt on screen (no draft, no menu, no \
+                       dialog) that is idle, or busy for `rename` and \
+                       `color`, which Claude applies mid-turn; and no other \
+                       prompt is open. Control \
                        characters in a name become spaces. Args: `session` \
                        (handle), `command`, `argument` (the name or colour). \
                        Returns `{ line, overlay, focused_handle }`."

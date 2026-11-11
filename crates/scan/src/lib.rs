@@ -27,10 +27,8 @@
 //! the previous scan. A live Claude session appending to one transcript costs
 //! one file read per rescan, not one per session.
 //!
-//! [`FsScanner::claude_default`] re-implements the `USERPROFILE`/`HOME`
-//! precedence that `app::paths::home_dir` centralises. That duplication is
-//! inherent to the hexagonal split — `scan` must not depend on `app` — so it
-//! stays, deliberately, rather than being deduplicated across the wall.
+//! The root is the caller's to resolve (`app` reads it from its `ClaudeDir`,
+//! which honours `CLAUDE_CONFIG_DIR`): a second resolution here would drift.
 
 mod cache;
 mod derive;
@@ -73,14 +71,6 @@ impl FsScanner {
             root,
             cache: Mutex::new(ScanCache::default()),
         }
-    }
-
-    /// Scanner over the default Claude CLI location, `~/.claude/projects`.
-    /// `None` when no home directory can be determined.
-    #[must_use]
-    pub fn claude_default() -> Option<Self> {
-        let home = paths::home_dir()?;
-        Some(Self::new(home.join(".claude").join("projects")))
     }
 
     /// The projects root this scanner walks.

@@ -212,6 +212,9 @@
   //   paste                     Cmd+V (macOS) / Ctrl+Shift+V, and Ctrl+V on Windows
   //   copy-agent-name           (unbound) copies the focused Claude's agent name
   //   send-to-desktop           (unbound) asks to type /desktop into the focused Claude
+  //                             (no-surface on Linux, where Claude Desktop does not run)
+  //   reveal-session-dir        (unbound) opens the focused pane's directory in the file manager
+  //   reveal-transcript         (unbound) shows the focused Claude's transcript selected there
   //   next-tab                  Ctrl+Tab
   //   prev-tab                  Ctrl+Shift+Tab
   //   activate-tab-1 … -9       Cmd+1 … Cmd+9 (macOS) / Alt+1 … Alt+9 (number-row keys)
@@ -232,6 +235,7 @@
   //   focus-next / focus-prev   (unbound)
   //   focus-search              mod+F ; Ctrl+Shift+F off macOS
   //   toggle-sidebar            mod+B ; Ctrl+Shift+B off macOS
+  //   open-settings             mod+, (the settings panel, or close it)
   //   scroll-top / -bottom      mod+Up / mod+Down ; Ctrl+Shift+Home / End off macOS
   //   zoom-in                   mod+= / mod+Shift+= / mod+plus (keypad +)
   //   zoom-out                  mod+-

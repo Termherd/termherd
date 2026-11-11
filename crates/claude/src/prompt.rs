@@ -12,6 +12,10 @@ pub enum PromptInput {
     Empty,
     /// The prompt is on screen and holds this text, every line of it.
     Draft(String),
+    /// The prompt is on screen and empty, but a message typed during a turn
+    /// waits in Claude's queue: the prompt shows `Press up to edit queued
+    /// messages` instead of its usual hint.
+    Queued,
     /// No input prompt is on screen: a menu, a dialog or a picker has the
     /// keyboard, or the view is scrolled away from it. Enter would answer that
     /// instead of submitting a command.
@@ -27,7 +31,9 @@ pub enum PromptInput {
 /// session's name as a label, `──── name ─`. An empty prompt shows a
 /// placeholder hint, `Try "…"`, which counts as empty: the screen carries no
 /// colour that would tell it from a draft spelling the same words, so a draft
-/// of exactly that shape is the one this reads wrong.
+/// of exactly that shape is the one this reads wrong. A prompt showing the
+/// queued-message hint reads as [`PromptInput::Queued`], with the same blind
+/// spot.
 #[must_use]
 pub fn read_prompt(screen: &str) -> PromptInput {
     let rows: Vec<&str> = screen.lines().collect();
@@ -56,6 +62,8 @@ pub fn read_prompt(screen: &str) -> PromptInput {
     let draft = draft.trim();
     if draft.is_empty() || is_placeholder(draft) {
         PromptInput::Empty
+    } else if draft == QUEUED_HINT {
+        PromptInput::Queued
     } else {
         PromptInput::Draft(draft.to_owned())
     }
@@ -81,6 +89,11 @@ fn is_rule(row: &str) -> bool {
     let row = row.trim();
     row.chars().take(OPENING_RUN).filter(|&c| c == '─').count() == OPENING_RUN && row.ends_with('─')
 }
+
+/// The hint an empty prompt shows while a message typed during a turn waits
+/// in Claude's queue (Claude Code 2.1.322). Matched whole: a reworded hint
+/// reads as a draft, which refuses rather than types over it.
+const QUEUED_HINT: &str = "Press up to edit queued messages";
 
 /// Whether `text` is the hint an empty prompt shows, `Try "…"`.
 fn is_placeholder(text: &str) -> bool {
@@ -113,6 +126,76 @@ mod tests {
             read_prompt(&screen(&[RULE, "> ", RULE])),
             PromptInput::Empty
         );
+    }
+
+    #[test]
+    fn a_busy_prompt_under_its_spinner_reads_as_empty() {
+        // Live, Claude Code 2.1.322, during a turn: the spinner sits above
+        // the frame, which is drawn as when idle.
+        let text = screen(&[
+            "✻ Drizzling…",
+            "                    ◐ medium · /effort",
+            RULE,
+            "❯",
+            RULE,
+            "  termherd │ ⎇ main │ Opus 5.5 │ Ctx: 0",
+        ]);
+        assert_eq!(read_prompt(&text), PromptInput::Empty);
+    }
+
+    #[test]
+    fn a_message_queued_during_a_turn_reads_as_queued() {
+        // Live, Claude Code 2.1.322: Enter pressed on `go W7` while busy.
+        // The composer is empty again; the queued message is drawn above it.
+        let text = screen(&[
+            "╭──────────────────────────╮",
+            "│ 10:58 go W7              │",
+            "╰──────────────────────────╯",
+            "  ctrl+enter to send now",
+            "",
+            RULE,
+            "❯ Press up to edit queued messages",
+            RULE,
+            "  termherd │ ⎇ main │ Opus 5.5 │ Ctx: 82K",
+        ]);
+        assert_eq!(read_prompt(&text), PromptInput::Queued);
+        assert_eq!(
+            read_prompt(&screen(&[
+                RULE,
+                "❯\u{a0}Press up to edit queued messages",
+                RULE
+            ])),
+            PromptInput::Queued
+        );
+    }
+
+    #[test]
+    fn a_draft_close_to_the_queue_hint_is_still_a_draft() {
+        // Only the exact hint is not typed text; anything else the user may
+        // have written, and a hint Claude Code rewords falls back to a draft,
+        // which refuses rather than types over it.
+        for draft in [
+            "Press up to edit queued messages now",
+            "press up to edit queued messages",
+            "Press up to edit queued messages\nand more",
+        ] {
+            let rows: Vec<String> = std::iter::once(RULE.to_owned())
+                .chain(draft.lines().enumerate().map(|(i, line)| {
+                    if i == 0 {
+                        format!("❯ {line}")
+                    } else {
+                        format!("  {line}")
+                    }
+                }))
+                .chain(std::iter::once(RULE.to_owned()))
+                .collect();
+            let rows: Vec<&str> = rows.iter().map(String::as_str).collect();
+            assert_eq!(
+                read_prompt(&screen(&rows)),
+                PromptInput::Draft(draft.to_owned()),
+                "{draft:?}"
+            );
+        }
     }
 
     #[test]

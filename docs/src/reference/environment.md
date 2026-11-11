@@ -11,6 +11,8 @@ few on every session it spawns. None is required.
 | `RUST_LOG` | what is logged | For example `termherd=debug`. Where the log goes: [Installation](../guide/installation.md#where-the-log-goes). |
 | `TMPDIR` (macOS, Linux), `TMP` (Windows) | the system temp directory | The single-instance lock is named after it, so a build given its own temp directory runs beside the installed one. Each session's private files (the MCP config, shell integration) live there too. |
 | `USERPROFILE`, then `HOME` | your home directory | `~/.termherd` and `~/.claude` are found from it. With neither set, nothing is persisted. |
+| `TERMHERD_DATA_DIR` | where TermHerd keeps its own files | Replaces `~/.termherd`: settings, layout, log, bridge file. Your home, `~/.claude` and the shells' home are left alone, which is how a second build is kept off your settings without hiding your sessions. `termherd-mcp` reads it too. Empty counts as unset. |
+| `CLAUDE_CONFIG_DIR` | where Claude Code keeps its files | Replaces `~/.claude`, the same variable Claude Code reads, so the sidebar lists the sessions the Claude you launch writes. Empty counts as unset. |
 | `ZDOTDIR`, `TERMHERD_ORIG_ZDOTDIR` | where a zsh session replays your startup files from | See [below](#termherd_orig_zdotdir). |
 
 ## What a session receives

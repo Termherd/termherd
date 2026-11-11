@@ -51,6 +51,16 @@ ignore = [
     { id = "RUSTSEC-2026-0370", reason = "unmaintained, transitive via zbus (iced_winit, notify-rust); no safe upgrade" },
     { id = "RUSTSEC-2026-0371", reason = "unmaintained, transitive via zbus (iced_winit, notify-rust); no safe upgrade" },
     { id = "RUSTSEC-2026-0372", reason = "unmaintained, transitive via zbus (iced_winit, notify-rust); no safe upgrade" },
+    # rmcp's OAuth client SSRF filter (< 3.7) and its Streamable HTTP clients'
+    # unbounded response buffering (< 3.9). Both live in rmcp's *client* half,
+    # which termherd never compiles: `crates/app` enables `server`,
+    # `transport-streamable-http-server` and `macros` only, and
+    # `cargo tree -e features -i rmcp` shows no `auth` or
+    # `transport-streamable-http-client*` feature from any crate. The fix is
+    # rmcp 3.9, two majors up. TODO: drop these with the rmcp 3 bump, or the day
+    # a client feature is enabled.
+    { id = "RUSTSEC-2026-0457", reason = "rmcp OAuth client SSRF; unreachable — client/auth features not compiled" },
+    { id = "RUSTSEC-2026-0462", reason = "rmcp Streamable HTTP client buffering; unreachable — client features not compiled" },
 ]
 
 [bans]

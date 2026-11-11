@@ -48,8 +48,8 @@ impl Shell {
 
     /// Why no colour can be picked for `session` now, `None` when one can:
     /// always for a pane termherd colours, and for a Claude only while it can
-    /// take `/color` — idle, its prompt empty and on screen. Asked by the
-    /// picker before it opens and by the tab menu before it offers the
+    /// take `/color` — idle or at work, its prompt empty and on screen. Asked
+    /// by the picker before it opens and by the tab menu before it offers the
     /// picker, so neither offers a list that cannot work.
     pub(super) fn color_refusal(&self, session: SessionId) -> Option<CommandRefusal> {
         self.core

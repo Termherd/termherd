@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (`TERMHERD_DATA_DIR`, and `CLAUDE_CONFIG_DIR` honoured)
+
+- TermHerd now reads `CLAUDE_CONFIG_DIR`, as Claude Code does: with Claude's
+  data moved elsewhere, the sidebar lists its sessions instead of reporting
+  an unreadable `~/.claude/projects`.
+- `TERMHERD_DATA_DIR` moves TermHerd's own files (settings, layout, log,
+  bridge file) out of `~/.termherd`, for the GUI and `termherd-mcp` alike,
+  without changing the home the shells see (#577).
+
 ### Added (double- and triple-click, by hand and over MCP)
 
 - A triple-click in a terminal selects the whole row, as a double-click
@@ -27,6 +36,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sidebar row has a `↗` button that reveals its transcript. The tab menu also
   gains *Send to Claude Desktop*. On Linux, where Claude Desktop does not run,
   that entry is left out and `send-to-desktop` answers `no-surface` (#346).
+
+### Changed (rename and colour a Claude at work)
+
+- Renaming or recolouring a Claude tab no longer waits for Claude to finish
+  its turn: the keymap, the tab menu, the colour list and the MCP
+  `rename_tab` and `claude_command` tools now type `/rename` and `/color`
+  into a busy Claude, which applies them mid-turn and keeps a message you
+  queued during the turn. A dialog, a draft in Claude's prompt or a prompt
+  off screen still refuse, and `/desktop` still waits for Claude to be idle.
+  An MCP client that matched the refusal `the session is busy, not idle at
+  its prompt` for a rename or a colour no longer receives it (#379).
 
 ### Fixed (no console window beside TermHerd on Windows)
 
