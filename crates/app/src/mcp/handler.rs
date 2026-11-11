@@ -446,7 +446,7 @@ impl TermherdMcp {
                        default, \"middle\", \"right\"), `click_count` (1 \
                        default; 2 or 3 on a \"click\" or \"press\" is a \
                        double- or triple-click, which at a shell selects the \
-                       word, path or link, or the row, and copies it when \
+                       word, path or link, or the line, and copies it when \
                        `terminal.copy_on_select` is on). Returns `focused_handle` \
                        and `pointer`: \"forwarded\" when the program in the \
                        session reads the mouse, as of its last rendered frame, \

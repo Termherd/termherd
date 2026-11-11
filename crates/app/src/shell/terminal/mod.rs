@@ -9,7 +9,7 @@ mod canvas;
 mod selection;
 
 pub(super) use canvas::TerminalView;
-pub(super) use selection::{ClickSelection, click_selection};
+pub(super) use selection::click_selection;
 
 /// Terminal cell metrics for the monospace grid, as ratios of the font size
 /// so a zoomed font scales the grid proportionally. At the default

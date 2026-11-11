@@ -123,51 +123,35 @@ pub(super) fn target_at(screen: &Screen, col: u16, row: u16) -> Option<TargetPro
     })
 }
 
-/// What a repeated click selects at once: the range for the terminal, and its
-/// text read off this screen, since the selection lands on a later frame.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::shell) struct ClickSelection {
-    pub(in crate::shell) op: SelectOp,
-    pub(in crate::shell) text: String,
-}
-
 /// What `clicks` on visible cell `(col, row)` select outright — a double-click
-/// the word, path or link ([`double_click_at`]), a triple-click the row — or
-/// `None` when it is a plain press: a single click, or a double-click on a
-/// blank. The one rule the canvas and the MCP bridge both read, so a click
-/// over the bridge selects what the same click by hand would.
-///
-/// A triple-click reads one grid row, as a double-click does: a line the
-/// terminal soft-wrapped selects only its part on the clicked row.
+/// the word, path or link ([`double_click_at`]), a triple-click the whole
+/// logical line, every row the terminal soft-wrapped it over — or `None` when
+/// it is a plain press: a single click, or a double-click on a blank. The one
+/// rule the canvas and the MCP bridge both read, so a click over the bridge
+/// selects what the same click by hand would. What it selects is copied from
+/// the terminal's selection, as a drag's is, never read off this screen.
 pub(in crate::shell) fn click_selection(
     screen: &Screen,
     col: u16,
     row: u16,
     clicks: ClickCount,
-) -> Option<ClickSelection> {
-    let (anchor, head) = match clicks {
-        ClickCount::Single => return None,
-        ClickCount::Double => double_click_at(screen, col, row)?,
-        ClickCount::Triple => row_at(screen, row)?,
-    };
+) -> Option<SelectOp> {
     let off = screen.display_offset;
-    Some(ClickSelection {
-        op: SelectOp::Range {
-            line0: grid_line(anchor.1, off),
-            col0: usize::from(anchor.0),
-            line1: grid_line(head.1, off),
-            col1: usize::from(head.0),
-        },
-        text: word_text(screen, anchor, head),
-    })
-}
-
-/// The whole of visible row `row` as an inclusive cell range, or `None` when
-/// the screen has no such row.
-fn row_at(screen: &Screen, row: u16) -> Option<((u16, u16), (u16, u16))> {
-    let line = screen.lines.get(row as usize)?;
-    let last = u16::try_from(line.len().checked_sub(1)?).ok()?;
-    Some(((0, row), (last, row)))
+    match clicks {
+        ClickCount::Single => None,
+        ClickCount::Double => {
+            let (anchor, head) = double_click_at(screen, col, row)?;
+            Some(SelectOp::Range {
+                line0: grid_line(anchor.1, off),
+                col0: usize::from(anchor.0),
+                line1: grid_line(head.1, off),
+                col1: usize::from(head.0),
+            })
+        }
+        ClickCount::Triple => (usize::from(row) < screen.lines.len()).then(|| SelectOp::Line {
+            line: grid_line(row, off),
+        }),
+    }
 }
 
 /// What a double-click on grid cell `(col, row)` selects, as an inclusive cell
@@ -203,33 +187,6 @@ fn word_at(screen: &Screen, col: u16, row: u16) -> Option<((u16, u16), (u16, u16
     Some(((start as u16, row), (end as u16, row)))
 }
 
-/// The text of a single-row range — what a double- or triple-click copies
-/// before its native selection has been echoed back on a snapshot.
-fn word_text(screen: &Screen, anchor: (u16, u16), head: (u16, u16)) -> String {
-    spans_text(screen, &[(anchor.1, anchor.0, head.0)])
-}
-
-/// Read inclusive `(row, c0, c1)` spans off the grid, trimming each row's
-/// trailing blanks and joining rows with newlines.
-fn spans_text(screen: &Screen, spans: &[(u16, u16, u16)]) -> String {
-    let mut out = String::new();
-    let last = spans.len().saturating_sub(1);
-    for (i, (r, c0, c1)) in spans.iter().enumerate() {
-        if let Some(line) = screen.lines.get(*r as usize) {
-            let c0 = *c0 as usize;
-            let c1 = (*c1 as usize).min(line.len().saturating_sub(1));
-            if c0 <= c1 {
-                let row: String = line[c0..=c1].iter().map(|cell| cell.c).collect();
-                out.push_str(row.trim_end());
-            }
-        }
-        if i != last {
-            out.push('\n');
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,11 +209,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn word_text_reads_a_single_row_range() {
-        let screen = screen_from("see src/main.rs now");
-        // cols 4..=14 is `src/main.rs`.
-        assert_eq!(word_text(&screen, (4, 0), (14, 0)), "src/main.rs");
+    /// The text of the single-row cell range `anchor..=head`.
+    fn word_text(screen: &Screen, anchor: (u16, u16), head: (u16, u16)) -> String {
+        screen.lines[usize::from(anchor.1)][usize::from(anchor.0)..=usize::from(head.0)]
+            .iter()
+            .map(|cell| cell.c)
+            .collect()
     }
 
     #[test]
@@ -492,18 +450,15 @@ mod tests {
     }
 
     #[test]
-    fn a_double_click_selection_is_the_word_with_its_text() {
+    fn a_double_click_selects_the_word() {
         let screen = screen_from("see src/main.rs now");
         assert_eq!(
             click_selection(&screen, 8, 0, ClickCount::Double),
-            Some(ClickSelection {
-                op: SelectOp::Range {
-                    line0: 0,
-                    col0: 4,
-                    line1: 0,
-                    col1: 14,
-                },
-                text: "src/main.rs".to_string(),
+            Some(SelectOp::Range {
+                line0: 0,
+                col0: 4,
+                line1: 0,
+                col1: 14,
             })
         );
         assert_eq!(
@@ -514,19 +469,16 @@ mod tests {
     }
 
     #[test]
-    fn a_triple_click_selects_the_whole_row_and_copies_it_without_trailing_blanks() {
+    fn a_triple_click_selects_the_logical_line_the_terminal_resolves() {
         let screen = screen_from("$ ls -la    ");
         assert_eq!(
             click_selection(&screen, 3, 0, ClickCount::Triple),
-            Some(ClickSelection {
-                op: SelectOp::Range {
-                    line0: 0,
-                    col0: 0,
-                    line1: 0,
-                    col1: 11,
-                },
-                text: "$ ls -la".to_string(),
-            })
+            Some(SelectOp::Line { line: 0 })
+        );
+        assert_eq!(
+            click_selection(&screen, 3, 1, ClickCount::Triple),
+            None,
+            "a row past the screen holds no line"
         );
     }
 
@@ -538,16 +490,18 @@ mod tests {
             display_offset: 2,
             ..screen_from("hello world")
         };
-        for clicks in [ClickCount::Double, ClickCount::Triple] {
-            let Some(ClickSelection {
-                op: SelectOp::Range { line0, line1, .. },
+        assert!(matches!(
+            click_selection(&screen, 1, 0, ClickCount::Double),
+            Some(SelectOp::Range {
+                line0: -2,
+                line1: -2,
                 ..
-            }) = click_selection(&screen, 1, 0, clicks)
-            else {
-                panic!("{clicks:?} on a word selects a range");
-            };
-            assert_eq!((line0, line1), (-2, -2), "{clicks:?}");
-        }
+            })
+        ));
+        assert_eq!(
+            click_selection(&screen, 1, 0, ClickCount::Triple),
+            Some(SelectOp::Line { line: -2 })
+        );
     }
 
     proptest::proptest! {

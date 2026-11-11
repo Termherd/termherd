@@ -80,15 +80,6 @@ use input::{AltSides, event_modifiers};
 use record::RecordState;
 use streams::{PtyOutput, RESCAN_INTERVAL, pty_stream, rescan_tick_stream, watch_stream};
 
-/// `task`, followed by `copy` written to the clipboard unless it is empty —
-/// the one copy rule a gesture's selection follows, by hand or over the bridge.
-fn with_copy(task: Task<Message>, copy: Option<String>) -> Task<Message> {
-    match copy.filter(|text| !text.is_empty()) {
-        Some(text) => Task::batch([task, iced::clipboard::write(text)]),
-        None => task,
-    }
-}
-
 fn search_id() -> widget::Id {
     widget::Id::new("termherd-search")
 }
@@ -557,12 +548,12 @@ enum Message {
         session: SessionId,
         op: SelectOp,
     },
-    /// Set a terminal's selection (a double-click word) and copy it at once, so
-    /// the highlight persists and tracks while the word lands on the clipboard.
+    /// Set a terminal's selection (a double- or triple-click) and copy it at
+    /// once, so the highlight persists and tracks while its text lands on the
+    /// clipboard.
     SelectAndCopy {
         session: SessionId,
         op: SelectOp,
-        text: String,
     },
     /// Ask a terminal to copy its current selection (a drag release). The text
     /// is read from the live grid selection and returned out-of-band, so it is
@@ -1019,15 +1010,30 @@ impl Shell {
     }
 
     /// Change a session's selection — the one path a selection by hand and one
-    /// over the bridge share. `None` when `core` absorbed it: the session has
-    /// exited, so the bridge must refuse, though a hand may still copy from
-    /// the screen it left. Whether to copy is the caller's, through
-    /// [`with_copy`], once it knows which.
-    fn select(&mut self, session: SessionId, op: termherd_core::SelectOp) -> Option<Task<Message>> {
-        let effects = self
+    /// over the bridge share — and, when `copy`, copy what the terminal then
+    /// holds, read off its live selection as a drag release's copy is: the
+    /// terminal applies its commands in order, so the copy sees the new
+    /// selection. `None` when `core` absorbed it: the session has exited, so
+    /// the bridge must refuse.
+    fn select(
+        &mut self,
+        session: SessionId,
+        op: termherd_core::SelectOp,
+        copy: bool,
+    ) -> Option<Task<Message>> {
+        let mut effects = self
             .core
             .apply(termherd_core::Event::Select { session, op });
-        (!effects.is_empty()).then(|| self.perform(effects))
+        if effects.is_empty() {
+            return None;
+        }
+        if copy {
+            effects.extend(
+                self.core
+                    .apply(termherd_core::Event::CopyTerminalSelection { session }),
+            );
+        }
+        Some(self.perform(effects))
     }
 
     // The iced `update`: a flat `match` over every `Message` variant — the
@@ -1268,11 +1274,12 @@ impl Shell {
                     .apply(termherd_core::Event::TerminalPointer { session, pointer });
                 self.perform(effects)
             }
-            Message::Select { session, op } => self.select(session, op).unwrap_or_else(Task::none),
-            Message::SelectAndCopy { session, op, text } => with_copy(
-                self.select(session, op).unwrap_or_else(Task::none),
-                Some(text),
-            ),
+            Message::Select { session, op } => {
+                self.select(session, op, false).unwrap_or_else(Task::none)
+            }
+            Message::SelectAndCopy { session, op } => {
+                self.select(session, op, true).unwrap_or_else(Task::none)
+            }
             Message::RequestCopySelection { session } => {
                 let effects = self
                     .core
@@ -2684,28 +2691,42 @@ mod key_routing {
     }
 
     /// A double- or triple-click over the bridge selects what the same click
-    /// by hand selects: the canvas's range, as one `Select`, with no single
+    /// by hand selects: the canvas's op, as one `Select`, with no single
     /// click reaching the terminal to clear it again.
     #[test]
-    fn pointer_action_selects_the_word_or_row_a_repeated_click_would() {
+    fn pointer_action_selects_the_word_or_line_a_repeated_click_would() {
+        let cargo = SelectOp::Range {
+            line0: 0,
+            col0: 2,
+            line1: 0,
+            col1: 6,
+        };
         for (clicks, expected) in [
-            (ClickCount::Double, (2, 6)),  // `cargo`
-            (ClickCount::Triple, (0, 11)), // the whole row
+            (ClickCount::Double, cargo),
+            (ClickCount::Triple, SelectOp::Line { line: 0 }),
         ] {
             let (outcome, pty, _) = clicks_at("$ cargo test", 4, clicks, |_, _| {});
             assert_eq!(outcome.error, None, "{clicks:?}");
             assert_eq!(outcome.pointer(), Some(PointerRoute::Select), "{clicks:?}");
-            assert_eq!(
-                pty.selects(),
-                vec![SelectOp::Range {
-                    line0: 0,
-                    col0: expected.0,
-                    line1: 0,
-                    col1: expected.1,
-                }],
-                "{clicks:?}"
-            );
+            assert_eq!(pty.selects(), vec![expected], "{clicks:?}");
             assert!(pty.pointers().is_empty(), "{clicks:?}");
+        }
+    }
+
+    /// Over the bridge as by hand, a repeated click copies what it selected
+    /// only under copy-on-select, and the copy is the terminal's to read.
+    #[test]
+    fn pointer_action_copies_a_repeated_click_only_under_copy_on_select() {
+        for copy_on_select in [false, true] {
+            let (outcome, pty, _) = clicks_at("$ cargo test", 4, ClickCount::Triple, |shell, _| {
+                shell.gestures.copy_on_select = copy_on_select;
+            });
+            assert_eq!(outcome.error, None);
+            assert_eq!(
+                pty.copy_count(),
+                usize::from(copy_on_select),
+                "copy_on_select {copy_on_select}"
+            );
         }
     }
 
@@ -4225,8 +4246,8 @@ mod key_routing {
 
     #[test]
     fn a_double_click_selects_the_word_and_copies_it() {
-        // SelectAndCopy sets the native word selection *and* lands the text on
-        // the clipboard in one step.
+        // SelectAndCopy sets the native word selection *and* asks the terminal
+        // to copy it, in that order, so the copy reads the new selection.
         let (mut shell, pty) = shell_with_terminal();
         let session = shell.core.workspace.focused_session().expect("focused");
         let _ = shell.update(Message::SelectAndCopy {
@@ -4237,8 +4258,8 @@ mod key_routing {
                 line1: 0,
                 col1: 14,
             },
-            text: "src/main.rs".to_string(),
         });
+        assert_eq!(pty.copy_count(), 1, "the selection is copied");
         assert_eq!(
             pty.selects(),
             vec![SelectOp::Range {

@@ -160,6 +160,10 @@ pub enum SelectOp {
         line1: i32,
         col1: usize,
     },
+    /// Select the whole logical line holding grid line `line` — a triple-click.
+    /// A line the terminal soft-wrapped spans several rows, and only the
+    /// terminal knows where it wrapped, so it resolves the extent itself.
+    Line { line: i32 },
     /// Drop the selection — a bare click, or an explicit clear.
     Clear,
 }
