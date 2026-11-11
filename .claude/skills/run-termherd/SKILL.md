@@ -23,6 +23,7 @@ launch in a session. The steps that matter:
    ```bash
    TERMHERD_DATA_DIR=$(cygpath -w "$(mktemp -d)") TMP=$(cygpath -w "$(mktemp -d)") cargo run -p termherd-app
    ```
+
    Never isolate with `USERPROFILE` or `HOME`: that also hides `~/.claude`
    (empty sidebar) and changes the shells' home. `CLAUDE_CONFIG_DIR` points
    the build at another Claude directory.
