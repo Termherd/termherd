@@ -30,9 +30,23 @@ pub(crate) struct ScanOutcome {
 /// records and the folders that had no derivable cwd. Pure of logging policy
 /// so the skip set is unit-testable. `cache` carries the previous scan's
 /// digests and is replaced by this scan's generation.
+///
+/// A root that does not exist is an empty outcome, not an error: Claude Code
+/// creates it on its first run, so a user who has not run it yet has no
+/// sessions rather than a broken scan. A root that exists but cannot be
+/// listed stays an error.
 pub(crate) fn scan_root(root: &Path, cache: &mut ScanCache) -> Result<ScanOutcome, ScanError> {
-    let folders = fs::read_dir(root)
-        .map_err(|e| ScanError::Unreadable(format!("{}: {e}", root.display())))?;
+    let folders = match fs::read_dir(root) {
+        Ok(folders) => folders,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            *cache = ScanCache::default();
+            return Ok(ScanOutcome {
+                records: Vec::new(),
+                skipped: Vec::new(),
+            });
+        }
+        Err(e) => return Err(ScanError::Unreadable(format!("{}: {e}", root.display()))),
+    };
 
     let mut records = Vec::new();
     let mut skipped = Vec::new();
@@ -414,8 +428,34 @@ mod tests {
     }
 
     #[test]
-    fn missing_root_is_a_typed_error() {
-        let scanner = FsScanner::new(PathBuf::from("/definitely/not/here"));
-        assert!(scanner.scan().is_err());
+    fn a_missing_root_is_an_empty_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let scanner = FsScanner::new(tmp.path().join("claude").join("projects"));
+        assert!(scanner.scan().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_root_that_vanishes_drops_its_sessions_and_their_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("projects");
+        let folder = root.join("-p");
+        fs::create_dir_all(&folder).unwrap();
+        write_session(&folder, "abc.jsonl", "/p", "hello");
+        let scanner = FsScanner::new(root.clone());
+        assert_eq!(scanner.scan().unwrap().len(), 1);
+
+        fs::remove_dir_all(&root).unwrap();
+        assert!(scanner.scan().unwrap().is_empty());
+        let cache = scanner.cache.lock().unwrap();
+        assert!(cache.digests.is_empty() && cache.cwds.is_empty());
+    }
+
+    #[test]
+    fn a_root_that_is_not_a_directory_is_a_typed_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("projects");
+        fs::write(&root, "not a directory").unwrap();
+        let scanner = FsScanner::new(root);
+        assert!(matches!(scanner.scan(), Err(ScanError::Unreadable(_))));
     }
 }
