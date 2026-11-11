@@ -205,6 +205,13 @@ mid-run: success and vacuity are indistinguishable from the
 outside. Probe with the operation you actually intend to perform, and if that
 is destructive, assert on something the operation *must* have changed.
 
+A property test has the same trap once the code under test calls the oracle.
+Extracting the drop-zone predicate (#572), the first proptest checked
+`lands_parked` against the zone `move_tab` left the tab in — but `move_tab`
+now *calls* `lands_parked`, so flipping any arm of the rule kept it green. The
+oracle has to state the rule independently (there, by the carried tab's
+neighbours), with the invariant the mutator keeps asserted beside it.
+
 ## Poll for the value you assert
 
 **Poll for the value you assert, not for a sign it is coming.** The argv
