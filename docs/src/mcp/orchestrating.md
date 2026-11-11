@@ -30,8 +30,9 @@ by their handle and `peer_name`, not by their title.
 
 `background: true` appends the tab without activating it, so the next key the
 user types still lands where they were typing. Read the new session from
-`opened_handle`, not from `focused_handle`. A new Claude session starts on
-`starting`: wait for `idle` before handing it work.
+`opened_handle`, not from `focused_handle`. Wait for `idle` before handing the
+new session work: the wait answers at once when Claude is already at its
+prompt.
 
 Close a finished worker the same way, with `close_pane` and
 `background: true`.
@@ -63,6 +64,11 @@ then a read:
    straight away answers at once with the old one.
 3. `wait_for_status` with `statuses: ["idle", "attention"]`.
 4. `read_terminal` — the last lines of the screen, as text.
+
+Ask for more lines than the default 40 when reading a Claude session, on
+`read_terminal` and `prompt_in_session` alike: Claude Code pads its screen with
+blank rows between the conversation and the input box, and on a tall pane the
+last 40 lines can hold none of the reply. `lines: 80` or more reaches it.
 
 `prompt_in_session` does all three in one round trip: it types, waits up to
 2 s for the status to leave its old value, waits for the target statuses, and
