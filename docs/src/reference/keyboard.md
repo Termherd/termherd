@@ -191,6 +191,8 @@ does above.
 | <kbd>↑</kbd> / <kbd>↓</kbd> in the tab menu | move the selection |
 | Right-click a tab | focus it and open its menu |
 | Drag a selection | select; copies too with `terminal.copy_on_select` (off by default) |
+| Double-click | select the word, or the whole URL or path, under the pointer; copies too with `terminal.copy_on_select` |
+| Triple-click | select the whole row; copies too with `terminal.copy_on_select` |
 | Right-click | paste, with `terminal.paste_on_right_click` (off by default) |
 | Wheel | scroll back through history, or the wheel event to a program reading the mouse |
 | Click, drag, right-click in a program reading the mouse | the event goes to the program — vim, lazygit, Claude Code's `/resume`; nothing is selected or pasted locally |

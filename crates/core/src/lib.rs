@@ -22,7 +22,7 @@ pub mod workspace;
 
 pub use app::layout::{Layout, PaneLaunch, PaneLayout, TabLayout};
 pub use app::{
-    App, ClaudeLaunch, ColorKeeper, CommandRefusal, DEFAULT_FONT_SIZE, Effect, Event,
+    App, ClaudeLaunch, ClickCount, ColorKeeper, CommandRefusal, DEFAULT_FONT_SIZE, Effect, Event,
     ForegroundJob, HoverTarget, Launch, LaunchSpec, LiveSession, McpConfig, MouseReporting,
     PathPurpose, PathRequest, PathRoots, PendingPaste, Placement, PointerButton, PointerEvent,
     PointerKind, PointerRoute, ProbeKind, ResolvedPath, ScrollTarget, SelectOp, SelectSide,

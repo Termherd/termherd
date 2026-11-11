@@ -7,6 +7,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (double- and triple-click, by hand and over MCP)
+
+- A triple-click in a terminal selects the whole row, as a double-click
+  selects the word, path or link under the pointer; with
+  `terminal.copy_on_select` on, both copy it.
+- `mouse_in_session` takes a `click_count` (`1` default, `2`, `3`) on a
+  `click` or a `press`, so an agent can double- or triple-click: at a shell it
+  selects what the same clicks by hand would, and a program reading the mouse
+  is sent that many clicks. A count outside `1` to `3`, or on another kind, is
+  rejected (#492).
+
 ### Added (reveal a session in the file manager)
 
 - Two actions, unbound by default: `reveal-session-dir` opens the focused
