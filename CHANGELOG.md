@@ -28,6 +28,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gains *Send to Claude Desktop*. On Linux, where Claude Desktop does not run,
   that entry is left out and `send-to-desktop` answers `no-surface` (#346).
 
+### Changed (rename and colour a Claude at work)
+
+- Renaming or recolouring a Claude tab no longer waits for Claude to finish
+  its turn: the keymap, the tab menu, the colour list and the MCP
+  `rename_tab` and `claude_command` tools now type `/rename` and `/color`
+  into a busy Claude, which applies them mid-turn and keeps a message you
+  queued during the turn. A dialog, a draft in Claude's prompt or a prompt
+  off screen still refuse, and `/desktop` still waits for Claude to be idle.
+  An MCP client that matched the refusal `the session is busy, not idle at
+  its prompt` for a rename or a colour no longer receives it (#379).
+
 ### Fixed (no console window beside TermHerd on Windows)
 
 - Launching TermHerd from Explorer or the Start menu on Windows 11 24H2 or
