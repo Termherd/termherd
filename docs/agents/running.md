@@ -49,6 +49,13 @@ Point the data dir at a throwaway directory:
 TERMHERD_DATA_DIR=$(mktemp -d) TMPDIR=$(mktemp -d) cargo run -p termherd-app
 ```
 
+On Windows, from Git Bash: `TMP`, not `TMPDIR`, and Windows paths — with
+`TMPDIR` alone the build takes the user's lock and exits with code 2.
+
+```bash
+TERMHERD_DATA_DIR=$(cygpath -w "$(mktemp -d)") TMP=$(cygpath -w "$(mktemp -d)") cargo run -p termherd-app
+```
+
 `TERMHERD_DATA_DIR` moves `~/.termherd` and nothing else (`termherd-mcp`
 reads it as well). Isolating with `USERPROFILE` or `HOME`, as this page used
 to say, also hid `~/.claude` — an empty sidebar reporting

@@ -16,7 +16,13 @@ launch in a session. The steps that matter:
    TERMHERD_DATA_DIR=$(mktemp -d) TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app
    ```
 
-   On Windows set `TMP` to a directory that exists, never a missing one.
+   On Windows `TMPDIR` is ignored (Rust reads `TMP`, then `TEMP`), and Git
+   Bash's `mktemp` paths must be converted, or the build takes the user's
+   lock and exits with code 2:
+
+   ```bash
+   TERMHERD_DATA_DIR=$(cygpath -w "$(mktemp -d)") TMP=$(cygpath -w "$(mktemp -d)") cargo run -p termherd-app
+   ```
    Never isolate with `USERPROFILE` or `HOME`: that also hides `~/.claude`
    (empty sidebar) and changes the shells' home. `CLAUDE_CONFIG_DIR` points
    the build at another Claude directory.
