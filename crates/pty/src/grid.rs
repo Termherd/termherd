@@ -368,15 +368,15 @@ pub(crate) fn apply_select<T: EventListener>(term: &mut Term<T>, op: SelectOp) {
 /// would run as Enter — dropped, so a copied line pastes as text.
 pub(crate) fn selection_text<T: EventListener>(term: &Term<T>) -> Option<String> {
     use alacritty_terminal::selection::SelectionType;
-    let text = term.selection_to_string()?;
+    let mut text = term.selection_to_string()?;
     let is_line = term
         .selection
         .as_ref()
         .is_some_and(|sel| sel.ty == SelectionType::Lines);
-    Some(match text.strip_suffix('\n') {
-        Some(line) if is_line => line.to_owned(),
-        _ => text,
-    })
+    if is_line && text.ends_with('\n') {
+        text.pop();
+    }
+    Some(text)
 }
 
 /// The terminal's own selection as inclusive per-row column spans in visible

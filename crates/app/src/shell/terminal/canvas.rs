@@ -362,9 +362,10 @@ impl canvas::Program<Message> for TerminalView<'_> {
                 }
                 // A double-click selects the link, path or word under the
                 // pointer, a triple-click the whole line, and either copies
-                // it, like a terminal. iced's click tracker classifies the press from the
-                // previous one's time and distance. The range drives a native
-                // selection so the highlight persists and rides scroll.
+                // it, like a terminal. iced's click tracker classifies the
+                // press from the previous one's time and distance. The op
+                // drives a native selection so the highlight persists and
+                // rides scroll.
                 let clicked = Click::new(position, mouse::Button::Left, state.last_click);
                 state.last_click = Some(clicked);
                 if let Some(op) =
