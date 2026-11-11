@@ -24,6 +24,7 @@ pub(crate) fn record(id: &str, path: &str, summary: &str) -> SessionRecord {
             ..SessionDigest::default()
         },
         modified: None,
+        transcript: format!("/claude/projects/{id}.jsonl").into(),
     }
 }
 

@@ -33,8 +33,8 @@ Toggle it with <kbd>Cmd</kbd>+<kbd>B</kbd> (macOS) or
 │   new-repo     ❯  ✳   ✕  │  ← added by hand, no sessions yet
 │     No sessions yet …    │
 │ ▾ my-app          ❯  ✳   │  ← launch a shell / a fresh Claude session
-│     fix the race  ★ ⊟ ✎  │
-│     add the cache ★ ⊟ ✎  │
+│     fix the race ★ ↗ ⊟ ✎ │
+│     add the cache ★ ↗ ⊟ ✎│
 │     … 3 more             │
 │ ▸ other-repo      ❯  ✳   │
 ├──────────────────────────┤
@@ -128,15 +128,16 @@ large `~/.claude` history the first scan is the slow part, not the query.
 
 ## Stars, renames, archives
 
-Three buttons on each session row:
+Four buttons on each session row:
 
 | Button | Does |
 | --- | --- |
 | ★ | star / unstar — starred sessions collect under **★ Favorites** at the top |
+| ↗ | reveal the transcript: its `.jsonl` file, selected in Finder or Explorer; on Linux, the folder holding it opens |
 | ⊟ | archive (with a confirmation) — hidden unless **Show archived** is on |
 | ✎ | rename — an inline field; <kbd>Escape</kbd> abandons the edit |
 
-All three are an **overlay**: they are written to
+The star, archive and rename are an **overlay**: they are written to
 `~/.termherd/metadata.json`, never under `~/.claude`. Nothing you do in the
 sidebar changes what the Claude CLI sees, with one exception: renaming a
 session that is **open in a Claude tab** asks Claude to rename it, with
