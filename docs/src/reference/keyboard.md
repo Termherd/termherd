@@ -59,9 +59,9 @@ is <kbd>Tab</kbd>, so claiming it takes nothing away from that program.
 and *None*, over the focused tab — the list the tab menu's *Tab colour…*
 opens. <kbd>↑</kbd> and <kbd>↓</kbd> move, <kbd>Enter</kbd> picks,
 <kbd>Escape</kbd> leaves. On a Claude tab the pick is typed as `/color` behind
-the usual prompt, and the action does nothing unless that Claude is idle with
-an empty prompt; on a shell tab, or one whose Claude has exited, TermHerd
-keeps the colour itself (see
+the usual prompt, and the action does nothing unless that Claude has an empty
+prompt and no dialog open (it may be at work); on a shell tab, or one whose
+Claude has exited, TermHerd keeps the colour itself (see
 [tabs](../workspace/tabs-and-splits.md#tabs)). Bind it yourself; it has no
 default.
 
@@ -191,6 +191,8 @@ does above.
 | <kbd>↑</kbd> / <kbd>↓</kbd> in the tab menu | move the selection |
 | Right-click a tab | focus it and open its menu |
 | Drag a selection | select; copies too with `terminal.copy_on_select` (off by default) |
+| Double-click | select the word, or the whole URL or path, under the pointer; copies too with `terminal.copy_on_select` |
+| Triple-click | select the whole row; copies too with `terminal.copy_on_select` |
 | Right-click | paste, with `terminal.paste_on_right_click` (off by default) |
 | Wheel | scroll back through history, or the wheel event to a program reading the mouse |
 | Click, drag, right-click in a program reading the mouse | the event goes to the program — vim, lazygit, Claude Code's `/resume`; nothing is selected or pasted locally |

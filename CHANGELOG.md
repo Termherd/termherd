@@ -16,6 +16,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bridge file) out of `~/.termherd`, for the GUI and `termherd-mcp` alike,
   without changing the home the shells see (#577).
 
+### Added (double- and triple-click, by hand and over MCP)
+
+- A triple-click in a terminal selects the whole row, as a double-click
+  selects the word, path or link under the pointer; with
+  `terminal.copy_on_select` on, both copy it.
+- `mouse_in_session` takes a `click_count` (`1` default, `2`, `3`) on a
+  `click` or a `press`, so an agent can double- or triple-click: at a shell it
+  selects what the same clicks by hand would, and a program reading the mouse
+  is sent that many clicks. A count outside `1` to `3`, or on another kind, is
+  rejected (#492).
+
 ### Added (reveal a session in the file manager)
 
 - Two actions, unbound by default: `reveal-session-dir` opens the focused
@@ -25,6 +36,17 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sidebar row has a `↗` button that reveals its transcript. The tab menu also
   gains *Send to Claude Desktop*. On Linux, where Claude Desktop does not run,
   that entry is left out and `send-to-desktop` answers `no-surface` (#346).
+
+### Changed (rename and colour a Claude at work)
+
+- Renaming or recolouring a Claude tab no longer waits for Claude to finish
+  its turn: the keymap, the tab menu, the colour list and the MCP
+  `rename_tab` and `claude_command` tools now type `/rename` and `/color`
+  into a busy Claude, which applies them mid-turn and keeps a message you
+  queued during the turn. A dialog, a draft in Claude's prompt or a prompt
+  off screen still refuse, and `/desktop` still waits for Claude to be idle.
+  An MCP client that matched the refusal `the session is busy, not idle at
+  its prompt` for a rename or a colour no longer receives it (#379).
 
 ### Fixed (no console window beside TermHerd on Windows)
 

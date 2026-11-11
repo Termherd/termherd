@@ -2,7 +2,7 @@
 //! status / record read models.
 
 use crate::browser::{SessionRecord, project_label};
-use crate::claude_command::PromptInput;
+use crate::claude_command::{CommandKind, PromptInput};
 use crate::snapshot::SessionKind;
 use termherd_claude::color::ClaudeColor;
 
@@ -240,7 +240,7 @@ impl App {
             .ok_or(CommandRefusal::UnknownSession)?
         {
             ColorKeeper::Claude => self
-                .claude_command_check(session, prompt)
+                .claude_command_check(session, CommandKind::Color, prompt)
                 .map(|()| ColorKeeper::Claude),
             ColorKeeper::Termherd => Ok(ColorKeeper::Termherd),
         }

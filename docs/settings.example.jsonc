@@ -116,8 +116,9 @@
     // reaches the clipboard unless asked for. A value that is not true/false
     // leaves its own gesture off and does not fail the file.
     //
-    // Releasing a drag — or double-clicking a word — copies the selection
-    // outright. Off: the selection highlights and waits for the copy chord.
+    // Releasing a drag — or double- or triple-clicking — copies the
+    // selection outright. Off: the selection highlights and waits for the
+    // copy chord.
     "copy_on_select": false,
     // A right-click pastes into THE PANE UNDER THE POINTER (not necessarily
     // the focused one), bracketed when that pane asked for bracketed paste.
