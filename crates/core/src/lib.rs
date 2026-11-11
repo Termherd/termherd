@@ -10,6 +10,7 @@ pub mod deeplink;
 pub mod docscope;
 pub mod keymap;
 pub mod links;
+pub mod locations;
 pub mod metadata;
 pub mod open;
 pub mod paths;

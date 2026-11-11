@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (`TERMHERD_DATA_DIR`, and `CLAUDE_CONFIG_DIR` honoured)
+
+- TermHerd now reads `CLAUDE_CONFIG_DIR`, as Claude Code does: with Claude's
+  data moved elsewhere, the sidebar lists its sessions instead of reporting
+  an unreadable `~/.claude/projects`.
+- `TERMHERD_DATA_DIR` moves TermHerd's own files (settings, layout, log,
+  bridge file) out of `~/.termherd`, for the GUI and `termherd-mcp` alike,
+  without changing the home the shells see (#577).
+
 ### Fixed (no console window beside TermHerd on Windows)
 
 - Launching TermHerd from Explorer or the Start menu on Windows 11 24H2 or

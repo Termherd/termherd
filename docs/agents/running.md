@@ -37,28 +37,24 @@ line, and on macOS the lock went off unannounced). Launch detached when you
 need to keep interacting with the original window (e.g. to compare quit
 behaviour).
 
-**A second instance shares `~/.termherd/settings.json` with the first.** The
-lock moved, the settings did not: a theme picked in the test build is
-persisted to the same file, and the settings watch repaints the user's own
-app with it. Point the home at a throwaway directory too. `paths::home_dir`
-reads `USERPROFILE` before `HOME`, and a worktree-isolated agent session
-refused a command setting `HOME` (it injects git config), so use
-`USERPROFILE`:
+**A second instance shares `~/.termherd` with the first** unless told
+otherwise. The lock moved, the settings did not: a theme picked in the test
+build is persisted to the same file, and the settings watch repaints the
+user's own app with it. The tab strip is restored at launch too, so a second
+instance on the user's `layout.json` reopens their tabs, each Claude pane
+running `claude --resume` on a conversation the first instance still holds.
+Point the data dir at a throwaway directory:
 
 ```bash
-USERPROFILE=$(mktemp -d) TMPDIR=$(mktemp -d) cargo run -p termherd-app
+TERMHERD_DATA_DIR=$(mktemp -d) TMPDIR=$(mktemp -d) cargo run -p termherd-app
 ```
 
-The home matters twice over since the tab strip is restored at launch: a
-second instance on the user's `~/.termherd` reopens their tabs from
-`layout.json`, so each Claude pane runs `claude --resume` on a conversation
-the first instance is still holding, and whichever quits last writes the
-file.
-
-The fake home hides `~/.claude` as well, so that build starts with an empty
-sidebar and finds no session files: fine for a theme or layout check, wrong
-for anything that reads Claude's data; copy `~/.claude/projects` into the fake
-home when a check needs real sessions.
+`TERMHERD_DATA_DIR` moves `~/.termherd` and nothing else (`termherd-mcp`
+reads it as well). Isolating with `USERPROFILE` or `HOME`, as this page used
+to say, also hid `~/.claude` — an empty sidebar reporting
+`projects directory not readable` — and handed the fake home to every shell,
+so the build looked like no user's (#577). `CLAUDE_CONFIG_DIR`, read with
+Claude Code's own precedence, points the build at another Claude directory.
 
 **A build from before the lock followed the temp dir on Windows and Linux does
 not see a newer one, nor the reverse**: the default lock name changed with it.
@@ -103,22 +99,21 @@ env ZDOTDIR="$TMPDIR/termherd-shell-1" cargo test -p termherd-app \
 
 A dev build started beside the user's own termherd can be driven over its live
 bridge by anything that speaks HTTP — no Claude session needed. Give it a
-throwaway home and temp dir (so it neither takes the user's lock nor touches
-their settings), turn `mcp.attach` on in that home, and read the endpoint it
-publishes:
+throwaway data dir and temp dir (so it neither takes the user's lock nor
+touches their settings), turn `mcp.attach` on in that data dir, and read the
+endpoint it publishes:
 
 ```bash
 cargo build -p termherd-app
-home=$(mktemp -d)
+data=$(mktemp -d)
 tmp=$(mktemp -d)
-mkdir -p "$home/.termherd"
-echo '{ "mcp": { "attach": true } }' > "$home/.termherd/settings.json"
-USERPROFILE="$home" TMPDIR="$tmp" target/debug/termherd \
+echo '{ "mcp": { "attach": true } }' > "$data/settings.json"
+TERMHERD_DATA_DIR="$data" TMPDIR="$tmp" target/debug/termherd \
   > "$tmp/termherd.log" 2>&1 &
 
 # Published once the server is bound: { "url": …, "token": … }, mode 0600.
-until [ -s "$home/.termherd/bridge.json" ]; do sleep 0.2; done
-cat "$home/.termherd/bridge.json"
+until [ -s "$data/bridge.json" ]; do sleep 0.2; done
+cat "$data/bridge.json"
 ```
 
 `TERMHERD_MCP_ATTACH=1` on the launch line does the same as the settings file
@@ -130,8 +125,8 @@ The bridge speaks MCP's streamable HTTP in stateless mode: no
 call needs the bearer token and both `Accept` types; a wrong token gets `401`.
 
 ```bash
-url=$(jq -r .url "$home/.termherd/bridge.json")
-token=$(jq -r .token "$home/.termherd/bridge.json")
+url=$(jq -r .url "$data/bridge.json")
+token=$(jq -r .token "$data/bridge.json")
 hdr=(-H "Authorization: Bearer $token" -H 'Content-Type: application/json'
      -H 'Accept: application/json, text/event-stream')
 
@@ -144,11 +139,11 @@ curl -s "${hdr[@]}" "$url" -d '{"jsonrpc":"2.0","id":2,"method":"tools/call",
   "params":{"name":"snapshot","arguments":{}}}'
 ```
 
-`target/debug/termherd mcp-config` (with the same `USERPROFILE`) prints the
+`target/debug/termherd mcp-config` (with the same `TERMHERD_DATA_DIR`) prints the
 `mcpServers` snippet for that endpoint instead, after proving it answers — the
 form to hand a Claude session started outside termherd. A file left by a
-killed instance reads as stale there; the next launch over the same home
-clears it.
+killed instance reads as stale there; the next launch over the same data
+dir clears it.
 
 ## Capturing state for the AI dev loop (#108)
 
