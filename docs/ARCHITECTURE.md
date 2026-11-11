@@ -399,7 +399,5 @@ their job graphs.
 - **GUI framework churn.** Mitigation: logic is in `core`; the GUI crate is
   replaceable without touching tests or adapters.
 - **Claude format/OSC drift.** Mitigation: isolated, property-tested `claude`.
-- **The Unsure bet (IDE bridge/diff) returning later.** Mitigation: it would
-  enter as a new port in `core::ports` and an adapter implementing it —
-  additive, not a rework. No `IdeBridge` port exists yet; it is written when
-  the bet is taken, not ahead of it.
+- **The Unsure bet (IDE bridge/diff) returning later.** Mitigation: an
+  `IdeBridge` would be one more `core::ports` trait and adapter; additive, not a rework.
