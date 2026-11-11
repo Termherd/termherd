@@ -477,9 +477,8 @@ impl Workspace {
     /// shifted by it, unless the move parked it. Returns `None` (no change) if
     /// either index is out of range; `from == to` is a successful no-op.
     pub fn move_tab(&mut self, from: usize, to: usize) -> Option<()> {
-        if from >= self.tabs.len() || to >= self.tabs.len() {
-            return None;
-        }
+        // The predicate refuses an index off the strip, so it is the bounds
+        // check too.
         let parked = self.lands_parked(from, to)?;
         if from != to {
             self.relocate(from, to, parked);
