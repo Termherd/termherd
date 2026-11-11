@@ -70,7 +70,7 @@ impl Shell {
             return Err(ArmRefusal::PromptOpen(owner.label()));
         }
         self.core
-            .claude_command_check(session, &self.prompt_input(session))
+            .claude_command_check(session, command.kind(), &self.prompt_input(session))
             .map_err(ArmRefusal::Session)?;
         let line = command.line();
         tracing::info!(session = session.0.get(), %line, "claude command armed");
@@ -121,11 +121,15 @@ impl Shell {
     /// keeps the prompt open and names why, so nothing vanishes unexplained;
     /// `escape` then dismisses it.
     pub(super) fn confirm_claude_command(&mut self) -> Result<Task<Message>, CommandRefusal> {
-        let Some(session) = self.claude_command.as_ref().map(|pending| pending.session) else {
+        let Some((session, kind)) = self
+            .claude_command
+            .as_ref()
+            .map(|pending| (pending.session, pending.command.kind()))
+        else {
             return Ok(Task::none());
         };
         let prompt = self.prompt_input(session);
-        if let Err(refusal) = self.core.claude_command_check(session, &prompt) {
+        if let Err(refusal) = self.core.claude_command_check(session, kind, &prompt) {
             if let Some(pending) = self.claude_command.as_mut() {
                 tracing::warn!(
                     session = session.0.get(),

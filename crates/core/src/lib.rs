@@ -31,7 +31,8 @@ pub use app::{
 };
 pub use browser::{ProjectGroup, SessionRecord};
 pub use claude_command::{
-    ClaudeColor, ClaudeCommand, CommandArgument, CommandError, PromptInput, read_prompt,
+    ClaudeColor, ClaudeCommand, CommandArgument, CommandError, CommandKind, PromptInput,
+    read_prompt,
 };
 pub use keymap::{
     Action, ActionBinding, ChordError, KeyChord, Keymap, Platform, action_catalog, default_bindings,

@@ -14,6 +14,8 @@ use std::fmt;
 
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::SessionStatus;
+
 pub use termherd_claude::color::ClaudeColor;
 pub use termherd_claude::prompt::{PromptInput, read_prompt};
 
@@ -48,6 +50,23 @@ pub enum ClaudeCommand {
     Color(ClaudeColor),
     /// `/desktop` — hand the session to the Claude desktop app.
     Desktop,
+}
+
+/// Which command of the catalogue, without its argument: when a command may
+/// be typed depends on what it does, never on the name or colour it carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandKind {
+    Rename,
+    Color,
+    Desktop,
+}
+
+impl CommandKind {
+    /// Whether a Claude in `status` can take this command at its prompt.
+    #[must_use]
+    pub fn accepts(self, status: SessionStatus) -> bool {
+        status == SessionStatus::Idle
+    }
 }
 
 /// Why a command could not be built from what the caller gave.
@@ -146,6 +165,15 @@ impl ClaudeCommand {
     /// [`CommandError::EmptyArgument`] for a name with nothing typeable in it.
     pub fn rename(name: &str) -> Result<Self, CommandError> {
         CommandArgument::new(name).map(Self::Rename)
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> CommandKind {
+        match self {
+            Self::Rename(_) => CommandKind::Rename,
+            Self::Color(_) => CommandKind::Color,
+            Self::Desktop => CommandKind::Desktop,
+        }
     }
 
     /// The line typed at Claude's prompt — what the confirmation shows, and,

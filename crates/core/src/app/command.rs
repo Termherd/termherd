@@ -10,7 +10,7 @@
 
 use std::fmt;
 
-use crate::claude_command::{CLEAR_DRAFT, ClaudeCommand, PromptInput, SUBMIT};
+use crate::claude_command::{CLEAR_DRAFT, ClaudeCommand, CommandKind, PromptInput, SUBMIT};
 
 use super::*;
 
@@ -60,8 +60,9 @@ impl fmt::Display for CommandRefusal {
 }
 
 impl App {
-    /// Whether `session` can take a Claude command now: a Claude launch, idle,
-    /// with `prompt` — its input as the screen shows it — empty.
+    /// Whether `session` can take a command of `kind` now: a Claude launch,
+    /// in a status the command accepts, with `prompt` — its input as the
+    /// screen shows it — empty.
     ///
     /// # Errors
     ///
@@ -69,6 +70,7 @@ impl App {
     pub fn claude_command_check(
         &self,
         session: SessionId,
+        kind: CommandKind,
         prompt: &PromptInput,
     ) -> Result<(), CommandRefusal> {
         let live = self
@@ -78,7 +80,7 @@ impl App {
         if !live.runs_claude() {
             return Err(CommandRefusal::NotClaude);
         }
-        if live.status != SessionStatus::Idle {
+        if !kind.accepts(live.status) {
             return Err(CommandRefusal::NotIdle(live.status));
         }
         match prompt {
@@ -95,7 +97,10 @@ impl App {
         command: &ClaudeCommand,
         prompt: &PromptInput,
     ) -> Vec<Effect> {
-        if self.claude_command_check(session, prompt).is_err() {
+        if self
+            .claude_command_check(session, command.kind(), prompt)
+            .is_err()
+        {
             return Vec::new();
         }
         vec![
@@ -131,7 +136,7 @@ mod tests {
     }
 
     fn check(app: &App, session: SessionId) -> Result<(), CommandRefusal> {
-        app.claude_command_check(session, &PromptInput::Empty)
+        app.claude_command_check(session, CommandKind::Color, &PromptInput::Empty)
     }
 
     #[test]
@@ -141,13 +146,13 @@ mod tests {
         set_status(&mut app, session, SessionStatus::Idle);
         let draft = PromptInput::Draft("fix the\nlogin bug".to_owned());
         assert_eq!(
-            app.claude_command_check(session, &draft),
+            app.claude_command_check(session, CommandKind::Color, &draft),
             Err(CommandRefusal::DraftPresent(
                 "fix the\nlogin bug".to_owned()
             ))
         );
         assert_eq!(
-            app.claude_command_check(session, &PromptInput::NotVisible),
+            app.claude_command_check(session, CommandKind::Color, &PromptInput::NotVisible),
             Err(CommandRefusal::PromptNotVisible)
         );
         for prompt in [draft, PromptInput::NotVisible] {

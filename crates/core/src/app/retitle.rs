@@ -62,7 +62,7 @@ mod tests {
     use super::*;
     use crate::app::testsupport::*;
     use crate::browser::SessionRecord;
-    use crate::claude_command::{ClaudeCommand, PromptInput};
+    use crate::claude_command::{ClaudeCommand, CommandKind, PromptInput};
 
     /// Open a Claude tab launched as `launch`, labelled `repo`.
     fn open_claude(app: &mut App, launch: ClaudeLaunch) -> SessionId {
@@ -317,7 +317,7 @@ mod tests {
         });
         assert!(!app.tab_names_through_claude(0), "the shell is back");
         assert_eq!(
-            app.claude_command_check(session, &PromptInput::Empty),
+            app.claude_command_check(session, CommandKind::Rename, &PromptInput::Empty),
             Err(CommandRefusal::NotClaude),
             "nothing is typed into the shell left behind"
         );
