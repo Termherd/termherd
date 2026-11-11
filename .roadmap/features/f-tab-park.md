@@ -19,7 +19,10 @@ Shipped (#353): `toggle-park-tab` with no default chord, a *Park tab* entry in
 the tab menu, and `parked` on the snapshot. Attention unparks without taking
 the focus; a drag takes the zone it lands in.
 
-Deferred to a later tidy-first (#454): shell tab state stored by session rather
-than as an index re-anchored after each message, and one drop-zone rule shared
-by the strip view and `Workspace::move_tab`. The third slice is done (#446):
-`core` reports a change of the shown tab as `Effect::TabShown`.
+Deferred to a later tidy-first (#454), and since done, in three slices: shell
+tab state stored by session rather than as an index re-anchored after each
+message (#472); `core` reporting a change of the shown tab as
+`Effect::TabShown` (#456); and one drop-zone rule, `Workspace::lands_parked`,
+which `move_tab` applies and the strip's caret reads (#572). A drop from
+another window (#153) has no `from` in the target strip, so it will need the
+rule keyed on the carried tab's zone rather than its index.
