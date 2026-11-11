@@ -9,16 +9,24 @@ The full reference is `docs/agents/running.md`; read it before the first
 launch in a session. The steps that matter:
 
 1. The user's release termherd usually hosts this session and holds the
-   single-instance lock. Isolate the build's temp dir **and** home, or it
+   single-instance lock. Isolate the build's temp dir **and** data dir, or it
    refuses to start or repaints the user's app with its settings:
 
    ```bash
-   USERPROFILE=$(mktemp -d) TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app
+   TERMHERD_DATA_DIR=$(mktemp -d) TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app
    ```
 
-   On Windows set `TMP` to a directory that exists, never a missing one.
-   Copy `~/.claude/projects` into the fake home when the check needs real
-   sessions.
+   On Windows `TMPDIR` is ignored (Rust reads `TMP`, then `TEMP`), and Git
+   Bash's `mktemp` paths must be converted, or the build takes the user's
+   lock and exits with code 2:
+
+   ```bash
+   TERMHERD_DATA_DIR=$(cygpath -w "$(mktemp -d)") TMP=$(cygpath -w "$(mktemp -d)") cargo run -p termherd-app
+   ```
+
+   Never isolate with `USERPROFILE` or `HOME`: that also hides `~/.claude`
+   (empty sidebar) and changes the shells' home. `CLAUDE_CONFIG_DIR` points
+   the build at another Claude directory.
 2. Launch it in the background and read its `tracing` output; add `info!` at
    the seam you are verifying, never `println!`.
 3. A build an agent launches inherits this session's `CLAUDE*` variables, so
@@ -28,5 +36,5 @@ launch in a session. The steps that matter:
    merged tree (`git merge --no-commit origin/main`, build,
    `git merge --abort`).
 5. To observe: `⌘⇧S` / `Ctrl+Shift+S` writes a JSON + PNG capture to
-   `~/.termherd/captures/` (the latest is the highest name); the MCP bridge
+   `captures/` in the data dir (the latest is the highest name); the MCP bridge
    reads a live app — see the `drive-termherd` skill.

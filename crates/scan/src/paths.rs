@@ -143,17 +143,11 @@ fn resolved(path: &Path) -> ResolvedPath {
     ResolvedPath { path, real }
 }
 
-/// The user's home directory: `%USERPROFILE%` (Windows) then `$HOME` (Unix).
-///
-/// Deliberately untested, and the only thing here that is: pointing it
-/// somewhere known needs `std::env::set_var`, which is `unsafe` in edition 2024
-/// and denied workspace-wide. Everything that *decides* anything from a home
-/// directory takes it as an argument instead — see [`expand_home`] — so this
-/// stays a two-line lookup with no branch worth pinning.
+/// The user's home directory, by `termherd_core::locations::home`'s
+/// precedence. Everything that *decides* anything from it takes the home as an
+/// argument instead — see [`expand_home`] — so tests never read the ambient one.
 pub(crate) fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
+    termherd_core::locations::home(&|name| std::env::var_os(name))
 }
 
 /// Expand a leading `~` against `home`, or [`None`] when the candidate does not
