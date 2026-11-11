@@ -1801,8 +1801,8 @@ mod key_routing {
     use std::sync::Mutex as StdMutex;
     use termherd_core::ports::{PtyError, ScanError};
     use termherd_core::{
-        Action, CommandRefusal, PointerEvent, PointerKind, PointerRoute, SelectSide, SessionKind,
-        SnapshotFilter, SpawnSpec,
+        Action, ClickCount, CommandRefusal, PointerEvent, PointerKind, PointerRoute, SelectSide,
+        SessionKind, SnapshotFilter, SpawnSpec,
     };
 
     /// A `PtyHost` double recording every write and kill; all calls succeed.
@@ -2498,6 +2498,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: 999,
             pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+            clicks: ClickCount::Single,
         });
         assert!(
             outcome.error.as_deref().is_some_and(|e| e.contains("999")),
@@ -2514,6 +2515,7 @@ mod key_routing {
             let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
                 session: handle,
                 pointer: PointerEvent::left(PointerKind::Press, col, row),
+                clicks: ClickCount::Single,
             });
             let error = outcome
                 .error
@@ -2539,6 +2541,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: handle,
             pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+            clicks: ClickCount::Single,
         });
         assert!(
             outcome.error.is_some(),
@@ -2554,6 +2557,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: handle,
             pointer,
+            clicks: ClickCount::Single,
         });
         assert_eq!(outcome.error, None, "the last cell is inside the pane");
         assert_eq!(outcome.pointer(), Some(PointerRoute::Select));
@@ -2574,6 +2578,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: handle,
             pointer: PointerEvent::left(PointerKind::Move, 3, 0),
+            clicks: ClickCount::Single,
         });
         assert_eq!(outcome.error, None);
         assert_eq!(outcome.pointer(), Some(PointerRoute::Nothing));
@@ -2594,6 +2599,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: handle,
             pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+            clicks: ClickCount::Single,
         });
         assert!(
             outcome
@@ -2627,6 +2633,7 @@ mod key_routing {
             let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
                 session: handle,
                 pointer: PointerEvent::left(kind, 2, 0),
+                clicks: ClickCount::Single,
             });
             assert_eq!(outcome.error, None, "{kind:?}");
             assert_eq!(outcome.pointer(), Some(expected), "{kind:?}");
@@ -2636,6 +2643,105 @@ mod key_routing {
             3,
             "every event still reaches the terminal, which decides on its live mode"
         );
+    }
+
+    /// A repeated click on the bridge at a cell of `text`.
+    fn clicks_at(
+        text: &str,
+        col: u16,
+        clicks: ClickCount,
+    ) -> (super::bridge::ActionOutcome, Arc<RecordingPty>, SessionId) {
+        let (mut shell, pty, handle) = shell_showing(text);
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: PointerEvent::left(PointerKind::Click, col, 0),
+            clicks,
+        });
+        (outcome, pty, session)
+    }
+
+    /// A double- or triple-click over the bridge selects what the same click
+    /// by hand selects: the canvas's range, as one `Select`, with no single
+    /// click reaching the terminal to clear it again.
+    #[test]
+    fn pointer_action_selects_the_word_or_row_a_repeated_click_would() {
+        for (clicks, expected) in [
+            (ClickCount::Double, (2, 6)),  // `cargo`
+            (ClickCount::Triple, (0, 11)), // the whole row
+        ] {
+            let (outcome, pty, _) = clicks_at("$ cargo test", 4, clicks);
+            assert_eq!(outcome.error, None, "{clicks:?}");
+            assert_eq!(outcome.pointer(), Some(PointerRoute::Select), "{clicks:?}");
+            assert_eq!(
+                pty.selects(),
+                vec![SelectOp::Range {
+                    line0: 0,
+                    col0: expected.0,
+                    line1: 0,
+                    col1: expected.1,
+                }],
+                "{clicks:?}"
+            );
+            assert!(pty.pointers().is_empty(), "{clicks:?}");
+        }
+    }
+
+    #[test]
+    fn pointer_action_double_click_on_a_blank_is_that_many_plain_clicks() {
+        let (outcome, pty, session) = clicks_at("$ cargo test", 1, ClickCount::Double);
+        assert_eq!(outcome.error, None);
+        assert_eq!(outcome.pointer(), Some(PointerRoute::Select));
+        let click = PointerEvent::left(PointerKind::Click, 1, 0);
+        assert_eq!(pty.pointers(), vec![(session, click), (session, click)]);
+        assert!(pty.selects().is_empty());
+    }
+
+    /// A child reading the mouse tells a double-click by its timing, so it is
+    /// handed the clicks themselves, as the canvas hands it each press.
+    #[test]
+    fn pointer_action_forwards_a_repeated_click_as_that_many_clicks() {
+        use termherd_core::MouseReporting;
+        let (mut shell, pty, handle) = shell_showing("$ vim");
+        let session = shell.core.workspace.focused_session().expect("focused");
+        shell
+            .screens
+            .get_mut(&session)
+            .expect("the fixture rendered a screen")
+            .mouse_reporting = Some(MouseReporting::Click);
+        let click = PointerEvent::left(PointerKind::Click, 2, 0);
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: click,
+            clicks: ClickCount::Triple,
+        });
+        assert_eq!(outcome.pointer(), Some(PointerRoute::Forward));
+        assert_eq!(pty.pointers(), vec![(session, click); 3]);
+        assert!(pty.selects().is_empty(), "the mouse is the child's");
+    }
+
+    #[test]
+    fn pointer_action_rejects_a_repeated_click_on_an_exited_session() {
+        let (mut shell, pty, handle) = shell_showing("$ cargo test");
+        let session = shell.core.workspace.focused_session().expect("focused");
+        let _ = shell.update(Message::PtyExited {
+            session,
+            clean: false,
+        });
+        let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
+            session: handle,
+            pointer: PointerEvent::left(PointerKind::Click, 4, 0),
+            clicks: ClickCount::Double,
+        });
+        assert!(
+            outcome
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("exited")),
+            "{outcome:?}"
+        );
+        assert!(pty.selects().is_empty());
+        assert!(pty.pointers().is_empty());
     }
 
     #[test]
@@ -3244,6 +3350,7 @@ mod key_routing {
         let (outcome, _task) = shell.perform_action(BridgeAction::Pointer {
             session: worker,
             pointer: PointerEvent::left(PointerKind::Press, 0, 0),
+            clicks: ClickCount::Single,
         });
         assert_eq!(outcome.error, None);
         assert_eq!(pty.pointers().len(), 1, "the press reached the worker");

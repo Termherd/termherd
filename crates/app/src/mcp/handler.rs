@@ -31,8 +31,9 @@ use termherd_core::keymap::ChordError;
 use termherd_core::snapshot::DEFAULT_TEXT_LINES;
 use termherd_core::workspace::SplitDir;
 use termherd_core::{
-    Action as KeymapAction, ClaudeColor, ClaudeCommand, KeyChord, PointerButton, PointerEvent,
-    PointerKind, PointerRoute, Section, SessionKind, SessionStatus, SnapshotFilter, TerminalScope,
+    Action as KeymapAction, ClaudeColor, ClaudeCommand, ClickCount, KeyChord, PointerButton,
+    PointerEvent, PointerKind, PointerRoute, Section, SessionKind, SessionStatus, SnapshotFilter,
+    TerminalScope,
 };
 use termherd_mcp::file::SetAtError;
 
@@ -438,7 +439,11 @@ impl TermherdMcp {
                        \"release\", \"click\", \"drag\", \"move\"), `col` and \
                        `row` (0-based cells of the visible screen; out of the \
                        pane's geometry rejects the call), `button` (\"left\" \
-                       default, \"middle\", \"right\"). Returns `focused_handle` \
+                       default, \"middle\", \"right\"), `click_count` (1 \
+                       default; 2 or 3 on a \"click\" or \"press\" is a \
+                       double- or triple-click, which at a shell selects the \
+                       word, path or link, or the row, and copies it when \
+                       `terminal.copy_on_select` is on). Returns `focused_handle` \
                        and `pointer`: \"forwarded\" when the program in the \
                        session reads the mouse, as of its last rendered frame, \
                        and was sent the event (follow with `wait_for_status` / \
@@ -455,7 +460,13 @@ impl TermherdMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let session = parse_handle(&args.session)?;
         let pointer = parse_pointer(&args)?;
-        self.act(Action::Pointer { session, pointer }).await
+        let clicks = parse_clicks(&args, pointer.kind)?;
+        self.act(Action::Pointer {
+            session,
+            pointer,
+            clicks,
+        })
+        .await
     }
 
     /// Block until a session's activity reaches one of the given statuses — the
@@ -1228,6 +1239,33 @@ struct MouseArgs {
     /// `left` (default), `middle` or `right`.
     #[serde(default)]
     button: Option<String>,
+    /// `1` (default), `2` for a double-click, `3` for a triple-click. Only a
+    /// `click` or a `press` can repeat.
+    #[serde(default)]
+    click_count: Option<u8>,
+}
+
+/// How many clicks a `mouse_in_session` call lands. Out of `1..=3`, or above
+/// one on a kind that is not a button going down, rejects the whole call
+/// before the bridge, as an unknown word does.
+fn parse_clicks(args: &MouseArgs, kind: PointerKind) -> Result<ClickCount, ErrorData> {
+    let Some(count) = args.click_count else {
+        return Ok(ClickCount::Single);
+    };
+    let clicks = ClickCount::from_count(count).ok_or_else(|| {
+        ErrorData::invalid_params(format!("click_count {count} is outside 1..=3"), None)
+    })?;
+    let repeatable = matches!(kind, PointerKind::Click | PointerKind::Press);
+    if clicks != ClickCount::Single && !repeatable {
+        return Err(ErrorData::invalid_params(
+            format!(
+                "click_count {count} needs a \"click\" or a \"press\", not {:?}",
+                args.kind
+            ),
+            None,
+        ));
+    }
+    Ok(clicks)
 }
 
 /// The pointer event a `mouse_in_session` call describes, or the first word it
@@ -2500,6 +2538,7 @@ mod tests {
                 col: 7,
                 row: 2,
                 button: Some("right".into()),
+                click_count: None,
             }))
             .await
         })
@@ -2512,6 +2551,7 @@ mod tests {
                     button: PointerButton::Right,
                     ..PointerEvent::left(PointerKind::Drag, 7, 2)
                 },
+                clicks: ClickCount::Single,
             }
         );
     }
@@ -2568,6 +2608,68 @@ mod tests {
             assert!(
                 error.message.contains(word),
                 "the rejection names the word: {}",
+                error.message
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mouse_in_session_tool_carries_the_click_count_of_a_click_or_press() {
+        for (kind, count, clicks) in [
+            ("click", None, ClickCount::Single),
+            ("click", Some(2), ClickCount::Double),
+            ("click", Some(3), ClickCount::Triple),
+            ("press", Some(2), ClickCount::Double),
+            ("drag", Some(1), ClickCount::Single),
+        ] {
+            let action = action_of(|mcp| async move {
+                mcp.mouse_in_session(Parameters(MouseArgs {
+                    session: "3".into(),
+                    kind: kind.into(),
+                    click_count: count,
+                    ..MouseArgs::default()
+                }))
+                .await
+            })
+            .await;
+            let Action::Pointer { clicks: got, .. } = action else {
+                panic!("expected a pointer action, got {action:?}");
+            };
+            assert_eq!(got, clicks, "{kind} {count:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn mouse_in_session_tool_rejects_a_click_count_it_cannot_honour() {
+        // Out of 1..=3, or repeated on a kind that is not a button going down:
+        // rejected before the bridge, naming what was wrong.
+        for (kind, count, named) in [
+            ("click", 0, "0"),
+            ("click", 4, "4"),
+            ("press", 9, "9"),
+            ("drag", 2, "drag"),
+            ("release", 3, "release"),
+            ("move", 2, "move"),
+        ] {
+            let (handle, requests) = channel();
+            drop(requests);
+            let error = TermherdMcp::new(handle)
+                .mouse_in_session(Parameters(MouseArgs {
+                    session: "1".into(),
+                    kind: kind.into(),
+                    click_count: Some(count),
+                    ..MouseArgs::default()
+                }))
+                .await
+                .expect_err("rejected before the bridge");
+            assert_eq!(
+                error.code,
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "{kind} {count}"
+            );
+            assert!(
+                error.message.contains(named),
+                "the rejection names {named:?}: {}",
                 error.message
             );
         }

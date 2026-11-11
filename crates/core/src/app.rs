@@ -51,7 +51,7 @@ pub use hover::{
 };
 pub use paste::{PendingPaste, line_count, paste_needs_confirmation};
 pub use pointer::{
-    MouseReporting, PointerButton, PointerEvent, PointerKind, PointerRoute, grid_line,
+    ClickCount, MouseReporting, PointerButton, PointerEvent, PointerKind, PointerRoute, grid_line,
     pointer_select,
 };
 pub use session::{

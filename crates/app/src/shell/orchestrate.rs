@@ -14,7 +14,8 @@ use std::num::NonZeroU64;
 use iced::Task;
 use termherd_core::workspace::{SessionId, SplitDir};
 use termherd_core::{
-    ClaudeCommand, ClaudeLaunch, Event, Launch, Placement, PointerEvent, SessionKind,
+    ClaudeCommand, ClaudeLaunch, ClickCount, Event, Launch, Placement, PointerEvent, PointerRoute,
+    SessionKind,
 };
 
 use super::bridge::{
@@ -23,6 +24,7 @@ use super::bridge::{
 use super::input::event_of;
 use super::repos::RepoGesture;
 use super::routing::{KeyVerdict, KeyboardOwner};
+use super::terminal::{ClickSelection, click_selection};
 use super::{Focus, Message, Shell};
 
 impl Shell {
@@ -47,7 +49,11 @@ impl Shell {
             Action::Close { pane, background } => self.act_close(pane, background),
             Action::Run { session, bytes } => self.act_run(session, bytes),
             Action::Submit { session } => self.act_submit(session),
-            Action::Pointer { session, pointer } => self.act_pointer(session, pointer),
+            Action::Pointer {
+                session,
+                pointer,
+                clicks,
+            } => self.act_pointer(session, pointer, clicks),
             Action::DeclareRepo { path } => self.act_declare_repo(&path),
             Action::ForgetRepo { path } => self.act_forget_repo(&path),
             Action::ClaudeCommand { session, command } => {
@@ -286,6 +292,7 @@ impl Shell {
         &mut self,
         session: u64,
         pointer: PointerEvent,
+        clicks: ClickCount,
     ) -> (ActionOutcome, Task<Message>) {
         let Some(id) = self.resolve(session) else {
             return (unknown_handle(session), Task::none());
@@ -311,10 +318,29 @@ impl Shell {
         // Answered off the last screen's mouse mode, as the bounds are off its
         // geometry; the terminal decides again on its live mode and offset.
         let route = pointer.route(screen.mouse_reporting);
-        let effects = self.core.apply(Event::TerminalPointer {
-            session: id,
-            pointer,
-        });
+        // A repeated click the terminal keeps selects what the canvas would,
+        // off the same screen; anything else is that many single events — a
+        // child reading the mouse tells a double-click by their timing.
+        let selection = (route == PointerRoute::Select)
+            .then(|| click_selection(screen, pointer.col, pointer.row, clicks))
+            .flatten();
+        let (effects, copied) = match selection {
+            Some(ClickSelection { op, text }) => (
+                self.core.apply(Event::Select { session: id, op }),
+                self.gestures.copy_on_select.then_some(text),
+            ),
+            None => {
+                let effects = (0..clicks.count())
+                    .flat_map(|_| {
+                        self.core.apply(Event::TerminalPointer {
+                            session: id,
+                            pointer,
+                        })
+                    })
+                    .collect();
+                (effects, None)
+            }
+        };
         // `core` absorbs an event for a session that has exited; a screen is
         // still there to bound against, but no terminal is behind it, and the
         // answer must not claim one did something.
@@ -327,9 +353,16 @@ impl Shell {
                 Task::none(),
             );
         }
+        let performed = self.perform(effects);
+        let task = match copied {
+            Some(text) if !text.is_empty() => {
+                Task::batch([performed, iced::clipboard::write(text)])
+            }
+            _ => performed,
+        };
         (
             self.applied().with_detail(ActionDetail::Pointer(route)),
-            self.perform(effects),
+            task,
         )
     }
 

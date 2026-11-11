@@ -210,10 +210,11 @@ one types what the layout composes, such as `|` with `⌥⇧L` on a French layou
 
 Dragging with the mouse selects, and the wheel scrolls back through history.
 The two classic terminal clipboard gestures are off until you ask for them:
-`terminal.copy_on_select` makes a drag release (or a double-click) copy
-outright, and `terminal.paste_on_right_click` makes a right-click paste into the
-pane under the pointer. Left off, the copy chord copies the terminal's current
-selection, even one scrolled out of view. A full-screen program that reads the
+`terminal.copy_on_select` makes a drag release (or a double- or triple-click)
+copy outright, and `terminal.paste_on_right_click` makes a right-click paste
+into the pane under the pointer. Left off, the copy chord copies the terminal's
+current selection, even one scrolled out of view. A full-screen program that
+reads the
 mouse — Claude Code's `/diff` and `/resume`, vim, lazygit, less — owns it while
 it runs: clicks, drags and the wheel go to the program, nothing is selected or
 pasted locally, and <kbd>Shift</kbd>+drag takes the mouse back for a selection.
@@ -264,7 +265,7 @@ nothing to configure. It exposes the running workspace:
 | `read_terminal` | one pane's visible text |
 | `screenshot` | the window as a PNG — for what only pixels show |
 | `press_keys` · `run_action` | drive termherd's own interface — chords through the live keymap, or actions by name |
-| `mouse_in_session` | a mouse event at a cell of a terminal — forwarded to a program reading the mouse, else the terminal's own selection |
+| `mouse_in_session` | a mouse event at a cell of a terminal, single, double or triple — forwarded to a program reading the mouse, else the terminal's own selection |
 | `add_repo` · `forget_repo` | put a repository in the sidebar before it has any session, and drop that addition |
 | `claude_command` | ask to type `/rename`, `/color` or `/desktop` into an idle Claude session — behind a confirmation the caller or the user answers |
 | `prompt_in_session` | type, wait and read in one round trip — prompting another Claude session is opt-in |
@@ -291,11 +292,11 @@ renames. The rename fields use the same commit path for MCP and widget submit
 
 Follow-ups remain. The pointer at TermHerd's own interface ([#301]) reaches a
 session's terminal, and through it a program reading the mouse, but not yet
-the sidebar, tabs or gutters. Six more would let an agent check what it cannot
-reach today: layout and IME keys, the app's own log, window focus, the docs
-editor, double-click, and the overlay that holds the keyboard ([#482],
-[#483], [#484], [#485], [#492], [#493]). A client TermHerd did *not* spawn can now
-reach the bridge too, once `mcp.attach` is turned on ([#267]).
+the sidebar, tabs or gutters. Four more would let an agent check what it cannot
+reach today: layout and IME keys, the app's own log, the docs editor, and the
+overlay that holds the keyboard along with window focus ([#482], [#483],
+[#485], [#493]). A client TermHerd did *not* spawn can now reach the bridge
+too, once `mcp.attach` is turned on ([#267]).
 
 ### The stdio server (manual)
 
@@ -328,9 +329,7 @@ Build the binary with `cargo build -p termherd-mcp` (it lands in `target/`).
 [#301]: https://github.com/Termherd/termherd/issues/301
 [#482]: https://github.com/Termherd/termherd/issues/482
 [#483]: https://github.com/Termherd/termherd/issues/483
-[#484]: https://github.com/Termherd/termherd/issues/484
 [#485]: https://github.com/Termherd/termherd/issues/485
-[#492]: https://github.com/Termherd/termherd/issues/492
 [#493]: https://github.com/Termherd/termherd/issues/493
 
 ## Test
