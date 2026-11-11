@@ -143,8 +143,8 @@ impl App {
     /// has seen the file of the id it was minted under.
     #[must_use]
     pub fn transcript_of(&self, session: SessionId) -> Option<&std::path::Path> {
-        let claude_id = self.sessions.get(&session)?.claude_session_id()?;
-        Some(self.record_for(claude_id)?.transcript.as_path())
+        self.session_record(session)
+            .map(|record| record.transcript.as_path())
     }
 
     /// Whether a session id is still on the scanned project list — the guard

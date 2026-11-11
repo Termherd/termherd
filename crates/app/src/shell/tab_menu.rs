@@ -288,6 +288,8 @@ impl Shell {
     pub(super) fn open_tab_menu(&mut self) -> Option<()> {
         let anchor = self.core.workspace.focused_session()?;
         let offers = Offers {
+            // First: it re-reads the session file, which the transcript offer
+            // below reads too, as the `reveal-transcript` action does.
             agent_named: self.focused_agent_name().is_some(),
             color_refusal: self.color_refusal(anchor),
             unparked: self

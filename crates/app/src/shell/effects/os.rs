@@ -29,6 +29,7 @@ pub(super) fn open_path(path: &std::path::Path) -> Result<(), PtyError> {
 /// but not the `"/select,C:\a b\f"` a quoted argument would become. A Windows
 /// path cannot hold a `"`, so the quotes written here are the only ones.
 pub(super) fn reveal(path: &std::path::Path) -> Result<(), PtyError> {
+    revealable(path)?;
     #[cfg(target_os = "macos")]
     {
         let mut cmd = std::process::Command::new("open");
@@ -46,6 +47,23 @@ pub(super) fn reveal(path: &std::path::Path) -> Result<(), PtyError> {
     {
         open_path(path.parent().unwrap_or(path))
     }
+}
+
+/// Refuse a path no file manager should be handed. A missing file is not
+/// reported by any of them: `open -R` exits unread, and `explorer` opens
+/// Documents instead. A relative path is refused too, which also keeps a
+/// leading `-` from ever reaching an opener's argv as an option.
+fn revealable(path: &std::path::Path) -> Result<(), PtyError> {
+    if !path.is_absolute() {
+        return Err(PtyError::Io(format!(
+            "not an absolute path: {}",
+            path.display()
+        )));
+    }
+    if !path.exists() {
+        return Err(PtyError::Io(format!("no such file: {}", path.display())));
+    }
+    Ok(())
 }
 
 /// Start `cmd` and let it run: an OS opener returns at once, so it is never
@@ -349,6 +367,25 @@ mod tests {
             "the arguments reached the program, in order"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reveal_refuses_a_missing_or_relative_path_before_any_spawn() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let present = dir.path().join("abc.jsonl");
+        std::fs::write(&present, b"{}").expect("write");
+        assert!(revealable(&present).is_ok());
+        for refused in [
+            dir.path().join("gone.jsonl"),
+            "-R".into(),
+            "abc.jsonl".into(),
+        ] {
+            assert!(
+                matches!(reveal(&refused), Err(PtyError::Io(_))),
+                "{} must not reach a file manager",
+                refused.display()
+            );
+        }
     }
 
     #[test]

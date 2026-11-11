@@ -65,7 +65,7 @@ distinction useless.
 | Reason | Means | Do |
 | --- | --- | --- |
 | `no-surface` | the action is wired to nothing here: `open-new-session` everywhere, `send-to-desktop` on Linux | **stop** — retrying is pointless |
-| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, colour or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to (or to colour) | **create it**, then retry |
+| `no-context` | a precondition was absent — nothing focused to derive a repo from, no closed tab to reopen, no tab to rename, colour or open a menu on, nothing to scroll, nothing selected to copy, no Claude agent name to copy, no idle Claude to send a command to (or to colour), no known directory or no transcript a scan has found to reveal | **create it**, then retry |
 
 Each handler that can refuse this way says so at its own refusal site.
 

@@ -60,7 +60,11 @@ fn pace(session: SessionId, writes: Vec<Vec<u8>>) -> Task<Message> {
 fn open_target(target: OpenTarget) -> Result<(), PtyError> {
     match target {
         OpenTarget::SystemHandler { path } => open_path(&path),
-        OpenTarget::Reveal { path } => reveal(&path),
+        // A transcript deleted since the scan would otherwise show nothing, or
+        // the wrong folder, with no word of why.
+        OpenTarget::Reveal { path } => reveal(&path).inspect_err(|error| {
+            let _ = notify("TermHerd", &format!("Nothing to reveal: {error}"));
+        }),
         OpenTarget::Editor { program, args } => {
             spawn_editor(&program, &args).inspect_err(|error| {
                 let _ = notify(
