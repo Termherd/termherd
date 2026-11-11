@@ -221,7 +221,9 @@ it, `enter` tries again.
 
 The prompt is read off the screen: the row starting with `❯` under a
 horizontal rule, down to the next rule. Its placeholder hint (`Try "…"`) reads
-as empty, so a draft spelling exactly that shape is the one case read wrong.
+as empty, and the hint Claude shows under a queued message (`Press up to edit
+queued messages`) reads as a queued message, which does not refuse. A draft
+spelling exactly one of those two shapes is read wrong.
 
 A prompt armed by this tool **ignores a physical Enter for 600 ms**: someone
 typing in another pane when it appears would otherwise confirm it with the

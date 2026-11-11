@@ -118,8 +118,9 @@ selection, and `copy` runs on it.
   `enter` answers `refused` with the reason and the list stays open.
 - On **`claude-command-confirm`**, `enter` types the slash command the
   prompt names into its Claude session — or answers `refused` with the reason,
-  leaving the prompt open, when Claude raised a dialog or a draft appeared
-  meanwhile;
+  leaving the prompt open, when meanwhile Claude raised a dialog, exited or
+  is not in a state that takes the command, a draft appeared, or its prompt
+  left the screen;
   see [`claude_command`](./live-bridge.md#a-claude-slash-command-confirmed).
 - **`paste-confirm`** opens when the `paste` action, or a right-click paste,
   carries a line break into a terminal that did not turn bracketed paste on;
