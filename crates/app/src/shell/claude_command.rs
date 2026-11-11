@@ -5,7 +5,7 @@
 //! the keymap, the MCP tool, the tab colour picker, and the rename to come.
 //! Nothing is typed until the prompt is confirmed, and the confirmation asks
 //! `core` again, against the screen as it is then: the session may have
-//! started work, or a draft may have appeared, while the prompt was up.
+//! raised a dialog, or a draft may have appeared, while the prompt was up.
 
 use std::fmt;
 use std::time::{Duration, Instant};
@@ -69,11 +69,18 @@ impl Shell {
         if let Some(owner) = self.keyboard_owner() {
             return Err(ArmRefusal::PromptOpen(owner.label()));
         }
+        let prompt = self.prompt_input(session);
         self.core
-            .claude_command_check(session, command.kind(), &self.prompt_input(session))
+            .claude_command_check(session, command.kind(), &prompt)
             .map_err(ArmRefusal::Session)?;
         let line = command.line();
-        tracing::info!(session = session.0.get(), %line, "claude command armed");
+        tracing::info!(
+            session = session.0.get(),
+            %line,
+            status = ?self.core.sessions.get(&session).map(|live| live.status),
+            ?prompt,
+            "claude command armed"
+        );
         let enter_ignored_until = self
             .serving_remote_caller
             .then(|| Instant::now() + REMOTE_ARM_GRACE);
@@ -135,6 +142,8 @@ impl Shell {
                     session = session.0.get(),
                     line = %pending.command,
                     %refusal,
+                    status = ?self.core.sessions.get(&session).map(|live| live.status),
+                    ?prompt,
                     "claude command not typed"
                 );
                 pending.refused = Some(refusal.clone());

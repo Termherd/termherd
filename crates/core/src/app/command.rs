@@ -21,8 +21,9 @@ pub enum CommandRefusal {
     UnknownSession,
     /// The session runs a shell, which would execute the line, not read it.
     NotClaude,
-    /// Claude is not waiting at its prompt: the line would be queued behind
-    /// running work, or would answer a permission prompt instead.
+    /// Claude is in a status the command does not accept: a dialog would take
+    /// the Enter, the session has not started or has exited, or the command
+    /// waits for the turn to end (`/desktop`).
     NotIdle(SessionStatus),
     /// Claude's prompt holds a draft, which the command would be typed into.
     /// Carries the draft, so the user can see what is in the way.
@@ -84,7 +85,10 @@ impl App {
             return Err(CommandRefusal::NotIdle(live.status));
         }
         match prompt {
-            PromptInput::Empty => Ok(()),
+            // A queue exists only during a turn, so a command that reaches
+            // here with one already accepts a busy Claude, which keeps the
+            // queued message queued.
+            PromptInput::Empty | PromptInput::Queued => Ok(()),
             PromptInput::Draft(draft) => Err(CommandRefusal::DraftPresent(draft.clone())),
             PromptInput::NotVisible => Err(CommandRefusal::PromptNotVisible),
         }
@@ -263,11 +267,7 @@ mod tests {
             Err(CommandRefusal::NotIdle(SessionStatus::Starting)),
             "a fresh launch has not reached its prompt"
         );
-        for status in [
-            SessionStatus::Busy,
-            SessionStatus::Attention,
-            SessionStatus::Exited,
-        ] {
+        for status in [SessionStatus::Attention, SessionStatus::Exited] {
             set_status(&mut app, session, status);
             assert_eq!(check(&app, session), Err(CommandRefusal::NotIdle(status)));
             assert!(
@@ -275,6 +275,81 @@ mod tests {
                 "{status:?} sends nothing"
             );
         }
+    }
+
+    #[test]
+    fn a_busy_claude_takes_a_rename_or_a_colour_but_not_desktop() {
+        let mut app = App::new();
+        let session = launch_claude(&mut app);
+        set_status(&mut app, session, SessionStatus::Busy);
+
+        for kind in [CommandKind::Rename, CommandKind::Color] {
+            assert_eq!(
+                app.claude_command_check(session, kind, &PromptInput::Empty),
+                Ok(()),
+                "{kind:?}"
+            );
+        }
+        assert_eq!(
+            app.claude_command_check(session, CommandKind::Desktop, &PromptInput::Empty),
+            Err(CommandRefusal::NotIdle(SessionStatus::Busy))
+        );
+
+        let effects = send(&mut app, session);
+        assert_eq!(
+            writes_of(&effects, session),
+            vec![
+                (false, b"\x15".to_vec()),
+                (true, b"/color pink".to_vec()),
+                (true, b"\r".to_vec()),
+            ],
+            "{effects:?}"
+        );
+        let desktop = app.apply(Event::SendClaudeCommand {
+            session,
+            command: ClaudeCommand::Desktop,
+            prompt: PromptInput::Empty,
+        });
+        assert!(desktop.is_empty(), "{desktop:?}");
+    }
+
+    #[test]
+    fn a_busy_claude_with_a_queued_message_still_takes_a_rename() {
+        // The queue is Claude's, not a draft: `/rename` applies and leaves the
+        // queued message where it is (live, Claude Code 2.1.322).
+        let mut app = App::new();
+        let session = launch_claude(&mut app);
+        set_status(&mut app, session, SessionStatus::Busy);
+        assert_eq!(
+            app.claude_command_check(session, CommandKind::Rename, &PromptInput::Queued),
+            Ok(())
+        );
+        let effects = app.apply(Event::SendClaudeCommand {
+            session,
+            command: ClaudeCommand::rename("api work").expect("a name"),
+            prompt: PromptInput::Queued,
+        });
+        assert_eq!(
+            writes_of(&effects, session),
+            vec![
+                (false, b"\x15".to_vec()),
+                (true, b"/rename api work".to_vec()),
+                (true, b"\r".to_vec()),
+            ],
+            "{effects:?}"
+        );
+    }
+
+    #[test]
+    fn a_busy_claude_with_a_draft_is_still_refused() {
+        let mut app = App::new();
+        let session = launch_claude(&mut app);
+        set_status(&mut app, session, SessionStatus::Busy);
+        let draft = PromptInput::Draft("go W7".to_owned());
+        assert_eq!(
+            app.claude_command_check(session, CommandKind::Rename, &draft),
+            Err(CommandRefusal::DraftPresent("go W7".to_owned()))
+        );
     }
 
     #[test]
@@ -317,14 +392,14 @@ mod tests {
     }
 
     #[test]
-    fn a_session_that_turned_busy_after_the_check_is_refused_at_the_send() {
+    fn a_session_that_raised_a_dialog_after_the_check_is_refused_at_the_send() {
         // The confirmation sits between the two: the send re-asks rather than
         // trusting an answer given before the user decided.
         let mut app = App::new();
         let session = launch_claude(&mut app);
         set_status(&mut app, session, SessionStatus::Idle);
         assert_eq!(check(&app, session), Ok(()));
-        set_status(&mut app, session, SessionStatus::Busy);
+        set_status(&mut app, session, SessionStatus::Attention);
         assert!(send(&mut app, session).is_empty());
     }
 

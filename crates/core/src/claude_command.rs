@@ -63,9 +63,18 @@ pub enum CommandKind {
 
 impl CommandKind {
     /// Whether a Claude in `status` can take this command at its prompt.
+    ///
+    /// Claude Code applies `/rename` and `/color` during a turn, leaving any
+    /// queued message queued; `/desktop` hands the session over, so it waits
+    /// for the turn to end. A dialog (`Attention`) would take the Enter, and a
+    /// starting or exited Claude reads nothing.
     #[must_use]
     pub fn accepts(self, status: SessionStatus) -> bool {
-        status == SessionStatus::Idle
+        match status {
+            SessionStatus::Idle => true,
+            SessionStatus::Busy => matches!(self, Self::Rename | Self::Color),
+            SessionStatus::Starting | SessionStatus::Attention | SessionStatus::Exited => false,
+        }
     }
 }
 
@@ -201,6 +210,70 @@ mod tests {
 
     fn renamed(raw: &str) -> String {
         ClaudeCommand::rename(raw).expect("a typeable name").line()
+    }
+
+    /// Every kind: a kind added to the catalogue fails this match, and so
+    /// joins the sweep below.
+    fn every_kind() -> [CommandKind; 3] {
+        let _ = |kind: CommandKind| match kind {
+            CommandKind::Rename | CommandKind::Color | CommandKind::Desktop => (),
+        };
+        [
+            CommandKind::Rename,
+            CommandKind::Color,
+            CommandKind::Desktop,
+        ]
+    }
+
+    /// Every status, kept complete the same way.
+    fn every_status() -> [SessionStatus; 5] {
+        let _ = |status: SessionStatus| match status {
+            SessionStatus::Starting
+            | SessionStatus::Busy
+            | SessionStatus::Idle
+            | SessionStatus::Attention
+            | SessionStatus::Exited => (),
+        };
+        [
+            SessionStatus::Starting,
+            SessionStatus::Busy,
+            SessionStatus::Idle,
+            SessionStatus::Attention,
+            SessionStatus::Exited,
+        ]
+    }
+
+    #[test]
+    fn rename_and_color_run_while_claude_works_and_desktop_waits_for_its_prompt() {
+        // Live, Claude Code 2.1.322: `/rename` and `/color` typed during a
+        // turn apply at once ("Session renamed to: …") and leave a queued
+        // message queued. `/desktop` hands the session over, so it waits.
+        for kind in every_kind() {
+            for status in every_status() {
+                let expected = matches!(
+                    (kind, status),
+                    (_, SessionStatus::Idle)
+                        | (
+                            CommandKind::Rename | CommandKind::Color,
+                            SessionStatus::Busy
+                        )
+                );
+                assert_eq!(kind.accepts(status), expected, "{kind:?} in {status:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn each_command_reports_its_kind() {
+        assert_eq!(
+            ClaudeCommand::rename("x").expect("a name").kind(),
+            CommandKind::Rename
+        );
+        assert_eq!(
+            ClaudeCommand::Color(ClaudeColor::Red).kind(),
+            CommandKind::Color
+        );
+        assert_eq!(ClaudeCommand::Desktop.kind(), CommandKind::Desktop);
     }
 
     #[test]

@@ -6056,14 +6056,14 @@ mod key_routing {
     }
 
     #[test]
-    fn a_command_confirmed_after_claude_turned_busy_is_not_typed() {
-        // The prompt can sit open while Claude starts work; typing then would
-        // queue the line behind it, so the confirmation asks again.
+    fn a_command_confirmed_after_claude_raised_a_dialog_is_not_typed() {
+        // The prompt can sit open while Claude asks for a permission; Enter
+        // would then answer that dialog, so the confirmation asks again.
         let (mut shell, pty, session) = shell_with_idle_claude();
         let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Color(ClaudeColor::Red));
         let _ = shell.update(Message::PtyStatus {
             session,
-            status: SessionStatus::Busy,
+            status: SessionStatus::Attention,
         });
 
         let _ = shell.update(Message::ConfirmClaudeCommand);
@@ -6073,9 +6073,25 @@ mod key_routing {
                 .claude_command
                 .as_ref()
                 .and_then(|p| p.refused.clone()),
-            Some(CommandRefusal::NotIdle(SessionStatus::Busy)),
+            Some(CommandRefusal::NotIdle(SessionStatus::Attention)),
             "the prompt stays open and says why"
         );
+    }
+
+    #[test]
+    fn a_colour_confirmed_after_claude_started_work_is_typed() {
+        // Claude Code applies `/color` during a turn, so starting work under
+        // the prompt is no reason to hold it back.
+        let (mut shell, pty, session) = shell_with_idle_claude();
+        let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Color(ClaudeColor::Red));
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+
+        let _ = shell.update(Message::ConfirmClaudeCommand);
+        assert_eq!(pty.writes(), vec![b"\x15".to_vec()], "typing has begun");
+        assert!(shell.claude_command.is_none(), "the prompt lets go");
     }
 
     #[test]
@@ -6163,16 +6179,35 @@ mod key_routing {
         let (mut shell, _pty, session) = shell_with_idle_claude();
         let _ = shell.update(Message::PtyStatus {
             session,
-            status: SessionStatus::Busy,
+            status: SessionStatus::Attention,
         });
         rename_tab_by_hand(&mut shell, 0, "api work");
 
         assert_eq!(armed(&shell), None);
         let notice = shell.notice.clone().expect("the refusal is shown");
-        assert!(notice.contains("busy"), "it says why: {notice}");
+        assert!(
+            notice.contains("waiting for an answer"),
+            "it says why: {notice}"
+        );
         assert_eq!(shell.core.workspace.tabs[0].custom_title, None);
 
         let _ = shell.update(Message::DismissNotice);
+        assert_eq!(shell.notice, None);
+    }
+
+    #[test]
+    fn a_busy_claude_tab_renamed_by_hand_arms_the_rename() {
+        let (mut shell, _pty, session) = shell_with_idle_claude();
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Busy,
+        });
+        rename_tab_by_hand(&mut shell, 0, "api work");
+
+        assert_eq!(
+            armed(&shell),
+            Some(&ClaudeCommand::rename("api work").expect("a name"))
+        );
         assert_eq!(shell.notice, None);
     }
 
@@ -6288,9 +6323,21 @@ mod key_routing {
             tab: 0,
             title: "api work".into(),
         });
+        assert_eq!(busy.error, None, "a working Claude takes a rename");
+        assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ClaudeCommand));
+
+        let _ = shell.update(Message::CancelClaudeCommand);
+        let _ = shell.update(Message::PtyStatus {
+            session,
+            status: SessionStatus::Attention,
+        });
+        let (waiting, _task) = shell.perform_action(BridgeAction::Rename {
+            tab: 0,
+            title: "api work".into(),
+        });
         assert_eq!(
-            busy.error.as_deref(),
-            Some("the session is busy, not idle at its prompt")
+            waiting.error.as_deref(),
+            Some("the session is waiting for an answer, not idle at its prompt")
         );
     }
 
@@ -9263,12 +9310,12 @@ mod key_routing {
             assert!(shell.core.workspace.tabs[index].is_parked());
         }
 
-        const BUSY: CommandRefusal = CommandRefusal::NotIdle(SessionStatus::Busy);
+        const WAITING: CommandRefusal = CommandRefusal::NotIdle(SessionStatus::Attention);
 
         fn nothing() -> Offers {
             Offers {
                 agent_named: false,
-                color_refusal: Some(BUSY),
+                color_refusal: Some(WAITING),
                 unparked: false,
                 in_repo: false,
             }
@@ -9323,7 +9370,7 @@ mod key_routing {
             // Hidden, an entry that is unavailable right now reads as missing.
             let refused = nothing();
             assert!(lines(&refused).any(|line| line.entry.action == Action::PickTabColor));
-            assert_eq!(disabled(&refused), vec![(Action::PickTabColor, BUSY)]);
+            assert_eq!(disabled(&refused), vec![(Action::PickTabColor, WAITING)]);
             let pickable = Offers {
                 color_refusal: None,
                 ..nothing()
@@ -9625,12 +9672,13 @@ mod key_routing {
         }
 
         #[test]
-        fn a_busy_claude_is_offered_no_picker_from_the_keymap_and_a_disabled_menu_entry() {
-            // The line would queue behind its work.
+        fn a_claude_waiting_for_an_answer_is_offered_no_picker_from_the_keymap_and_a_disabled_menu_entry()
+         {
+            // Enter would answer its dialog instead of submitting the line.
             let (mut shell, _pty, session) = shell_with_idle_claude();
             let _ = shell.update(Message::PtyStatus {
                 session,
-                status: SessionStatus::Busy,
+                status: SessionStatus::Attention,
             });
 
             let (outcome, _task) =
@@ -9647,9 +9695,31 @@ mod key_routing {
                 .map(|line| line.refusal.cloned());
             assert_eq!(
                 colour,
-                Some(Some(CommandRefusal::NotIdle(SessionStatus::Busy))),
+                Some(Some(CommandRefusal::NotIdle(SessionStatus::Attention))),
                 "the menu lists the entry, disabled with why, rather than hide it"
             );
+        }
+
+        #[test]
+        fn a_busy_claude_gets_the_picker_from_the_keymap_and_an_enabled_menu_entry() {
+            let (mut shell, _pty, session) = shell_with_idle_claude();
+            let _ = shell.update(Message::PtyStatus {
+                session,
+                status: SessionStatus::Busy,
+            });
+
+            let _ = shell.perform_presses(vec![Press::Command(Action::PickTabColor)]);
+            assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ColorPicker));
+
+            let _ = press_all(&mut shell, &["escape"]);
+            let _ = shell.update(Message::OpenTabMenu(0));
+            let colour = shell
+                .live_tab_menu()
+                .expect("open")
+                .lines()
+                .find(|line| line.entry.action == Action::PickTabColor)
+                .map(|line| line.refusal.cloned());
+            assert_eq!(colour, Some(None), "the entry is enabled");
         }
 
         #[test]
@@ -9677,12 +9747,12 @@ mod key_routing {
         }
 
         #[test]
-        fn a_claude_that_went_busy_under_the_picker_refuses_the_pick_and_keeps_it_open() {
+        fn a_claude_that_raised_a_dialog_under_the_picker_refuses_the_pick_and_keeps_it_open() {
             let (mut shell, pty, session) = shell_with_idle_claude();
             let _ = shell.dispatch_action(Action::PickTabColor);
             let _ = shell.update(Message::PtyStatus {
                 session,
-                status: SessionStatus::Busy,
+                status: SessionStatus::Attention,
             });
 
             let steps = press_all(&mut shell, &["enter"]);
@@ -9691,7 +9761,8 @@ mod key_routing {
                 steps,
                 vec![PressStep::Refused {
                     overlay: "tab-color-picker".to_owned(),
-                    reason: "the session is busy, not idle at its prompt".to_owned(),
+                    reason: "the session is waiting for an answer, not idle at its prompt"
+                        .to_owned(),
                 }]
             );
             assert_eq!(shell.keyboard_owner(), Some(KeyboardOwner::ColorPicker));
