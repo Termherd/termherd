@@ -3975,6 +3975,7 @@ dependencies = [
  "libc",
  "notify",
  "proptest",
+ "serde_json",
  "tempfile",
  "termherd-claude",
  "termherd-core",

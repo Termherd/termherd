@@ -10,10 +10,21 @@ default:
 run:
     cargo run -p termherd-app
 
-# The instance lock follows the temp dir: `TMPDIR`, or `TMP` as a Windows path.
-[doc("Run a dev copy alongside the installed app (own lock via a private temp dir)")]
-run-isolated:
-    d="$(mktemp -d)"; TMPDIR="$d" TMP="$(cygpath -w "$d" 2>/dev/null || echo "$d")" cargo run -p termherd-app
+# A dev copy beside the installed app, looking like a user's: its own lock (the
+# temp dir: `TMPDIR`, or `TMP` as a Windows path) and data dir, the real shell
+# home, and the Claude fixture `crates/scan/examples/dev_fixture` generates,
+# dated from now, in place of `~/.claude`. The environment passes through, so
+# `TERMHERD_MCP_ATTACH=1 just dev-instance` publishes its live bridge.
+[doc("Run a dev copy alongside the installed app, on the generated Claude fixture")]
+dev-instance:
+    set -eu; root="$(mktemp -d)"; mkdir -p "$root/data" "$root/tmp"; \
+    native() { cygpath -w "$1" 2>/dev/null || echo "$1"; }; \
+    cargo run -q -p termherd-scan --example dev_fixture -- "$(native "$root/fixture")"; \
+    echo "dev instance: $root" >&2; \
+    TERMHERD_DATA_DIR="$(native "$root/data")" \
+    CLAUDE_CONFIG_DIR="$(native "$root/fixture/claude")" \
+    TMPDIR="$root/tmp" TMP="$(native "$root/tmp")" TEMP="$(native "$root/tmp")" \
+    cargo run -p termherd-app
 
 # Assert the hexagonal crate dependency rule (deps point inward only) and
 # toolchain lockstep across config/workflow files. Mirrors the `cargo-checks`
