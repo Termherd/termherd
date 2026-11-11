@@ -41,6 +41,7 @@ use tracing::{info, warn};
 
 fn main() -> iced::Result {
     let data_dir = paths::DataDir::user();
+    let claude_dir = paths::ClaudeDir::user();
 
     // Answer a question about the *running* instance before touching anything
     // that would disturb it: the single-instance lock below exits(2) on a second
@@ -95,10 +96,10 @@ fn main() -> iced::Result {
     );
 
     let (scanner, watch_root): (Arc<dyn ProjectScanner>, Option<std::path::PathBuf>) =
-        match FsScanner::claude_default() {
-            Some(s) => {
-                let root = s.root().to_owned();
-                (Arc::new(s), Some(root))
+        match claude_dir.as_ref() {
+            Some(dir) => {
+                let root = dir.join("projects");
+                (Arc::new(FsScanner::new(root.clone())), Some(root))
             }
             None => {
                 warn!("no home directory found; session browser will be empty");
@@ -210,7 +211,7 @@ fn main() -> iced::Result {
             || ".".to_owned(),
             |home| home.to_string_lossy().into_owned(),
         ),
-        claude_dir: paths::ClaudeDir::user(),
+        claude_dir,
     };
     // Terminal path candidates are checked against the real filesystem — the
     // one thing that tells `src/main.rs` from prose like `and/or`.

@@ -95,10 +95,11 @@ fn store_settings(settings: &Value) -> Result<(), String> {
     termherd_mcp::file::write(&path, settings)
 }
 
-/// `~/.termherd/settings.json` — the same file the GUI shell reads.
+/// `settings.json` in termherd's data dir — the same file the GUI shell
+/// reads, by the same precedence (`TERMHERD_DATA_DIR`, else `~/.termherd`).
 fn settings_path() -> Option<PathBuf> {
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"))?;
-    Some(PathBuf::from(home).join(".termherd").join("settings.json"))
+    termherd_core::locations::data_dir(&|name| std::env::var_os(name))
+        .map(|dir| dir.join("settings.json"))
 }
 
 #[cfg(test)]

@@ -1,18 +1,23 @@
 //! Shared filesystem locations — the user's home dir, the `~/.termherd` app
-//! data dir (PRD §7) and Claude's `~/.claude`. Resolved in one place so every
-//! store speaks the same `USERPROFILE`/`HOME` precedence and the same dir name;
-//! the alternative is the seven hand-rolled copies this replaces, which drift
-//! the day the location moves.
+//! data dir (PRD §7) and Claude's `~/.claude`, read from the process
+//! environment here and nowhere else in the app. The precedence itself
+//! (`USERPROFILE`/`HOME`, `TERMHERD_DATA_DIR`, `CLAUDE_CONFIG_DIR`) is
+//! `termherd_core::locations`, which the stdio MCP server reads too.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+
+use termherd_core::locations;
+
+fn process_env(name: &str) -> Option<OsString> {
+    std::env::var_os(name)
+}
 
 /// The user's home directory: `%USERPROFILE%` (Windows) then `$HOME` (Unix).
 /// `None` when neither is set.
 #[must_use]
 pub fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
+    locations::home(&process_env)
 }
 
 /// The app data dir (PRD §7). Resolved in `main()` alone and injected.
@@ -20,11 +25,11 @@ pub fn home_dir() -> Option<PathBuf> {
 pub struct DataDir(PathBuf);
 
 impl DataDir {
-    /// `~/.termherd`. `None` when no home directory is set, in which case
-    /// nothing is persisted.
+    /// `$TERMHERD_DATA_DIR`, else `~/.termherd`. `None` when neither that
+    /// nor a home directory is set, in which case nothing is persisted.
     #[must_use]
     pub fn user() -> Option<Self> {
-        home_dir().map(|home| Self(home.join(".termherd")))
+        locations::data_dir(&process_env).map(Self)
     }
 
     /// A data dir rooted at `root`: a test's own.
@@ -46,10 +51,11 @@ impl DataDir {
 pub struct ClaudeDir(PathBuf);
 
 impl ClaudeDir {
-    /// `~/.claude`. `None` when no home directory is set.
+    /// `$CLAUDE_CONFIG_DIR`, else `~/.claude`. `None` when neither that nor
+    /// a home directory is set.
     #[must_use]
     pub fn user() -> Option<Self> {
-        home_dir().map(|home| Self(home.join(".claude")))
+        locations::claude_dir(&process_env).map(Self)
     }
 
     /// A Claude dir rooted at `root`: a test's own.
@@ -113,14 +119,6 @@ pub enum TempDirState {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn claude_dir_is_the_dot_claude_folder_in_home() {
-        assert_eq!(
-            ClaudeDir::user().map(|dir| dir.path().to_path_buf()),
-            home_dir().map(|home| home.join(".claude"))
-        );
-    }
 
     #[test]
     fn an_existing_temp_dir_is_left_as_it_is() {
@@ -205,6 +203,10 @@ mod tests {
             ])
             .env("USERPROFILE", home.path())
             .env("HOME", home.path())
+            // A developer running the suite from a dev instance has these set;
+            // inherited, they would send the rerun's writes past the empty home.
+            .env_remove(locations::DATA_DIR_VAR)
+            .env_remove(locations::CLAUDE_CONFIG_DIR_VAR)
             .env("TMPDIR", tmp.path())
             .env("TMP", tmp.path())
             .env("TEMP", tmp.path())
