@@ -198,7 +198,9 @@ too. The prompt is there for the **human at the window**: it shows them the
 line before it lands. It does not constrain the caller, which can confirm its
 own prompt with `enter` — and could type into the terminal with
 `run_in_session` anyway. What the tool adds over raw typing is the checks
-below, and one write path shared with the keyboard.
+below, and one write path shared with the keyboard. On Linux, where Claude
+Desktop does not run, the `send-to-desktop` action answers `no-surface`; this
+tool still arms `/desktop` there.
 
 It is **refused**, with nothing armed, when:
 
