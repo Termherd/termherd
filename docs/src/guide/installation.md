@@ -125,8 +125,9 @@ one; closing it closes TermHerd.
 The `RUST_LOG` environment variable sets what is logged wherever it goes, for
 example `termherd=debug`.
 
-TermHerd is **single-instance**: an advisory lock file under the system temp
-directory. A second launch carrying a `termherd://` link hands it to the
+TermHerd is **single-instance**: a lock named after the system temp directory
+(a file there on macOS, a named mutex on Windows, an abstract socket on
+Linux). A second launch carrying a `termherd://` link hands it to the
 running instance and exits with code 0; the tab opens there without bringing
 the window forward. Without a link, it exits with code 2. To
 run a second build alongside one that already holds the lock, point it at a

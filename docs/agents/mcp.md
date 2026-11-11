@@ -276,7 +276,7 @@ alongside the widget's `on_submit` path for human input (#246).
 
 **Two things named `mcp`.** `crates/mcp` is built: the stdio server
 `termherd-mcp` and the pure option catalogue both servers share. The live
-bridge runs the other way round from it and lives in `app` (`app::mcp`).
-`docs/ARCHITECTURE.md` §15 also sketches an `mcp` adapter for
-`F-mcp-ide-bridge` — termherd as an MCP *client* of Claude's IDE bridge — and
-that one is unbuilt.
+bridge is the other server, and lives in `app` (`app::mcp`). What runs the
+other way round is `F-mcp-ide-bridge` — termherd as an MCP *client* of
+Claude's IDE bridge — which `docs/ARCHITECTURE.md` §7 sketches and §15 lists
+on a row of its own: unbuilt, with no crate and no port.
