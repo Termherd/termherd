@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (reveal a session in the file manager)
+
+- Two actions, unbound by default: `reveal-session-dir` opens the focused
+  pane's working directory in Finder, Explorer or the Linux file manager, and
+  `reveal-transcript` shows the focused Claude's `.jsonl` transcript selected
+  there (on Linux, its folder opens). Both are in the tab menu, and each
+  sidebar row has a `↗` button that reveals its transcript. The tab menu also
+  gains *Send to Claude Desktop*, left out on Linux (#346).
+
 ### Fixed (no console window beside TermHerd on Windows)
 
 - Launching TermHerd from Explorer or the Start menu on Windows 11 24H2 or

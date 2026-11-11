@@ -11,6 +11,7 @@ use termherd_core::{Action, ClaudeCommand, ScrollTarget, keymap};
 use termherd_pty::{KeyMods, TermKey};
 
 use super::input::{chord_of, key_mods, numpad_char, sends_meta, to_term_key};
+use super::reveal::Reveal;
 use super::{Focus, Message, Shell, search_id};
 
 /// How a confirmation overlay reads a key — the shared shape behind the quit,
@@ -227,6 +228,12 @@ impl Shell {
             Action::Paste => iced::clipboard::read().map(Message::Paste),
             Action::SendToDesktop => self
                 .arm_focused_claude_command(ClaudeCommand::Desktop)
+                .ok_or(Inertia::NoContext)?,
+            Action::RevealSessionDir => {
+                self.reveal_focused(Reveal::Dir).ok_or(Inertia::NoContext)?
+            }
+            Action::RevealTranscript => self
+                .reveal_focused(Reveal::Transcript)
                 .ok_or(Inertia::NoContext)?,
             Action::NextTab => self.cycle_tab(Step::Next).ok_or(Inertia::NoContext)?,
             Action::PrevTab => self.cycle_tab(Step::Prev).ok_or(Inertia::NoContext)?,

@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use termherd_claude::digest::SessionDigest;
@@ -21,6 +22,10 @@ pub struct SessionRecord {
     pub digest: SessionDigest,
     /// File mtime; `None` when the filesystem could not provide one.
     pub modified: Option<SystemTime>,
+    /// The transcript file the scan read this record from. Kept rather than
+    /// rebuilt from [`Self::project_path`], which is worktree-collapsed and so
+    /// names another folder for a session run in a worktree.
+    pub transcript: PathBuf,
 }
 
 /// One sidebar project: its sessions, most recent first.
@@ -303,6 +308,7 @@ mod tests {
                 ..SessionDigest::default()
             },
             modified: Some(UNIX_EPOCH + Duration::from_secs(age_secs)),
+            transcript: std::path::PathBuf::new(),
         }
     }
 

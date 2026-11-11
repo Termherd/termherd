@@ -109,6 +109,7 @@ fn scan_folder(dir: &Path, old: &ScanCache, next: &mut ScanCache) -> Option<Vec<
             project_path: project_path.clone(),
             digest,
             modified: sig.map(|s| s.mtime),
+            transcript: path,
         });
     }
     Some(records)
@@ -326,6 +327,9 @@ mod tests {
             records[0].project_path.replace('\\', "/"),
             main.display().to_string().replace('\\', "/")
         );
+        // The collapsed path names the main checkout's folder; the transcript
+        // stays the file the scan read, in the worktree's own folder.
+        assert_eq!(records[0].transcript, folder.join("abc.jsonl"));
 
         // Same shape, but the parent does not exist → keep the worktree cwd.
         let orphan_folder = tmp.path().join("C--ghost");

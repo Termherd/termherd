@@ -102,8 +102,10 @@ selection, and `copy` runs on it.
   always listed, but disabled when no colour can be picked for the focused
   pane (a busy Claude, a draft in its prompt, the prompt off screen): `enter`
   on it runs nothing, leaves the menu open and reports `refused` with the
-  reason. *Copy agent name* is listed only when a named Claude is in front of
-  the pane; left out, it shifts every entry below it by one.
+  reason. *Send to Claude Desktop* is disabled the same way. *Copy agent
+  name*, *Reveal directory*, *Reveal transcript* and *Send to Claude Desktop*
+  are listed only where they apply (see the tabs page); one left out shifts
+  every entry below it by one.
   The menu closes if its pane loses focus, so a `focus_pane` call while it is
   open dismisses it.
 - **`tab-color-picker`** (opened by `pick-tab-color`, or the tab menu's

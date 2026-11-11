@@ -107,6 +107,8 @@ without Shift. Off macOS it takes <kbd>Alt</kbd>, which costs the shell its
 | `paste` | `cmd+v` | `ctrl+shift+v`; also `ctrl+v` on Windows |
 | `copy-agent-name` | *(unbound)* | *(unbound)* |
 | `send-to-desktop` | *(unbound)* | *(unbound)* |
+| `reveal-session-dir` | *(unbound)* | *(unbound)* |
+| `reveal-transcript` | *(unbound)* | *(unbound)* |
 | `scroll-top` | `cmd+up` | `ctrl+shift+home` |
 | `scroll-bottom` | `cmd+down` | `ctrl+shift+end` |
 | `zoom-in` | `cmd+=`, `cmd+shift+=`, `cmd+plus` | `ctrl+…` (same three) |
@@ -143,6 +145,14 @@ which hands the session to the Claude desktop app. A prompt shows the exact line
 first: <kbd>Enter</kbd> types it, <kbd>Escape</kbd> drops it. It does nothing
 unless that Claude is idle with nothing typed in its prompt. Bind it yourself;
 it has no default.
+
+`reveal-session-dir` opens the focused pane's working directory in the file
+manager: Finder, Explorer, or the one `xdg-open` picks on Linux.
+`reveal-transcript` shows the focused Claude's transcript, its `.jsonl` file,
+selected there; on Linux, where no file manager takes a selection the same
+way, the folder holding it opens. It does nothing on a shell pane, and on a
+fresh Claude until the sidebar's scan has found its file. Neither has a
+default.
 
 Off macOS zoom keeps bare <kbd>Ctrl</kbd>, as GNOME Terminal, Konsole and
 Windows Terminal do. <kbd>Ctrl</kbd>+<kbd>-</kbd> shares its key with `_`

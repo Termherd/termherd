@@ -21,6 +21,41 @@ pub(super) fn open_path(path: &std::path::Path) -> Result<(), PtyError> {
     open_url(&path.to_string_lossy())
 }
 
+/// Show `path` selected in the OS file manager: `open -R` on macOS,
+/// `explorer /select,` on Windows. Linux has no portable selection, so its
+/// file manager opens on the folder holding the file instead.
+///
+/// Windows takes the argument raw: `explorer` reads `/select,"C:\a b\f"`
+/// but not the `"/select,C:\a b\f"` a quoted argument would become. A Windows
+/// path cannot hold a `"`, so the quotes written here are the only ones.
+pub(super) fn reveal(path: &std::path::Path) -> Result<(), PtyError> {
+    use std::process::Command;
+    let spawn = |mut cmd: Command| {
+        cmd.spawn()
+            .map(|_| ())
+            .map_err(|e| PtyError::Io(e.to_string()))
+    };
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = Command::new("open");
+        cmd.arg("-R").arg(path);
+        spawn(cmd)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = Command::new("explorer");
+        cmd.raw_arg(format!("/select,\"{}\"", path.display()));
+        spawn(cmd)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let mut cmd = Command::new("xdg-open");
+        cmd.arg(path.parent().unwrap_or(path));
+        spawn(cmd)
+    }
+}
+
 /// Run the user's configured editor command. `core` already substituted the
 /// argv, so this spawns it as-is: a real executable with its arguments, never
 /// a line a shell re-parses — the same rule as [`open_url`], and here it is

@@ -11,9 +11,14 @@ use iced::keyboard::{self, Key, key::Named};
 use termherd_core::workspace::SessionId;
 use termherd_core::{Action, CommandRefusal};
 
+use super::reveal::Reveal;
 use super::routing::{KeyVerdict, KeyboardOwner, is_escape};
 use super::{Message, Shell};
 use crate::strings;
+
+/// Whether Claude Desktop runs on this platform: it ships for macOS and
+/// Windows only, so elsewhere its menu entry would only ever refuse.
+const CLAUDE_DESKTOP_EXISTS: bool = cfg!(any(target_os = "macos", target_os = "windows"));
 
 /// Which tabs an entry is offered on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +37,15 @@ enum Offered {
     WhenUnparked,
     /// Only where a git checkout holds the focused pane's directory.
     InRepo,
+    /// Only where the focused pane's directory is known, as the
+    /// `reveal-session-dir` action finds it.
+    WithDir,
+    /// Only where a scan has found the focused Claude's transcript, as the
+    /// `reveal-transcript` action finds it.
+    WithTranscript,
+    /// Only on a Claude pane, on a platform Claude Desktop runs on; listed
+    /// disabled with `core`'s refusal while Claude cannot take the command.
+    WhenDesktopExists,
 }
 
 /// What the focused pane allows, read once when the menu opens.
@@ -42,6 +56,12 @@ pub(super) struct Offers {
     pub(super) color_refusal: Option<CommandRefusal>,
     pub(super) unparked: bool,
     pub(super) in_repo: bool,
+    pub(super) dir_known: bool,
+    pub(super) transcript_known: bool,
+    /// Whether the pane runs Claude on a platform Claude Desktop exists on.
+    pub(super) desktop_listed: bool,
+    /// Why the pane cannot take `/desktop` now; `None` when it can.
+    pub(super) desktop_refusal: Option<CommandRefusal>,
 }
 
 impl Offers {
@@ -60,6 +80,12 @@ impl Offers {
             }),
             Offered::WhenUnparked => self.unparked.then_some(enabled),
             Offered::InRepo => self.in_repo.then_some(enabled),
+            Offered::WithDir => self.dir_known.then_some(enabled),
+            Offered::WithTranscript => self.transcript_known.then_some(enabled),
+            Offered::WhenDesktopExists => self.desktop_listed.then_some(Line {
+                entry,
+                refusal: self.desktop_refusal.as_ref(),
+            }),
         }
     }
 }
@@ -96,6 +122,21 @@ pub(super) const ENTRIES: &[Entry] = &[
         action: Action::CopyAgentName,
         label: strings::TAB_MENU_COPY_AGENT_NAME,
         offered: Offered::WithAgentName,
+    },
+    Entry {
+        action: Action::RevealSessionDir,
+        label: strings::TAB_MENU_REVEAL_DIR,
+        offered: Offered::WithDir,
+    },
+    Entry {
+        action: Action::RevealTranscript,
+        label: strings::TAB_MENU_REVEAL_TRANSCRIPT,
+        offered: Offered::WithTranscript,
+    },
+    Entry {
+        action: Action::SendToDesktop,
+        label: strings::TAB_MENU_SEND_TO_DESKTOP,
+        offered: Offered::WhenDesktopExists,
     },
     Entry {
         action: Action::NewShellHere,
@@ -261,6 +302,18 @@ impl Shell {
                 .get(self.core.workspace.active)
                 .is_some_and(|tab| !tab.is_parked()),
             in_repo: self.focused_repo().is_some(),
+            dir_known: self.focused_reveal(Reveal::Dir).is_some(),
+            transcript_known: self.focused_reveal(Reveal::Transcript).is_some(),
+            desktop_listed: CLAUDE_DESKTOP_EXISTS
+                && self
+                    .core
+                    .sessions
+                    .get(&anchor)
+                    .is_some_and(|live| live.runs_claude()),
+            desktop_refusal: self
+                .core
+                .claude_command_check(anchor, &self.prompt_input(anchor))
+                .err(),
         };
         self.tab_menu = Some(TabMenu {
             anchor,

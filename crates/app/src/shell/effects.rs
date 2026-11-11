@@ -24,7 +24,7 @@ use termherd_scan::read_session_file;
 use super::bridge::Request;
 use super::notify_click::Posting;
 use super::{Message, Shell};
-use os::{notify, notify_clickable, notify_replacing, open_path, open_url, spawn_editor};
+use os::{notify, notify_clickable, notify_replacing, open_path, open_url, reveal, spawn_editor};
 
 /// Pause before each paced write. Claude Code takes a burst of about 64 bytes
 /// or more for a paste, where Enter is a line break, so Enter must reach it in
@@ -60,6 +60,7 @@ fn pace(session: SessionId, writes: Vec<Vec<u8>>) -> Task<Message> {
 fn open_target(target: OpenTarget) -> Result<(), PtyError> {
     match target {
         OpenTarget::SystemHandler { path } => open_path(&path),
+        OpenTarget::Reveal { path } => reveal(&path),
         OpenTarget::Editor { program, args } => {
             spawn_editor(&program, &args).inspect_err(|error| {
                 let _ = notify(

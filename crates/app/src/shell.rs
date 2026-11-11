@@ -50,6 +50,7 @@ mod notify_click;
 mod orchestrate;
 mod record;
 mod repos;
+mod reveal;
 mod routing;
 mod serve;
 mod session_ops;
@@ -623,6 +624,8 @@ enum Message {
     CancelCloseWindow,
     /// Toggle a browsed session's star (F-session-metadata).
     ToggleStar(String),
+    /// Show a browsed session's transcript selected in the OS file manager.
+    RevealTranscript(std::path::PathBuf),
     /// Toggle a project's star, by real path (F-favorites, repo-level).
     ToggleRepoStar(String),
     /// Toggle a browsed session's archived flag (F-session-metadata). Used
@@ -782,6 +785,7 @@ impl Message {
                 | Self::RequestCloseTab(_)
                 | Self::CloseTab(_)
                 | Self::ToggleStar(_)
+                | Self::RevealTranscript(_)
                 | Self::ToggleRepoStar(_)
                 | Self::PickRepoFolder
                 | Self::ForgetRepo(_)
@@ -1392,6 +1396,9 @@ impl Shell {
                 let effects = self.core.apply(termherd_core::Event::ToggleStar(session));
                 self.perform(effects)
             }
+            Message::RevealTranscript(path) => self.perform(vec![termherd_core::Effect::OpenPath(
+                termherd_core::OpenTarget::Reveal { path },
+            )]),
             Message::ToggleRepoStar(path) => {
                 let effects = self.core.apply(termherd_core::Event::ToggleRepoStar(path));
                 self.perform(effects)
@@ -2738,6 +2745,7 @@ mod key_routing {
                 ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
+            transcript: std::path::PathBuf::new(),
         }
     }
 
@@ -4493,6 +4501,7 @@ mod key_routing {
                 ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
+            transcript: std::path::PathBuf::new(),
         };
         let _ = shell
             .core
@@ -4516,6 +4525,7 @@ mod key_routing {
                 ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
+            transcript: std::path::PathBuf::new(),
         };
         let _ = shell.core.apply(termherd_core::Event::ScanCompleted(vec![
             row("sess-a"),
@@ -6321,6 +6331,66 @@ mod key_routing {
     }
 
     #[test]
+    fn reveal_points_at_the_focused_directory_and_the_scanned_transcript() {
+        use crate::shell::reveal::Reveal;
+        use termherd_core::OpenTarget;
+        let (mut shell, _pty) = empty_shell();
+        let _ = shell.launch(
+            "/tmp/claude".to_string(),
+            Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
+        );
+        assert_eq!(
+            shell.focused_reveal(Reveal::Dir),
+            Some(OpenTarget::SystemHandler {
+                path: "/tmp/claude".into()
+            })
+        );
+        assert_eq!(
+            shell.focused_reveal(Reveal::Transcript),
+            None,
+            "no scan has found the transcript yet"
+        );
+
+        // The scan's file, not one rebuilt from the project path.
+        let mut record = scan_record("abc-123", "/tmp/claude");
+        record.transcript = "/claude/projects/-tmp-claude-wt/abc-123.jsonl".into();
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::ScanCompleted(vec![record]));
+        assert_eq!(
+            shell.focused_reveal(Reveal::Transcript),
+            Some(OpenTarget::Reveal {
+                path: "/claude/projects/-tmp-claude-wt/abc-123.jsonl".into()
+            })
+        );
+    }
+
+    #[test]
+    fn reveal_is_inert_with_nothing_to_show() {
+        let (mut empty, _pty) = empty_shell();
+        let (outcome, _task) = empty.perform_presses(vec![
+            Press::Command(Action::RevealSessionDir),
+            Press::Command(Action::RevealTranscript),
+        ]);
+        assert_eq!(
+            outcome.steps,
+            vec![
+                inert("reveal-session-dir", "no-context"),
+                inert("reveal-transcript", "no-context"),
+            ]
+        );
+
+        let (mut plain, _pty) = shell_with_terminal();
+        let (outcome, _task) =
+            plain.perform_presses(vec![Press::Command(Action::RevealTranscript)]);
+        assert_eq!(
+            outcome.steps,
+            vec![inert("reveal-transcript", "no-context")],
+            "a shell has no transcript"
+        );
+    }
+
+    #[test]
     fn an_armed_claude_command_shows_its_own_modal() {
         let (mut shell, _pty, session) = shell_with_idle_claude();
         let _ = arm_over_bridge(&mut shell, session, ClaudeCommand::Desktop);
@@ -7762,6 +7832,7 @@ mod key_routing {
                 ..termherd_claude::digest::SessionDigest::default()
             },
             modified: None,
+            transcript: std::path::PathBuf::new(),
         };
         let _ = shell
             .core
@@ -9271,6 +9342,10 @@ mod key_routing {
                 color_refusal: Some(BUSY),
                 unparked: false,
                 in_repo: false,
+                dir_known: false,
+                transcript_known: false,
+                desktop_listed: false,
+                desktop_refusal: Some(BUSY),
             }
         }
 
@@ -9298,6 +9373,10 @@ mod key_routing {
                 color_refusal: None,
                 unparked: true,
                 in_repo: true,
+                dir_known: true,
+                transcript_known: true,
+                desktop_listed: true,
+                desktop_refusal: None,
             };
             assert_eq!(lines(&everything).count(), ENTRIES.len());
             assert_eq!(disabled(&everything), vec![]);
@@ -9316,6 +9395,26 @@ mod key_routing {
                 ..nothing()
             };
             assert_eq!(added_by(&in_repo), vec![Action::NewClaudeSessionInWorktree]);
+            let dir = Offers {
+                dir_known: true,
+                ..nothing()
+            };
+            assert_eq!(added_by(&dir), vec![Action::RevealSessionDir]);
+            let transcript = Offers {
+                transcript_known: true,
+                ..nothing()
+            };
+            assert_eq!(added_by(&transcript), vec![Action::RevealTranscript]);
+            let desktop = Offers {
+                desktop_listed: true,
+                ..nothing()
+            };
+            assert_eq!(added_by(&desktop), vec![Action::SendToDesktop]);
+            assert_eq!(
+                disabled(&desktop),
+                vec![(Action::PickTabColor, BUSY), (Action::SendToDesktop, BUSY)],
+                "a Claude that cannot take `/desktop` now lists it disabled"
+            );
         }
 
         #[test]

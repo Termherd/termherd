@@ -520,7 +520,14 @@ impl Shell {
             .style(button::text)
             .padding(0);
 
-        let entry = row![star, middle, rename, archive]
+        // Shows the file this row was read from: the scan's own path, which a
+        // worktree session's collapsed project path could not rebuild.
+        let reveal = button(text("↗").size(12))
+            .on_press(Message::RevealTranscript(s.transcript.clone()))
+            .style(button::text)
+            .padding(0);
+
+        let entry = row![star, middle, reveal, rename, archive]
             .spacing(6)
             .align_y(iced::Center);
         // A content hit shows its matched line in muted text beneath the
