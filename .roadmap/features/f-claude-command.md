@@ -40,5 +40,6 @@ Busy rename and colour (#379): `CommandKind::accepts` decides per command
 which statuses can take it. `/rename` and `/color` are also typed into a busy
 Claude, which applies them mid-turn (live, Claude Code 2.1.322); `/desktop`
 stays idle-only. `read_prompt` reads the queued-message hint as
-`PromptInput::Queued`, which the check accepts. Design pass:
+`PromptInput::Queued`, which the check accepts. A key typed during the paced
+writes can still land in, or be erased by, the command: #573. Design pass:
 `.personal/egm/379-rename-busy/concepts_brief.md`.
