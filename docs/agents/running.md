@@ -63,6 +63,31 @@ to say, also hid `~/.claude` — an empty sidebar reporting
 so the build looked like no user's (#577). `CLAUDE_CONFIG_DIR`, read with
 Claude Code's own precedence, points the build at another Claude directory.
 
+## `just dev-instance`: the default second instance
+
+`just dev-instance` does all of the above and points `CLAUDE_CONFIG_DIR` at
+a fixture generated for the launch: three invented repositories (one session
+in a worktree), nine sessions with AI titles, renames, `/color`s and
+first-prompt fallbacks, each dated *relative to now*. It prints its root on
+stderr as `dev instance: …`; the data dir is `<root>/data`.
+
+The fixture rather than the user's `~/.claude`, always (#578):
+
+- a screenshot of the real sidebar publishes the user's project names;
+- the real directory is written to by every live Claude, so the build rescans
+  every second or two and never shows the same thing twice;
+- conformity to one developer's machine proves nothing about defaults, which
+  unit tests and a pristine environment cover instead.
+
+Its source is the `SESSIONS` table in
+`crates/scan/examples/dev_fixture/fixture.rs`: edit it when a check needs
+other sessions. The sidebar dates a session by its transcript's mtime, so the
+generator sets each one; a frozen tree in git would age in every screenshot
+and lose its mtimes on checkout. `crates/scan/tests/dev_fixture.rs` reads the
+generated tree through `FsScanner` and spells out the rows it must produce.
+
+## Traps a second instance still meets
+
 **A build from before the lock followed the temp dir on Windows and Linux does
 not see a newer one, nor the reverse**: the default lock name changed with it.
 Quit an older release before testing a newer build against it. A pull
