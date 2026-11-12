@@ -983,18 +983,11 @@ impl TermherdMcp {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TermherdMcp {
     fn get_info(&self) -> ServerConfig {
-        // rmcp's `ServerConfig`/`Implementation` are `#[non_exhaustive]`, so build
-        // from a default and set the fields we care about rather than a literal.
-        let mut server = Implementation::from_build_env();
-        server.name = "termherd".into();
-        server.version = env!("CARGO_PKG_VERSION").into();
-
-        let mut info = ServerConfig::default();
-        info.protocol_version = ProtocolVersion::LATEST;
-        info.capabilities = ServerCapabilities::builder().enable_tools().build();
-        info.server_info = server;
-        info.instructions = Some(
-            "termherd's live bridge: read and drive the terminal sessions and \
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_protocol_version(ProtocolVersion::LATEST)
+            .with_server_info(Implementation::new("termherd", env!("CARGO_PKG_VERSION")))
+            .with_instructions(
+                "termherd's live bridge: read and drive the terminal sessions and \
              the workspace of the termherd hosting you. Address a session by \
              the `handle` `list_sessions` gives, never by Claude's resume id. \
              Act, wait, observe: `run_in_session` returns at once, so follow \
@@ -1006,10 +999,8 @@ impl ServerHandler for TermherdMcp {
              open prompt takes their keys, and `escape` leaves any prompt; \
              `enter` on the quit prompt quits termherd and this connection. \
              Take a `screenshot` last: it weighs hundreds of times a \
-             `snapshot`."
-                .into(),
-        );
-        info
+             `snapshot`.",
+            )
     }
 }
 
