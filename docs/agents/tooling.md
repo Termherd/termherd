@@ -81,8 +81,22 @@ reads as "no such type" rather than "wrong id". Fetch all three:
 gh api graphql -f query='{ organization(login: "Termherd") {
   issueTypes(first: 10) { nodes { id name } } } }'   # Task / Bug / Feature
 gh project field-list 1 --owner Termherd --format json   # fields + option ids
-gh project item-list 1 --owner Termherd --format json --limit 200  # item ids
+gh project item-list 1 --owner Termherd --format json --limit 1000  # item ids
 ```
+
+**Read the whole board, or the id you need is not in it.** The board held
+222 items on 2026-11-11 — closed issues stay on it — so a `--limit 200`
+silently dropped 22 of them. `scripts/board_check.py` reads with
+`BOARD_LIMIT`; match it. When `item-list` answers `API rate limit exceeded`
+while `gh api rate_limit` still shows GraphQL points left (3165 that day),
+query only the fields you need with `gh api graphql --paginate`, whose cursor
+variable must be named `$endCursor`: under any other name `gh` fetches page
+one again, forever, and spends the budget.
+
+**A view grouped by Horizon shows a sub-issue in its parent's group.** On
+2026-11-11, four `Now` issues appeared under `Later` and `Next` because their
+parents, #90 and #153, sat there. Rank from a flat view, or from the field
+itself, never from where a hierarchical view draws the row.
 
 Then `updateIssue(input: {id, issueTypeId})` over `gh api graphql` for the
 type — the native type is *not* named by that bullet, but an unclassified type
