@@ -19,9 +19,7 @@ use crate::settings::ClipboardGestures;
 use crate::shell::Message;
 
 use super::cell_size;
-use super::selection::{
-    ClickSelection, cell_at, cell_nearest, cell_side, click_selection, target_at,
-};
+use super::selection::{cell_at, cell_nearest, cell_side, click_selection, target_at};
 
 /// A canvas program that draws the visible terminal grid with per-cell colour
 /// and the cursor (FR4), and handles wheel scrollback + drag-to-select.
@@ -363,19 +361,20 @@ impl canvas::Program<Message> for TerminalView<'_> {
                     }));
                 }
                 // A double-click selects the link, path or word under the
-                // pointer, a triple-click the row, and either copies it, like a
-                // terminal. iced's click tracker classifies the press from the
-                // previous one's time and distance. The range drives a native
-                // selection so the highlight persists and rides scroll.
+                // pointer, a triple-click the whole line, and either copies
+                // it, like a terminal. iced's click tracker classifies the
+                // press from the previous one's time and distance. The op
+                // drives a native selection so the highlight persists and
+                // rides scroll.
                 let clicked = Click::new(position, mouse::Button::Left, state.last_click);
                 state.last_click = Some(clicked);
-                if let Some(ClickSelection { op, text }) =
+                if let Some(op) =
                     click_selection(self.screen, col, row, click_count(clicked.kind()))
                 {
                     state.held = None;
                     let session = self.session;
                     return Some(canvas::Action::publish(if self.gestures.copy_on_select {
-                        Message::SelectAndCopy { session, op, text }
+                        Message::SelectAndCopy { session, op }
                     } else {
                         Message::Select { session, op }
                     }));
@@ -1037,7 +1036,7 @@ mod tests {
     }
 
     #[test]
-    fn a_triple_click_selects_and_copies_the_row() {
+    fn a_triple_click_selects_and_copies_the_line() {
         use canvas::Program;
         let line = "see src/main.rs now";
         let screen = screen_from(line);
@@ -1047,23 +1046,14 @@ mod tests {
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
         match published(view.update(&mut state, &press(), test_bounds(), cursor)) {
-            Some(Message::SelectAndCopy { op, text, .. }) => {
-                assert_eq!(text, line);
-                assert_eq!(
-                    op,
-                    SelectOp::Range {
-                        line0: 0,
-                        col0: 0,
-                        line1: 0,
-                        col1: line.len() - 1,
-                    }
-                );
+            Some(Message::SelectAndCopy { op, .. }) => {
+                assert_eq!(op, SelectOp::Line { line: 0 });
             }
-            other => panic!("expected the row selected and copied, got {other:?}"),
+            other => panic!("expected the line selected and copied, got {other:?}"),
         }
         assert!(
             state.held.is_none(),
-            "a row selection is settled, not a drag"
+            "a line selection is settled, not a drag"
         );
     }
 
@@ -1077,7 +1067,16 @@ mod tests {
         let mut state = TermState::default();
         let _ = view.update(&mut state, &press(), test_bounds(), cursor);
         match published(view.update(&mut state, &press(), test_bounds(), cursor)) {
-            Some(Message::SelectAndCopy { text, .. }) => assert_eq!(text, "src/main.rs"),
+            Some(Message::SelectAndCopy { op, .. }) => assert_eq!(
+                op,
+                SelectOp::Range {
+                    line0: 0,
+                    col0: 4,
+                    line1: 0,
+                    col1: 14,
+                },
+                "src/main.rs, the full stop left out"
+            ),
             other => panic!("expected a copied selection, got {other:?}"),
         }
     }

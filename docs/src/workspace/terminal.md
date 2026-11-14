@@ -9,7 +9,8 @@ escape-sequence handling, scrollback, selection, colours.
 Drag with the mouse to select; a double-click selects the word under the
 pointer, or the whole URL or path when there is one — exactly the span a
 [link click](#clickable-links) opens, so a sentence's closing `.` is left out
-and a `:42` suffix kept; a triple-click selects the whole row;
+and a `:42` suffix kept; a triple-click selects the whole line, every row a
+long line wrapped onto;
 <kbd>Shift</kbd>+click extends the current selection.
 The chords that reach the clipboard:
 

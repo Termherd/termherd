@@ -288,9 +288,10 @@ inside it.
 
 `click_count` repeats the click as a human's double- or triple-click would.
 At a shell, `2` selects the word under the cell — or the whole URL or path
-there, the span a link click opens — and `3` the whole row, exactly as the
-same clicks by hand; with `terminal.copy_on_select` on, the selection is also
-copied. A double-click on a blank selects nothing and is two plain clicks. A
+there, the span a link click opens — and `3` the whole line, every row a long
+line wrapped onto, exactly as the same clicks by hand; with
+`terminal.copy_on_select` on, the selection is also copied. A double-click on
+a blank selects nothing and is two plain clicks. A
 program reading the mouse is sent that many clicks — for a `press`, the clicks
 before it and then the press, held — and tells them apart by their timing as
 it would a human's. A count outside `1` to `3`, or above `1` on
