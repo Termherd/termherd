@@ -48,6 +48,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   An MCP client that matched the refusal `the session is busy, not idle at
   its prompt` for a rename or a colour no longer receives it (#379).
 
+### Fixed (before Claude Code's first run)
+
+- With no `~/.claude/projects` yet, the sidebar shows *No sessions found.*
+  instead of `Scan failed: projects directory not readable`. When Claude Code
+  creates the directory, its first session appears without a restart (#579).
+
 ### Fixed (no console window beside TermHerd on Windows)
 
 - Launching TermHerd from Explorer or the Start menu on Windows 11 24H2 or

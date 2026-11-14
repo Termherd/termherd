@@ -11,6 +11,10 @@ a restart:
 - ten seconds at most if the filesystem watch delivers nothing at all, as
   macOS can: the sidebar also rescans on its own every ten seconds.
 
+Before Claude Code's first run there is no `~/.claude/projects`: the sidebar
+reads *No sessions found.*, and lists the first session once Claude Code
+creates the directory.
+
 The walk follows no symlink: a linked project folder, session subdirectory or
 `.jsonl` under `~/.claude/projects` is skipped. A transcript is read whole up
 to 256 MiB; past that, only its first and last 128 MiB are read, so the message

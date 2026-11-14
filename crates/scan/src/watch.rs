@@ -4,6 +4,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
@@ -16,9 +17,10 @@ use tracing::{debug, warn};
 pub const MAX_WAIT: Duration = Duration::from_secs(2);
 
 /// Keeps the fs watcher and its coalescing thread alive; dropping it stops
-/// both.
+/// both. Shared because a watch waiting for its root re-aims the watcher from
+/// the coalescing thread, which holds it weakly so the drop still stops it.
 pub struct WatchHandle {
-    _watcher: notify::RecommendedWatcher,
+    _watcher: Arc<Mutex<notify::RecommendedWatcher>>,
 }
 
 /// Watch `root` recursively and invoke `on_change` once per debounced
@@ -26,11 +28,18 @@ pub struct WatchHandle {
 /// without coalescing every keystroke of a session would trigger a
 /// rescan). A burst fires after `debounce` of quiet, or [`MAX_WAIT`] after
 /// its first event. The callback runs on a background thread.
+///
+/// A root that does not exist yet is waited for, since Claude Code creates
+/// `~/.claude/projects` on its first run: once it appears it is watched, and
+/// `on_change` fires for whatever it already holds.
 pub fn watch_changes(
     root: PathBuf,
     debounce: Duration,
     on_change: impl FnMut() + Send + 'static,
 ) -> Result<WatchHandle, ScanError> {
+    if !root.exists() {
+        return watch_until_created(root, debounce, on_change);
+    }
     watch(
         &root,
         RecursiveMode::Recursive,
@@ -78,23 +87,145 @@ fn watch(
     debounce: Duration,
     on_change: impl FnMut() + Send + 'static,
 ) -> Result<WatchHandle, ScanError> {
+    let (mut watcher, rx) = signalling_watcher(relevant)?;
+    add_watch(&mut watcher, root, mode)?;
+    spawn_coalescer(move || coalesce(&rx, debounce, on_change))?;
+    Ok(WatchHandle {
+        _watcher: Arc::new(Mutex::new(watcher)),
+    })
+}
+
+/// [`watch_changes`] on a root that does not exist yet: watch its nearest
+/// existing ancestor without recursing (a recursive watch on a home directory
+/// would report every file under it), step down as each missing level is
+/// created, and watch the root recursively once it is there.
+fn watch_until_created(
+    root: PathBuf,
+    debounce: Duration,
+    on_change: impl FnMut() + Send + 'static,
+) -> Result<WatchHandle, ScanError> {
+    let ancestor = nearest_existing(&root).ok_or_else(|| {
+        ScanError::Unreadable(format!("{}: no existing ancestor", root.display()))
+    })?;
+    let (mut watcher, rx) = signalling_watcher(|_| true)?;
+    add_watch(&mut watcher, &ancestor, RecursiveMode::NonRecursive)?;
+    let shared = Arc::new(Mutex::new(watcher));
+    let mut pending = Pending {
+        root,
+        watched: Some(ancestor),
+        watcher: Arc::downgrade(&shared),
+        on_change,
+    };
+    spawn_coalescer(move || {
+        // A level created between the ancestor lookup and its watch sent no
+        // event: look once before waiting.
+        pending.step();
+        coalesce(&rx, debounce, || pending.step());
+    })?;
+    Ok(WatchHandle { _watcher: shared })
+}
+
+/// A watch waiting for its root: the ancestor it watches, or `None` once the
+/// root itself is watched and every burst is a change.
+struct Pending<F> {
+    root: PathBuf,
+    watched: Option<PathBuf>,
+    watcher: Weak<Mutex<notify::RecommendedWatcher>>,
+    on_change: F,
+}
+
+impl<F: FnMut()> Pending<F> {
+    /// One burst of events. Once the root is watched, a change. Before, a
+    /// cue to re-aim the watch at the nearest existing ancestor, or at the
+    /// root when it has appeared, which is a change: it may hold sessions
+    /// already.
+    fn step(&mut self) {
+        if self.watched.is_none() {
+            (self.on_change)();
+            return;
+        }
+        // A level created while the watch moved down sent its event to no
+        // one: descend until the nearest ancestor stops changing.
+        while self.descend() {}
+    }
+
+    /// Move the watch to the nearest existing ancestor, or the root; whether
+    /// it moved to an ancestor, so that another level may need following.
+    fn descend(&mut self) -> bool {
+        let Some(watched) = &self.watched else {
+            return false;
+        };
+        let Some(nearest) = nearest_existing(&self.root).filter(|nearest| nearest != watched)
+        else {
+            return false;
+        };
+        let Some(watcher) = self.watcher.upgrade() else {
+            return false;
+        };
+        let mut watcher = watcher.lock().unwrap_or_else(PoisonError::into_inner);
+        let reached = nearest == self.root;
+        let mode = if reached {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+        if let Err(error) = add_watch(&mut watcher, &nearest, mode) {
+            // Kept on the old ancestor, retried at its next event.
+            warn!(%error, "fs watch could not follow the watched root's creation");
+            return false;
+        }
+        // Failing only when the old ancestor is gone, and its watch with it.
+        let _ = watcher.unwatch(watched);
+        drop(watcher);
+        if reached {
+            debug!(root = %self.root.display(), "watched root created");
+            self.watched = None;
+            (self.on_change)();
+            false
+        } else {
+            self.watched = Some(nearest);
+            true
+        }
+    }
+}
+
+/// `path`, or the closest of its ancestors that exists.
+fn nearest_existing(path: &Path) -> Option<PathBuf> {
+    path.ancestors()
+        .find(|candidate| candidate.exists())
+        .map(Path::to_path_buf)
+}
+
+/// A watcher sending one signal per event `relevant` admits.
+fn signalling_watcher(
+    relevant: impl Fn(&notify::Event) -> bool + Send + 'static,
+) -> Result<(notify::RecommendedWatcher, Receiver<()>), ScanError> {
     let (tx, rx) = std::sync::mpsc::channel::<()>();
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+    let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         deliver(event, &relevant, || {
             let _ = tx.send(());
         });
     })
     .map_err(|e| ScanError::Unreadable(format!("watcher: {e}")))?;
-    watcher
-        .watch(root, mode)
-        .map_err(|e| ScanError::Unreadable(format!("{}: {e}", root.display())))?;
+    Ok((watcher, rx))
+}
 
+fn add_watch(
+    watcher: &mut notify::RecommendedWatcher,
+    path: &Path,
+    mode: RecursiveMode,
+) -> Result<(), ScanError> {
+    watcher
+        .watch(path, mode)
+        .map_err(|e| ScanError::Unreadable(format!("{}: {e}", path.display())))
+}
+
+fn spawn_coalescer(run: impl FnOnce() + Send + 'static) -> Result<(), ScanError> {
     std::thread::Builder::new()
         .name("termherd-fs-watch".into())
-        .spawn(move || coalesce(&rx, debounce, on_change))
-        .map_err(|e| ScanError::Unreadable(format!("watch thread: {e}")))?;
-
-    Ok(WatchHandle { _watcher: watcher })
+        .spawn(run)
+        .map(drop)
+        .map_err(|e| ScanError::Unreadable(format!("watch thread: {e}")))
 }
 
 /// One watcher callback: `signal` when the event is one `relevant` admits.
@@ -396,6 +527,43 @@ mod tests {
             extra <= 2,
             "burst was not coalesced: {} extra signals",
             extra + 1
+        );
+    }
+
+    #[test]
+    fn a_watch_on_a_missing_root_follows_its_creation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let claude = tmp.path().join("claude");
+        let root = claude.join("projects");
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let _handle = watch_changes(root.clone(), Duration::from_millis(100), move || {
+            let _ = tx.send(());
+        })
+        .unwrap();
+
+        // Changes beside the root, before it exists, are not its changes.
+        fs::write(tmp.path().join("unrelated.txt"), "x").unwrap();
+        fs::create_dir(&claude).unwrap();
+        fs::write(claude.join("settings.json"), "{}").unwrap();
+        assert!(
+            rx.recv_timeout(Duration::from_millis(800)).is_err(),
+            "fired before the root existed"
+        );
+
+        fs::create_dir(&root).unwrap();
+        assert!(
+            rx.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "no signal when the root was created"
+        );
+        while rx.recv_timeout(Duration::from_millis(600)).is_ok() {}
+
+        // Now watched recursively, as an existing root is.
+        let folder = root.join("-repo");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("session.jsonl"), "{}\n").unwrap();
+        assert!(
+            rx.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "no signal for a session written under the created root"
         );
     }
 
