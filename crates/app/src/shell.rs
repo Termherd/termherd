@@ -1842,7 +1842,8 @@ mod key_routing {
         scrolls: StdMutex<Vec<ScrollTarget>>,
         selects: StdMutex<Vec<SelectOp>>,
         pointers: StdMutex<Vec<(SessionId, PointerEvent)>>,
-        copies: StdMutex<usize>,
+        /// One entry per copy: how many selects had reached the terminal by then.
+        copies: StdMutex<Vec<usize>>,
     }
 
     impl RecordingPty {
@@ -1875,7 +1876,11 @@ mod key_routing {
             self.selects.lock().expect("selects lock").clone()
         }
         fn copy_count(&self) -> usize {
-            *self.copies.lock().expect("copies lock")
+            self.copies.lock().expect("copies lock").len()
+        }
+        /// For each copy, the number of selects applied before it.
+        fn selects_before_copies(&self) -> Vec<usize> {
+            self.copies.lock().expect("copies lock").clone()
         }
         fn pointers(&self) -> Vec<(SessionId, PointerEvent)> {
             self.pointers.lock().expect("pointers lock").clone()
@@ -1921,7 +1926,8 @@ mod key_routing {
             Ok(())
         }
         fn copy_selection(&self, _: SessionId) -> Result<(), PtyError> {
-            *self.copies.lock().expect("copies lock") += 1;
+            let selects = self.selects.lock().expect("selects lock").len();
+            self.copies.lock().expect("copies lock").push(selects);
             Ok(())
         }
         fn kill(&self, _: SessionId) -> Result<(), PtyError> {
@@ -4259,7 +4265,11 @@ mod key_routing {
                 col1: 14,
             },
         });
-        assert_eq!(pty.copy_count(), 1, "the selection is copied");
+        assert_eq!(
+            pty.selects_before_copies(),
+            vec![1],
+            "copied once, after the select reached the terminal"
+        );
         assert_eq!(
             pty.selects(),
             vec![SelectOp::Range {

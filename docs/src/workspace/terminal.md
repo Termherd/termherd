@@ -88,11 +88,12 @@ so nothing reaches the clipboard unless you asked for it:
 ```
 
 - **`copy_on_select`** — releasing a drag, or double- or triple-clicking,
-  copies the selection outright. With it off the selection still highlights and
-  waits for the copy chord, which asks the terminal for its current selection —
-  even one scrolled out of view — so the text you copy is the text you just
-  selected, never what you copied last. With nothing selected the chord does
-  nothing — in particular in a pane whose program owns the mouse (below), where
+  copies the selection outright, in a session still running: a pane whose
+  session exited selects and copies nothing. With it off the selection still
+  highlights and waits for the copy chord, which asks the terminal for its
+  current selection — even one scrolled out of view — so the text you copy is
+  the text you just selected, never what you copied last. With nothing selected
+  the chord does nothing — in particular in a pane whose program owns the mouse (below), where
   the program's own copy of a drag stays on the clipboard untouched.
 - **`paste_on_right_click`** — a right-click pastes into **the pane under the
   pointer**, which need not be the focused one, and is bracketed when that pane
