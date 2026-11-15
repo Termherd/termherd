@@ -8,25 +8,21 @@ description: Launch a termherd build to see a change working, beside the user's 
 The full reference is `docs/agents/running.md`; read it before the first
 launch in a session. The steps that matter:
 
-1. The user's release termherd usually hosts this session and holds the
-   single-instance lock. Isolate the build's temp dir **and** data dir, or it
-   refuses to start or repaints the user's app with its settings:
+1. Launch with `just dev-instance`. The user's release termherd usually
+   hosts this session and holds the single-instance lock; the recipe gives
+   the build its own temp dir and data dir (or it refuses to start, or
+   repaints the user's app with its settings), keeps the real shell home, and
+   points `CLAUDE_CONFIG_DIR` at a generated fixture: three invented repos,
+   nine sessions dated from now. It prints its root on stderr
+   (`dev instance: …`). `TERMHERD_MCP_ATTACH=1 just dev-instance` publishes
+   the bridge to `<root>/data/bridge.json`.
 
-   ```bash
-   TERMHERD_DATA_DIR=$(mktemp -d) TMPDIR=$(mktemp -d) RUST_LOG=info cargo run -p termherd-app
-   ```
-
-   On Windows `TMPDIR` is ignored (Rust reads `TMP`, then `TEMP`), and Git
-   Bash's `mktemp` paths must be converted, or the build takes the user's
-   lock and exits with code 2:
-
-   ```bash
-   TERMHERD_DATA_DIR=$(cygpath -w "$(mktemp -d)") TMP=$(cygpath -w "$(mktemp -d)") cargo run -p termherd-app
-   ```
-
-   Never isolate with `USERPROFILE` or `HOME`: that also hides `~/.claude`
-   (empty sidebar) and changes the shells' home. `CLAUDE_CONFIG_DIR` points
-   the build at another Claude directory.
+   Edit the fixture (`crates/scan/examples/dev_fixture/fixture.rs`) when a
+   check needs other sessions; never point a build at the user's `~/.claude`
+   for a screenshot. By hand, on Windows: `TMP`, not `TMPDIR`, as a Windows
+   path, or the build takes the user's lock and exits with code 2. Never
+   isolate with `USERPROFILE` or `HOME`: that hides `~/.claude` and changes
+   the shells' home.
 2. Launch it in the background and read its `tracing` output; add `info!` at
    the seam you are verifying, never `println!`.
 3. A build an agent launches inherits this session's `CLAUDE*` variables, so
