@@ -171,21 +171,11 @@ pub const SESSIONS: &[Session] = &[
     },
 ];
 
-/// What [`write`] created under its root.
-#[allow(
-    dead_code,
-    reason = "read by tests/dev_fixture.rs; the example only writes"
-)]
-pub struct Written {
-    /// The directory to pass as `CLAUDE_CONFIG_DIR`.
-    pub claude_dir: PathBuf,
-    /// Each session's transcript, in [`SESSIONS`] order.
-    pub transcripts: Vec<PathBuf>,
-}
-
 /// Write the repositories under `<root>/repos` and Claude's data under
-/// `<root>/claude`, every session dated from `now`.
-pub fn write(root: &Path, now: SystemTime) -> io::Result<Written> {
+/// `<root>/claude`, the directory to pass as `CLAUDE_CONFIG_DIR`, every
+/// session dated from `now`. Returns each session's transcript, in
+/// [`SESSIONS`] order.
+pub fn write(root: &Path, now: SystemTime) -> io::Result<Vec<PathBuf>> {
     let claude_dir = root.join("claude");
     let mut transcripts = Vec::with_capacity(SESSIONS.len());
     for session in SESSIONS {
@@ -215,10 +205,7 @@ pub fn write(root: &Path, now: SystemTime) -> io::Result<Written> {
             .set_modified(last)?;
         transcripts.push(transcript);
     }
-    Ok(Written {
-        claude_dir,
-        transcripts,
-    })
+    Ok(transcripts)
 }
 
 /// The transcript's entries, the last message stamped `last` and each one
@@ -232,7 +219,7 @@ fn lines(session: &Session, cwd: &str, last: SystemTime) -> Vec<Value> {
             .checked_sub(Duration::from_secs((count - 1 - index as u64) * 60))
             .unwrap_or(UNIX_EPOCH);
         let uuid = format!("{}-{index:04}", &session.id[..23]);
-        let common = json!({
+        let mut entry = json!({
             "parentUuid": parent,
             "isSidechain": false,
             "userType": "external",
@@ -244,7 +231,6 @@ fn lines(session: &Session, cwd: &str, last: SystemTime) -> Vec<Value> {
             "uuid": uuid,
             "timestamp": rfc3339(at),
         });
-        let mut entry = common;
         if index % 2 == 0 {
             entry["type"] = json!("user");
             entry["message"] = json!({
