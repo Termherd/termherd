@@ -15,16 +15,16 @@ use termherd_core::ports::ProjectScanner;
 use termherd_scan::FsScanner;
 
 fn scan(root: &Path, now: SystemTime) -> Vec<termherd_core::SessionRecord> {
-    let written = fixture::write(root, now).expect("write the fixture");
-    FsScanner::new(written.claude_dir.join("projects"))
+    fixture::write(root, now).expect("write the fixture");
+    FsScanner::new(root.join("claude").join("projects"))
         .scan()
         .expect("scan the fixture")
 }
 
-fn name_of(project_path: &str) -> String {
+fn name_of(project_path: &str) -> &str {
     Path::new(project_path)
         .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
+        .and_then(std::ffi::OsStr::to_str)
         .unwrap_or_default()
 }
 
@@ -33,12 +33,12 @@ fn every_session_is_found_under_its_repository_with_its_title() {
     let root = tempfile::tempdir().expect("tempdir");
     let records = scan(root.path(), SystemTime::now());
 
-    let mut found: Vec<(String, String)> = records
+    let mut found: Vec<(&str, &str)> = records
         .iter()
         .map(|record| {
             (
                 name_of(&record.project_path),
-                record.digest.display_title(None).to_owned(),
+                record.digest.display_title(None),
             )
         })
         .collect();
@@ -60,10 +60,6 @@ fn every_session_is_found_under_its_repository_with_its_title() {
             "Set up a zsh prompt that shows the git branch and dirty state.",
         ),
     ];
-    let expected: Vec<(String, String)> = expected
-        .iter()
-        .map(|(repo, title)| ((*repo).to_owned(), (*title).to_owned()))
-        .collect();
     assert_eq!(found, expected);
 }
 
@@ -75,8 +71,8 @@ fn ages_are_relative_to_the_generation_time() {
         UNIX_EPOCH + Duration::from_secs(1_800_000_000) + 30 * day,
     ] {
         let root = tempfile::tempdir().expect("tempdir");
-        let written = fixture::write(root.path(), now).expect("write the fixture");
-        for (session, transcript) in fixture::SESSIONS.iter().zip(&written.transcripts) {
+        let transcripts = fixture::write(root.path(), now).expect("write the fixture");
+        for (session, transcript) in fixture::SESSIONS.iter().zip(&transcripts) {
             let modified = std::fs::metadata(transcript)
                 .and_then(|meta| meta.modified())
                 .expect("mtime");
