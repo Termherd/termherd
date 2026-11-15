@@ -114,13 +114,12 @@ fn build_service(
     bridge: BridgeHandle,
     settings_file: Option<PathBuf>,
 ) -> StreamableHttpService<TermherdMcp, LocalSessionManager> {
-    // `StreamableHttpServerConfig` is `#[non_exhaustive]`; set fields on a
-    // default. Stateless request/response with a plain JSON body: each call is
+    // Stateless request/response with a plain JSON body: each call is
     // self-contained, so no SSE session bookkeeping is needed. Many tools
     // mutate the workspace, which is why every request is gated first.
-    let mut config = StreamableHttpServerConfig::default();
-    config.legacy_session_mode = false;
-    config.json_response = true;
+    let config = StreamableHttpServerConfig::default()
+        .with_legacy_session_mode(false)
+        .with_json_response(true);
     StreamableHttpService::new(
         move || Ok(TermherdMcp::new(bridge.clone()).with_settings_file(settings_file.clone())),
         Arc::new(LocalSessionManager::default()),
