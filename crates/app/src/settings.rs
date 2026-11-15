@@ -331,7 +331,8 @@ where
 /// gesture is which.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ClipboardGestures {
-    /// A drag release (or a double-click) copies the selection outright.
+    /// A drag release, a double-click or a triple-click copies the selection
+    /// outright.
     pub copy_on_select: bool,
     /// A right press pastes into the pane under the pointer.
     pub paste_on_right_click: bool,

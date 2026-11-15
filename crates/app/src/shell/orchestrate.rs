@@ -24,8 +24,8 @@ use super::bridge::{
 use super::input::event_of;
 use super::repos::RepoGesture;
 use super::routing::{KeyVerdict, KeyboardOwner};
-use super::terminal::{ClickSelection, click_selection};
-use super::{Focus, Message, Shell, with_copy};
+use super::terminal::click_selection;
+use super::{Focus, Message, Shell};
 
 impl Shell {
     /// Carry out one MCP [`Action`], returning the outcome to answer the caller
@@ -327,11 +327,8 @@ impl Shell {
         } else {
             None
         };
-        let copy_on_select = self.gestures.copy_on_select;
         let task = match selection {
-            Some(ClickSelection { op, text }) => self
-                .select(id, op)
-                .map(|task| with_copy(task, copy_on_select.then_some(text))),
+            Some(op) => self.select(id, op, self.gestures.copy_on_select),
             None => {
                 let effects: Vec<_> = repeated(pointer, clicks)
                     .flat_map(|pointer| {

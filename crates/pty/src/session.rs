@@ -25,7 +25,7 @@ use termherd_core::{
 };
 
 use crate::events::{EventSink, PtyEvent};
-use crate::grid::{Palette, apply_pointer, apply_select, indexed_rgb, snapshot};
+use crate::grid::{Palette, apply_pointer, apply_select, indexed_rgb, selection_text, snapshot};
 use crate::input::{mouse_bytes, wheel_bytes};
 use crate::mode::{self, mouse_reporting};
 use crate::prompt::decode_marks;
@@ -619,7 +619,7 @@ pub(crate) fn spawn_term(
                         // Read the text from the live selection, not a snapshot,
                         // so a fast drag's copy is exact. Commands are FIFO, so
                         // any queued Select ops have already been applied here.
-                        if let Some(text) = term.selection_to_string() {
+                        if let Some(text) = selection_text(&term) {
                             term_sink(PtyEvent::SelectionCopied { session, text });
                         }
                     }

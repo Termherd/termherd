@@ -148,17 +148,22 @@ left the canvas. *Where* a local gesture lands is still
 `route`'s alone, and the bridge carries `route`'s own answer rather than a
 renamed copy of it.
 
-**A repeated click is one rule, two readers** (#492). The word or row a
-double- or triple-click selects is `terminal::selection::click_selection`,
-read off the shell's `Screen`; the canvas calls it with iced's click
+**A repeated click is one rule, two readers** (#492). The `SelectOp` a
+double- or triple-click sends is `terminal::selection::click_selection`, read
+off the shell's `Screen`; the canvas calls it with iced's click
 classification and `mouse_in_session` with its `click_count`, so the bridge
-cannot select a different span than a hand would. It is decided in the shell,
-not on the terminal thread, because the word boundary is the link detector's
-(`target_at`), which lives app-side — the range then goes down as one
-`Event::Select`, as the canvas's does. When `route` forwards, the bridge sends
-the events one by one instead — for a `press`, the clicks before it, then the
-press (`orchestrate::repeated`), so no button goes down twice unreleased:
-xterm's report has no click count, and a TUI counts clicks by their timing.
+cannot select a different span than a hand would. The word is decided in the
+shell, not on the terminal thread, because its boundary is the link
+detector's (`target_at`), which lives app-side, and goes down as a `Range`.
+The line goes down as `SelectOp::Line`, which the terminal resolves into
+alacritty's `Lines` selection (#581): only the grid knows which rows a long
+line soft-wrapped onto, and a `Screen` carries no wrap flag. Either way the
+copy is `CopyTerminalSelection` queued after the `Select`, as a drag
+release's is, read off the live selection. When `route` forwards, the bridge
+sends the events one by one instead — for a `press`, the clicks before it,
+then the press (`orchestrate::repeated`), so no button goes down twice
+unreleased: xterm's report has no click count, and a TUI counts clicks by
+their timing.
 
 Three things the review pass after the merge added, each a rule worth
 keeping. **A gesture's owner is decided at its press and kept to its
@@ -216,12 +221,10 @@ before touching it:
 To drive an isolated dev build from outside with plain `curl`, see
 [running.md](running.md#driving-an-isolated-build-from-outside).
 
-**Still open on the driving surface.** The pointer at termherd's own chrome
-(#301 — the sidebar, tabs and gutters still have no mouse), and four issues
-that would let an agent verify a fix it cannot reach today: layout and IME keys
-(#482), the app's own log (#483), the docs editor (#485), and the open overlay
-in the snapshot with window focus (#493).
-No defect is open beside them. The bridge's hardening is done: first #284,
+**Still open on the driving surface**: the open
+[`area:mcp`](https://github.com/Termherd/termherd/issues?q=is%3Aissue%20is%3Aopen%20label%3Aarea%3Amcp)
+issues — a hand-kept list here went stale the day the next one was filed. The
+bridge's hardening is done: first #284,
 then #293, which moved the Host/Origin check from rmcp's defaults into
 termherd's own gate (403 before the token's 401). Four other defects are
 fixed. A `read_terminal` that returned the screen from before the status it waited

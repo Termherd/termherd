@@ -355,8 +355,28 @@ pub(crate) fn apply_select<T: EventListener>(term: &mut Term<T>, op: SelectOp) {
             sel.update(Point::new(Line(line1), Column(col1)), Side::Right);
             term.selection = Some(sel);
         }
+        SelectOp::Line { line } => {
+            let at = Point::new(Line(line), Column(0));
+            term.selection = Some(Selection::new(SelectionType::Lines, at, Side::Left));
+        }
         SelectOp::Clear => term.selection = None,
     }
+}
+
+/// The text a copy of the terminal's selection takes. A line selection ends
+/// with the line break `alacritty_terminal` adds, which a paste into a shell
+/// would run as Enter — dropped, so a copied line pastes as text.
+pub(crate) fn selection_text<T: EventListener>(term: &Term<T>) -> Option<String> {
+    use alacritty_terminal::selection::SelectionType;
+    let mut text = term.selection_to_string()?;
+    let is_line = term
+        .selection
+        .as_ref()
+        .is_some_and(|sel| sel.ty == SelectionType::Lines);
+    if is_line && text.ends_with('\n') {
+        text.pop();
+    }
+    Some(text)
 }
 
 /// The terminal's own selection as inclusive per-row column spans in visible
@@ -845,6 +865,37 @@ mod tests {
             term.selection_to_string().as_deref(),
             Some("wide\nworld"),
             "the dragged text is what a copy reads"
+        );
+    }
+
+    /// A line selection takes the whole logical line, every row the terminal
+    /// soft-wrapped it over, from whichever row it is asked on — and copies it
+    /// without the line break that ends it, so pasting it runs nothing.
+    #[test]
+    fn a_line_selection_takes_every_row_of_a_soft_wrapped_line() {
+        use alacritty_terminal::event::VoidListener;
+        let mut term = Term::new(Config::default(), &TermSize::new(10, 4), VoidListener);
+        let mut parser: Processor = Processor::new();
+        // Fifteen cells into ten columns wrap onto a second row.
+        parser.advance(&mut term, b"$ echo\r\n0123456789abcde\r\nnext");
+        for line in [1, 2] {
+            apply_select(&mut term, SelectOp::Line { line });
+            assert_eq!(
+                snapshot(&term, &Palette::default()).selection,
+                vec![(1, 0, 9), (2, 0, 9)],
+                "asked on row {line}"
+            );
+            assert_eq!(
+                selection_text(&term).as_deref(),
+                Some("0123456789abcde"),
+                "asked on row {line}"
+            );
+        }
+        apply_select(&mut term, SelectOp::Line { line: 3 });
+        assert_eq!(
+            selection_text(&term).as_deref(),
+            Some("next"),
+            "a line that did not wrap is its own row, trailing blanks dropped"
         );
     }
 
