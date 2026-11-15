@@ -231,6 +231,10 @@ struct Shell {
     bounds: WindowConfig,
     scanner: Arc<dyn ProjectScanner>,
     watch_root: Option<PathBuf>,
+    /// Whether `watch_root` exists, so that its watch can start: before
+    /// Claude Code's first run it does not, and a watch refuses a missing
+    /// root. Looked at again after each scan until it does.
+    watch_root_exists: bool,
     /// Where the shell persists the user's state. `None`: nothing is written.
     data_dir: Option<crate::paths::DataDir>,
     /// The `settings.json` the live-reload watch follows; resolved once.
@@ -888,6 +892,7 @@ impl Shell {
             core,
             bounds,
             scanner,
+            watch_root_exists: watch_root.as_deref().is_some_and(std::path::Path::is_dir),
             watch_root,
             settings_file,
             scan_error: None,
@@ -969,6 +974,19 @@ impl Shell {
             async move { scanner.scan().map_err(|e| e.to_string()) },
             Message::ScanCompleted,
         )
+    }
+
+    /// Note a projects root created since launch, which starts its watch
+    /// (see `subscription`). Until then the rescan tick alone finds it: the
+    /// scan reads a missing root as no sessions. One stat per scan, and only
+    /// while the root is missing.
+    fn look_for_watch_root(&mut self) {
+        if !self.watch_root_exists {
+            self.watch_root_exists = self
+                .watch_root
+                .as_deref()
+                .is_some_and(std::path::Path::is_dir);
+        }
     }
 
     /// The periodic fallback rescan. Skipped while a scan is in flight, and
@@ -1064,6 +1082,7 @@ impl Shell {
             Message::ScanCompleted(Ok(records)) => {
                 tracing::info!(sessions = records.len(), "scan completed");
                 self.scan_error = None;
+                self.look_for_watch_root();
                 let effects = self
                     .core
                     .apply(termherd_core::Event::ScanCompleted(records));
@@ -1766,7 +1785,9 @@ impl Shell {
             keyboard::listen().map(Message::Key),
         ];
         if let Some(root) = &self.watch_root {
-            subs.push(Subscription::run_with(root.clone(), watch_stream));
+            if self.watch_root_exists {
+                subs.push(Subscription::run_with(root.clone(), watch_stream));
+            }
             subs.push(Subscription::run_with(RESCAN_INTERVAL, rescan_tick_stream));
         }
         subs.push(Subscription::run_with(self.pty_output.clone(), pty_stream));
@@ -3430,6 +3451,31 @@ mod key_routing {
             "the reported focus is the pane that was asked for"
         );
         assert_eq!(focused(&shell), Some(first.to_string()));
+    }
+
+    #[test]
+    fn a_projects_root_created_after_launch_is_watched_from_the_next_scan() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("claude").join("projects");
+        let (_tx, rx) = iced::futures::channel::mpsc::unbounded::<PtyEvent>();
+        let ports = Ports {
+            watch_root: Some(root.clone()),
+            ..test_ports(Arc::new(RecordingPty::default()), rx)
+        };
+        let mut shell = Shell::new(
+            WindowConfig::default(),
+            ports,
+            test_live_bridge(),
+            test_startup(),
+        );
+        assert!(!shell.watch_root_exists, "a missing root is not watched");
+
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(!shell.watch_root_exists);
+
+        std::fs::create_dir_all(&root).unwrap();
+        let _ = shell.update(Message::ScanCompleted(Ok(Vec::new())));
+        assert!(shell.watch_root_exists, "the created root is not watched");
     }
 
     #[test]

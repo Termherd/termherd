@@ -1,29 +1,21 @@
 //! A user who has not run Claude Code yet has no `~/.claude/projects`. The
-//! scanner and the watch the app wires on that root must read it as "no
-//! sessions yet", then pick up the directory and its first session when Claude
-//! Code creates them, without a restart.
+//! scanner must read it as "no sessions yet", then find the directory and its
+//! first session once Claude Code creates them, without being rebuilt.
 #![allow(
     clippy::expect_used,
     reason = "a test binary; `allow-expect-in-tests` only covers #[cfg(test)] items"
 )]
 
 use std::fs;
-use std::sync::mpsc;
-use std::time::Duration;
 
 use termherd_core::ports::ProjectScanner;
-use termherd_scan::{FsScanner, watch_changes};
+use termherd_scan::FsScanner;
 
 #[test]
-fn a_projects_root_created_after_launch_is_scanned_and_watched() {
+fn a_projects_root_created_after_launch_is_scanned() {
     let home = tempfile::tempdir().expect("tempdir");
     let root = home.path().join(".claude").join("projects");
     let scanner = FsScanner::new(root.clone());
-    let (tx, changes) = mpsc::channel::<()>();
-    let _watch = watch_changes(root.clone(), Duration::from_millis(100), move || {
-        let _ = tx.send(());
-    })
-    .expect("a missing root is watched, not refused");
 
     assert!(
         scanner.scan().expect("a missing root scans").is_empty(),
@@ -40,9 +32,6 @@ fn a_projects_root_created_after_launch_is_scanned_and_watched() {
     )
     .expect("write the transcript");
 
-    changes
-        .recv_timeout(Duration::from_secs(10))
-        .expect("no change signal once the root was created");
     let records = scanner.scan().expect("scan the created root");
     let paths: Vec<&str> = records
         .iter()

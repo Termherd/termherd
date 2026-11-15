@@ -21,6 +21,7 @@ use crate::repo::sidebar_key;
 /// Result of walking a projects root: the derived session records, plus the
 /// folders whose project path could not be derived (kept so the caller —
 /// not this pure walk — decides how loudly to report them).
+#[derive(Default)]
 pub(crate) struct ScanOutcome {
     pub(crate) records: Vec<SessionRecord>,
     pub(crate) skipped: Vec<PathBuf>,
@@ -40,10 +41,7 @@ pub(crate) fn scan_root(root: &Path, cache: &mut ScanCache) -> Result<ScanOutcom
         Ok(folders) => folders,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             *cache = ScanCache::default();
-            return Ok(ScanOutcome {
-                records: Vec::new(),
-                skipped: Vec::new(),
-            });
+            return Ok(ScanOutcome::default());
         }
         Err(e) => return Err(ScanError::Unreadable(format!("{}: {e}", root.display()))),
     };
