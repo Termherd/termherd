@@ -93,8 +93,9 @@ so nothing reaches the clipboard unless you asked for it:
   highlights and waits for the copy chord, which asks the terminal for its
   current selection — even one scrolled out of view — so the text you copy is
   the text you just selected, never what you copied last. With nothing selected
-  the chord does nothing — in particular in a pane whose program owns the mouse (below), where
-  the program's own copy of a drag stays on the clipboard untouched.
+  the chord does nothing — in particular in a pane whose program owns the mouse
+  (below), where the program's own copy of a drag stays on the clipboard
+  untouched.
 - **`paste_on_right_click`** — a right-click pastes into **the pane under the
   pointer**, which need not be the focused one, and is bracketed when that pane
   asked for bracketed paste. The click also focuses that pane, so the keys you
