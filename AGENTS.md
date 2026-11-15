@@ -355,3 +355,9 @@ Rules that keep the layers in sync:
   `Horizon` disagreement; **`just roadmap`** validates the roadmap against
   itself. Run the first before a planning pass.
   [History](docs/agents/lessons.md#how-tracking-got-its-shape)
+- **A gate your diff did not break is someone else's work too**: search
+  issues and PRs for its identifier (`gh search prs RUSTSEC-2026-0457`, the
+  error text) before fixing it, and cite the issue from the first push.
+  Three sessions answered #584's two advisories within an hour: #589 ignored
+  them, #587 and #590 both upgraded rmcp; the two that started from the red
+  check never saw the issue.
