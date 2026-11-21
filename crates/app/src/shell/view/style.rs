@@ -54,13 +54,23 @@ pub(super) enum Backdrop {
     ActiveChip,
 }
 
+/// The hue of a waiting session's marks before any shading, tuned for a dark
+/// surface. The document editor's error note shares it.
+pub(super) const ATTENTION_HUE: Color = Color::from_rgb(0.95, 0.35, 0.35);
+
+/// The hue of an idle session's dot before any shading; the document editor's
+/// saved note shares it.
+pub(super) const IDLE_HUE: Color = Color::from_rgb(0.3, 0.8, 0.4);
+
+/// A status's hue before any shading, tuned for a dark surface, or `None`
+/// when the status has no mark.
 fn status_hue(status: SessionStatus) -> Option<Color> {
     match status {
         SessionStatus::Starting => Some(Color::from_rgb(0.55, 0.55, 0.6)),
         SessionStatus::Unmonitored => None,
         SessionStatus::Busy => Some(Color::from_rgb(0.95, 0.7, 0.2)),
-        SessionStatus::Idle => Some(Color::from_rgb(0.3, 0.8, 0.4)),
-        SessionStatus::Attention => Some(Color::from_rgb(0.95, 0.35, 0.35)),
+        SessionStatus::Idle => Some(IDLE_HUE),
+        SessionStatus::Attention => Some(ATTENTION_HUE),
         SessionStatus::Exited => Some(Color::from_rgb(0.5, 0.5, 0.5)),
     }
 }
@@ -88,7 +98,7 @@ fn on_fill(hue: Color, fill: Color) -> Color {
     } else {
         Color::BLACK
     };
-    shade_until_it_reads(hue, away, &[fill])
+    shade_until_it_reads(hue, away, &[fill], MARK_FLOOR)
 }
 
 /// The hues are tuned for a dark surface. The fixed light-theme darkening
@@ -96,25 +106,28 @@ fn on_fill(hue: Color, fill: Color) -> Color {
 /// needs the push away from it, until the mark clears [`MARK_FLOOR`] on the
 /// [`mark_surfaces`].
 fn on_surface(hue: Color, palette: &Extended) -> Color {
+    on_surface_at(hue, palette, MARK_FLOOR)
+}
+
+/// [`on_surface`] with the contrast `floor` the shade must clear.
+fn on_surface_at(hue: Color, palette: &Extended, floor: f32) -> Color {
     let (start, away) = if palette.is_dark {
         (hue, Color::WHITE)
     } else {
         (mix(hue, Color::BLACK, LIGHT_SURFACE_DARKEN), Color::BLACK)
     };
-    shade_until_it_reads(start, away, &mark_surfaces(palette))
+    shade_until_it_reads(start, away, &mark_surfaces(palette), floor)
 }
 
-/// The first shade on the way from `start` to `away` that clears
-/// [`MARK_FLOOR`] on every one of `surfaces`, else `away` itself.
-fn shade_until_it_reads(start: Color, away: Color, surfaces: &[Color]) -> Color {
+/// The first shade on the way from `start` to `away` that clears `floor` on
+/// every one of `surfaces`, else `away` itself.
+fn shade_until_it_reads(start: Color, away: Color, surfaces: &[Color], floor: f32) -> Color {
     let surfaces: Vec<f32> = surfaces.iter().copied().map(luminance).collect();
     (0..=SHADE_STEPS)
         .map(|step| mix(start, away, f32::from(step) / f32::from(SHADE_STEPS)))
         .find(|shade| {
             let shade = luminance(*shade);
-            surfaces
-                .iter()
-                .all(|s| contrast_ratio(shade, *s) >= MARK_FLOOR)
+            surfaces.iter().all(|s| contrast_ratio(shade, *s) >= floor)
         })
         .unwrap_or(away)
 }

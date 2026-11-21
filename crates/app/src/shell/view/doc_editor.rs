@@ -8,6 +8,7 @@ use iced::{Color, Element, Fill, Font};
 
 use super::super::Message;
 use super::super::docs::{DocFeedback, OpenDoc};
+use super::style::{ATTENTION_HUE, IDLE_HUE};
 use crate::strings;
 
 /// Render an open plan/memory doc: a header (label, save state, actions) above
@@ -59,14 +60,12 @@ pub(super) fn doc_editor(doc: &OpenDoc, editable: bool) -> Element<'_, Message> 
 /// The save-state note for the editor header: the last save outcome if there is
 /// one, else a "modified" hint while there are unsaved edits, else nothing.
 fn save_note(doc: &OpenDoc) -> Option<Element<'_, Message>> {
-    const SAVED: Color = Color::from_rgb(0.3, 0.8, 0.4);
-    const ERROR: Color = Color::from_rgb(0.95, 0.35, 0.35);
     const DIRTY: Color = Color::from_rgb(0.6, 0.6, 0.6);
 
     match &doc.feedback {
-        Some(DocFeedback::Saved) => Some(text(strings::DOC_SAVED).size(11).color(SAVED).into()),
+        Some(DocFeedback::Saved) => Some(text(strings::DOC_SAVED).size(11).color(IDLE_HUE).into()),
         Some(DocFeedback::Error(message)) => {
-            Some(text(message.clone()).size(11).color(ERROR).into())
+            Some(text(message.clone()).size(11).color(ATTENTION_HUE).into())
         }
         None if doc.dirty => Some(text(strings::DOC_MODIFIED).size(11).color(DIRTY).into()),
         None => None,
