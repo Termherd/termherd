@@ -109,6 +109,12 @@ fn on_surface(hue: Color, palette: &Extended) -> Color {
     on_surface_at(hue, palette, MARK_FLOOR)
 }
 
+/// `hue` shaded to read as text on the window's surfaces: [`on_surface`]
+/// held to [`TEXT_FLOOR`] rather than the mark floor.
+pub(super) fn text_on_surface(hue: Color, palette: &Extended) -> Color {
+    on_surface_at(hue, palette, TEXT_FLOOR)
+}
+
 /// [`on_surface`] with the contrast `floor` the shade must clear.
 fn on_surface_at(hue: Color, palette: &Extended, floor: f32) -> Color {
     let (start, away) = if palette.is_dark {
@@ -141,6 +147,15 @@ pub(super) fn active_chip_fill(palette: &Extended) -> Color {
 /// backdrop of its own ([`Backdrop::ActiveChip`]): no one shade suits both.
 fn mark_surfaces(palette: &Extended) -> [Color; 2] {
     [palette.background.base.color, palette.background.weak.color]
+}
+
+/// The WCAG contrast floor for body text.
+pub(super) const TEXT_FLOOR: f32 = 4.5;
+
+/// The contrast ratio of two colours, from 1 to 21.
+#[cfg(test)]
+pub(super) fn contrast(a: Color, b: Color) -> f32 {
+    contrast_ratio(luminance(a), luminance(b))
 }
 
 /// How far a status hue moves toward black on a light surface.
