@@ -5,6 +5,13 @@ Rebind any of them in the `keys` section of
 [`settings.json`](./settings.md); an override **replaces** that action's
 default, and unlisted actions keep theirs.
 
+The window shows the chord where it offers the action: at the end of each tab
+menu line, in the tooltips of the sidebar's *Hide* and settings buttons, and
+in the search box's placeholder. It reads your keymap, so a rebinding shows
+there at once, and an action with no chord shows none. macOS spells a chord
+with symbols (<kbd>⇧⌘R</kbd>), other platforms with words
+(<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>).
+
 Below, **`mod`** is the platform primary modifier: <kbd>Cmd</kbd> on macOS,
 <kbd>Ctrl</kbd> everywhere else. It is a shorthand for reading this table —
 **not** valid chord syntax. Write concrete modifiers in your own bindings.

@@ -2072,6 +2072,34 @@ mod key_routing {
         }
     }
 
+    #[test]
+    fn the_shortcut_shown_follows_the_users_keymap() {
+        use termherd_core::keymap::{Action, KeyChord, Platform};
+        let (mut shell, _pty) = shell_with_terminal();
+        let default = match Platform::current() {
+            Platform::MacOs => "⌘B",
+            Platform::Windows | Platform::Linux => "Ctrl+Shift+B",
+        };
+        assert_eq!(
+            shell.shortcut_of(Action::ToggleSidebar).as_deref(),
+            Some(default)
+        );
+
+        let rebound = KeyChord::parse("ctrl+alt+s").expect("chord");
+        shell.keymap.set(Action::ToggleSidebar, [rebound]);
+        let shown = match Platform::current() {
+            Platform::MacOs => "⌃⌥S",
+            Platform::Windows | Platform::Linux => "Ctrl+Alt+S",
+        };
+        assert_eq!(
+            shell.shortcut_of(Action::ToggleSidebar).as_deref(),
+            Some(shown)
+        );
+
+        shell.keymap.set(Action::ToggleSidebar, []);
+        assert_eq!(shell.shortcut_of(Action::ToggleSidebar), None);
+    }
+
     /// A `Shell` with one terminal open and focused, plus its recording PTY.
     fn shell_with_terminal() -> (Shell, Arc<RecordingPty>) {
         let pty = Arc::new(RecordingPty::default());
@@ -8547,7 +8575,7 @@ mod key_routing {
 
         let prompt = shell.quit_prompt();
         assert!(prompt.contains("“notes.md”"), "{prompt}");
-        assert!(prompt.contains("1 open session(s)"), "{prompt}");
+        assert!(prompt.contains("1 open session will"), "{prompt}");
     }
 
     #[test]

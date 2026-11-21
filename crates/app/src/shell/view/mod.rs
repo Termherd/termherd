@@ -12,6 +12,7 @@ use iced::widget::{Column, Space, button, column, container, mouse_area, row, te
 use iced::{Border, Color, Element, Fill, Length, Size, mouse};
 use termherd_claude::digest::SessionDigest;
 use termherd_core::browser::{compact_elapsed, relative_age};
+use termherd_core::keymap::{Action, Platform};
 use termherd_core::workspace::{Branch, Pane, SessionId, SplitDir};
 use termherd_core::{ClaudeColor, SessionRecord};
 
@@ -36,6 +37,14 @@ use style::{
 };
 
 impl Shell {
+    /// The shortcut that runs `action` under the user's keymap, as this
+    /// platform spells it; `None` when nothing is bound to it.
+    pub(in crate::shell) fn shortcut_of(&self, action: Action) -> Option<String> {
+        self.keymap
+            .chord_of(action)
+            .map(|chord| chord.label(Platform::current()))
+    }
+
     pub(super) fn view(&self) -> Element<'_, Message> {
         // Hiding the sidebar hands its width to the terminal; a slim
         // always-present handle brings it back without needing the shortcut.

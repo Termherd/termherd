@@ -175,7 +175,9 @@ impl Shell {
     /// its label. `None` when no menu is open.
     pub(in crate::shell) fn tab_menu_card(&self) -> Option<Element<'_, Message>> {
         let menu = self.live_tab_menu()?;
-        let lines = menu.lines().map(tab_menu_line);
+        let lines = menu
+            .lines()
+            .map(|line| tab_menu_line(line, self.shortcut_of(line.entry.action)));
         Some(list_card(
             vec![list_heading(self.active_tab_title())],
             lines,
@@ -264,10 +266,20 @@ fn list_heading<'a>(title: &str) -> Element<'a, Message> {
     text(clip(title, 32)).size(11).into()
 }
 
-/// One tab menu entry as its card line: the label, and beneath it why the
-/// entry is refused when it is.
-fn tab_menu_line<'a>(line: crate::shell::tab_menu::Line<'_>) -> ListLine<'a> {
-    let label = text(line.entry.label).size(12);
+/// One tab menu entry as its card line: the label with the entry's shortcut
+/// at the far end, and beneath it why the entry is refused when it is.
+fn tab_menu_line<'a>(
+    line: crate::shell::tab_menu::Line<'_>,
+    shortcut: Option<String>,
+) -> ListLine<'a> {
+    let mut label = row![text(line.entry.label).size(12)]
+        .spacing(16)
+        .align_y(iced::Center);
+    if let Some(keys) = shortcut {
+        label = label
+            .push(iced::widget::Space::new().width(Fill))
+            .push(text(keys).size(11).style(super::style::card_secondary_text));
+    }
     match line.refusal {
         None => ListLine::runnable(label),
         Some(refusal) => ListLine {

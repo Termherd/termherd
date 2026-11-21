@@ -581,11 +581,155 @@ impl Keymap {
     pub fn lookup(&self, chord: &KeyChord) -> Option<Action> {
         self.bindings.get(chord).copied()
     }
+
+    /// The chord to show for `action`, or `None` when nothing is bound to it.
+    /// Of several, the one with the fewest modifiers, then the lowest key, so
+    /// the choice does not depend on the map's iteration order.
+    #[must_use]
+    pub fn chord_of(&self, action: Action) -> Option<&KeyChord> {
+        self.bindings
+            .iter()
+            .filter(|(_, bound)| **bound == action)
+            .map(|(chord, _)| chord)
+            .min_by_key(|chord| (chord.mods.count_ones(), chord.key.as_str()))
+    }
+}
+
+/// The modifiers in the order a shortcut lists them, with the symbol macOS
+/// shows and the word other platforms spell.
+const MOD_LABELS: [(u8, &str, &str); 4] = [
+    (MOD_CTRL, "⌃", "Ctrl"),
+    (MOD_ALT, "⌥", "Alt"),
+    (MOD_SHIFT, "⇧", "Shift"),
+    (MOD_CMD, "⌘", "Super"),
+];
+
+impl KeyChord {
+    /// The chord as `platform` spells a shortcut to its users: `⇧⌘R` on
+    /// macOS, `Ctrl+Shift+R` elsewhere.
+    #[must_use]
+    pub fn label(&self, platform: Platform) -> String {
+        let mods = MOD_LABELS
+            .iter()
+            .filter(|(bit, _, _)| self.mods & bit != 0)
+            .map(|(_, symbol, word)| {
+                if platform == Platform::MacOs {
+                    *symbol
+                } else {
+                    *word
+                }
+            });
+        let key = key_label(&self.key);
+        if platform == Platform::MacOs {
+            mods.chain(std::iter::once(key.as_str())).collect()
+        } else {
+            mods.chain(std::iter::once(key.as_str()))
+                .collect::<Vec<_>>()
+                .join("+")
+        }
+    }
+}
+
+/// A chord's key as a shortcut shows it: an arrow for an arrow key, a
+/// capitalised name otherwise.
+fn key_label(key: &str) -> String {
+    match key {
+        "left" => "←".to_owned(),
+        "right" => "→".to_owned(),
+        "up" => "↑".to_owned(),
+        "down" => "↓".to_owned(),
+        _ => {
+            let mut chars = key.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn label(spec: &str, platform: Platform) -> String {
+        KeyChord::parse(spec).expect("chord").label(platform)
+    }
+
+    #[test]
+    fn a_mac_label_stacks_the_modifier_symbols_in_apple_order() {
+        assert_eq!(label("cmd+b", Platform::MacOs), "⌘B");
+        assert_eq!(label("shift+cmd+r", Platform::MacOs), "⇧⌘R");
+        assert_eq!(label("cmd+alt+ctrl+shift+t", Platform::MacOs), "⌃⌥⇧⌘T");
+    }
+
+    #[test]
+    fn a_pc_label_spells_the_modifiers_out_joined_by_plus() {
+        for platform in [Platform::Windows, Platform::Linux] {
+            assert_eq!(label("ctrl+shift+b", platform), "Ctrl+Shift+B");
+            assert_eq!(label("alt+1", platform), "Alt+1");
+            assert_eq!(label("cmd+r", platform), "Super+R");
+        }
+    }
+
+    #[test]
+    fn a_label_names_arrows_and_named_keys_readably() {
+        assert_eq!(label("cmd+left", Platform::MacOs), "⌘←");
+        assert_eq!(label("ctrl+down", Platform::Linux), "Ctrl+↓");
+        assert_eq!(label("cmd+right", Platform::MacOs), "⌘→");
+        assert_eq!(label("alt+up", Platform::Windows), "Alt+↑");
+        assert_eq!(label("ctrl+tab", Platform::Windows), "Ctrl+Tab");
+        assert_eq!(label("cmd+home", Platform::MacOs), "⌘Home");
+        assert_eq!(label("ctrl+plus", Platform::Linux), "Ctrl++");
+        assert_eq!(label("cmd+-", Platform::MacOs), "⌘-");
+    }
+
+    #[test]
+    fn every_default_binding_has_a_chord_to_show_and_a_label() {
+        for platform in Platform::ALL {
+            let keymap = Keymap::defaults_for(platform);
+            for (_, action) in default_bindings(platform) {
+                let chord = keymap.chord_of(action);
+                assert!(chord.is_some(), "{action:?} on {platform:?}");
+                let shown = chord.map(|c| c.label(platform)).unwrap_or_default();
+                assert!(!shown.is_empty(), "{action:?} on {platform:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_chord_shown_is_one_bound_to_the_action() {
+        for platform in Platform::ALL {
+            let keymap = Keymap::defaults_for(platform);
+            for (_, action) in default_bindings(platform) {
+                let chord = keymap.chord_of(action).expect("bound");
+                assert_eq!(keymap.lookup(chord), Some(action), "{platform:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn of_several_chords_the_one_with_fewest_modifiers_is_shown() {
+        let mut keymap = Keymap::defaults_for(Platform::Linux);
+        let plain = KeyChord::parse("ctrl+v").expect("chord");
+        let shifted = KeyChord::parse("ctrl+shift+v").expect("chord");
+        keymap.set(Action::Paste, [shifted, plain.clone()]);
+        assert_eq!(keymap.chord_of(Action::Paste), Some(&plain));
+    }
+
+    #[test]
+    fn a_rebound_action_shows_its_new_chord() {
+        let mut keymap = Keymap::defaults_for(Platform::MacOs);
+        let chord = KeyChord::parse("ctrl+alt+s").expect("chord");
+        keymap.set(Action::ToggleSidebar, [chord.clone()]);
+        assert_eq!(keymap.chord_of(Action::ToggleSidebar), Some(&chord));
+    }
+
+    #[test]
+    fn an_unbound_action_shows_no_chord() {
+        let mut keymap = Keymap::defaults_for(Platform::MacOs);
+        keymap.set(Action::ToggleSidebar, []);
+        assert_eq!(keymap.chord_of(Action::ToggleSidebar), None);
+    }
 
     #[test]
     fn parse_reads_modifiers_and_key_in_any_order() {

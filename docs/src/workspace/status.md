@@ -126,7 +126,7 @@ there TermHerd finds only a Claude below the shell, so beyond the status only
 a Claude and full-screen programs count; a long command a shell without
 integration runs closes without asking.
 
-Quitting names the cost: *"Quit TermHerd? 3 open session(s) will be
+Quitting names the cost: *"Quit TermHerd? 3 open sessions will be
 force-stopped — any running work is lost."* Every non-exited session dies on
 quit, Claude or shell. A doc with unsaved changes is named in the same prompt,
 and makes the quit ask under every policy, `noConfirmation` included.
