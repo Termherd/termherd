@@ -583,42 +583,50 @@ impl Keymap {
     }
 
     /// The chord to show for `action`, or `None` when nothing is bound to it.
-    /// Of several, the one with the fewest modifiers, then the lowest key, so
-    /// the choice does not depend on the map's iteration order.
+    /// Of several, the one with the fewest modifiers, then a letter or digit
+    /// over a symbol, then the lowest key, so the choice does not depend on
+    /// the map's iteration order.
     #[must_use]
     pub fn chord_of(&self, action: Action) -> Option<&KeyChord> {
         self.bindings
             .iter()
             .filter(|(_, bound)| **bound == action)
             .map(|(chord, _)| chord)
-            .min_by_key(|chord| (chord.mods.count_ones(), chord.key.as_str()))
+            .min_by_key(|chord| {
+                let symbol = !chord.key.chars().all(char::is_alphanumeric);
+                (chord.mods.count_ones(), symbol, chord.key.as_str())
+            })
     }
 }
 
-/// The modifiers in the order a shortcut lists them, with the symbol macOS
-/// shows and the word other platforms spell.
-const MOD_LABELS: [(u8, &str, &str); 4] = [
-    (MOD_CTRL, "⌃", "Ctrl"),
-    (MOD_ALT, "⌥", "Alt"),
-    (MOD_SHIFT, "⇧", "Shift"),
-    (MOD_CMD, "⌘", "Super"),
-];
+/// The modifier bits in the order a shortcut lists them.
+const MOD_ORDER: [u8; 4] = [MOD_CTRL, MOD_ALT, MOD_SHIFT, MOD_CMD];
+
+/// How `platform` names one modifier bit: a symbol on macOS, a word
+/// elsewhere, the logo key after the keyboard it is printed on.
+fn mod_label(bit: u8, platform: Platform) -> &'static str {
+    match (bit, platform) {
+        (MOD_CTRL, Platform::MacOs) => "⌃",
+        (MOD_ALT, Platform::MacOs) => "⌥",
+        (MOD_SHIFT, Platform::MacOs) => "⇧",
+        (_, Platform::MacOs) => "⌘",
+        (MOD_CTRL, _) => "Ctrl",
+        (MOD_ALT, _) => "Alt",
+        (MOD_SHIFT, _) => "Shift",
+        (_, Platform::Windows) => "Win",
+        (_, Platform::Linux) => "Super",
+    }
+}
 
 impl KeyChord {
     /// The chord as `platform` spells a shortcut to its users: `⇧⌘R` on
     /// macOS, `Ctrl+Shift+R` elsewhere.
     #[must_use]
     pub fn label(&self, platform: Platform) -> String {
-        let mods = MOD_LABELS
-            .iter()
-            .filter(|(bit, _, _)| self.mods & bit != 0)
-            .map(|(_, symbol, word)| {
-                if platform == Platform::MacOs {
-                    *symbol
-                } else {
-                    *word
-                }
-            });
+        let mods = MOD_ORDER
+            .into_iter()
+            .filter(|bit| self.mods & bit != 0)
+            .map(|bit| mod_label(bit, platform));
         let key = key_label(&self.key);
         if platform == Platform::MacOs {
             mods.chain(std::iter::once(key.as_str())).collect()
@@ -638,6 +646,9 @@ fn key_label(key: &str) -> String {
         "right" => "→".to_owned(),
         "up" => "↑".to_owned(),
         "down" => "↓".to_owned(),
+        "pageup" => "PageUp".to_owned(),
+        "pagedown" => "PageDown".to_owned(),
+        "escape" => "Esc".to_owned(),
         _ => {
             let mut chars = key.chars();
             chars.next().map_or_else(String::new, |first| {
@@ -667,7 +678,6 @@ mod tests {
         for platform in [Platform::Windows, Platform::Linux] {
             assert_eq!(label("ctrl+shift+b", platform), "Ctrl+Shift+B");
             assert_eq!(label("alt+1", platform), "Alt+1");
-            assert_eq!(label("cmd+r", platform), "Super+R");
         }
     }
 
@@ -689,8 +699,7 @@ mod tests {
             let keymap = Keymap::defaults_for(platform);
             for (_, action) in default_bindings(platform) {
                 let chord = keymap.chord_of(action);
-                assert!(chord.is_some(), "{action:?} on {platform:?}");
-                let shown = chord.map(|c| c.label(platform)).unwrap_or_default();
+                let shown = chord.expect("bound").label(platform);
                 assert!(!shown.is_empty(), "{action:?} on {platform:?}");
             }
         }
@@ -714,6 +723,27 @@ mod tests {
         let shifted = KeyChord::parse("ctrl+shift+v").expect("chord");
         keymap.set(Action::Paste, [shifted, plain.clone()]);
         assert_eq!(keymap.chord_of(Action::Paste), Some(&plain));
+    }
+
+    #[test]
+    fn of_chords_with_as_many_modifiers_a_letter_beats_a_symbol() {
+        let keymap = Keymap::defaults_for(Platform::Linux);
+        let shown = keymap.chord_of(Action::SplitHorizontal).expect("bound");
+        assert_eq!(shown.label(Platform::Linux), "Alt+Shift+D");
+    }
+
+    #[test]
+    fn multi_word_keys_are_spelled_as_keyboards_print_them() {
+        assert_eq!(label("ctrl+pageup", Platform::Linux), "Ctrl+PageUp");
+        assert_eq!(label("ctrl+pagedown", Platform::Linux), "Ctrl+PageDown");
+        assert_eq!(label("cmd+backspace", Platform::MacOs), "⌘Backspace");
+        assert_eq!(label("ctrl+escape", Platform::Windows), "Ctrl+Esc");
+    }
+
+    #[test]
+    fn the_logo_key_is_win_on_windows_and_super_on_linux() {
+        assert_eq!(label("cmd+x", Platform::Windows), "Win+X");
+        assert_eq!(label("cmd+x", Platform::Linux), "Super+X");
     }
 
     #[test]
