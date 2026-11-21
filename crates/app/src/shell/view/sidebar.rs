@@ -125,25 +125,19 @@ impl Shell {
             .padding(0);
         // Adding a repo sits with the sidebar's own chrome, not inside the
         // project list: it is how the list gets a row it could not discover.
-        let add_repo = tooltip(
+        let add_repo = chrome_tooltip(
             button(text(strings::SIDEBAR_ADD_REPO).size(11))
                 .on_press(Message::PickRepoFolder)
                 .style(button::text)
                 .padding(0),
-            container(text(strings::SIDEBAR_ADD_REPO_HINT).size(11))
-                .padding(6)
-                .style(container::rounded_box),
-            tooltip::Position::Bottom,
+            strings::SIDEBAR_ADD_REPO_HINT.to_owned(),
         );
-        let settings = tooltip(
+        let settings = chrome_tooltip(
             button(text(strings::SIDEBAR_SETTINGS).size(13))
                 .on_press(Message::ToggleSettings)
                 .style(button::text)
                 .padding(0),
-            container(text(strings::SIDEBAR_SETTINGS_HINT).size(11))
-                .padding(6)
-                .style(container::rounded_box),
-            tooltip::Position::Bottom,
+            strings::SIDEBAR_SETTINGS_HINT.to_owned(),
         );
         let mut chrome = column![].spacing(8);
         if !self.load_problems.is_empty() {
@@ -605,6 +599,21 @@ fn section_header(key: &str, collapsed: bool, label: &str) -> Element<'static, M
 /// An icon button beside a project header that launches a session in the repo
 /// dir (FR4a): the glyph is the affordance, the tooltip spells it out.
 /// Built once so the shell and Claude buttons can't drift in style.
+/// A sidebar chrome control with its explanation beneath it on hover.
+fn chrome_tooltip<'a>(
+    control: impl Into<Element<'a, Message>>,
+    tip: String,
+) -> Element<'a, Message> {
+    tooltip(
+        control,
+        container(text(tip).size(11))
+            .padding(6)
+            .style(container::rounded_box),
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
 fn launch_button(
     icon: &'static str,
     tip: &'static str,

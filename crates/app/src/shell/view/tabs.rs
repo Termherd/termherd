@@ -175,20 +175,7 @@ impl Shell {
     /// its label. `None` when no menu is open.
     pub(in crate::shell) fn tab_menu_card(&self) -> Option<Element<'_, Message>> {
         let menu = self.live_tab_menu()?;
-        let lines = menu.lines().map(|line| {
-            let label = text(line.entry.label).size(12);
-            match line.refusal {
-                None => ListLine::runnable(label),
-                Some(refusal) => ListLine {
-                    content: column![
-                        label,
-                        card_secondary_line(strings::tab_menu_refusal(refusal).to_owned())
-                    ]
-                    .into(),
-                    runnable: false,
-                },
-            }
-        });
+        let lines = menu.lines().map(tab_menu_line);
         Some(list_card(
             vec![list_heading(self.active_tab_title())],
             lines,
@@ -275,6 +262,23 @@ impl Shell {
 /// A list's heading: the title of the tab it acts on.
 fn list_heading<'a>(title: &str) -> Element<'a, Message> {
     text(clip(title, 32)).size(11).into()
+}
+
+/// One tab menu entry as its card line: the label, and beneath it why the
+/// entry is refused when it is.
+fn tab_menu_line<'a>(line: crate::shell::tab_menu::Line<'_>) -> ListLine<'a> {
+    let label = text(line.entry.label).size(12);
+    match line.refusal {
+        None => ListLine::runnable(label),
+        Some(refusal) => ListLine {
+            content: column![
+                label,
+                card_secondary_line(strings::tab_menu_refusal(refusal).to_owned())
+            ]
+            .into(),
+            runnable: false,
+        },
+    }
 }
 
 /// One line of a [`list_card`]: what it shows, and whether a click runs it.
