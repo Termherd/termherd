@@ -21,12 +21,12 @@ pub(super) struct Appearance {
 }
 
 /// One entry of the terminal-scheme picker: the scheme sharing a chrome
-/// theme's name, or `None` for the default palette.
+/// theme's name, or `None` to follow the chrome theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SchemeChoice(pub(crate) Option<ThemeChoice>);
 
 impl SchemeChoice {
-    /// The default palette, then every theme that has a scheme.
+    /// Following the theme, then every theme that has a scheme.
     pub(super) fn all() -> Vec<Self> {
         let paired = ThemeChoice::ALL
             .into_iter()
@@ -54,14 +54,20 @@ impl fmt::Display for SchemeChoice {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
             Some(theme) => theme.fmt(f),
-            None => f.write_str(crate::strings::SETTINGS_SCHEME_BUILTIN),
+            None => f.write_str(crate::strings::SETTINGS_SCHEME_FOLLOW_THEME),
         }
     }
 }
 
 impl Shell {
-    /// Apply a chrome theme and persist it.
+    /// Apply a chrome theme and persist it. Terminals following the theme,
+    /// with no scheme of their own, are recoloured with it.
     pub(super) fn pick_theme(&mut self, theme: ThemeChoice) {
+        let before = self.appearance.colors.to_palette(self.appearance.theme);
+        let after = self.appearance.colors.to_palette(theme);
+        if after != before {
+            self.settings_sink.repaint(after);
+        }
         self.appearance.theme = theme;
         self.settings_sink.persist(&AppearanceChange::Theme(theme));
     }
@@ -89,7 +95,7 @@ mod tests {
         let names: Vec<_> = choices.iter().filter_map(|c| c.name()).collect();
         assert_eq!(names, Palette::schemes().collect::<Vec<_>>());
         let labels: Vec<String> = choices.iter().map(ToString::to_string).collect();
-        assert_eq!(labels[0], "Built-in");
+        assert_eq!(labels[0], "Same as theme");
         assert!(
             labels.iter().any(|l| l == "Catppuccin Frappé"),
             "{labels:?}"

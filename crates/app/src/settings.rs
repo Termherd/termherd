@@ -360,21 +360,24 @@ pub struct ColorSettings {
 
 impl ColorSettings {
     /// Sanitise the overrides into the runtime [`Palette`]: the named scheme
-    /// (or the built-in default) first, then each valid field replaces its
-    /// slot; each invalid one is warned about and skipped, so one bad value
-    /// never costs the rest of the scheme.
+    /// (else the one `theme` brings, else the built-in default) first, then
+    /// each valid field replaces its slot; each invalid one is warned about
+    /// and skipped, so one bad value never costs the rest of the scheme.
     #[must_use]
-    pub fn to_palette(&self, _theme: ThemeChoice) -> Palette {
-        let mut palette = match &self.scheme {
-            None => Palette::default(),
-            Some(name) => Palette::named(name).unwrap_or_else(|| {
+    pub fn to_palette(&self, theme: ThemeChoice) -> Palette {
+        let named = self.scheme.as_deref().and_then(|name| {
+            let scheme = Palette::named(name);
+            if scheme.is_none() {
                 warn!(
                     scheme = name,
-                    "unknown terminal colour scheme; using the default"
+                    "unknown terminal colour scheme; following the theme"
                 );
-                Palette::default()
-            }),
-        };
+            }
+            scheme
+        });
+        let mut palette = named
+            .or_else(|| theme.terminal_scheme().and_then(Palette::named))
+            .unwrap_or_default();
         let apply = |field: &str, raw: &Option<String>, slot: &mut [u8; 3]| {
             let Some(raw) = raw else { return };
             match parse_hex(raw) {
@@ -509,6 +512,22 @@ theme_choices! {
     Nightfly => "nightfly",
     Oxocarbon => "oxocarbon",
     Ferra => "ferra",
+}
+
+impl ThemeChoice {
+    /// The terminal scheme this theme brings when `terminal.colors.scheme`
+    /// names none: the one sharing its name, else a published light scheme
+    /// for a light theme that has none of its own, else `None` for the
+    /// built-in palette.
+    #[must_use]
+    pub fn terminal_scheme(self) -> Option<&'static str> {
+        let name = match self {
+            Self::Light => "catppuccin-latte",
+            Self::KanagawaLotus => "gruvbox-light",
+            other => other.settings_name(),
+        };
+        Palette::named(name).is_some().then_some(name)
+    }
 }
 
 impl From<ThemeChoice> for &'static str {
@@ -1106,7 +1125,12 @@ mod tests {
         )
         .expect("a bad colour must not fail the whole parse");
         let p = s.palette();
-        assert_eq!(p.foreground, Palette::default().foreground);
+        assert_eq!(
+            p.foreground,
+            ColorSettings::default()
+                .to_palette(ThemeChoice::Light)
+                .foreground
+        );
         assert_eq!(p.background, [0xfa, 0xfb, 0xfc]);
         assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
     }
@@ -1145,13 +1169,48 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_scheme_degrades_to_the_default() {
+    fn an_unknown_scheme_falls_back_to_the_themes_own() {
         let s: Settings = serde_json::from_str(
-            r#"{ "theme": "light", "terminal": { "colors": { "scheme": "no-such" } } }"#,
+            r#"{ "theme": "nord", "terminal": { "colors": { "scheme": "no-such" } } }"#,
         )
         .expect("valid json");
-        assert_eq!(s.palette(), Palette::default());
-        assert_eq!(s.theme, ThemeChoice::Light, "the rest of the file survives");
+        assert_eq!(s.palette(), Palette::named("nord").expect("known scheme"));
+        assert_eq!(s.theme, ThemeChoice::Nord, "the rest of the file survives");
+    }
+
+    #[test]
+    fn with_no_scheme_the_terminal_takes_the_themes_own() {
+        let follows = |theme| ColorSettings::default().to_palette(theme);
+        let named = |name| Palette::named(name).expect("known scheme");
+        for theme in ThemeChoice::ALL {
+            if let Some(own) = Palette::named(theme.settings_name()) {
+                assert_eq!(follows(theme), own, "{theme:?}");
+            }
+        }
+        assert_eq!(follows(ThemeChoice::Light), named("catppuccin-latte"));
+        assert_eq!(follows(ThemeChoice::KanagawaLotus), named("gruvbox-light"));
+        assert_eq!(follows(ThemeChoice::Dark), Palette::default());
+        assert_eq!(follows(ThemeChoice::Ferra), Palette::default());
+    }
+
+    #[test]
+    fn a_light_theme_never_gets_a_dark_terminal() {
+        for theme in ThemeChoice::ALL {
+            let chrome_is_light = !theme.to_iced().extended_palette().is_dark;
+            let [r, g, b] = ColorSettings::default().to_palette(theme).background;
+            let terminal_is_light = u16::from(r) + u16::from(g) + u16::from(b) > 3 * 128;
+            assert_eq!(terminal_is_light, chrome_is_light, "{theme:?}");
+        }
+    }
+
+    #[test]
+    fn a_scheme_written_down_outranks_the_theme() {
+        let colors: ColorSettings =
+            serde_json::from_str(r#"{ "scheme": "dracula" }"#).expect("valid colours");
+        assert_eq!(
+            colors.to_palette(ThemeChoice::Nord),
+            Palette::named("dracula").expect("known scheme")
+        );
     }
 
     #[test]

@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (the terminal follows the theme)
+
+- With no `terminal.colors.scheme` set, the terminals take the interface
+  theme's colours: the scheme of the same name, `catppuccin-latte` under
+  `light`, `gruvbox-light` under `kanagawa-lotus`, and the built-in palette
+  under `dark` and `ferra`. A light theme no longer frames a dark terminal.
+  Picking a theme recolours the open terminals. A scheme you set still wins;
+  the panel's first terminal-colours entry is now `Same as theme`.
+
 ### Changed (a quieter sidebar)
 
 - A sidebar row shows its title, and its ★ when starred. The star, reveal,

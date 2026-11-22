@@ -39,7 +39,7 @@
   // "catppuccin-mocha", "tokyo-night", "tokyo-night-storm",
   // "tokyo-night-light", "kanagawa-wave", "kanagawa-dragon",
   // "kanagawa-lotus", "moonfly", "nightfly", "oxocarbon" or "ferra".
-  // Give `terminal.colors.scheme` the same value for a matching grid.
+  // With no `terminal.colors.scheme`, the grid follows the theme.
   "theme": "dark",
 
   // ── Close confirmation ──────────────────────────────────────────────────
@@ -133,7 +133,8 @@
     // degrades to its default alone.
     "colors": {
       // Built-in scheme the overrides start from: any `theme` value above but
-      // "dark", "light", "kanagawa-lotus" and "ferra". Omit for the default.
+      // "dark", "light", "kanagawa-lotus" and "ferra". Omit to follow the
+      // theme.
       "scheme": "solarized-dark",
       // Default text / background / cursor-block colours, "#rrggbb"
       // (the "#" is optional).
