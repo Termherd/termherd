@@ -12,8 +12,27 @@ needs you. Every session carries one of five activity statuses:
 | `exited` | the program is gone |
 
 The status drives the **tab activity dot**, the focused-terminal badge, the
-close confirmation, and the MCP [`wait_for_status`](../mcp/live-bridge.md)
-tool. One value, four readers.
+[marks of a waiting session](#when-a-session-waits-for-you), the close
+confirmation, and the MCP [`wait_for_status`](../mcp/live-bridge.md) tool.
+
+## When a session waits for you
+
+A session in `attention` is marked wherever you might be looking:
+
+| Where | Mark |
+| --- | --- |
+| its tab, when another tab is active | the chip is tinted red |
+| its pane, in a split, when it does not hold the keyboard | a red frame, kept when the window loses focus |
+| the end of the tab strip | *N waiting*; a click goes to the next one |
+| the Dock icon (macOS) | the number of sessions waiting |
+
+`next-attention` (`mod+shift+a`) goes to the next waiting session after the
+focused pane, across tabs and splits, and wraps around. With none waiting it
+does nothing. Every mark clears when the session resumes work.
+
+A session's own colour (`/color`) outlines its tab and marks its sidebar row;
+a waiting mark is a fill, a frame or words instead, so a red session is never
+mistaken for one that waits.
 
 ## Where the signal comes from
 

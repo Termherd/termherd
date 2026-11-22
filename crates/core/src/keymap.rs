@@ -118,6 +118,9 @@ pub enum Action {
     FocusRight,
     FocusUp,
     FocusDown,
+    /// Go to the next session waiting for the user, after the focused pane,
+    /// cycling. Inert when none waits.
+    NextAttention,
     NextTab,
     PrevTab,
     FocusSearch,
@@ -270,6 +273,7 @@ const ACTIONS: &[ActionDef] = &[
     ActionDef::new(Action::FocusRight, "focus-right", &["mod+shift+right"]),
     ActionDef::new(Action::FocusUp, "focus-up", &["mod+shift+up"]),
     ActionDef::new(Action::FocusDown, "focus-down", &["mod+shift+down"]),
+    ActionDef::new(Action::NextAttention, "next-attention", &["mod+shift+a"]),
     ActionDef::new(Action::NextTab, "next-tab", &["ctrl+tab"]),
     ActionDef::new(Action::PrevTab, "prev-tab", &["ctrl+shift+tab"]),
     ActionDef::new(Action::FocusSearch, "focus-search", &["mod+f"]).off_mac(&["ctrl+shift+f"]),
@@ -1143,6 +1147,23 @@ mod tests {
         assert_eq!(
             Keymap::defaults_for(Platform::Linux).lookup(&KeyChord::new("i", MOD_CTRL | MOD_SHIFT)),
             Some(Action::RenameTab)
+        );
+    }
+
+    #[test]
+    fn defaults_bind_next_attention_to_the_primary_modifier_shift_a_on_every_platform() {
+        assert_eq!(
+            Keymap::defaults_for(Platform::MacOs).lookup(&KeyChord::new("a", MOD_CMD | MOD_SHIFT)),
+            Some(Action::NextAttention)
+        );
+        assert_eq!(
+            Keymap::defaults_for(Platform::Linux).lookup(&KeyChord::new("a", MOD_CTRL | MOD_SHIFT)),
+            Some(Action::NextAttention)
+        );
+        assert_eq!(
+            Keymap::defaults_for(Platform::Windows)
+                .lookup(&KeyChord::new("a", MOD_CTRL | MOD_SHIFT)),
+            Some(Action::NextAttention)
         );
     }
 

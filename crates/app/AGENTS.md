@@ -82,5 +82,6 @@ code under `crates/app/`. The incidents behind them are in
 (whose `status::win_process` reads the Win32 process tree): the Cmd+Q quit
 path, the Edit menu that gives Ctrl+Cmd+Space its *Emoji & Symbols* item, the
 Window menu that gives Cmd+M its *Minimize*, the `insertText:` relay that
-turns Character Viewer text winit drops into an input-method commit, and the
-`GetURL` Apple Event relay that drops a `termherd://` link into the inbox.
+turns Character Viewer text winit drops into an input-method commit, the
+`GetURL` Apple Event relay that drops a `termherd://` link into the inbox, and
+the Dock badge counting the sessions waiting for the user.
