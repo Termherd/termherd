@@ -34,11 +34,11 @@ Toggle it with <kbd>Cmd</kbd>+<kbd>B</kbd> (macOS) or
 │ ★ Favorites              │
 │   my-app · fix the race  │
 ├──────────────────────────┤
-│   new-repo     ❯  ✳   ✕  │  ← added by hand, no sessions yet
+│   new-repo     ❯  ✳      │  ← added by hand, no sessions yet
 │     No sessions yet …    │
-│ ▾ my-app          ❯  ✳   │  ← launch a shell / a fresh Claude session
-│     fix the race ★ ↗ ⊟ ✎ │
-│     add the cache ★ ↗ ⊟ ✎│
+│ ▾ ★ my-app        ❯  ✳   │  ← launch a shell / a fresh Claude session
+│   ★ fix the race         │  ← starred
+│   ☆ add the cache  ↗ ✎ ⊟ │  ← under the pointer
 │     … 3 more             │
 │ ▸ other-repo      ❯  ✳   │
 ├──────────────────────────┤
@@ -79,10 +79,11 @@ The row that appears carries the same `❯` and `✳` buttons as any other, and 
 project row — there is no second entry.
 
 An added repository sorts to the top of the list until its first session, then
-takes its place by recency like everything else. A **✕** on its row removes it;
-the button only appears on rows you added, since a discovered project has no
-declaration to drop. Removing a repository that has since gained sessions drops
-only the addition — the project stays, because the scan still finds it.
+takes its place by recency like everything else. A **✕** on its row, under
+the pointer, removes it; the button only appears on rows you added, since a
+discovered project has no declaration to drop. Removing a repository that has
+since gained sessions drops only the addition — the project stays, because the
+scan still finds it.
 
 What you pick is not always what is stored, but it is filed by **exactly the
 rule the scan uses** for a session's working directory — that agreement is what
@@ -132,7 +133,9 @@ large `~/.claude` history the first scan is the slow part, not the query.
 
 ## Stars, renames, archives
 
-Four buttons on each session row:
+A session row shows its title, and a ★ when starred. Its four buttons appear
+when the pointer is over the row, which is drawn on a lighter or darker fill;
+a row being renamed keeps them in view. A project's ☆ works the same way.
 
 | Button | Does |
 | --- | --- |

@@ -7,6 +7,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (a quieter sidebar)
+
+- A sidebar row shows its title, and its ★ when starred. The star, reveal,
+  rename and archive buttons, and a repository's ✕, appear under the pointer,
+  on the hovered row.
+
 ### Added (a session waiting for you is hard to miss)
 
 - A tab whose session waits for you is tinted red while another tab is
