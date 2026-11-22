@@ -41,7 +41,9 @@ pub use keymap::{
 };
 pub use metadata::{Overlay, RepoMeta, SessionMeta};
 pub use open::{OpenCommand, OpenCommandError, OpenTarget};
-pub use provider::{ActivitySupport, Provider, ProviderCapabilities, RenameSupport};
+pub use provider::{
+    ActivitySupport, AvailableProviders, Provider, ProviderCapabilities, RenameSupport,
+};
 pub use record::Recording;
 pub use snapshot::{
     ClaudeIdentity, ConfigInput, ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section,

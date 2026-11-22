@@ -17,6 +17,7 @@ pub const PLANS_AND_MEMORY: &str = "Plans & memory";
 pub const FAVORITES: &str = "★ Favorites";
 pub const SIDEBAR_LAUNCH_SHELL: &str = "Open a shell here";
 pub const SIDEBAR_LAUNCH_CLAUDE: &str = "Start a fresh Claude session";
+pub const SIDEBAR_LAUNCH_OTHER: &str = "Launch another agent CLI";
 pub const SIDEBAR_SHOW_LESS: &str = "show less";
 pub const SIDEBAR_HIDE: &str = "◀ Hide";
 pub const SIDEBAR_ADD_REPO: &str = "+ Add a repo";
@@ -25,6 +26,12 @@ pub const SIDEBAR_FORGET_REPO: &str = "Remove this repo from the sidebar";
 pub const SIDEBAR_SETTINGS: &str = "⚙";
 pub const SIDEBAR_SETTINGS_HINT: &str = "Settings";
 pub const SIDEBAR_REPO_NO_SESSIONS: &str = "No sessions yet — start one with ❯ or ✳";
+
+/// Tooltip for a secondary provider launch button in the sidebar.
+#[must_use]
+pub fn sidebar_launch_agent(provider: &str) -> String {
+    format!("Start a fresh {provider} session")
+}
 
 /// Expander under a truncated session list: how many more are folded.
 #[must_use]
