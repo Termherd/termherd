@@ -35,14 +35,12 @@ pub(super) fn kind_icon<'a>(kind: SessionKind) -> Text<'a> {
 /// colour is the only place the UI shows a status; the word form an agent
 /// reads lives in [`crate::snapshot_dto`], not on the screen.
 pub(super) fn status_dot<'a>(status: SessionStatus, backdrop: Backdrop) -> Option<Text<'a>> {
-    if status == SessionStatus::Unmonitored {
-        return None;
-    }
+    let hue = status_hue(status)?;
     Some(
         text("●")
             .size(9)
             .style(move |theme: &iced::Theme| text::Style {
-                color: Some(status_color(status, theme.extended_palette(), backdrop)),
+                color: Some(shade_status(hue, theme.extended_palette(), backdrop)),
             }),
     )
 }
@@ -56,18 +54,27 @@ pub(super) enum Backdrop {
     ActiveChip,
 }
 
-fn status_color(status: SessionStatus, palette: &Extended, backdrop: Backdrop) -> Color {
-    let hue = match status {
-        SessionStatus::Starting | SessionStatus::Unmonitored => Color::from_rgb(0.55, 0.55, 0.6),
-        SessionStatus::Busy => Color::from_rgb(0.95, 0.7, 0.2),
-        SessionStatus::Idle => Color::from_rgb(0.3, 0.8, 0.4),
-        SessionStatus::Attention => Color::from_rgb(0.95, 0.35, 0.35),
-        SessionStatus::Exited => Color::from_rgb(0.5, 0.5, 0.5),
-    };
+fn status_hue(status: SessionStatus) -> Option<Color> {
+    match status {
+        SessionStatus::Starting => Some(Color::from_rgb(0.55, 0.55, 0.6)),
+        SessionStatus::Unmonitored => None,
+        SessionStatus::Busy => Some(Color::from_rgb(0.95, 0.7, 0.2)),
+        SessionStatus::Idle => Some(Color::from_rgb(0.3, 0.8, 0.4)),
+        SessionStatus::Attention => Some(Color::from_rgb(0.95, 0.35, 0.35)),
+        SessionStatus::Exited => Some(Color::from_rgb(0.5, 0.5, 0.5)),
+    }
+}
+
+fn shade_status(hue: Color, palette: &Extended, backdrop: Backdrop) -> Color {
     match backdrop {
         Backdrop::Chrome => on_surface(hue, palette),
         Backdrop::ActiveChip => on_fill(hue, active_chip_fill(palette)),
     }
+}
+
+#[cfg(test)]
+fn status_color(status: SessionStatus, palette: &Extended, backdrop: Backdrop) -> Option<Color> {
+    Some(shade_status(status_hue(status)?, palette, backdrop))
 }
 
 /// `hue` shaded to read on `fill`, pushed toward whichever of white and black
@@ -320,7 +327,8 @@ mod tests {
             let palette = theme.extended_palette();
             for surface in mark_surfaces(palette) {
                 for status in ALL {
-                    let ratio = contrast(status_color(status, palette, Backdrop::Chrome), surface);
+                    let dot = status_color(status, palette, Backdrop::Chrome).expect("monitored");
+                    let ratio = contrast(dot, surface);
                     assert!(ratio >= MARK_FLOOR, "{status:?} on {theme}: {ratio:.2}");
                 }
             }
@@ -333,7 +341,7 @@ mod tests {
             let palette = theme.extended_palette();
             let fill = active_chip_fill(palette);
             for status in ALL {
-                let dot = status_color(status, palette, Backdrop::ActiveChip);
+                let dot = status_color(status, palette, Backdrop::ActiveChip).expect("monitored");
                 let ratio = contrast(dot, fill);
                 assert!(
                     ratio >= MARK_FLOOR,
@@ -349,12 +357,12 @@ mod tests {
         for theme in [iced::Theme::Dark, iced::Theme::Dracula] {
             let palette = theme.extended_palette();
             let fill = active_chip_fill(palette);
-            let chrome = status_color(BUSY, palette, Backdrop::Chrome);
+            let chrome = status_color(BUSY, palette, Backdrop::Chrome).expect("monitored");
             assert!(
                 contrast(chrome, fill) < MARK_FLOOR,
                 "the chrome shade must fail on {theme}'s chip, or this proves nothing"
             );
-            let dot = status_color(BUSY, palette, Backdrop::ActiveChip);
+            let dot = status_color(BUSY, palette, Backdrop::ActiveChip).expect("monitored");
             assert!(contrast(dot, fill) >= MARK_FLOOR, "{theme}");
         }
     }
@@ -365,8 +373,12 @@ mod tests {
         let dark = iced::Theme::Dark.extended_palette();
         let dracula = iced::Theme::Dracula.extended_palette();
         let hue = luminance(Color::from_rgb(0.95, 0.7, 0.2));
-        assert!(luminance(status_color(BUSY, dark, Backdrop::ActiveChip)) > hue);
-        assert!(luminance(status_color(BUSY, dracula, Backdrop::ActiveChip)) < hue);
+        assert!(
+            luminance(status_color(BUSY, dark, Backdrop::ActiveChip).expect("monitored")) > hue
+        );
+        assert!(
+            luminance(status_color(BUSY, dracula, Backdrop::ActiveChip).expect("monitored")) < hue
+        );
     }
 
     #[test]
@@ -459,8 +471,8 @@ mod tests {
             iced::Theme::Light.extended_palette(),
         );
         for status in ALL {
-            let on_dark = status_color(status, dark, Backdrop::Chrome);
-            let on_light = status_color(status, light, Backdrop::Chrome);
+            let on_dark = status_color(status, dark, Backdrop::Chrome).expect("monitored");
+            let on_light = status_color(status, light, Backdrop::Chrome).expect("monitored");
             assert!(
                 luminance(on_light) < luminance(on_dark),
                 "{status:?} darkens"
@@ -470,6 +482,8 @@ mod tests {
 
     #[test]
     fn unmonitored_status_omits_dot_and_every_kind_has_a_distinct_glyph() {
+        let dark = iced::Theme::Dark.extended_palette();
+        assert!(status_color(SessionStatus::Unmonitored, dark, Backdrop::Chrome).is_none());
         assert!(status_dot(SessionStatus::Unmonitored, Backdrop::Chrome).is_none());
         for status in ALL {
             assert!(status_dot(status, Backdrop::Chrome).is_some());

@@ -769,6 +769,7 @@ impl TermherdMcp {
     async fn wait_for_start(&self, session: u64, targets: &[SessionStatus], bound: Duration) {
         let others: Vec<SessionStatus> = [
             SessionStatus::Starting,
+            SessionStatus::Unmonitored,
             SessionStatus::Busy,
             SessionStatus::Idle,
             SessionStatus::Attention,
@@ -1572,6 +1573,7 @@ fn wait_timeout(timeout_ms: Option<u64>) -> Duration {
 fn status_from_str(name: &str) -> Option<SessionStatus> {
     match name {
         "starting" => Some(SessionStatus::Starting),
+        "unmonitored" => Some(SessionStatus::Unmonitored),
         "busy" => Some(SessionStatus::Busy),
         "idle" => Some(SessionStatus::Idle),
         "attention" => Some(SessionStatus::Attention),
@@ -3775,5 +3777,29 @@ mod tests {
             .await
             .expect_err("a closed bridge is a tool error");
         assert!(error.message.contains("closed"), "got: {}", error.message);
+    }
+
+    #[test]
+    fn status_from_str_is_the_exact_inverse_of_status_str() {
+        let all = [
+            SessionStatus::Starting,
+            SessionStatus::Unmonitored,
+            SessionStatus::Busy,
+            SessionStatus::Idle,
+            SessionStatus::Attention,
+            SessionStatus::Exited,
+        ];
+        for status in all {
+            match status {
+                SessionStatus::Starting
+                | SessionStatus::Unmonitored
+                | SessionStatus::Busy
+                | SessionStatus::Idle
+                | SessionStatus::Attention
+                | SessionStatus::Exited => {}
+            }
+            assert_eq!(status_from_str(status_str(status)), Some(status));
+        }
+        assert_eq!(status_from_str("unknown"), None);
     }
 }
