@@ -96,14 +96,18 @@ impl App {
         self.repos.get(path).is_some_and(|m| m.declared)
     }
 
-    /// The live session whose Claude conversation is `claude_id` (resumed,
-    /// launched under a minted id, or re-keyed to it), if one is open. Lets the shell re-focus an existing terminal when its
+    /// The live session whose conversation is `session_id` (resumed under any
+    /// provider, or a Claude launched under a minted id or re-keyed to it), if
+    /// one is open. Lets the shell re-focus an existing terminal when its
     /// sidebar row is clicked again, rather than spawning a duplicate (FR4).
     #[must_use]
-    pub fn open_session_for(&self, claude_id: &str) -> Option<SessionId> {
+    pub fn open_session_for(&self, session_id: &str) -> Option<SessionId> {
         self.sessions
             .values()
-            .find(|s| s.claude_session_id() == Some(claude_id))
+            .find(|s| {
+                s.claude_session_id() == Some(session_id)
+                    || s.launch.resume_id() == Some(session_id)
+            })
             .map(|s| s.id)
     }
 

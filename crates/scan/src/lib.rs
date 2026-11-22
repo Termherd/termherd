@@ -30,6 +30,7 @@
 //! The root is the caller's to resolve (`app` reads it from its `ClaudeDir`,
 //! which honours `CLAUDE_CONFIG_DIR`): a second resolution here would drift.
 
+mod antigravity;
 mod cache;
 mod derive;
 mod entry;
@@ -47,6 +48,7 @@ use termherd_core::SessionRecord;
 use termherd_core::ports::{ProjectScanner, ScanError};
 use tracing::{debug, warn};
 
+use antigravity::scan_antigravity;
 use cache::ScanCache;
 use walk::scan_root;
 
@@ -55,13 +57,21 @@ pub use repo::{normalize_repo_path, repo_root, sidebar_key};
 pub use session_file::{MAX_SESSION_FILE_BYTES, read_session_file};
 pub use watch::{WatchHandle, watch_changes, watch_file};
 
-/// Scanner over a projects root (normally `~/.claude/projects`).
+#[derive(Default)]
+pub(crate) struct ScannerCaches {
+    pub(crate) claude: ScanCache,
+    pub(crate) antigravity: ScanCache,
+}
+
+/// Scanner over a Claude projects root (normally `~/.claude/projects`),
+/// optionally paired with an Antigravity data dir (`~/.gemini/antigravity-cli`).
 pub struct FsScanner {
     root: PathBuf,
+    antigravity_dir: Option<PathBuf>,
     /// Digest/cwd results of the previous scan, keyed by file signature.
     /// Interior mutability because [`ProjectScanner::scan`] takes
     /// `&self`; the shell serialises scans, so the lock is uncontended.
-    pub(crate) cache: Mutex<ScanCache>,
+    pub(crate) caches: Mutex<ScannerCaches>,
 }
 
 impl FsScanner {
@@ -69,8 +79,17 @@ impl FsScanner {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
-            cache: Mutex::new(ScanCache::default()),
+            antigravity_dir: None,
+            caches: Mutex::new(ScannerCaches::default()),
         }
+    }
+
+    /// Also scan `dir` (normally `~/.gemini/antigravity-cli`) for Antigravity
+    /// sessions alongside Claude's.
+    #[must_use]
+    pub fn with_antigravity_dir(mut self, dir: PathBuf) -> Self {
+        self.antigravity_dir = Some(dir);
+        self
     }
 
     /// The projects root this scanner walks.
@@ -82,11 +101,18 @@ impl FsScanner {
 
 impl ProjectScanner for FsScanner {
     fn scan(&self) -> Result<Vec<SessionRecord>, ScanError> {
-        let mut cache = self
-            .cache
+        let mut caches = self
+            .caches
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let outcome = scan_root(&self.root, &mut cache)?;
+        let mut outcome = scan_root(&self.root, &mut caches.claude)?;
+
+        if let Some(agy_dir) = &self.antigravity_dir {
+            let mut next_agy = ScanCache::default();
+            let mut agy_records = scan_antigravity(agy_dir, &caches.antigravity, &mut next_agy);
+            caches.antigravity = next_agy;
+            outcome.records.append(&mut agy_records);
+        }
 
         // Q5: underivable folders are dropped like upstream, but never
         // silently. The detail is per-folder noise (dozens of `.worktrees`

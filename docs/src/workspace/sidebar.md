@@ -52,6 +52,10 @@ Toggle it with <kbd>Cmd</kbd>+<kbd>B</kbd> (macOS) or
 ## Opening a session
 
 Click a project to expand it, then a session to resume it in a new tab.
+Antigravity (`agy`) conversations discovered in
+`~/.gemini/antigravity-cli/conversation_summaries.db` appear under their
+matching project with a `✦` mark beside the title; clicking one resumes it via
+`agy --conversation <id>` (or brings its open tab forward).
 
 Beside each project row are two launch buttons: **`❯`** opens a plain shell in
 that project's directory, **`✳`** starts a fresh Claude session there — under a

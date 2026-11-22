@@ -96,17 +96,7 @@ fn main() -> iced::Result {
         "termherd starting (M1 browser)"
     );
 
-    let (scanner, watch_root): (Arc<dyn ProjectScanner>, Option<std::path::PathBuf>) =
-        match claude_dir.as_ref() {
-            Some(dir) => {
-                let root = dir.join("projects");
-                (Arc::new(FsScanner::new(root.clone())), Some(root))
-            }
-            None => {
-                warn!("no home directory found; session browser will be empty");
-                (Arc::new(NoScanner), None)
-            }
-        };
+    let (scanner, watch_root) = build_scanner(claude_dir.as_ref());
 
     // Thin user settings (FR10): the configured shell is injected into the PTY
     // host, the theme into the iced shell. A corrupt file falls back to
@@ -297,6 +287,26 @@ fn build_bridge_runtime() -> Option<tokio::runtime::Runtime> {
         Err(error) => {
             warn!(%error, "async transport runtime unavailable; bridge disabled");
             None
+        }
+    }
+}
+
+fn build_scanner(
+    claude_dir: Option<&paths::ClaudeDir>,
+) -> (Arc<dyn ProjectScanner>, Option<std::path::PathBuf>) {
+    match claude_dir {
+        Some(dir) => {
+            let root = dir.join("projects");
+            let mut fs_scanner = FsScanner::new(root.clone());
+            if let Some(home) = paths::home_dir() {
+                fs_scanner =
+                    fs_scanner.with_antigravity_dir(home.join(".gemini").join("antigravity-cli"));
+            }
+            (Arc::new(fs_scanner), Some(root))
+        }
+        None => {
+            warn!("no home directory found; session browser will be empty");
+            (Arc::new(NoScanner), None)
         }
     }
 }
