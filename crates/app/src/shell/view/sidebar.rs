@@ -27,7 +27,10 @@ use crate::strings;
 
 /// The width of a row's glyph control. It is fixed so that a slot left empty
 /// at rest lines up with the control the hover layer draws over it.
-const CONTROL_WIDTH: f32 = 14.0;
+/// The glyph is drawn at `BODY`, so the slot follows it.
+const CONTROL_WIDTH: f32 = BODY + 1.0;
+/// A search toggle's box: a control, not text, so outside the type scale.
+const CHECKBOX_SIZE: f32 = 14.0;
 
 /// The widest a twin's hint grows, so a long summary leaves the title room.
 const TWIN_HINT_MAX_WIDTH: f32 = 120.0;
@@ -77,12 +80,12 @@ impl Shell {
             .label(strings::TITLES_ONLY)
             .on_toggle(Message::SearchTitlesOnly)
             .text_size(CAPTION)
-            .size(HEADING);
+            .size(CHECKBOX_SIZE);
         let show_archived = checkbox(self.core.sidebar.show_archived)
             .label(strings::SHOW_ARCHIVED)
             .on_toggle(Message::ShowArchived)
             .text_size(CAPTION)
-            .size(HEADING);
+            .size(CHECKBOX_SIZE);
 
         let live = self.live_statuses();
         let visible = self.core.visible_projects();

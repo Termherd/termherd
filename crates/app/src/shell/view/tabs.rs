@@ -14,7 +14,7 @@ use termherd_core::ClaudeColor;
 
 use super::modals::modal_card;
 use super::style::{
-    ATTENTION_HUE, BODY, CAPTION, HEADING, text_on_surface, waiting_chip_fill, waiting_chip_text,
+    ATTENTION_HUE, BODY, HEADING, text_on_surface, waiting_chip_fill, waiting_chip_text,
 };
 use super::{
     Backdrop, COLOR_MARK_WIDTH, CardFacts, active_chip_fill, card_frame, card_secondary_line,
@@ -288,11 +288,9 @@ fn tab_menu_line<'a>(
         .spacing(16)
         .align_y(iced::Center);
     if let Some(keys) = shortcut {
-        label = label.push(iced::widget::Space::new().width(Fill)).push(
-            text(keys)
-                .size(CAPTION)
-                .style(super::style::card_secondary_text),
-        );
+        label = label
+            .push(iced::widget::Space::new().width(Fill))
+            .push(card_secondary_line(keys));
     }
     match line.refusal {
         None => ListLine::runnable(label),
