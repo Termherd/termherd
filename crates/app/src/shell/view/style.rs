@@ -412,8 +412,10 @@ mod tests {
             }
             let source = std::fs::read_to_string(&path).expect("a view source file");
             for (n, line) in source.lines().enumerate() {
-                let sized = line.match_indices(".size(").any(|(at, call)| {
-                    line[at + call.len()..].starts_with(|c: char| c.is_ascii_digit())
+                // `.size(` and `.text_size(` alike.
+                let sized = line.match_indices("size(").any(|(at, call)| {
+                    line[..at].ends_with(['.', '_'])
+                        && line[at + call.len()..].starts_with(|c: char| c.is_ascii_digit())
                 });
                 let fitted = line.contains("fitted(")
                     && line

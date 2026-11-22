@@ -76,12 +76,12 @@ impl Shell {
         let titles_only = checkbox(self.core.sidebar.search_titles_only)
             .label(strings::TITLES_ONLY)
             .on_toggle(Message::SearchTitlesOnly)
-            .text_size(11)
+            .text_size(CAPTION)
             .size(HEADING);
         let show_archived = checkbox(self.core.sidebar.show_archived)
             .label(strings::SHOW_ARCHIVED)
             .on_toggle(Message::ShowArchived)
-            .text_size(11)
+            .text_size(CAPTION)
             .size(HEADING);
 
         let live = self.live_statuses();
@@ -193,8 +193,7 @@ impl Shell {
             .spacing(6)
             .align_y(iced::Center),
             search,
-            titles_only,
-            show_archived
+            row![titles_only, show_archived].spacing(16)
         ]
         .spacing(8)
         .into()]);

@@ -28,8 +28,7 @@ Toggle it with <kbd>Cmd</kbd>+<kbd>B</kbd> (macOS) or
 ┌──────────────────────────┐
 │ ◀ Hide       + Add a repo  ⚙ │  ← add a folder · open the settings panel
 │ Search…                  │  ← focus: Cmd+F / Ctrl+Shift+F
-│ ☐ Titles only            │
-│ ☐ Show archived          │
+│ ☐ Titles only  ☐ Show archived │
 ├──────────────────────────┤
 │ ★ Favorites              │
 │   my-app · fix the race  │

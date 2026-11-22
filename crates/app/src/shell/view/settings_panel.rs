@@ -30,14 +30,14 @@ impl Shell {
             Some(self.appearance.theme),
             Message::PickTheme,
         )
-        .text_size(12)
+        .text_size(BODY)
         .width(180);
         let scheme = pick_list(
             SchemeChoice::all(),
             SchemeChoice::of(self.appearance.colors.scheme.as_deref()),
             Message::PickScheme,
         )
-        .text_size(12)
+        .text_size(BODY)
         .width(180);
 
         let field = |label: &'static str, control: Element<'static, Message>| {

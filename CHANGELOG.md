@@ -13,6 +13,8 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   lines, 13 for what you read, 15 for project names and panel titles, 40 for
   the welcome title. Sidebar rows grow from 11 to 13 and tab titles from 12
   to 13, so a long title is cut a little sooner.
+- **Titles only** and **Show archived** sit side by side under the search
+  box, giving the session list one more row.
 
 ### Changed (the terminal follows the theme)
 
