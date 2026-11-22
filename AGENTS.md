@@ -26,6 +26,7 @@ This file holds the rules. The rest loads when the task needs it:
 | Code under `crates/app/` | [`crates/app/AGENTS.md`](crates/app/AGENTS.md) |
 | Every CI gate, when it runs, how to mirror it | [`docs/CI.md`](docs/CI.md) |
 | Coding standards (Tidy First, CUPID, test first, comments) | [`CODING_STANDARDS.md`](CODING_STANDARDS.md) |
+| Change how the interface looks: who it is for, its colours, sizes, spacing | [`docs/design/PRODUCT.md`](docs/design/PRODUCT.md), [`docs/design/DESIGN.md`](docs/design/DESIGN.md) |
 
 ## Commands
 
