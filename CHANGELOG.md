@@ -55,6 +55,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   instead of `Scan failed: projects directory not readable`. When Claude Code
   creates the directory, its first session appears without a restart (#579).
 
+### Fixed (a legible save note in the document editor)
+
+- The editor's *Saved*, *Modified* and error notes are shaded to read as
+  text on every theme. They used fixed colours that fell to about 2:1 on a
+  light theme, and the red error to 4.2:1 even on Dark.
+
 ### Fixed (no console window beside TermHerd on Windows)
 
 - Launching TermHerd from Explorer or the Start menu on Windows 11 24H2 or
