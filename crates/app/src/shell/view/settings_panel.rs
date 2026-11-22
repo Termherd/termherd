@@ -7,6 +7,7 @@ use iced::widget::{button, column, container, pick_list, row, text};
 use iced::{Element, Fill};
 
 use super::sidebar_secondary_text;
+use super::style::{BODY, CAPTION, HEADING};
 use crate::settings::ThemeChoice;
 use crate::shell::appearance::SchemeChoice;
 use crate::shell::{Message, Shell};
@@ -15,9 +16,9 @@ use crate::strings;
 impl Shell {
     pub(super) fn settings_panel(&self) -> Element<'_, Message> {
         let header = row![
-            text(strings::SETTINGS_TITLE).size(16),
+            text(strings::SETTINGS_TITLE).size(HEADING),
             iced::widget::Space::new().width(Fill),
-            button(text(strings::SETTINGS_CLOSE).size(12))
+            button(text(strings::SETTINGS_CLOSE).size(BODY))
                 .on_press(Message::CloseSettings)
                 .style(button::text)
                 .padding(4),
@@ -40,7 +41,7 @@ impl Shell {
         .width(180);
 
         let field = |label: &'static str, control: Element<'static, Message>| {
-            row![text(label).size(12).width(Fill), control]
+            row![text(label).size(BODY).width(Fill), control]
                 .spacing(12)
                 .align_y(iced::Center)
         };
@@ -51,10 +52,10 @@ impl Shell {
                 field(strings::SETTINGS_THEME, theme.into()),
                 field(strings::SETTINGS_SCHEME, scheme.into()),
                 text(strings::SETTINGS_SAVED_NOTE)
-                    .size(11)
+                    .size(CAPTION)
                     .style(sidebar_secondary_text),
                 text(strings::SETTINGS_CLAUDE_NOTE)
-                    .size(11)
+                    .size(CAPTION)
                     .style(sidebar_secondary_text),
             ]
             .spacing(12),

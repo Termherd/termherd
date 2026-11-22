@@ -26,7 +26,7 @@ pub(super) fn kind_glyph(kind: SessionKind) -> &'static str {
 /// The tab chip's kind mark. It takes the chip's text colour, leaving colour
 /// to the status dot beside it.
 pub(super) fn kind_icon<'a>(kind: SessionKind) -> Text<'a> {
-    text(kind_glyph(kind)).size(12)
+    text(kind_glyph(kind)).size(BODY)
 }
 
 /// The activity dot for a status (FR8), or `None` when the session's activity
@@ -38,7 +38,7 @@ pub(super) fn status_dot<'a>(status: SessionStatus, backdrop: Backdrop) -> Optio
     let hue = status_hue(status)?;
     Some(
         text("●")
-            .size(9)
+            .size(STATUS_DOT_SIZE)
             .style(move |theme: &iced::Theme| text::Style {
                 color: Some(shade_status(hue, theme.extended_palette(), backdrop)),
             }),
@@ -55,6 +55,23 @@ pub(super) enum Backdrop {
     /// A waiting tab chip's fill, [`waiting_chip_fill`].
     WaitingChip,
 }
+
+/// The type scale. Every text in the chrome takes one of these sizes, so the
+/// steps between them read as hierarchy: secondary lines, what is read,
+/// what names a group, and the welcome title.
+#[cfg(test)]
+const TYPE_SCALE: [f32; 4] = [CAPTION, BODY, HEADING, DISPLAY];
+/// A secondary line: a matched snippet, a shortcut hint, a tooltip, a note.
+pub(super) const CAPTION: f32 = 11.0;
+/// What is read: sidebar rows, tab titles, buttons, prompts, fields.
+pub(super) const BODY: f32 = 13.0;
+/// What names a group or a surface, and the chrome's icon buttons.
+pub(super) const HEADING: f32 = 15.0;
+/// The welcome screen's title.
+pub(super) const DISPLAY: f32 = 40.0;
+
+/// The status dot's glyph size: a mark, not text, so outside the scale.
+const STATUS_DOT_SIZE: f32 = 9.0;
 
 /// The hue of a waiting session's marks before any shading, tuned for a dark
 /// surface. The document editor's error note shares it.
@@ -373,6 +390,46 @@ pub(super) fn clip(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use crate::settings::ThemeChoice;
+
+    #[test]
+    fn each_step_of_the_type_scale_reads_as_a_step() {
+        for pair in TYPE_SCALE.windows(2) {
+            assert!(
+                pair[1] >= pair[0] * 1.15,
+                "{pair:?} are too close to tell apart"
+            );
+        }
+    }
+
+    #[test]
+    fn every_text_size_in_the_view_comes_from_the_type_scale() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/shell/view");
+        let mut literals = Vec::new();
+        for entry in std::fs::read_dir(dir).expect("the view directory") {
+            let path = entry.expect("a directory entry").path();
+            if path.extension().is_none_or(|ext| ext != "rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("a view source file");
+            for (n, line) in source.lines().enumerate() {
+                let sized = line.match_indices(".size(").any(|(at, call)| {
+                    line[at + call.len()..].starts_with(|c: char| c.is_ascii_digit())
+                });
+                let fitted = line.contains("fitted(")
+                    && line
+                        .match_indices(".0,")
+                        .any(|(at, _)| line[..at].ends_with(|c: char| c.is_ascii_digit()));
+                if sized || fitted {
+                    literals.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            literals.is_empty(),
+            "sizes outside the scale:\n{}",
+            literals.join("\n")
+        );
+    }
 
     /// Busy, the hue both cases in the report were measured with.
     const BUSY: SessionStatus = SessionStatus::Busy;

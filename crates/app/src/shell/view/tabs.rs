@@ -13,7 +13,9 @@ use termherd_core::workspace::Tab;
 use termherd_core::ClaudeColor;
 
 use super::modals::modal_card;
-use super::style::{ATTENTION_HUE, text_on_surface, waiting_chip_fill, waiting_chip_text};
+use super::style::{
+    ATTENTION_HUE, BODY, CAPTION, HEADING, text_on_surface, waiting_chip_fill, waiting_chip_text,
+};
 use super::{
     Backdrop, COLOR_MARK_WIDTH, CardFacts, active_chip_fill, card_frame, card_secondary_line,
     claude_color, clip, color_swatch, detail_lines, kind_icon, session_card, status_dot,
@@ -89,7 +91,7 @@ impl Shell {
                         .id(tab_rename_id())
                         .on_input(Message::TabRenameInput)
                         .on_submit(Message::CommitTabRename)
-                        .size(12)
+                        .size(BODY)
                         .padding(2)
                         .width(140.0),
                 );
@@ -101,12 +103,12 @@ impl Shell {
                 // A parked chip keeps only the dot and the kind mark; its
                 // title stays in the hover card.
                 if !tab.is_parked() {
-                    inner = inner.push(text(clip(tab.display_title(), 24)).size(12));
+                    inner = inner.push(text(clip(tab.display_title(), 24)).size(BODY));
                     // The × lives inside the chip so it sits on the active tab's
                     // fill, and its colour follows the chip's text so it stays
                     // legible there.
                     inner = inner.push(
-                        button(text("×").size(14))
+                        button(text("×").size(HEADING))
                             .on_press(Message::RequestCloseTab(index))
                             .style(move |theme: &iced::Theme, _status| button::Style {
                                 background: None,
@@ -202,7 +204,7 @@ impl Shell {
             ListLine::runnable(
                 row![
                     color_swatch(color),
-                    text(strings::color_choice(color)).size(12)
+                    text(strings::color_choice(color)).size(BODY)
                 ]
                 .spacing(8)
                 .align_y(iced::Center),
@@ -273,7 +275,7 @@ impl Shell {
 
 /// A list's heading: the title of the tab it acts on.
 fn list_heading<'a>(title: &str) -> Element<'a, Message> {
-    text(clip(title, 32)).size(11).into()
+    text(clip(title, 32)).size(BODY).into()
 }
 
 /// One tab menu entry as its card line: the label with the entry's shortcut
@@ -282,13 +284,15 @@ fn tab_menu_line<'a>(
     line: crate::shell::tab_menu::Line<'_>,
     shortcut: Option<String>,
 ) -> ListLine<'a> {
-    let mut label = row![text(line.entry.label).size(12)]
+    let mut label = row![text(line.entry.label).size(BODY)]
         .spacing(16)
         .align_y(iced::Center);
     if let Some(keys) = shortcut {
-        label = label
-            .push(iced::widget::Space::new().width(Fill))
-            .push(text(keys).size(11).style(super::style::card_secondary_text));
+        label = label.push(iced::widget::Space::new().width(Fill)).push(
+            text(keys)
+                .size(CAPTION)
+                .style(super::style::card_secondary_text),
+        );
     }
     match line.refusal {
         None => ListLine::runnable(label),
@@ -349,7 +353,7 @@ fn list_card<'a>(
 /// The strip's count of the sessions waiting for the user, in the attention
 /// hue; a click goes to the next one, as `next-attention` does.
 fn waiting_count<'a>(count: String) -> Element<'a, Message> {
-    button(text(count).size(12))
+    button(text(count).size(BODY))
         .on_press(Message::NextAttention)
         .style(|theme: &iced::Theme, _status| button::Style {
             background: None,
@@ -460,7 +464,7 @@ fn insertion_caret<'a>() -> Element<'a, Message> {
 /// working directory it runs in. Styled like [`session_card`] so the two
 /// hover surfaces read alike.
 fn tab_card(title: String, facts: &CardFacts, cwd: Option<String>) -> Element<'static, Message> {
-    let mut card = column![text(title).size(12)].spacing(4);
+    let mut card = column![text(title).size(BODY)].spacing(4);
     for line in detail_lines(facts, None) {
         card = card.push(card_secondary_line(line));
     }

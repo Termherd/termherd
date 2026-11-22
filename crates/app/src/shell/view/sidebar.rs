@@ -17,7 +17,7 @@ use termherd_core::browser::{ProjectGroup, project_label, relative_age};
 use termherd_core::keymap::Action;
 use termherd_core::{Provider, SessionKind, SessionRecord, SessionStatus, SidebarFold};
 
-use super::style::row_hover_fill;
+use super::style::{BODY, CAPTION, HEADING, row_hover_fill};
 use super::{
     Backdrop, CardFacts, color_bar, fitted, kind_glyph, session_card, sidebar_secondary_text,
     status_dot,
@@ -27,7 +27,7 @@ use crate::strings;
 
 /// The width of a row's glyph control. It is fixed so that a slot left empty
 /// at rest lines up with the control the hover layer draws over it.
-const CONTROL_WIDTH: f32 = 12.0;
+const CONTROL_WIDTH: f32 = 14.0;
 
 /// The widest a twin's hint grows, so a long summary leaves the title room.
 const TWIN_HINT_MAX_WIDTH: f32 = 120.0;
@@ -54,7 +54,7 @@ impl Shell {
         );
         let search = text_input(&placeholder, &self.core.sidebar.search)
             .id(search_id())
-            .size(12)
+            .size(BODY)
             .padding(6);
         // The box only accepts input while it owns the keyboard; otherwise a
         // typed key must reach the terminal, not the search. But a disabled
@@ -77,12 +77,12 @@ impl Shell {
             .label(strings::TITLES_ONLY)
             .on_toggle(Message::SearchTitlesOnly)
             .text_size(11)
-            .size(14);
+            .size(HEADING);
         let show_archived = checkbox(self.core.sidebar.show_archived)
             .label(strings::SHOW_ARCHIVED)
             .on_toggle(Message::ShowArchived)
             .text_size(11)
-            .size(14);
+            .size(HEADING);
 
         let live = self.live_statuses();
         let visible = self.core.visible_projects();
@@ -96,14 +96,14 @@ impl Shell {
         let has_status = self.scan_error.is_some() || visible.is_empty();
         let mut list = column![].spacing(16).padding(12);
         if let Some(error) = &self.scan_error {
-            list = list.push(text(strings::scan_failed(error)).size(12));
+            list = list.push(text(strings::scan_failed(error)).size(BODY));
         } else if visible.is_empty() {
             let label = if self.core.sidebar.search.trim().is_empty() {
                 strings::NO_SESSIONS
             } else {
                 strings::NO_RESULTS
             };
-            list = list.push(text(label).size(12));
+            list = list.push(text(label).size(BODY));
         }
         // The present sections, in order. The projects are one block so a single
         // rule precedes them rather than one before every group.
@@ -133,7 +133,7 @@ impl Shell {
         // A handle to collapse the sidebar, mirroring the one that
         // restores it from the main pane.
         let hide = chrome_tooltip(
-            button(text(strings::SIDEBAR_HIDE).size(11))
+            button(text(strings::SIDEBAR_HIDE).size(BODY))
                 .on_press(Message::ToggleSidebar)
                 .style(button::text)
                 .padding(0),
@@ -145,14 +145,14 @@ impl Shell {
         // Adding a repo sits with the sidebar's own chrome, not inside the
         // project list: it is how the list gets a row it could not discover.
         let add_repo = chrome_tooltip(
-            button(text(strings::SIDEBAR_ADD_REPO).size(11))
+            button(text(strings::SIDEBAR_ADD_REPO).size(BODY))
                 .on_press(Message::PickRepoFolder)
                 .style(button::text)
                 .padding(0),
             strings::SIDEBAR_ADD_REPO_HINT.to_owned(),
         );
         let settings = chrome_tooltip(
-            button(text(strings::SIDEBAR_SETTINGS).size(13))
+            button(text(strings::SIDEBAR_SETTINGS).size(HEADING))
                 .on_press(Message::ToggleSettings)
                 .style(button::text)
                 .padding(0),
@@ -170,10 +170,10 @@ impl Shell {
                         &problem.file,
                         problem.kept_as.as_deref(),
                     ))
-                    .size(11),
+                    .size(CAPTION),
                 );
             }
-            let dismiss = button(text(strings::DISMISS).size(11))
+            let dismiss = button(text(strings::DISMISS).size(CAPTION))
                 .on_press(Message::DismissLoadProblems)
                 .style(button::text)
                 .padding(0);
@@ -257,13 +257,13 @@ impl Shell {
                 }
                 if s.provider != Provider::Claude {
                     label_row =
-                        label_row.push(text(kind_glyph(SessionKind::Agent(s.provider))).size(11));
+                        label_row.push(text(kind_glyph(SessionKind::Agent(s.provider))).size(BODY));
                 }
                 let title = self.core.session_title(s);
                 // The project label tells cross-project favourites apart.
                 label_row = label_row
-                    .push(fitted(title, 11.0, text::default))
-                    .push(text(format!("·  {}", project_label(path))).size(11));
+                    .push(fitted(title, BODY, text::default))
+                    .push(text(format!("·  {}", project_label(path))).size(BODY));
                 let open = button(label_row)
                     .on_press(Message::LaunchSession {
                         cwd: (*path).to_owned(),
@@ -296,7 +296,7 @@ impl Shell {
         if !collapsed {
             for doc in &self.docs {
                 docs_col = docs_col.push(
-                    button(fitted(doc.label.clone(), 11.0, text::default))
+                    button(fitted(doc.label.clone(), BODY, text::default))
                         .on_press(Message::OpenDoc {
                             label: doc.label.clone(),
                             path: doc.path.clone(),
@@ -347,7 +347,7 @@ impl Shell {
         let repo_star_glyph = if repo_starred { "★" } else { "☆" };
         let repo_star = || row_button(repo_star_glyph, Message::ToggleRepoStar(group.path.clone()));
         let name = || {
-            let name = button(text(project_label(&group.path).to_owned()).size(14))
+            let name = button(text(project_label(&group.path).to_owned()).size(HEADING))
                 .style(button::text)
                 .padding(0)
                 .width(Fill);
@@ -414,14 +414,14 @@ impl Shell {
                 );
                 let hint = strings::sidebar_launch_agent(provider.display_name());
                 picker = picker.push(tooltip(
-                    button(text(label).size(11))
+                    button(text(label).size(BODY))
                         .on_press(Message::LaunchAgent {
                             cwd: group.path.clone(),
                             provider,
                         })
                         .style(button::secondary)
                         .padding([2, 6]),
-                    text(hint).size(11),
+                    text(hint).size(CAPTION),
                     tooltip::Position::Bottom,
                 ));
             }
@@ -431,7 +431,7 @@ impl Shell {
             return g
                 .push(
                     text(strings::SIDEBAR_REPO_NO_SESSIONS)
-                        .size(11)
+                        .size(CAPTION)
                         .style(sidebar_secondary_text),
                 )
                 .into();
@@ -458,7 +458,7 @@ impl Shell {
                 SidebarFold::Expanded => strings::SIDEBAR_SHOW_LESS.to_owned(),
             };
             g = g.push(
-                button(text(label).size(11).style(sidebar_secondary_text))
+                button(text(label).size(BODY).style(sidebar_secondary_text))
                     .on_press(Message::ToggleExpanded(group.path.clone()))
                     .style(button::text)
                     .padding(0),
@@ -508,7 +508,7 @@ impl Shell {
                 .id(rename_id())
                 .on_input(Message::RenameInput)
                 .on_submit(Message::CommitRename)
-                .size(11)
+                .size(BODY)
                 .padding(2)
                 .width(Fill);
             row![star(true), field, actions(true)]
@@ -536,20 +536,20 @@ impl Shell {
                 }
                 if s.provider != Provider::Claude {
                     content =
-                        content.push(text(kind_glyph(SessionKind::Agent(s.provider))).size(11));
+                        content.push(text(kind_glyph(SessionKind::Agent(s.provider))).size(BODY));
                 }
                 // The title takes what the row leaves; the twin hint only
                 // what it needs, up to a cap, and the count keeps its own
                 // width at the end, so a cut never hides it.
-                content = content.push(fitted(title.clone(), 11.0, text::default));
+                content = content.push(fitted(title.clone(), BODY, text::default));
                 if let Some(hint) = &hint {
                     content = content.push(
-                        fitted(format!("·  {hint}"), 11.0, text::default)
+                        fitted(format!("·  {hint}"), BODY, text::default)
                             .width(iced::Length::Shrink)
                             .max_width(TWIN_HINT_MAX_WIDTH),
                     );
                 }
-                content = content.push(text(s.digest.message_count.to_string()).size(11));
+                content = content.push(text(s.digest.message_count.to_string()).size(BODY));
                 let launch = button(content)
                     .on_press(Message::LaunchSession {
                         cwd: group_path.to_owned(),
@@ -596,7 +596,7 @@ impl Shell {
         // Title-only hits return `None` and stay single-line. The
         // core windows the line around the hit; we clip to the sidebar.
         match self.core.search_snippet(s) {
-            Some(snip) => column![entry, fitted(snip.line, 10.0, sidebar_secondary_text),]
+            Some(snip) => column![entry, fitted(snip.line, CAPTION, sidebar_secondary_text),]
                 .spacing(1)
                 .into(),
             None => entry,
@@ -638,7 +638,7 @@ impl Shell {
 
 /// A glyph button on a sidebar row: a star, or one of a session's actions.
 fn row_button(glyph: &'static str, on_press: Message) -> button::Button<'static, Message> {
-    button(text(glyph).size(12))
+    button(text(glyph).size(BODY))
         .on_press(on_press)
         .style(button::text)
         .padding(0)
@@ -656,7 +656,10 @@ fn slot<'a>(
     let content: Element<'a, Message> = if visible {
         control.into()
     } else {
-        text(glyph).size(12).color(iced::Color::TRANSPARENT).into()
+        text(glyph)
+            .size(BODY)
+            .color(iced::Color::TRANSPARENT)
+            .into()
     };
     container(content).center_x(CONTROL_WIDTH).into()
 }
@@ -749,7 +752,7 @@ fn section_divider() -> Element<'static, Message> {
 fn section_header(key: &str, collapsed: bool, label: &str) -> Element<'static, Message> {
     row![
         fold_toggle(key, collapsed),
-        button(text(label.to_owned()).size(12))
+        button(text(label.to_owned()).size(BODY))
             .on_press(Message::ToggleCollapsed(key.to_owned()))
             .style(button::text)
             .padding(0),
@@ -769,7 +772,7 @@ fn chrome_tooltip<'a>(
 ) -> Element<'a, Message> {
     tooltip(
         control,
-        container(text(tip).size(11))
+        container(text(tip).size(CAPTION))
             .padding(6)
             .style(container::rounded_box),
         tooltip::Position::Bottom,
@@ -783,11 +786,11 @@ fn launch_button(
     on_press: Message,
 ) -> Element<'static, Message> {
     tooltip(
-        button(text(icon).size(14))
+        button(text(icon).size(HEADING))
             .on_press(on_press)
             .style(button::text)
             .padding(0),
-        container(text(tip).size(12))
+        container(text(tip).size(CAPTION))
             .padding(4)
             .style(container::rounded_box),
         tooltip::Position::Bottom,

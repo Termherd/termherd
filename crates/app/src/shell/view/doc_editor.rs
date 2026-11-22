@@ -9,7 +9,7 @@ use iced::{Color, Element, Fill, Font};
 
 use super::super::Message;
 use super::super::docs::{DocFeedback, OpenDoc};
-use super::style::{ATTENTION_HUE, IDLE_HUE, text_on_surface};
+use super::style::{ATTENTION_HUE, BODY, CAPTION, HEADING, IDLE_HUE, text_on_surface};
 #[cfg(test)]
 use super::style::{TEXT_FLOOR, contrast};
 use crate::strings;
@@ -20,13 +20,13 @@ use crate::strings;
 /// any prompt sits over the editor: a modal blocks only the mouse, and a
 /// focused editor would otherwise take the very Enter that answers it.
 pub(super) fn doc_editor(doc: &OpenDoc, editable: bool) -> Element<'_, Message> {
-    let mut header = row![text(&doc.label).size(13)]
+    let mut header = row![text(&doc.label).size(HEADING)]
         .spacing(12)
         .align_y(iced::Center);
 
     if doc.writable {
         // A disabled button (no `on_press`) reads as "nothing to save".
-        let mut save = button(text(strings::DOC_SAVE).size(12))
+        let mut save = button(text(strings::DOC_SAVE).size(BODY))
             .style(button::text)
             .padding(0);
         if doc.dirty {
@@ -40,7 +40,7 @@ pub(super) fn doc_editor(doc: &OpenDoc, editable: bool) -> Element<'_, Message> 
     }
 
     header = header.push(
-        button(text(strings::DOC_CLOSE).size(12))
+        button(text(strings::DOC_CLOSE).size(BODY))
             .on_press(Message::CloseDoc)
             .style(button::text)
             .padding(0),
@@ -48,7 +48,7 @@ pub(super) fn doc_editor(doc: &OpenDoc, editable: bool) -> Element<'_, Message> 
 
     let mut editor = text_editor(&doc.content)
         .font(Font::MONOSPACE)
-        .size(12)
+        .size(BODY)
         .height(Fill);
     if editable {
         editor = editor.on_action(Message::DocEdit);
@@ -71,7 +71,7 @@ fn save_note(doc: &OpenDoc) -> Option<Element<'_, Message>> {
     };
     Some(
         text(label)
-            .size(11)
+            .size(CAPTION)
             .style(move |theme: &iced::Theme| text::Style {
                 color: Some(note_color(note, theme.extended_palette())),
             })

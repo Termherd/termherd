@@ -7,6 +7,7 @@ use iced::widget::{button, center, container, mouse_area, opaque, row, stack, te
 use iced::{Color, Element};
 
 use super::clip;
+use super::style::BODY;
 use crate::shell::docs::DocDiscard;
 use crate::shell::{Message, Shell};
 use crate::strings;
@@ -177,12 +178,12 @@ impl Shell {
         on_confirm: Message,
         on_cancel: Message,
     ) -> Element<'a, Message> {
-        let prompt = text(prompt).size(12);
-        let confirm = button(text(confirm_label).size(12))
+        let prompt = text(prompt).size(BODY);
+        let confirm = button(text(confirm_label).size(BODY))
             .on_press(on_confirm)
             .style(confirm_style)
             .padding(6);
-        let cancel = button(text(strings::CANCEL).size(12))
+        let cancel = button(text(strings::CANCEL).size(BODY))
             .on_press(on_cancel)
             .style(button::text)
             .padding(6);
