@@ -14,6 +14,7 @@ use iced::widget::{
 };
 use iced::{Element, Fill};
 use termherd_core::browser::{ProjectGroup, project_label, relative_age};
+use termherd_core::keymap::Action;
 use termherd_core::{Provider, SessionKind, SessionRecord, SessionStatus, SidebarFold};
 
 use super::{
@@ -39,7 +40,11 @@ impl Shell {
     /// The per-section builders keep this dispatcher short; each returns the
     /// column it contributes so the length stays a proxy for real complexity.
     pub(super) fn sidebar(&self) -> Element<'_, Message> {
-        let search = text_input(strings::SEARCH_PLACEHOLDER, &self.core.sidebar.search)
+        let placeholder = strings::with_shortcut(
+            strings::SEARCH_PLACEHOLDER,
+            self.shortcut_of(Action::FocusSearch).as_deref(),
+        );
+        let search = text_input(&placeholder, &self.core.sidebar.search)
             .id(search_id())
             .size(12)
             .padding(6);
@@ -119,31 +124,34 @@ impl Shell {
         }
         // A handle to collapse the sidebar, mirroring the one that
         // restores it from the main pane.
-        let hide = button(text(strings::SIDEBAR_HIDE).size(11))
-            .on_press(Message::ToggleSidebar)
-            .style(button::text)
-            .padding(0);
+        let hide = chrome_tooltip(
+            button(text(strings::SIDEBAR_HIDE).size(11))
+                .on_press(Message::ToggleSidebar)
+                .style(button::text)
+                .padding(0),
+            strings::with_shortcut(
+                strings::SIDEBAR_HIDE_HINT,
+                self.shortcut_of(Action::ToggleSidebar).as_deref(),
+            ),
+        );
         // Adding a repo sits with the sidebar's own chrome, not inside the
         // project list: it is how the list gets a row it could not discover.
-        let add_repo = tooltip(
+        let add_repo = chrome_tooltip(
             button(text(strings::SIDEBAR_ADD_REPO).size(11))
                 .on_press(Message::PickRepoFolder)
                 .style(button::text)
                 .padding(0),
-            container(text(strings::SIDEBAR_ADD_REPO_HINT).size(11))
-                .padding(6)
-                .style(container::rounded_box),
-            tooltip::Position::Bottom,
+            strings::SIDEBAR_ADD_REPO_HINT.to_owned(),
         );
-        let settings = tooltip(
+        let settings = chrome_tooltip(
             button(text(strings::SIDEBAR_SETTINGS).size(13))
                 .on_press(Message::ToggleSettings)
                 .style(button::text)
                 .padding(0),
-            container(text(strings::SIDEBAR_SETTINGS_HINT).size(11))
-                .padding(6)
-                .style(container::rounded_box),
-            tooltip::Position::Bottom,
+            strings::with_shortcut(
+                strings::SIDEBAR_SETTINGS_HINT,
+                self.shortcut_of(Action::OpenSettings).as_deref(),
+            ),
         );
         let mut chrome = column![].spacing(8);
         if !self.load_problems.is_empty() {
@@ -605,6 +613,21 @@ fn section_header(key: &str, collapsed: bool, label: &str) -> Element<'static, M
 /// An icon button beside a project header that launches a session in the repo
 /// dir (FR4a): the glyph is the affordance, the tooltip spells it out.
 /// Built once so the shell and Claude buttons can't drift in style.
+/// A sidebar chrome control with its explanation beneath it on hover.
+fn chrome_tooltip<'a>(
+    control: impl Into<Element<'a, Message>>,
+    tip: String,
+) -> Element<'a, Message> {
+    tooltip(
+        control,
+        container(text(tip).size(11))
+            .padding(6)
+            .style(container::rounded_box),
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
 fn launch_button(
     icon: &'static str,
     tip: &'static str,

@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (shortcuts shown where their action is offered)
+
+- Each tab menu line ends with its shortcut, and the sidebar's *Hide* and
+  settings tooltips and the search box's placeholder carry theirs. They follow
+  your `keys` overrides, and macOS spells them with symbols (`⇧⌘R`) (#600).
+- The welcome pane and the quit prompt count in real plurals: *1 session in
+  1 project*, *1 open session will be force-stopped*.
+
 ### Added (`TERMHERD_DATA_DIR`, and `CLAUDE_CONFIG_DIR` honoured)
 
 - TermHerd now reads `CLAUDE_CONFIG_DIR`, as Claude Code does: with Claude's
