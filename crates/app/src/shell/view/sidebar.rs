@@ -672,8 +672,7 @@ fn with_hover<'a>(
 }
 
 /// A session row's label: the clipped title and message count, plus a
-/// disambiguator when the title repeats within its project — the real summary
-/// when it separates the rows by content, else the last-activity age.
+/// disambiguator when the title repeats within its project.
 fn row_label(
     s: &SessionRecord,
     title: &str,
@@ -681,20 +680,28 @@ fn row_label(
     now: SystemTime,
 ) -> String {
     let mut label = format!("{}  ·  {}", clip(title, 26), s.digest.message_count);
-    if let Some(subtitle) = disambiguator {
-        let extra = match subtitle {
-            Some(summary) => Some(clip(summary, 28)),
-            None => s
-                .modified
-                .and_then(|m| now.duration_since(m).ok())
-                .map(relative_age),
-        };
-        if let Some(extra) = extra {
-            label.push_str("  ·  ");
-            label.push_str(&extra);
-        }
+    if let Some(extra) = twin_hint(s, disambiguator, now) {
+        label.push_str("  ·  ");
+        label.push_str(&extra);
     }
     label
+}
+
+/// What tells a row apart from another with the same title in its project:
+/// the real summary when it separates the rows by content, else the
+/// last-activity age. `None` for a row with no twin, or no age to show.
+fn twin_hint(
+    s: &SessionRecord,
+    disambiguator: Option<&Option<String>>,
+    now: SystemTime,
+) -> Option<String> {
+    match disambiguator? {
+        Some(summary) => Some(clip(summary, 28)),
+        None => s
+            .modified
+            .and_then(|m| now.duration_since(m).ok())
+            .map(relative_age),
+    }
 }
 
 /// The disclosure triangle that folds a sidebar section: ▾ when open, ▸
