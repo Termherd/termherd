@@ -25,9 +25,6 @@ use super::{
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
 use crate::strings;
 
-/// At rest a sidebar row shows its title, and its ★ when starred, which is
-/// state rather than an action. Its actions show only under the pointer, in the
-/// row redrawn on the hover fill.
 /// The width of a row's glyph control. It is fixed so that a slot left empty
 /// at rest lines up with the control the hover layer draws over it.
 const CONTROL_WIDTH: f32 = 12.0;
@@ -339,12 +336,8 @@ impl Shell {
         // A repo star pins the whole project group to the top of the sidebar
         // (F-favorites), mirroring the per-session star below.
         let repo_starred = self.core.is_repo_starred(&group.path);
-        let repo_star = || {
-            row_button(
-                if repo_starred { "★" } else { "☆" },
-                Message::ToggleRepoStar(group.path.clone()),
-            )
-        };
+        let repo_star_glyph = if repo_starred { "★" } else { "☆" };
+        let repo_star = || row_button(repo_star_glyph, Message::ToggleRepoStar(group.path.clone()));
         let name = || {
             let name = button(text(project_label(&group.path).to_owned()).size(14))
                 .style(button::text)
@@ -364,7 +357,7 @@ impl Shell {
         // no declaration to drop, and the button must not promise one.
         let declared = self.core.is_repo_declared(&group.path);
         let header = |hovered: bool| {
-            let star = slot(hovered || repo_starred, repo_star());
+            let star = slot(hovered || repo_starred, repo_star_glyph, repo_star());
             let mut header = row![
                 fold(),
                 star,
@@ -395,7 +388,7 @@ impl Shell {
                     row_button("✕", Message::ForgetRepo(group.path.clone())),
                     strings::SIDEBAR_FORGET_REPO.to_owned(),
                 );
-                header = header.push(slot(hovered, forget));
+                header = header.push(slot(hovered, "✕", forget));
             }
             header.into()
         };
@@ -468,7 +461,10 @@ impl Shell {
 
     /// One session row: its star pin, the resumable title (an edit field while
     /// renaming), the rename and archive controls, and — under a content search
-    /// hit — the matched line in muted text beneath it.
+    /// hit — the matched line in muted text beneath it. At rest the row shows
+    /// its title, and its ★ when starred, which is state rather than an
+    /// action; its actions show only under the pointer, in the row redrawn on
+    /// the hover fill.
     fn session_row(
         &self,
         s: &SessionRecord,
@@ -481,16 +477,19 @@ impl Shell {
         let starred = self.core.is_starred(id);
 
         // Star toggles the pin; archive hides/shows (F-session-metadata).
-        let star = || {
-            row_button(
-                if starred { "★" } else { "☆" },
-                Message::ToggleStar(s.session_id.clone()),
+        let star_glyph = if starred { "★" } else { "☆" };
+        let star = |visible: bool| {
+            slot(
+                visible,
+                star_glyph,
+                row_button(star_glyph, Message::ToggleStar(s.session_id.clone())),
             )
         };
 
         let title = self.core.session_title(s);
         let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);
-        let actions = || self.session_actions(s, renaming_this, &title);
+        let actions =
+            |visible: bool| controls(self.session_actions(s, renaming_this, &title), visible);
 
         let entry: Element<'_, Message> = if renaming_this {
             let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
@@ -504,7 +503,7 @@ impl Shell {
                 .size(11)
                 .padding(2)
                 .width(Fill);
-            row![star(), field, actions()]
+            row![star(true), field, actions(true)]
                 .spacing(6)
                 .align_y(iced::Center)
                 .into()
@@ -558,13 +557,10 @@ impl Shell {
                 .into()
             };
             let layer = |hovered: bool| -> Element<'_, Message> {
-                let mut layer = row![slot(hovered || starred, star()), resume(hovered)]
+                row![star(hovered || starred), resume(hovered), actions(hovered)]
                     .spacing(6)
-                    .align_y(iced::Center);
-                if hovered {
-                    layer = layer.push(actions());
-                }
-                layer.into()
+                    .align_y(iced::Center)
+                    .into()
             };
             with_hover(layer(false), layer(true))
         };
@@ -585,18 +581,18 @@ impl Shell {
         }
     }
 
-    /// A session row's actions: reveal the transcript, rename (✎ starts it,
-    /// ✓ commits it), and archive.
+    /// A session row's actions, each a glyph and what it sends: reveal the
+    /// transcript, rename (✎ starts it, ✓ commits it), and archive.
     fn session_actions(
         &self,
         s: &SessionRecord,
         renaming_this: bool,
         title: &str,
-    ) -> iced::widget::Row<'_, Message> {
+    ) -> [(&'static str, Message); 3] {
         let rename = if renaming_this {
-            row_button("✓", Message::CommitRename)
+            ("✓", Message::CommitRename)
         } else {
-            row_button(
+            (
                 "✎",
                 Message::StartRename {
                     session: s.session_id.clone(),
@@ -607,16 +603,14 @@ impl Shell {
         // Archiving is deliberate: arm the confirmation bar.
         // Un-archiving is a harmless restore, so it stays one-click.
         let archive = if self.core.is_archived(&s.session_id) {
-            row_button("⊞", Message::ToggleArchive(s.session_id.clone()))
+            ("⊞", Message::ToggleArchive(s.session_id.clone()))
         } else {
-            row_button("⊟", Message::RequestArchive(s.session_id.clone()))
+            ("⊟", Message::RequestArchive(s.session_id.clone()))
         };
         // Shows the file this row was read from: the scan's own path, which a
         // worktree session's collapsed project path could not rebuild.
-        let reveal = row_button("↗", Message::RevealRowTranscript(s.transcript.clone()));
-        row![reveal, rename, archive]
-            .spacing(6)
-            .align_y(iced::Center)
+        let reveal = ("↗", Message::RevealRowTranscript(s.transcript.clone()));
+        [reveal, rename, archive]
     }
 }
 
@@ -628,14 +622,33 @@ fn row_button(glyph: &'static str, on_press: Message) -> button::Button<'static,
         .padding(0)
 }
 
-/// `control` in a fixed-width slot when `visible`, else the slot left empty,
-/// so the resting row and the hovered row line up control for control.
-fn slot<'a>(visible: bool, control: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    if visible {
-        container(control).center_x(CONTROL_WIDTH).into()
+/// `control` in a fixed-width slot when `visible`, else its `glyph` drawn
+/// transparent and inert. The resting row keeps the hovered row's exact
+/// layout and height, so the two layers line up control for control and a
+/// press between the hovered row's buttons finds nothing beneath it.
+fn slot<'a>(
+    visible: bool,
+    glyph: &'static str,
+    control: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let content: Element<'a, Message> = if visible {
+        control.into()
     } else {
-        empty_slot()
-    }
+        text(glyph).size(12).color(iced::Color::TRANSPARENT).into()
+    };
+    container(content).center_x(CONTROL_WIDTH).into()
+}
+
+/// A row of glyph `actions`, shown as buttons when `visible`, else held by
+/// their inert [`slot`]s.
+fn controls<'a>(actions: [(&'static str, Message); 3], visible: bool) -> Element<'a, Message> {
+    actions
+        .into_iter()
+        .fold(
+            row![].spacing(6).align_y(iced::Center),
+            |row, (glyph, message)| row.push(slot(visible, glyph, row_button(glyph, message))),
+        )
+        .into()
 }
 
 /// A row control's slot with nothing in it.
@@ -688,12 +701,11 @@ fn row_label(
 /// when folded, toggling the fold for `key`. Shared by the project headers and
 /// the Plans & mémoire section so the two can't drift apart.
 fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
+    let glyph = if collapsed { "▸" } else { "▾" };
     slot(
         true,
-        row_button(
-            if collapsed { "▸" } else { "▾" },
-            Message::ToggleCollapsed(key.to_owned()),
-        ),
+        glyph,
+        row_button(glyph, Message::ToggleCollapsed(key.to_owned())),
     )
 }
 

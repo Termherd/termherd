@@ -135,16 +135,18 @@ large `~/.claude` history the first scan is the slow part, not the query.
 
 ## Stars, renames, archives
 
-A session row shows its title, and a ★ when starred. Its four buttons appear
-when the pointer is over the row, which is drawn on a lighter or darker fill;
-a row being renamed keeps them in view. A project's ☆ works the same way.
+At rest a session row shows what tells it apart: its colour bar and status dot
+when it has them, its title and message count, and a ★ when starred. Its four
+buttons appear when the pointer is over the row, which is drawn on a lighter
+or darker fill; a row being renamed keeps them in view. A project's ☆, and the
+✕ of a repository you added, work the same way.
 
 | Button | Does |
 | --- | --- |
 | ★ | star / unstar — starred sessions collect under **★ Favorites** at the top |
 | ↗ | reveal the transcript: its `.jsonl` file, selected in Finder or Explorer; on Linux, the folder holding it opens |
-| ⊟ | archive (with a confirmation) — hidden unless **Show archived** is on |
-| ✎ | rename — an inline field; <kbd>Escape</kbd> abandons the edit |
+| ⊟ | archive (with a confirmation) — hidden unless **Show archived** is on; an archived row shows ⊞, which restores it in one click |
+| ✎ | rename — an inline field, committed with ✓ or <kbd>Enter</kbd>; <kbd>Escape</kbd> abandons the edit |
 
 The star, archive and rename are an **overlay**: they are written to
 `~/.termherd/metadata.json`, never under `~/.claude`. Nothing you do in the
