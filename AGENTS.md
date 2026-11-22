@@ -151,8 +151,8 @@ exists). Do not relax them locally; the incident behind each linked rule is in
   Tests may use them (`clippy.toml` allows it in tests). Production paths
   return typed errors (`thiserror`).
 - **No global mutable state**, the environment included: construct in `main()`
-  and inject; `paths::DataDir::user()` and `paths::ClaudeDir::user()` are
-  `main()`'s alone.
+  and inject; `paths::DataDir::user()`, `paths::ClaudeDir::user()`, and
+  `paths::AntigravityDir::user()` are `main()`'s alone.
   [Why](docs/agents/lessons.md#no-global-mutable-state-the-environment-included)
 - **One logging stack:** `tracing`. No `println!` outside tests.
 - **`unsafe_code = "deny"`** workspace-wide. The two sanctioned exceptions

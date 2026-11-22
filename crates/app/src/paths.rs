@@ -248,7 +248,7 @@ mod tests {
         assert!(
             !written
                 .iter()
-                .any(|name| name == ".termherd" || name == ".claude"),
+                .any(|name| name == ".termherd" || name == ".claude" || name == ".gemini"),
             "tests wrote the user's home: {written:?}"
         );
         let touched: Vec<_> = live
