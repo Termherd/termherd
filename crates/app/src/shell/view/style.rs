@@ -52,15 +52,27 @@ pub(super) enum Backdrop {
     Chrome,
     /// The active tab chip's fill, [`active_chip_fill`].
     ActiveChip,
+    /// A waiting tab chip's fill, [`waiting_chip_fill`].
+    WaitingChip,
 }
 
+/// The hue of a waiting session's marks before any shading, tuned for a dark
+/// surface. The document editor's error note shares it.
+pub(super) const ATTENTION_HUE: Color = Color::from_rgb(0.95, 0.35, 0.35);
+
+/// The hue of an idle session's dot before any shading; the document editor's
+/// saved note shares it.
+pub(super) const IDLE_HUE: Color = Color::from_rgb(0.3, 0.8, 0.4);
+
+/// A status's hue before any shading, tuned for a dark surface, or `None`
+/// when the status has no mark.
 fn status_hue(status: SessionStatus) -> Option<Color> {
     match status {
         SessionStatus::Starting => Some(Color::from_rgb(0.55, 0.55, 0.6)),
         SessionStatus::Unmonitored => None,
         SessionStatus::Busy => Some(Color::from_rgb(0.95, 0.7, 0.2)),
-        SessionStatus::Idle => Some(Color::from_rgb(0.3, 0.8, 0.4)),
-        SessionStatus::Attention => Some(Color::from_rgb(0.95, 0.35, 0.35)),
+        SessionStatus::Idle => Some(IDLE_HUE),
+        SessionStatus::Attention => Some(ATTENTION_HUE),
         SessionStatus::Exited => Some(Color::from_rgb(0.5, 0.5, 0.5)),
     }
 }
@@ -69,6 +81,7 @@ fn shade_status(hue: Color, palette: &Extended, backdrop: Backdrop) -> Color {
     match backdrop {
         Backdrop::Chrome => on_surface(hue, palette),
         Backdrop::ActiveChip => on_fill(hue, active_chip_fill(palette)),
+        Backdrop::WaitingChip => on_fill(hue, waiting_chip_fill(palette)),
     }
 }
 
@@ -82,13 +95,19 @@ fn status_color(status: SessionStatus, palette: &Extended, backdrop: Backdrop) -
 /// better of them is at least 4.58:1 on any colour — so the push never runs
 /// out. A fill has no theme-wide tuning to keep, unlike [`on_surface`].
 fn on_fill(hue: Color, fill: Color) -> Color {
+    on_fill_at(hue, fill, MARK_FLOOR)
+}
+
+/// [`on_fill`] with the contrast `floor` the shade must clear. The better of
+/// white and black clears [`TEXT_FLOOR`] too.
+fn on_fill_at(hue: Color, fill: Color, floor: f32) -> Color {
     let fill_luminance = luminance(fill);
     let away = if contrast_ratio(1.0, fill_luminance) >= contrast_ratio(0.0, fill_luminance) {
         Color::WHITE
     } else {
         Color::BLACK
     };
-    shade_until_it_reads(hue, away, &[fill])
+    shade_until_it_reads(hue, away, &[fill], floor)
 }
 
 /// The hues are tuned for a dark surface. The fixed light-theme darkening
@@ -96,25 +115,34 @@ fn on_fill(hue: Color, fill: Color) -> Color {
 /// needs the push away from it, until the mark clears [`MARK_FLOOR`] on the
 /// [`mark_surfaces`].
 fn on_surface(hue: Color, palette: &Extended) -> Color {
+    on_surface_at(hue, palette, MARK_FLOOR)
+}
+
+/// `hue` shaded to read as text on the window's surfaces: [`on_surface`]
+/// held to [`TEXT_FLOOR`] rather than the mark floor.
+pub(super) fn text_on_surface(hue: Color, palette: &Extended) -> Color {
+    on_surface_at(hue, palette, TEXT_FLOOR)
+}
+
+/// [`on_surface`] with the contrast `floor` the shade must clear.
+fn on_surface_at(hue: Color, palette: &Extended, floor: f32) -> Color {
     let (start, away) = if palette.is_dark {
         (hue, Color::WHITE)
     } else {
         (mix(hue, Color::BLACK, LIGHT_SURFACE_DARKEN), Color::BLACK)
     };
-    shade_until_it_reads(start, away, &mark_surfaces(palette))
+    shade_until_it_reads(start, away, &mark_surfaces(palette), floor)
 }
 
-/// The first shade on the way from `start` to `away` that clears
-/// [`MARK_FLOOR`] on every one of `surfaces`, else `away` itself.
-fn shade_until_it_reads(start: Color, away: Color, surfaces: &[Color]) -> Color {
+/// The first shade on the way from `start` to `away` that clears `floor` on
+/// every one of `surfaces`, else `away` itself.
+fn shade_until_it_reads(start: Color, away: Color, surfaces: &[Color], floor: f32) -> Color {
     let surfaces: Vec<f32> = surfaces.iter().copied().map(luminance).collect();
     (0..=SHADE_STEPS)
         .map(|step| mix(start, away, f32::from(step) / f32::from(SHADE_STEPS)))
         .find(|shade| {
             let shade = luminance(*shade);
-            surfaces
-                .iter()
-                .all(|s| contrast_ratio(shade, *s) >= MARK_FLOOR)
+            surfaces.iter().all(|s| contrast_ratio(shade, *s) >= floor)
         })
         .unwrap_or(away)
 }
@@ -124,10 +152,44 @@ pub(super) fn active_chip_fill(palette: &Extended) -> Color {
     palette.primary.base.color
 }
 
+/// The fill of a tab chip whose tab waits for the user while another is
+/// active: the strip's surface tinted toward the attention hue.
+pub(super) fn waiting_chip_fill(palette: &Extended) -> Color {
+    mix(palette.background.base.color, ATTENTION_HUE, WAITING_TINT)
+}
+
+/// How far a waiting chip's fill moves from the strip toward the attention
+/// hue: enough to tell it from a plain chip at a glance, little enough to
+/// stay a tint rather than an alarm.
+const WAITING_TINT: f32 = 0.3;
+
+/// A waiting tab chip's text, shaded to read on [`waiting_chip_fill`].
+pub(super) fn waiting_chip_text(palette: &Extended) -> Color {
+    on_fill_at(
+        palette.background.base.text,
+        waiting_chip_fill(palette),
+        TEXT_FLOOR,
+    )
+}
+
+/// The border of a split pane that waits for the user.
+pub(super) fn waiting_ring(palette: &Extended) -> Color {
+    shade_status(ATTENTION_HUE, palette, Backdrop::Chrome)
+}
+
 /// The window surfaces a mark must read on. The active tab chip's fill is a
 /// backdrop of its own ([`Backdrop::ActiveChip`]): no one shade suits both.
 fn mark_surfaces(palette: &Extended) -> [Color; 2] {
     [palette.background.base.color, palette.background.weak.color]
+}
+
+/// The WCAG contrast floor for body text.
+pub(super) const TEXT_FLOOR: f32 = 4.5;
+
+/// The contrast ratio of two colours, from 1 to 21.
+#[cfg(test)]
+pub(super) fn contrast(a: Color, b: Color) -> f32 {
+    contrast_ratio(luminance(a), luminance(b))
 }
 
 /// How far a status hue moves toward black on a light surface.
@@ -348,6 +410,61 @@ mod tests {
                     "{status:?} on {theme}'s chip: {ratio:.2}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_status_dot_reads_on_every_themes_waiting_chip() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            let fill = waiting_chip_fill(palette);
+            for status in ALL {
+                let dot = status_color(status, palette, Backdrop::WaitingChip).expect("monitored");
+                let ratio = contrast(dot, fill);
+                assert!(
+                    ratio >= MARK_FLOOR,
+                    "{status:?} on {theme}'s waiting chip: {ratio:.2}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_waiting_chips_title_reads_as_text_on_every_theme() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            let ratio = contrast(waiting_chip_text(palette), waiting_chip_fill(palette));
+            assert!(ratio >= TEXT_FLOOR, "{theme}: {ratio:.2}");
+        }
+    }
+
+    /// How much redder than green `c` is: the attention hue's lean.
+    fn red_lean(c: Color) -> f32 {
+        c.r - c.g
+    }
+
+    #[test]
+    fn a_waiting_chip_leans_red_against_its_strip_on_every_theme() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            let fill = waiting_chip_fill(palette);
+            let strip = palette.background.base.color;
+            assert!(
+                red_lean(fill) >= red_lean(strip) + 0.1,
+                "{theme}: fill {fill:?} on strip {strip:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_waiting_ring_is_the_attention_mark_on_every_theme() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            assert_eq!(
+                Some(waiting_ring(palette)),
+                status_color(SessionStatus::Attention, palette, Backdrop::Chrome),
+                "{theme}"
+            );
         }
     }
 

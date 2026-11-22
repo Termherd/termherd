@@ -13,12 +13,14 @@ use termherd_core::workspace::Tab;
 use termherd_core::ClaudeColor;
 
 use super::modals::modal_card;
+use super::style::{ATTENTION_HUE, text_on_surface, waiting_chip_fill, waiting_chip_text};
 use super::{
     Backdrop, COLOR_MARK_WIDTH, CardFacts, active_chip_fill, card_frame, card_secondary_line,
     claude_color, clip, color_swatch, detail_lines, kind_icon, session_card, status_dot,
 };
 use crate::shell::{Message, Shell, tab_rename_id};
 use crate::strings;
+use iced::theme::palette::Extended;
 
 impl Shell {
     /// The tab strip (FR5): one chip per open session, the active one
@@ -54,6 +56,8 @@ impl Shell {
             // insertion bar between chips, not on the chip itself.
             let dragging_this = drag.is_some_and(|(from, _)| from == index);
             let color = self.core.tab_color(index);
+            let status = self.core.tab_status(index);
+            let look = ChipLook::of(active, self.core.tab_waits(index));
 
             // Double-clicking a chip opens an inline field over it; while that
             // field is up the chip is the editor, not a draggable button — so it
@@ -65,15 +69,8 @@ impl Shell {
             // The status dot, then the kind mark — shared by the chip and its
             // rename editor so editing a title never hides what the tab runs.
             let mut inner = row![].spacing(6).align_y(iced::Center);
-            if let Some(status) = self.core.tab_status(index) {
-                let backdrop = if active {
-                    Backdrop::ActiveChip
-                } else {
-                    Backdrop::Chrome
-                };
-                if let Some(dot) = status_dot(status, backdrop) {
-                    inner = inner.push(dot);
-                }
+            if let Some(dot) = status.and_then(|status| status_dot(status, look.backdrop())) {
+                inner = inner.push(dot);
             }
             if let Some(kind) = self.core.tab_kind(index) {
                 inner = inner.push(kind_icon(kind));
@@ -98,7 +95,7 @@ impl Shell {
                 );
                 container(inner)
                     .padding(6)
-                    .style(move |theme: &iced::Theme| tab_chip_style(theme, active, false, color))
+                    .style(move |theme: &iced::Theme| tab_chip_style(theme, look, false, color))
                     .into()
             } else {
                 // A parked chip keeps only the dot and the kind mark; its
@@ -113,7 +110,7 @@ impl Shell {
                             .on_press(Message::RequestCloseTab(index))
                             .style(move |theme: &iced::Theme, _status| button::Style {
                                 background: None,
-                                text_color: tab_chip_text(theme, active),
+                                text_color: tab_chip_text(theme, look),
                                 ..button::Style::default()
                             })
                             .padding(0),
@@ -122,7 +119,7 @@ impl Shell {
                 let chip = container(inner)
                     .padding(6)
                     .style(move |theme: &iced::Theme| {
-                        tab_chip_style(theme, active, dragging_this, color)
+                        tab_chip_style(theme, look, dragging_this, color)
                     });
                 // A press starts a drag; entering another chip moves the drop
                 // slot; a double-click opens the inline rename. The release is
@@ -165,6 +162,11 @@ impl Shell {
         if caret_at == Some(tabs.len()) {
             bar = bar.push(insertion_caret());
         }
+        if let Some(count) = strings::waiting_count(self.core.waiting_sessions().len()) {
+            bar = bar
+                .push(iced::widget::Space::new().width(Fill))
+                .push(waiting_count(count));
+        }
         // The release that ends a drag is heard window-wide by the shell's
         // subscription, so the strip carries no release or exit handler.
         Some(bar.into())
@@ -175,20 +177,9 @@ impl Shell {
     /// its label. `None` when no menu is open.
     pub(in crate::shell) fn tab_menu_card(&self) -> Option<Element<'_, Message>> {
         let menu = self.live_tab_menu()?;
-        let lines = menu.lines().map(|line| {
-            let label = text(line.entry.label).size(12);
-            match line.refusal {
-                None => ListLine::runnable(label),
-                Some(refusal) => ListLine {
-                    content: column![
-                        label,
-                        card_secondary_line(strings::tab_menu_refusal(refusal).to_owned())
-                    ]
-                    .into(),
-                    runnable: false,
-                },
-            }
-        });
+        let lines = menu
+            .lines()
+            .map(|line| tab_menu_line(line, self.shortcut_of(line.entry.action)));
         Some(list_card(
             vec![list_heading(self.active_tab_title())],
             lines,
@@ -285,6 +276,33 @@ fn list_heading<'a>(title: &str) -> Element<'a, Message> {
     text(clip(title, 32)).size(11).into()
 }
 
+/// One tab menu entry as its card line: the label with the entry's shortcut
+/// at the far end, and beneath it why the entry is refused when it is.
+fn tab_menu_line<'a>(
+    line: crate::shell::tab_menu::Line<'_>,
+    shortcut: Option<String>,
+) -> ListLine<'a> {
+    let mut label = row![text(line.entry.label).size(12)]
+        .spacing(16)
+        .align_y(iced::Center);
+    if let Some(keys) = shortcut {
+        label = label
+            .push(iced::widget::Space::new().width(Fill))
+            .push(text(keys).size(11).style(super::style::card_secondary_text));
+    }
+    match line.refusal {
+        None => ListLine::runnable(label),
+        Some(refusal) => ListLine {
+            content: column![
+                label,
+                card_secondary_line(strings::tab_menu_refusal(refusal).to_owned())
+            ]
+            .into(),
+            runnable: false,
+        },
+    }
+}
+
 /// One line of a [`list_card`]: what it shows, and whether a click runs it.
 struct ListLine<'a> {
     content: Element<'a, Message>,
@@ -328,33 +346,81 @@ fn list_card<'a>(
     modal_card(card)
 }
 
-/// A tab chip's text colour: the primary tier on the active (filled) chip, the
-/// background tier otherwise, so the label stays legible on either fill.
-fn tab_chip_text(theme: &iced::Theme, active: bool) -> Color {
+/// The strip's count of the sessions waiting for the user, in the attention
+/// hue; a click goes to the next one, as `next-attention` does.
+fn waiting_count<'a>(count: String) -> Element<'a, Message> {
+    button(text(count).size(12))
+        .on_press(Message::NextAttention)
+        .style(|theme: &iced::Theme, _status| button::Style {
+            background: None,
+            text_color: text_on_surface(ATTENTION_HUE, theme.extended_palette()),
+            ..button::Style::default()
+        })
+        .padding([2, 6])
+        .into()
+}
+
+/// Which fill a tab chip has: the active tab's, a waiting tab's, or none.
+/// The active tab is where the user already is, so it never shows as waiting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChipLook {
+    Active,
+    Waiting,
+    Plain,
+}
+
+impl ChipLook {
+    fn of(active: bool, waiting: bool) -> Self {
+        match (active, waiting) {
+            (true, _) => Self::Active,
+            (false, true) => Self::Waiting,
+            (false, false) => Self::Plain,
+        }
+    }
+
+    fn fill(self, palette: &Extended) -> Option<Color> {
+        match self {
+            Self::Active => Some(active_chip_fill(palette)),
+            Self::Waiting => Some(waiting_chip_fill(palette)),
+            Self::Plain => None,
+        }
+    }
+
+    fn backdrop(self) -> Backdrop {
+        match self {
+            Self::Active => Backdrop::ActiveChip,
+            Self::Waiting => Backdrop::WaitingChip,
+            Self::Plain => Backdrop::Chrome,
+        }
+    }
+}
+
+/// A tab chip's text colour, legible on the fill its `look` gives it.
+fn tab_chip_text(theme: &iced::Theme, look: ChipLook) -> Color {
     let palette = theme.extended_palette();
-    if active {
-        palette.primary.base.text
-    } else {
-        palette.background.base.text
+    match look {
+        ChipLook::Active => palette.primary.base.text,
+        ChipLook::Waiting => waiting_chip_text(palette),
+        ChipLook::Plain => palette.background.base.text,
     }
 }
 
 /// A tab chip's look, now a styled container rather than a button (the
 /// drag needs `mouse_area` to see press *and* release, which a button would
-/// capture). `active` paints the primary fill; `dragging` fades the tab being
+/// capture). `look` picks the fill; `dragging` fades the tab being
 /// carried to a ghost; `color`, the one `/color` set, outlines the chip — an
 /// outline rather than a fill, so it reads against the strip whichever fill the
 /// chip has. All colours but that one come from the theme palette.
 fn tab_chip_style(
     theme: &iced::Theme,
-    active: bool,
+    look: ChipLook,
     dragging: bool,
     color: Option<ClaudeColor>,
 ) -> container::Style {
     let palette = theme.extended_palette();
     let outline = color.and_then(|c| claude_color(c, palette));
-    let bg = active.then(|| active_chip_fill(palette));
-    let fg = tab_chip_text(theme, active);
+    let bg = look.fill(palette);
+    let fg = tab_chip_text(theme, look);
     let fade = |c: Color| super::mix(c, palette.background.base.color, 0.55);
     let (outline_color, outline_width) = match outline {
         Some(c) => (if dragging { fade(c) } else { c }, COLOR_MARK_WIDTH),
@@ -414,10 +480,38 @@ mod tests {
         let theme = iced::Theme::Dracula;
         let fill = active_chip_fill(theme.extended_palette());
 
-        let active = tab_chip_style(&theme, true, false, None);
-        let idle = tab_chip_style(&theme, false, false, None);
+        let active = tab_chip_style(&theme, ChipLook::Active, false, None);
+        let idle = tab_chip_style(&theme, ChipLook::Plain, false, None);
 
         assert_eq!(active.background, Some(iced::Background::Color(fill)));
         assert_eq!(idle.background, None);
+    }
+
+    #[test]
+    fn each_chip_look_paints_its_own_fill_and_text() {
+        let theme = iced::Theme::Dracula;
+        let palette = theme.extended_palette();
+        let waiting = tab_chip_style(&theme, ChipLook::Waiting, false, None);
+        assert_eq!(
+            waiting.background,
+            Some(iced::Background::Color(waiting_chip_fill(palette)))
+        );
+        assert_eq!(waiting.text_color, Some(waiting_chip_text(palette)));
+        assert_eq!(
+            tab_chip_text(&theme, ChipLook::Active),
+            palette.primary.base.text
+        );
+        assert_eq!(
+            tab_chip_text(&theme, ChipLook::Plain),
+            palette.background.base.text
+        );
+    }
+
+    #[test]
+    fn the_active_tab_never_looks_waiting() {
+        assert_eq!(ChipLook::of(true, true), ChipLook::Active);
+        assert_eq!(ChipLook::of(true, false), ChipLook::Active);
+        assert_eq!(ChipLook::of(false, true), ChipLook::Waiting);
+        assert_eq!(ChipLook::of(false, false), ChipLook::Plain);
     }
 }

@@ -7,11 +7,13 @@
 
 use std::time::{Duration, SystemTime};
 
+use iced::theme::palette::Extended;
 use iced::widget::canvas::Canvas;
 use iced::widget::{Column, Space, button, column, container, mouse_area, row, text};
 use iced::{Border, Color, Element, Fill, Length, Size, mouse};
 use termherd_claude::digest::SessionDigest;
 use termherd_core::browser::{compact_elapsed, relative_age};
+use termherd_core::keymap::{Action, Platform};
 use termherd_core::workspace::{Branch, Pane, SessionId, SplitDir};
 use termherd_core::{ClaudeColor, SessionRecord};
 
@@ -36,6 +38,14 @@ use style::{
 };
 
 impl Shell {
+    /// The shortcut that runs `action` under the user's keymap, as this
+    /// platform spells it; `None` when nothing is bound to it.
+    pub(in crate::shell) fn shortcut_of(&self, action: Action) -> Option<String> {
+        self.keymap
+            .chord_of(action)
+            .map(|chord| chord.label(Platform::current()))
+    }
+
     pub(super) fn view(&self) -> Element<'_, Message> {
         // Hiding the sidebar hands its width to the terminal; a slim
         // always-present handle brings it back without needing the shortcut.
@@ -256,32 +266,15 @@ impl Shell {
         if !bordered {
             return inner;
         }
-        let window_focused = self.core.window_focused();
+        let frame = pane_frame(
+            is_focused && self.core.window_focused(),
+            self.core.is_waiting(session),
+        );
         container(inner)
             .width(Fill)
             .height(Fill)
             .padding(PANE_PAD)
-            .style(move |theme: &iced::Theme| {
-                // Every split pane is outlined so the layout is legible; the
-                // focused one gets a thicker, accent-coloured border so which
-                // terminal holds the keyboard is unmistakable, the rest a thin
-                // muted one. An unfocused window mutes even the focus accent —
-                // no pane in it holds the keyboard.
-                let palette = theme.extended_palette();
-                let (color, width) = if is_focused && window_focused {
-                    (palette.primary.strong.color, PANE_BORDER)
-                } else {
-                    (palette.background.strong.color, PANE_BORDER / 2.0)
-                };
-                container::Style {
-                    border: Border {
-                        color,
-                        width,
-                        radius: 3.0.into(),
-                    },
-                    ..container::Style::default()
-                }
-            })
+            .style(move |theme: &iced::Theme| pane_frame_style(theme.extended_palette(), frame))
             .into()
     }
 
@@ -417,9 +410,79 @@ pub(super) fn session_card(
     card_frame(card)
 }
 
+/// What a split pane's frame says about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneFrame {
+    /// The pane holds the keyboard.
+    Keyboard,
+    /// The pane waits for the user, and does not hold the keyboard.
+    Waiting,
+    /// Neither.
+    Plain,
+}
+
+/// The frame of a split pane that may `hold_keyboard` and may be `waiting`.
+/// The keyboard wins: the user is already where the pane asks them to be.
+fn pane_frame(holds_keyboard: bool, waiting: bool) -> PaneFrame {
+    match (holds_keyboard, waiting) {
+        (true, _) => PaneFrame::Keyboard,
+        (false, true) => PaneFrame::Waiting,
+        (false, false) => PaneFrame::Plain,
+    }
+}
+
+/// A split pane's frame. Every split pane is outlined so the layout is
+/// legible; the one holding the keyboard gets a thicker, accent-coloured
+/// border so which terminal that is stays unmistakable, the rest a thin muted
+/// one. An unfocused window holds no keyboard, so it shows no accent.
+fn pane_frame_style(palette: &Extended, frame: PaneFrame) -> container::Style {
+    let (color, width) = match frame {
+        PaneFrame::Keyboard => (palette.primary.strong.color, PANE_BORDER),
+        PaneFrame::Waiting => (style::waiting_ring(palette), PANE_BORDER),
+        PaneFrame::Plain => (palette.background.strong.color, PANE_BORDER / 2.0),
+    };
+    container::Style {
+        border: Border {
+            color,
+            width,
+            radius: 3.0.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pane_frame_is_as_thick_as_the_focus_only_when_it_says_something() {
+        let palette = iced::Theme::Dark.extended_palette();
+        let border = |frame| pane_frame_style(palette, frame).border;
+        assert_eq!(
+            border(PaneFrame::Keyboard).color,
+            palette.primary.strong.color
+        );
+        assert_eq!(border(PaneFrame::Keyboard).width, PANE_BORDER);
+        assert_eq!(
+            border(PaneFrame::Waiting).color,
+            style::waiting_ring(palette)
+        );
+        assert_eq!(border(PaneFrame::Waiting).width, PANE_BORDER);
+        assert_eq!(
+            border(PaneFrame::Plain).color,
+            palette.background.strong.color
+        );
+        assert_eq!(border(PaneFrame::Plain).width, PANE_BORDER / 2.0);
+    }
+
+    #[test]
+    fn a_waiting_pane_is_ringed_unless_it_holds_the_keyboard() {
+        assert_eq!(pane_frame(true, false), PaneFrame::Keyboard);
+        assert_eq!(pane_frame(true, true), PaneFrame::Keyboard);
+        assert_eq!(pane_frame(false, true), PaneFrame::Waiting);
+        assert_eq!(pane_frame(false, false), PaneFrame::Plain);
+    }
 
     fn digest(model: Option<&str>, effort: Option<&str>) -> SessionDigest {
         SessionDigest {

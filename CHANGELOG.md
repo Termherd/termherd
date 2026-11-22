@@ -16,6 +16,22 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   while live activity is unmonitored) and show `Antigravity` in their hover
   card; `open_session` over MCP now also accepts `kind: "antigravity"` (#551).
 
+### Added (a session waiting for you is hard to miss)
+
+- A tab whose session waits for you is tinted red while another tab is
+  active, and in a split the waiting pane gets a red frame.
+- The tab strip ends with *N waiting*, and on macOS the Dock icon shows the
+  count. A click on the count, or the new `next-attention` action
+  (`mod+shift+a`), goes to the next waiting session (#602).
+
+### Added (shortcuts shown where their action is offered)
+
+- Each tab menu line ends with its shortcut, and the sidebar's *Hide* and
+  settings tooltips and the search box's placeholder carry theirs. They follow
+  your `keys` overrides, and macOS spells them with symbols (`⇧⌘R`) (#600).
+- The welcome pane and the quit prompt count in real plurals: *1 session in
+  1 project*, *1 open session will be force-stopped*.
+
 ### Added (`TERMHERD_DATA_DIR`, and `CLAUDE_CONFIG_DIR` honoured)
 
 - TermHerd now reads `CLAUDE_CONFIG_DIR`, as Claude Code does: with Claude's
@@ -63,6 +79,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - With no `~/.claude/projects` yet, the sidebar shows *No sessions found.*
   instead of `Scan failed: projects directory not readable`. When Claude Code
   creates the directory, its first session appears without a restart (#579).
+
+### Fixed (a legible save note in the document editor)
+
+- The editor's *Saved*, *Modified* and error notes are shaded to read as
+  text on every theme. They used fixed colours that fell to about 2:1 on a
+  light theme, and the red error to 4.2:1 even on Dark.
 
 ### Fixed (no console window beside TermHerd on Windows)
 

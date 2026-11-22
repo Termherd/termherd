@@ -25,6 +25,25 @@ pub const SIDEBAR_ADD_REPO_HINT: &str = "Pick a folder, or drop one on the windo
 pub const SIDEBAR_FORGET_REPO: &str = "Remove this repo from the sidebar";
 pub const SIDEBAR_SETTINGS: &str = "⚙";
 pub const SIDEBAR_SETTINGS_HINT: &str = "Settings";
+pub const SIDEBAR_HIDE_HINT: &str = "Hide the sidebar";
+
+/// A tooltip with the shortcut that does the same, when one is bound.
+#[must_use]
+pub fn with_shortcut(tip: &str, shortcut: Option<&str>) -> String {
+    match shortcut {
+        Some(keys) => format!("{tip}  {keys}"),
+        None => tip.to_owned(),
+    }
+}
+
+/// `n` and `noun`, the noun in the plural unless `n` is one.
+fn counted(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("{n} {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
 pub const SIDEBAR_REPO_NO_SESSIONS: &str = "No sessions yet — start one with ❯ or ✳";
 
 /// Tooltip for a secondary provider launch button in the sidebar.
@@ -49,10 +68,14 @@ pub fn scan_failed(error: &str) -> String {
 pub const WELCOME_HINT_OPEN: &str = "Use ❯ for a shell or ✳ for Claude beside a project,";
 pub const WELCOME_HINT_RESUME: &str = "or click a session to resume it.";
 
-/// The "N session(s) in M project(s)" summary on the welcome pane.
+/// The "N sessions in M projects" summary on the welcome pane.
 #[must_use]
 pub fn welcome_counts(sessions: usize, projects: usize) -> String {
-    format!("{sessions} session(s) in {projects} project(s)")
+    format!(
+        "{} in {}",
+        counted(sessions, "session"),
+        counted(projects, "project")
+    )
 }
 
 // --- Doc viewer ---
@@ -251,6 +274,19 @@ pub fn archive_prompt(title: &str) -> String {
     format!("Archive “{title}”?")
 }
 
+/// The tab strip's count of the sessions waiting for the user; none when
+/// none waits.
+#[must_use]
+pub fn waiting_count(waiting: usize) -> Option<String> {
+    (waiting > 0).then(|| format!("{waiting} waiting"))
+}
+
+/// The Dock badge for `waiting` sessions; none when none waits.
+#[must_use]
+pub fn dock_badge(waiting: usize) -> Option<String> {
+    (waiting > 0).then(|| waiting.to_string())
+}
+
 /// Every non-exited session dies on quit, Claude or shell, so `live` counts
 /// them all.
 #[must_use]
@@ -261,7 +297,8 @@ pub fn quit_prompt(live: usize, unsaved_doc: Option<&str>) -> String {
     }
     if live > 0 {
         prompt.push_str(&format!(
-            " {live} open session(s) will be force-stopped — any running work is lost."
+            " {} will be force-stopped — any running work is lost.",
+            counted(live, "open session")
         ));
     }
     prompt
@@ -293,6 +330,41 @@ pub const SETTINGS_CLAUDE_NOTE: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_waiting_count_names_how_many_wait() {
+        assert_eq!(waiting_count(0), None);
+        assert_eq!(waiting_count(1).as_deref(), Some("1 waiting"));
+        assert_eq!(waiting_count(3).as_deref(), Some("3 waiting"));
+    }
+
+    #[test]
+    fn the_dock_badge_shows_the_count_and_clears_at_zero() {
+        assert_eq!(dock_badge(0), None);
+        assert_eq!(dock_badge(1).as_deref(), Some("1"));
+        assert_eq!(dock_badge(12).as_deref(), Some("12"));
+    }
+
+    #[test]
+    fn a_tooltip_ends_with_its_shortcut_when_one_is_bound() {
+        assert_eq!(with_shortcut("Settings", Some("⌘,")), "Settings  ⌘,");
+        assert_eq!(with_shortcut("Settings", None), "Settings");
+    }
+
+    #[test]
+    fn the_welcome_counts_use_real_plurals() {
+        assert_eq!(welcome_counts(1, 1), "1 session in 1 project");
+        assert_eq!(welcome_counts(9, 3), "9 sessions in 3 projects");
+        assert_eq!(welcome_counts(0, 2), "0 sessions in 2 projects");
+    }
+
+    #[test]
+    fn the_quit_prompt_counts_one_session_in_the_singular() {
+        assert_eq!(
+            quit_prompt(1, None),
+            "Quit TermHerd? 1 open session will be force-stopped — any running work is lost."
+        );
+    }
 
     #[test]
     fn the_paste_prompt_names_the_lines_and_the_tab() {
@@ -350,11 +422,11 @@ mod tests {
         assert_eq!(
             quit_prompt(2, Some("notes.md")),
             "Quit TermHerd? Unsaved changes to “notes.md” will be lost. \
-             2 open session(s) will be force-stopped — any running work is lost."
+             2 open sessions will be force-stopped — any running work is lost."
         );
         assert_eq!(
             quit_prompt(2, None),
-            "Quit TermHerd? 2 open session(s) will be force-stopped — any running work is lost."
+            "Quit TermHerd? 2 open sessions will be force-stopped — any running work is lost."
         );
     }
 

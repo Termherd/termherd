@@ -3,11 +3,15 @@
 //! over the main pane; a read-only doc omits the Save control. No state
 //! transitions live here — those are in the parent module.
 
+use iced::theme::palette::Extended;
 use iced::widget::{button, column, container, row, text, text_editor};
 use iced::{Color, Element, Fill, Font};
 
 use super::super::Message;
 use super::super::docs::{DocFeedback, OpenDoc};
+use super::style::{ATTENTION_HUE, IDLE_HUE, text_on_surface};
+#[cfg(test)]
+use super::style::{TEXT_FLOOR, contrast};
 use crate::strings;
 
 /// Render an open plan/memory doc: a header (label, save state, actions) above
@@ -59,16 +63,75 @@ pub(super) fn doc_editor(doc: &OpenDoc, editable: bool) -> Element<'_, Message> 
 /// The save-state note for the editor header: the last save outcome if there is
 /// one, else a "modified" hint while there are unsaved edits, else nothing.
 fn save_note(doc: &OpenDoc) -> Option<Element<'_, Message>> {
-    const SAVED: Color = Color::from_rgb(0.3, 0.8, 0.4);
-    const ERROR: Color = Color::from_rgb(0.95, 0.35, 0.35);
-    const DIRTY: Color = Color::from_rgb(0.6, 0.6, 0.6);
+    let (note, label) = match &doc.feedback {
+        Some(DocFeedback::Saved) => (Note::Saved, strings::DOC_SAVED.to_owned()),
+        Some(DocFeedback::Error(message)) => (Note::Error, message.clone()),
+        None if doc.dirty => (Note::Modified, strings::DOC_MODIFIED.to_owned()),
+        None => return None,
+    };
+    Some(
+        text(label)
+            .size(11)
+            .style(move |theme: &iced::Theme| text::Style {
+                color: Some(note_color(note, theme.extended_palette())),
+            })
+            .into(),
+    )
+}
 
-    match &doc.feedback {
-        Some(DocFeedback::Saved) => Some(text(strings::DOC_SAVED).size(11).color(SAVED).into()),
-        Some(DocFeedback::Error(message)) => {
-            Some(text(message.clone()).size(11).color(ERROR).into())
+/// What the save note says, which decides its colour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Note {
+    Saved,
+    Error,
+    Modified,
+}
+
+#[cfg(test)]
+impl Note {
+    const ALL: [Self; 3] = [Self::Saved, Self::Error, Self::Modified];
+}
+
+fn note_color(note: Note, palette: &Extended) -> Color {
+    let hue = match note {
+        Note::Saved => IDLE_HUE,
+        Note::Error => ATTENTION_HUE,
+        Note::Modified => Color::from_rgb(0.6, 0.6, 0.6),
+    };
+    text_on_surface(hue, palette)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::ThemeChoice;
+
+    #[test]
+    fn every_save_note_reads_as_text_on_every_theme() {
+        for theme in ThemeChoice::ALL.map(ThemeChoice::to_iced) {
+            let palette = theme.extended_palette();
+            let surface = palette.background.base.color;
+            for note in Note::ALL {
+                let ratio = contrast(note_color(note, palette), surface);
+                assert!(ratio >= TEXT_FLOOR, "{note:?} on {theme}: {ratio:.2}");
+            }
         }
-        None if doc.dirty => Some(text(strings::DOC_MODIFIED).size(11).color(DIRTY).into()),
-        None => None,
+    }
+
+    #[test]
+    fn the_saved_note_stays_green_and_the_error_red() {
+        for theme in ThemeChoice::ALL.map(ThemeChoice::to_iced) {
+            let palette = theme.extended_palette();
+            let saved = note_color(Note::Saved, palette);
+            let error = note_color(Note::Error, palette);
+            assert!(
+                saved.g > saved.r && saved.g > saved.b,
+                "saved on {theme}: {saved:?}"
+            );
+            assert!(
+                error.r > error.g && error.r > error.b,
+                "error on {theme}: {error:?}"
+            );
+        }
     }
 }

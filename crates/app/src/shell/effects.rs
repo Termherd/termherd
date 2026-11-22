@@ -8,6 +8,8 @@
 
 mod os;
 
+pub(super) use os::show_dock_badge;
+
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::time::{Duration, SystemTime};

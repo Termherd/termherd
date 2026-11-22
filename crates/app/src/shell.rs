@@ -348,6 +348,8 @@ struct Shell {
     /// process (TerminateProcess / SIGKILL, no graceful shutdown), so a quit
     /// with sessions still running arms this modal first.
     closing_window: Option<window::Id>,
+    /// How many waiting sessions the Dock badge last showed.
+    dock_badge: usize,
     /// A Claude slash command awaiting confirmation, and the session it is for.
     /// The prompt names the exact line, so nothing is typed into Claude that
     /// the user has not read first.
@@ -673,6 +675,8 @@ enum Message {
     ToggleSidebar,
     /// Open the settings panel, or close it when open.
     ToggleSettings,
+    /// Go to the next session waiting for the user, as `next-attention` does.
+    NextAttention,
     /// Hide the notice about config files that could not be used.
     DismissLoadProblems,
     /// `settings.json` changed on disk: reload and apply it.
@@ -945,6 +949,7 @@ impl Shell {
             claude_command: None,
             notice: None,
             closing_window: None,
+            dock_badge: 0,
             link_modifier: false,
             shift_modifier: false,
             alt_sides: AltSides::default(),
@@ -1075,14 +1080,34 @@ impl Shell {
         Some(self.perform(effects))
     }
 
-    // The iced `update`: a flat `match` over every `Message` variant — the
+    /// The iced `update`: one message dispatched, then whatever must follow
+    /// every message, whichever arm ran.
+    fn update(&mut self, message: Message) -> Task<Message> {
+        let task = self.dispatch(message);
+        if let Some(waiting) = self.badge_due() {
+            effects::show_dock_badge(waiting);
+        }
+        task
+    }
+
+    /// The waiting count the Dock badge must now show, when it differs from
+    /// the one it shows; `None` when the badge is current.
+    fn badge_due(&mut self) -> Option<usize> {
+        let waiting = self.core.waiting_sessions().len();
+        (waiting != self.dock_badge).then(|| {
+            self.dock_badge = waiting;
+            waiting
+        })
+    }
+
+    // One message's dispatch: a flat `match` over every `Message` variant — the
     // app's central event dispatcher, whose arms delegate to the domain modules (launch,
     // session_ops, effects, geometry, routing, …). The length here is breadth
     // (one arm per message), not nested complexity, and splitting the dispatch
     // itself would only scatter it — the allow is by design, not a deferred
     // cleanup.
     #[allow(clippy::too_many_lines)]
-    fn update(&mut self, message: Message) -> Task<Message> {
+    fn dispatch(&mut self, message: Message) -> Task<Message> {
         self.drop_stale_lists();
         // Clicking (or typing) anywhere else in TermHerd while an inline rename
         // is open discards it — the blur-cancels-edit convention. Only genuine
@@ -1547,6 +1572,10 @@ impl Shell {
             Message::ToggleSettings => {
                 self.settings_open = !self.settings_open;
                 Task::none()
+            }
+            Message::NextAttention => {
+                self.dispatch_action(termherd_core::keymap::Action::NextAttention)
+                    .1
             }
             Message::CloseSettings => {
                 self.settings_open = false;
@@ -2110,6 +2139,34 @@ mod key_routing {
             }
             other => panic!("expected the configured editor, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_shortcut_shown_follows_the_users_keymap() {
+        use termherd_core::keymap::{Action, KeyChord, Platform};
+        let (mut shell, _pty) = shell_with_terminal();
+        let default = match Platform::current() {
+            Platform::MacOs => "⌘B",
+            Platform::Windows | Platform::Linux => "Ctrl+Shift+B",
+        };
+        assert_eq!(
+            shell.shortcut_of(Action::ToggleSidebar).as_deref(),
+            Some(default)
+        );
+
+        let rebound = KeyChord::parse("ctrl+alt+s").expect("chord");
+        shell.keymap.set(Action::ToggleSidebar, [rebound]);
+        let shown = match Platform::current() {
+            Platform::MacOs => "⌃⌥S",
+            Platform::Windows | Platform::Linux => "Ctrl+Alt+S",
+        };
+        assert_eq!(
+            shell.shortcut_of(Action::ToggleSidebar).as_deref(),
+            Some(shown)
+        );
+
+        shell.keymap.set(Action::ToggleSidebar, []);
+        assert_eq!(shell.shortcut_of(Action::ToggleSidebar), None);
     }
 
     /// A `Shell` with one terminal open and focused, plus its recording PTY.
@@ -3933,6 +3990,56 @@ mod key_routing {
         assert_eq!(pty.kill_count(), 1, "enter must confirm the close");
     }
 
+    fn set_status(shell: &mut Shell, session: SessionId, status: SessionStatus) {
+        let _ = shell
+            .core
+            .apply(termherd_core::Event::StatusChanged { session, status });
+    }
+
+    #[test]
+    fn next_attention_reveals_the_waiting_session_in_another_tab() {
+        let (mut shell, _pty, _) = shell_with_two_tabs();
+        let waiting = shell.core.workspace.tabs[0].first_session();
+        set_status(&mut shell, waiting, SessionStatus::Attention);
+
+        let (outcome, _task) = shell.perform_presses(vec![Press::Command(Action::NextAttention)]);
+        assert_eq!(
+            outcome.steps,
+            vec![PressStep::Ran("next-attention".to_owned())]
+        );
+        assert_eq!(shell.core.workspace.active, 0);
+        assert_eq!(shell.core.workspace.focused_session(), Some(waiting));
+    }
+
+    #[test]
+    fn clicking_the_waiting_count_goes_to_the_next_waiting_session() {
+        let (mut shell, _pty, _) = shell_with_two_tabs();
+        let waiting = shell.core.workspace.tabs[0].first_session();
+        set_status(&mut shell, waiting, SessionStatus::Attention);
+
+        let _ = shell.update(Message::NextAttention);
+        assert_eq!(shell.core.workspace.focused_session(), Some(waiting));
+    }
+
+    #[test]
+    fn the_dock_badge_is_due_only_when_the_waiting_count_changes() {
+        let (mut shell, _pty, _) = shell_with_two_tabs();
+        assert_eq!(shell.badge_due(), None, "none waits, and none is shown");
+
+        let first = shell.core.workspace.tabs[0].first_session();
+        let second = shell.core.workspace.tabs[1].first_session();
+        set_status(&mut shell, first, SessionStatus::Attention);
+        assert_eq!(shell.badge_due(), Some(1));
+        assert_eq!(shell.badge_due(), None, "already shown");
+
+        set_status(&mut shell, second, SessionStatus::Attention);
+        assert_eq!(shell.badge_due(), Some(2));
+
+        set_status(&mut shell, first, SessionStatus::Busy);
+        set_status(&mut shell, second, SessionStatus::Busy);
+        assert_eq!(shell.badge_due(), Some(0), "the badge clears");
+    }
+
     #[test]
     fn toggle_park_tab_parks_the_active_tab_and_focuses_an_unparked_one() {
         let (mut shell, _pty, first) = shell_with_two_tabs();
@@ -4067,6 +4174,8 @@ mod key_routing {
             (Action::PickTabColor, "pick-tab-color"),
             // No tab, so nothing to park.
             (Action::TogglePark, "toggle-park-tab"),
+            // No session, so none waits.
+            (Action::NextAttention, "next-attention"),
         ] {
             // Without Claude Desktop, `send-to-desktop` is wired to nothing.
             let reason = if action == Action::SendToDesktop
@@ -8613,7 +8722,7 @@ mod key_routing {
 
         let prompt = shell.quit_prompt();
         assert!(prompt.contains("“notes.md”"), "{prompt}");
-        assert!(prompt.contains("1 open session(s)"), "{prompt}");
+        assert!(prompt.contains("1 open session will"), "{prompt}");
     }
 
     #[test]

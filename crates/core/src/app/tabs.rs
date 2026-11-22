@@ -165,8 +165,67 @@ impl App {
         let tab = self.workspace.tabs.get(index)?;
         tab.sessions()
             .into_iter()
-            .filter_map(|id| self.sessions.get(&id).map(|s| s.status))
+            .filter_map(|id| self.session_status(id))
             .max_by_key(|status| status.urgency())
+    }
+
+    /// The sessions waiting for the user (status `attention`), in the order
+    /// the tab strip and each tab's panes show them.
+    #[must_use]
+    pub fn waiting_sessions(&self) -> Vec<SessionId> {
+        self.workspace
+            .tabs
+            .iter()
+            .flat_map(crate::workspace::Tab::sessions)
+            .filter(|id| self.is_waiting(*id))
+            .collect()
+    }
+
+    /// The waiting session to go to next: the first one after the focused
+    /// pane in [`Self::waiting_sessions`]' order, wrapping, so the focused
+    /// pane comes last. `None` when no session waits.
+    #[must_use]
+    pub fn next_waiting(&self) -> Option<SessionId> {
+        let order: Vec<SessionId> = self
+            .workspace
+            .tabs
+            .iter()
+            .flat_map(crate::workspace::Tab::sessions)
+            .collect();
+        let after = self
+            .workspace
+            .focused_session()
+            .and_then(|focused| order.iter().position(|id| *id == focused))
+            .map_or(0, |at| at + 1);
+        order
+            .iter()
+            .cycle()
+            .skip(after)
+            .take(order.len())
+            .copied()
+            .find(|id| self.is_waiting(*id))
+    }
+
+    /// Whether the session `id` waits for the user (status `attention`).
+    #[must_use]
+    pub fn is_waiting(&self, id: SessionId) -> bool {
+        self.session_status(id) == Some(SessionStatus::Attention)
+    }
+
+    /// Whether the tab at `index` hosts a session waiting for the user.
+    #[must_use]
+    pub fn tab_waits(&self, index: usize) -> bool {
+        self.workspace
+            .tabs
+            .get(index)
+            .is_some_and(|tab| tab.sessions().into_iter().any(|id| self.is_waiting(id)))
+    }
+
+    /// The activity status of the live session `id`, or `None` once it is
+    /// gone from the registry.
+    #[must_use]
+    pub fn session_status(&self, id: SessionId) -> Option<SessionStatus> {
+        self.sessions.get(&id).map(|s| s.status)
     }
 
     /// The kind of program the tab at `index` runs, read from its focused
@@ -964,6 +1023,83 @@ mod tests {
         assert_eq!(app.tab_status(0), Some(SessionStatus::Attention));
         // Unknown tab index has no status.
         assert_eq!(app.tab_status(7), None);
+    }
+
+    fn wait(app: &mut App, session: SessionId) {
+        app.apply(Event::StatusChanged {
+            session,
+            status: SessionStatus::Attention,
+        });
+    }
+
+    #[test]
+    fn waiting_sessions_follow_the_tabs_then_their_panes() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        let second = launch(&mut app, "b");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        let beside = app.workspace.focused_session().expect("the split pane");
+        assert_eq!(app.waiting_sessions(), Vec::<SessionId>::new());
+
+        wait(&mut app, beside);
+        wait(&mut app, first);
+        wait(&mut app, second);
+        assert_eq!(app.waiting_sessions(), vec![first, second, beside]);
+
+        app.apply(Event::StatusChanged {
+            session: second,
+            status: SessionStatus::Busy,
+        });
+        assert_eq!(app.waiting_sessions(), vec![first, beside]);
+    }
+
+    #[test]
+    fn the_next_waiting_session_is_the_first_after_the_focused_pane() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        let second = launch(&mut app, "b");
+        let third = launch(&mut app, "c");
+        assert_eq!(app.next_waiting(), None, "none waits");
+
+        wait(&mut app, first);
+        wait(&mut app, third);
+        app.apply(Event::ActivateTab(1));
+        assert_eq!(app.workspace.focused_session(), Some(second));
+        assert_eq!(app.next_waiting(), Some(third));
+
+        app.apply(Event::ActivateTab(2));
+        assert_eq!(
+            app.next_waiting(),
+            Some(first),
+            "it wraps past the last tab"
+        );
+
+        app.apply(Event::ActivateTab(0));
+        assert_eq!(app.next_waiting(), Some(third));
+    }
+
+    #[test]
+    fn a_tab_waits_when_any_of_its_panes_does() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        launch(&mut app, "b");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        let beside = app.workspace.focused_session().expect("the split pane");
+        assert!(!app.tab_waits(0) && !app.tab_waits(1));
+
+        wait(&mut app, beside);
+        assert!(app.is_waiting(beside) && !app.is_waiting(first));
+        assert!(!app.tab_waits(0), "the first tab hosts no waiting pane");
+        assert!(app.tab_waits(1), "its second pane waits");
+        assert!(!app.tab_waits(7), "no such tab");
+    }
+
+    #[test]
+    fn a_waiting_focused_pane_is_the_next_only_when_it_waits_alone() {
+        let mut app = App::new();
+        let only = launch(&mut app, "a");
+        wait(&mut app, only);
+        assert_eq!(app.next_waiting(), Some(only));
     }
 
     #[test]
