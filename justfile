@@ -23,6 +23,7 @@ dev-instance:
     echo "dev instance: $root" >&2; \
     TERMHERD_DATA_DIR="$(native "$root/data")" \
     CLAUDE_CONFIG_DIR="$(native "$root/fixture/claude")" \
+    TERMHERD_ANTIGRAVITY_DIR="$(native "$root/fixture/antigravity")" \
     TMPDIR="$root/tmp" TMP="$(native "$root/tmp")" TEMP="$(native "$root/tmp")" \
     cargo run -p termherd-app
 

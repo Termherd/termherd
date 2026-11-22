@@ -61,15 +61,18 @@ reads it as well). Isolating with `USERPROFILE` or `HOME`, as this page used
 to say, also hid `~/.claude` — an empty sidebar reporting
 `projects directory not readable` — and handed the fake home to every shell,
 so the build looked like no user's (#577). `CLAUDE_CONFIG_DIR`, read with
-Claude Code's own precedence, points the build at another Claude directory.
+Claude Code's own precedence, points the build at another Claude directory, and
+`TERMHERD_ANTIGRAVITY_DIR` relocates Antigravity's `~/.gemini/antigravity-cli`.
 
 ## `just dev-instance`: the default second instance
 
-`just dev-instance` does all of the above and points `CLAUDE_CONFIG_DIR` at
-a fixture generated for the launch: three invented repositories (one session
-in a worktree), nine sessions with AI titles, renames, `/color`s and
-first-prompt fallbacks, each dated *relative to now*. It prints its root on
-stderr as `dev instance: …`; the data dir is `<root>/data`.
+`just dev-instance` does all of the above and points `CLAUDE_CONFIG_DIR` and
+`TERMHERD_ANTIGRAVITY_DIR` at a fixture generated for the launch: three
+invented repositories (one session in a worktree), nine Claude sessions with
+AI titles, renames, `/color`s and first-prompt fallbacks, and three
+Antigravity sessions (titled and first-prompt fallback), each dated *relative
+to now*. It prints its root on stderr as `dev instance: …`; the data dir is
+`<root>/data`.
 
 The fixture rather than the user's `~/.claude`, always (#578):
 

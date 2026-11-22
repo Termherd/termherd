@@ -1,7 +1,8 @@
 //! Shared filesystem locations — the user's home dir, the `~/.termherd` app
-//! data dir (PRD §7) and Claude's `~/.claude`, read from the process
-//! environment here and nowhere else in the app. The precedence itself
-//! (`USERPROFILE`/`HOME`, `TERMHERD_DATA_DIR`, `CLAUDE_CONFIG_DIR`) is
+//! data dir (PRD §7), Claude's `~/.claude`, and Antigravity's
+//! `~/.gemini/antigravity-cli`, read from the process environment here and
+//! nowhere else in the app. The precedence itself (`USERPROFILE`/`HOME`,
+//! `TERMHERD_DATA_DIR`, `CLAUDE_CONFIG_DIR`, `TERMHERD_ANTIGRAVITY_DIR`) is
 //! `termherd_core::locations`, which the stdio MCP server reads too.
 
 use std::ffi::OsString;
@@ -75,6 +76,25 @@ impl ClaudeDir {
     #[must_use]
     pub fn join(&self, name: &str) -> PathBuf {
         self.0.join(name)
+    }
+}
+
+/// Antigravity's data dir: read, never owned. Resolved in `main()` alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AntigravityDir(PathBuf);
+
+impl AntigravityDir {
+    /// `$TERMHERD_ANTIGRAVITY_DIR`, else `~/.gemini/antigravity-cli`. `None`
+    /// when neither that nor a home directory is set.
+    #[must_use]
+    pub fn user() -> Option<Self> {
+        locations::antigravity_dir(&process_env).map(Self)
+    }
+
+    /// The directory itself.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.0
     }
 }
 
@@ -207,6 +227,7 @@ mod tests {
             // inherited, they would send the rerun's writes past the empty home.
             .env_remove(locations::DATA_DIR_VAR)
             .env_remove(locations::CLAUDE_CONFIG_DIR_VAR)
+            .env_remove(locations::ANTIGRAVITY_DIR_VAR)
             .env("TMPDIR", tmp.path())
             .env("TMP", tmp.path())
             .env("TEMP", tmp.path())

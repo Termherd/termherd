@@ -43,6 +43,7 @@ use tracing::{info, warn};
 fn main() -> iced::Result {
     let data_dir = paths::DataDir::user();
     let claude_dir = paths::ClaudeDir::user();
+    let antigravity_dir = paths::AntigravityDir::user();
 
     // Answer a question about the *running* instance before touching anything
     // that would disturb it: the single-instance lock below exits(2) on a second
@@ -96,8 +97,7 @@ fn main() -> iced::Result {
         "termherd starting (M1 browser)"
     );
 
-    let antigravity_dir = paths::home_dir().map(|home| home.join(".gemini").join("antigravity-cli"));
-    let (scanner, watch_root) = build_scanner(claude_dir.as_ref(), antigravity_dir.as_deref());
+    let (scanner, watch_root) = build_scanner(claude_dir.as_ref(), antigravity_dir.as_ref());
 
     // Thin user settings (FR10): the configured shell is injected into the PTY
     // host, the theme into the iced shell. A corrupt file falls back to
@@ -294,14 +294,14 @@ fn build_bridge_runtime() -> Option<tokio::runtime::Runtime> {
 
 fn build_scanner(
     claude_dir: Option<&paths::ClaudeDir>,
-    antigravity_dir: Option<&std::path::Path>,
+    antigravity_dir: Option<&paths::AntigravityDir>,
 ) -> (Arc<dyn ProjectScanner>, Option<std::path::PathBuf>) {
     match claude_dir {
         Some(dir) => {
             let root = dir.join("projects");
             let mut fs_scanner = FsScanner::new(root.clone());
             if let Some(agy) = antigravity_dir {
-                fs_scanner = fs_scanner.with_antigravity_dir(agy.to_path_buf());
+                fs_scanner = fs_scanner.with_antigravity_dir(agy.path().to_path_buf());
             }
             (Arc::new(fs_scanner), Some(root))
         }

@@ -1,5 +1,5 @@
-//! Where termherd and Claude Code keep their files, resolved from an injected
-//! environment lookup.
+//! Where termherd, Claude Code, and Antigravity keep their files, resolved
+//! from an injected environment lookup.
 //!
 //! Every binary reads these locations — the GUI, the scanner it builds, the
 //! stdio MCP server writing the same `settings.json` — so the precedence is
@@ -20,6 +20,11 @@ pub const DATA_DIR_VAR: &str = "TERMHERD_DATA_DIR";
 /// precedence so termherd reads the directory the sessions it launches write.
 pub const CLAUDE_CONFIG_DIR_VAR: &str = "CLAUDE_CONFIG_DIR";
 
+/// Relocates Antigravity's data dir (`~/.gemini/antigravity-cli`), so a dev
+/// instance or test can point the scanner at a fixture instead of the user's
+/// real conversations.
+pub const ANTIGRAVITY_DIR_VAR: &str = "TERMHERD_ANTIGRAVITY_DIR";
+
 /// The user's home directory: `%USERPROFILE%` (Windows) then `$HOME` (Unix).
 /// `None` when neither is set.
 #[must_use]
@@ -39,6 +44,14 @@ pub fn data_dir(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 #[must_use]
 pub fn claude_dir(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     overridden(env, CLAUDE_CONFIG_DIR_VAR).or_else(|| home(env).map(|home| home.join(".claude")))
+}
+
+/// Antigravity's data dir: [`ANTIGRAVITY_DIR_VAR`], else
+/// `<home>/.gemini/antigravity-cli`.
+#[must_use]
+pub fn antigravity_dir(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    overridden(env, ANTIGRAVITY_DIR_VAR)
+        .or_else(|| home(env).map(|home| home.join(".gemini").join("antigravity-cli")))
 }
 
 fn overridden(env: &impl Fn(&str) -> Option<OsString>, name: &str) -> Option<PathBuf> {
@@ -76,13 +89,18 @@ mod tests {
         assert_eq!(home(&env_of(&[])), None);
         assert_eq!(data_dir(&env_of(&[])), None);
         assert_eq!(claude_dir(&env_of(&[])), None);
+        assert_eq!(antigravity_dir(&env_of(&[])), None);
     }
 
     #[test]
-    fn without_overrides_both_dirs_sit_in_home() {
+    fn without_overrides_all_dirs_sit_in_home() {
         let env = env_of(&[("HOME", "/h")]);
         assert_eq!(data_dir(&env), Some(PathBuf::from("/h/.termherd")));
         assert_eq!(claude_dir(&env), Some(PathBuf::from("/h/.claude")));
+        assert_eq!(
+            antigravity_dir(&env),
+            Some(PathBuf::from("/h/.gemini/antigravity-cli"))
+        );
     }
 
     #[test]
@@ -90,17 +108,35 @@ mod tests {
         let env = env_of(&[("HOME", "/h"), (DATA_DIR_VAR, "/dev/data")]);
         assert_eq!(data_dir(&env), Some(PathBuf::from("/dev/data")));
         assert_eq!(claude_dir(&env), Some(PathBuf::from("/h/.claude")));
+        assert_eq!(
+            antigravity_dir(&env),
+            Some(PathBuf::from("/h/.gemini/antigravity-cli"))
+        );
 
         let env = env_of(&[("HOME", "/h"), (CLAUDE_CONFIG_DIR_VAR, "/fixture")]);
         assert_eq!(data_dir(&env), Some(PathBuf::from("/h/.termherd")));
         assert_eq!(claude_dir(&env), Some(PathBuf::from("/fixture")));
+        assert_eq!(
+            antigravity_dir(&env),
+            Some(PathBuf::from("/h/.gemini/antigravity-cli"))
+        );
+
+        let env = env_of(&[("HOME", "/h"), (ANTIGRAVITY_DIR_VAR, "/fixture-agy")]);
+        assert_eq!(data_dir(&env), Some(PathBuf::from("/h/.termherd")));
+        assert_eq!(claude_dir(&env), Some(PathBuf::from("/h/.claude")));
+        assert_eq!(antigravity_dir(&env), Some(PathBuf::from("/fixture-agy")));
     }
 
     #[test]
     fn an_override_needs_no_home() {
-        let env = env_of(&[(DATA_DIR_VAR, "/d"), (CLAUDE_CONFIG_DIR_VAR, "/c")]);
+        let env = env_of(&[
+            (DATA_DIR_VAR, "/d"),
+            (CLAUDE_CONFIG_DIR_VAR, "/c"),
+            (ANTIGRAVITY_DIR_VAR, "/a"),
+        ]);
         assert_eq!(data_dir(&env), Some(PathBuf::from("/d")));
         assert_eq!(claude_dir(&env), Some(PathBuf::from("/c")));
+        assert_eq!(antigravity_dir(&env), Some(PathBuf::from("/a")));
     }
 
     #[test]
@@ -109,8 +145,13 @@ mod tests {
             ("HOME", "/h"),
             (DATA_DIR_VAR, ""),
             (CLAUDE_CONFIG_DIR_VAR, ""),
+            (ANTIGRAVITY_DIR_VAR, ""),
         ]);
         assert_eq!(data_dir(&env), Some(PathBuf::from("/h/.termherd")));
         assert_eq!(claude_dir(&env), Some(PathBuf::from("/h/.claude")));
+        assert_eq!(
+            antigravity_dir(&env),
+            Some(PathBuf::from("/h/.gemini/antigravity-cli"))
+        );
     }
 }

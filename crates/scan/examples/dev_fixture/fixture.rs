@@ -1,17 +1,21 @@
-//! The Claude data a dev instance shows: invented repositories and sessions,
-//! written as Claude Code writes them, dated relative to now.
+//! The Claude and Antigravity data a dev instance shows: invented repositories
+//! and sessions, written as Claude Code and Antigravity write them, dated
+//! relative to now.
 //!
 //! The sessions below are the fixture's source. Edit them to show what a check
-//! or a screenshot needs; nothing here comes from a real `~/.claude`.
+//! or a screenshot needs; nothing here comes from a real `~/.claude` or
+//! `~/.gemini/antigravity-cli`.
 //!
 //! Ages are relative because the sidebar dates a session by its transcript's
-//! mtime: a frozen tree would age in every screenshot, and a git checkout
-//! resets every mtime to the checkout's.
+//! mtime (Claude) or summary timestamp (Antigravity): a frozen tree would age
+//! in every screenshot, and a git checkout resets every mtime to the
+//! checkout's.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use termherd_claude::path::encode_project_path;
 
@@ -171,10 +175,56 @@ pub const SESSIONS: &[Session] = &[
     },
 ];
 
-/// Write the repositories under `<root>/repos` and Claude's data under
-/// `<root>/claude`, the directory to pass as `CLAUDE_CONFIG_DIR`, every
-/// session dated from `now`. Returns each session's transcript, in
-/// [`SESSIONS`] order.
+pub struct AntigravitySession {
+    /// The conversation UUID; unique across the fixture.
+    pub id: &'static str,
+    /// The repository, under `<root>/repos/`.
+    pub repo: &'static str,
+    /// Explicit SQLite title, or `None` to fall back to the first prompt.
+    pub title: Option<&'static str>,
+    /// How long ago the session last wrote, in minutes.
+    pub age_minutes: u64,
+    /// Alternating user and planner messages, the user's first.
+    pub turns: &'static [&'static str],
+}
+
+pub const ANTIGRAVITY_SESSIONS: &[AntigravitySession] = &[
+    AntigravitySession {
+        id: "1b4d7e9a-2c5f-4a8b-9d0e-3f6a8b1c4d72",
+        repo: "acme-api",
+        title: Some("Profile slow checkout SQL queries"),
+        age_minutes: 25,
+        turns: &[
+            "The checkout query takes 400ms under load; find the missing index.",
+            "EXPLAIN shows a sequential scan on order_items(order_id); adding a composite index cuts it to 4ms.",
+        ],
+    },
+    AntigravitySession {
+        id: "3e6a9c1b-4d70-4b2e-8f5a-1c3d5e7f9024",
+        repo: "acme-web",
+        title: Some("Bundle size regression investigation"),
+        age_minutes: 5 * 60,
+        turns: &[
+            "Our main JS bundle grew by 180 KB after the chart upgrade.",
+            "The chart package pulled in all locales; importing the core entry drops 172 KB.",
+        ],
+    },
+    AntigravitySession {
+        id: "5a8c1e3d-6f92-4d4a-9b7c-2e4f6a8b0c46",
+        repo: "dotfiles",
+        title: None,
+        age_minutes: 18 * 60,
+        turns: &[
+            "Compare ripgrep and fd ignore rules across repos.",
+            "Both honour .gitignore and .ignore; fd also skips hidden directories unless -H is passed.",
+        ],
+    },
+];
+
+/// Write the repositories under `<root>/repos`, Claude's data under
+/// `<root>/claude` (for `CLAUDE_CONFIG_DIR`), and Antigravity's data under
+/// `<root>/antigravity` (for `TERMHERD_ANTIGRAVITY_DIR`), every session dated
+/// from `now`. Returns each Claude session's transcript, in [`SESSIONS`] order.
 pub fn write(root: &Path, now: SystemTime) -> io::Result<Vec<PathBuf>> {
     let claude_dir = root.join("claude");
     let mut transcripts = Vec::with_capacity(SESSIONS.len());
@@ -200,7 +250,123 @@ pub fn write(root: &Path, now: SystemTime) -> io::Result<Vec<PathBuf>> {
             .set_modified(last)?;
         transcripts.push(transcript);
     }
+    write_antigravity(root, now)?;
     Ok(transcripts)
+}
+
+fn write_antigravity(root: &Path, now: SystemTime) -> io::Result<()> {
+    let agy_dir = root.join("antigravity");
+    std::fs::create_dir_all(&agy_dir)?;
+    let db_path = agy_dir.join("conversation_summaries.db");
+    let conn = Connection::open(&db_path).map_err(io::Error::other)?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS conversation_summaries (
+            conversation_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            preview TEXT NOT NULL,
+            step_count INTEGER NOT NULL,
+            last_modified_time TEXT NOT NULL,
+            workspace_uris TEXT NOT NULL,
+            nesting_depth INTEGER NOT NULL DEFAULT 0
+        )",
+        [],
+    )
+    .map_err(io::Error::other)?;
+
+    for session in ANTIGRAVITY_SESSIONS {
+        let cwd = ensure_repo(root, session.repo, None)?;
+        let last = now
+            .checked_sub(Duration::from_secs(session.age_minutes * 60))
+            .unwrap_or(UNIX_EPOCH);
+        let workspace_uris = json!([path_to_file_uri(&cwd)]).to_string();
+        let step_count = i64::try_from(session.turns.len()).unwrap_or(0);
+        conn.execute(
+            "INSERT OR REPLACE INTO conversation_summaries
+             (conversation_id, title, preview, step_count, last_modified_time, workspace_uris, nesting_depth)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+            params![
+                session.id,
+                session.title.unwrap_or(""),
+                "",
+                step_count,
+                rfc3339(last),
+                workspace_uris,
+            ],
+        )
+        .map_err(io::Error::other)?;
+
+        let logs_dir = agy_dir
+            .join("brain")
+            .join(session.id)
+            .join(".system_generated")
+            .join("logs");
+        std::fs::create_dir_all(&logs_dir)?;
+        let transcript = logs_dir.join("transcript.jsonl");
+        let body: String = antigravity_lines(session, last)
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect();
+        std::fs::write(&transcript, body)?;
+        std::fs::File::options()
+            .write(true)
+            .open(&transcript)?
+            .set_modified(last)?;
+    }
+    Ok(())
+}
+
+fn antigravity_lines(session: &AntigravitySession, last: SystemTime) -> Vec<Value> {
+    let count = session.turns.len() as u64;
+    session
+        .turns
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            let at = last
+                .checked_sub(Duration::from_secs((count - 1 - index as u64) * 60))
+                .unwrap_or(UNIX_EPOCH);
+            if index % 2 == 0 {
+                json!({
+                    "step_index": index,
+                    "source": "USER_EXPLICIT",
+                    "type": "USER_INPUT",
+                    "status": "DONE",
+                    "created_at": rfc3339(at),
+                    "content": format!("<USER_REQUEST>\n{text}\n</USER_REQUEST>"),
+                })
+            } else {
+                json!({
+                    "step_index": index,
+                    "source": "MODEL",
+                    "type": "PLANNER_RESPONSE",
+                    "status": "DONE",
+                    "created_at": rfc3339(at),
+                    "content": text,
+                })
+            }
+        })
+        .collect()
+}
+
+/// Convert a local filesystem path into a `file://` URI using forward slashes
+/// and percent-encoding URI delimiters, matching Antigravity's `workspace_uris`.
+fn path_to_file_uri(path: &Path) -> String {
+    let raw = path.to_string_lossy().replace('\\', "/");
+    let mut uri = String::with_capacity(raw.len() + 16);
+    uri.push_str("file://");
+    if !raw.starts_with('/') {
+        uri.push('/');
+    }
+    for ch in raw.chars() {
+        match ch {
+            ' ' => uri.push_str("%20"),
+            '%' => uri.push_str("%25"),
+            '#' => uri.push_str("%23"),
+            '?' => uri.push_str("%3F"),
+            _ => uri.push(ch),
+        }
+    }
+    uri
 }
 
 /// Create `<root>/repos/<repo>` (with a `.git` marker so repo resolution
