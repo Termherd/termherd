@@ -35,6 +35,10 @@ pub enum RenameSupport {
 /// Static integration capabilities of a [`Provider`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCapabilities {
+    /// Whether the PTY adapter implements command construction for this
+    /// provider. Keeps UI launch affordances from offering a provider whose
+    /// command builder has not shipped yet.
+    pub launch_supported: bool,
     /// Accepts a caller-minted session UUID at fresh launch (`--session-id`).
     pub mint_session_id: bool,
     /// Supports resuming a discovered conversation/thread by provider ID.
@@ -84,6 +88,16 @@ impl Provider {
         }
     }
 
+    /// Executable stem probed on `$PATH` at startup.
+    #[must_use]
+    pub const fn binary_name(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Antigravity => "agy",
+        }
+    }
+
     /// Parse a stable lowercase provider identifier.
     #[must_use]
     pub fn parse(id: &str) -> Option<Self> {
@@ -100,6 +114,7 @@ impl Provider {
     pub const fn capabilities(self) -> ProviderCapabilities {
         match self {
             Self::Claude => ProviderCapabilities {
+                launch_supported: true,
                 mint_session_id: true,
                 resume_by_id: true,
                 history_discovery: true,
@@ -113,6 +128,7 @@ impl Provider {
                 mcp_bridge_injection: true,
             },
             Self::Codex => ProviderCapabilities {
+                launch_supported: false,
                 mint_session_id: false,
                 resume_by_id: true,
                 history_discovery: true,
@@ -126,6 +142,7 @@ impl Provider {
                 mcp_bridge_injection: false,
             },
             Self::Antigravity => ProviderCapabilities {
+                launch_supported: true,
                 mint_session_id: false,
                 resume_by_id: true,
                 history_discovery: true,
@@ -139,6 +156,70 @@ impl Provider {
                 mcp_bridge_injection: false,
             },
         }
+    }
+}
+
+/// Which agent CLIs were detected on the host at startup. Constructed once in
+/// `main()` and injected into the shell so `core` stays pure of filesystem and
+/// environment reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AvailableProviders {
+    claude: bool,
+    codex: bool,
+    antigravity: bool,
+}
+
+impl Default for AvailableProviders {
+    fn default() -> Self {
+        Self {
+            claude: true,
+            codex: false,
+            antigravity: false,
+        }
+    }
+}
+
+impl AvailableProviders {
+    /// Construct an explicit availability snapshot (used by startup detection
+    /// and tests).
+    #[must_use]
+    pub const fn new(claude: bool, codex: bool, antigravity: bool) -> Self {
+        Self {
+            claude,
+            codex,
+            antigravity,
+        }
+    }
+
+    /// Whether `provider`'s CLI was detected on the host.
+    #[must_use]
+    pub const fn is_available(self, provider: Provider) -> bool {
+        match provider {
+            Provider::Claude => self.claude,
+            Provider::Codex => self.codex,
+            Provider::Antigravity => self.antigravity,
+        }
+    }
+
+    /// Every provider that is both installed on this host and wired for launch.
+    #[must_use]
+    pub fn launchable(self) -> Vec<Provider> {
+        Provider::ALL
+            .into_iter()
+            .filter(|&provider| {
+                self.is_available(provider) && provider.capabilities().launch_supported
+            })
+            .collect()
+    }
+
+    /// Launchable providers other than `primary`, in display order. Drives the
+    /// sidebar's secondary agent picker: empty means no picker arrow is shown.
+    #[must_use]
+    pub fn secondary_launchable(self, primary: Provider) -> Vec<Provider> {
+        self.launchable()
+            .into_iter()
+            .filter(|&provider| provider != primary)
+            .collect()
     }
 }
 
@@ -186,5 +267,28 @@ mod tests {
             assert!(!caps.send_to_desktop);
             assert!(!caps.mcp_bridge_injection);
         }
+        assert!(Provider::Antigravity.capabilities().launch_supported);
+        assert!(!Provider::Codex.capabilities().launch_supported);
+    }
+
+    #[test]
+    fn available_providers_filters_to_installed_and_launch_supported() {
+        let all_installed = AvailableProviders::new(true, true, true);
+        assert_eq!(
+            all_installed.launchable(),
+            vec![Provider::Claude, Provider::Antigravity]
+        );
+        assert_eq!(
+            all_installed.secondary_launchable(Provider::Claude),
+            vec![Provider::Antigravity]
+        );
+
+        let claude_only = AvailableProviders::default();
+        assert_eq!(claude_only.launchable(), vec![Provider::Claude]);
+        assert!(
+            claude_only
+                .secondary_launchable(Provider::Claude)
+                .is_empty()
+        );
     }
 }

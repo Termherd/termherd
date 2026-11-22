@@ -320,6 +320,10 @@ impl Shell {
 /// default.
 #[derive(Debug, Default)]
 pub(super) struct CardFacts {
+    /// Non-Claude agent provider name shown on the tab hover card (e.g.
+    /// `Antigravity`). `None` for Shell and Claude, whose cards already carry
+    /// their own identity lines.
+    pub provider: Option<&'static str>,
     /// The peer name other Claude sessions address the pane's Claude by.
     pub agent: Option<String>,
     /// The colour `/color` gave the session.
@@ -332,8 +336,9 @@ pub(super) struct CardFacts {
 }
 
 /// The dimmed detail lines both hover cards show under their title, in order:
-/// agent, colour, model and effort (from the transcript `digest`), version,
-/// running time. A fact nobody knows is a line left out rather than a blank one.
+/// provider (for non-Claude agents), agent, colour, model and effort (from the
+/// transcript `digest`), version, running time. A fact nobody knows is a line
+/// left out rather than a blank one.
 ///
 /// The version is the running Claude's when a pane knows it, else the one the
 /// transcript last recorded: the transcript is only as fresh as the last scan,
@@ -346,6 +351,7 @@ pub(super) fn detail_lines(facts: &CardFacts, digest: Option<&SessionDigest>) ->
         .as_deref()
         .or_else(|| digest.and_then(|d| d.version.as_deref()));
     [
+        facts.provider.map(str::to_owned),
         facts.agent.as_deref().map(strings::agent_name),
         facts
             .color
@@ -488,11 +494,25 @@ mod tests {
 
     fn every_fact() -> CardFacts {
         CardFacts {
+            provider: None,
             agent: Some("termherd-b0".to_owned()),
             color: Some(ClaudeColor::Purple),
             version: Some("2.1.294".to_owned()),
             running_for: Some(Duration::from_secs(3600 + 12 * 60)),
         }
+    }
+
+    #[test]
+    fn a_non_claude_provider_card_names_its_provider() {
+        let facts = CardFacts {
+            provider: Some("Antigravity"),
+            running_for: Some(Duration::from_secs(120)),
+            ..CardFacts::default()
+        };
+        assert_eq!(
+            detail_lines(&facts, None),
+            vec!["Antigravity".to_owned(), strings::running_for("2m")]
+        );
     }
 
     #[test]

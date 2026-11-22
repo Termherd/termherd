@@ -22,6 +22,7 @@ mod macos;
 mod mcp;
 mod metadata_store;
 mod paths;
+mod providers;
 mod record;
 mod record_config;
 mod settings;
@@ -212,6 +213,7 @@ fn main() -> iced::Result {
             |home| home.to_string_lossy().into_owned(),
         ),
         claude_dir,
+        providers: providers::detect_from_env(),
     };
     // Terminal path candidates are checked against the real filesystem — the
     // one thing that tells `src/main.rs` from prose like `and/or`.

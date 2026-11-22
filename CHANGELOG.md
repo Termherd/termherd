@@ -13,6 +13,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   rename and archive buttons, and a repository's ✕, appear under the pointer,
   on the hovered row.
 
+### Added (Antigravity `agy` launch and provider badge)
+
+- TermHerd detects installed agent CLIs at startup and shows a `▾` picker beside
+  `✳` on each sidebar project row when `agy` is available, letting you start a
+  fresh Antigravity (`✦`) session in that repository (#550, #551).
+- Antigravity tabs display the `✦` kind mark (without a misleading activity dot
+  while live activity is unmonitored) and show `Antigravity` in their hover
+  card; `open_session` over MCP now also accepts `kind: "antigravity"` (#551).
+
 ### Added (a session waiting for you is hard to miss)
 
 - A tab whose session waits for you is tinted red while another tab is

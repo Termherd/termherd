@@ -224,8 +224,8 @@ impl TermherdMcp {
         name = "open_session",
         description = "Open a new terminal session, focused unless `background`. Args: `project` \
                        (working directory; omit for the home dir), `kind` \
-                       (\"shell\" or \"claude\", default \"shell\"), `background` \
-                       (true appends the tab without taking focus; default \
+                       (\"shell\", \"claude\", or \"antigravity\"; default \"shell\"), \
+                       `background` (true appends the tab without taking focus; default \
                        false). Returns the new session's `opened_handle` and the \
                        resulting `focused_handle`."
     )]
@@ -238,9 +238,12 @@ impl TermherdMcp {
             kind: match args.kind.as_deref() {
                 None | Some("shell") => SessionKind::Shell,
                 Some("claude") => SessionKind::Agent(termherd_core::Provider::Claude),
+                Some("antigravity") => SessionKind::Agent(termherd_core::Provider::Antigravity),
                 Some(other) => {
                     return Err(ErrorData::invalid_params(
-                        format!("unknown kind {other:?}; expected \"shell\" or \"claude\""),
+                        format!(
+                            "unknown kind {other:?}; expected \"shell\", \"claude\", or \"antigravity\""
+                        ),
                         None,
                     ));
                 }
@@ -2371,6 +2374,27 @@ mod tests {
                 project: Some("/proj".into()),
                 kind: SessionKind::Agent(termherd_core::Provider::Claude),
                 placement: Placement::Background,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn open_session_tool_accepts_antigravity_kind() {
+        let action = action_of(|mcp| async move {
+            mcp.open_session(Parameters(OpenArgs {
+                project: Some("/proj".into()),
+                kind: Some("antigravity".into()),
+                background: false,
+            }))
+            .await
+        })
+        .await;
+        assert_eq!(
+            action,
+            Action::Open {
+                project: Some("/proj".into()),
+                kind: SessionKind::Agent(termherd_core::Provider::Antigravity),
+                placement: Placement::Foreground,
             }
         );
     }

@@ -244,7 +244,15 @@ impl Shell {
         now: SystemTime,
     ) -> Element<'static, Message> {
         let first = tab.first_session();
+        let provider = self
+            .core
+            .sessions
+            .get(&first)
+            .and_then(|s| s.launch.provider())
+            .filter(|&p| p != termherd_core::Provider::Claude)
+            .map(termherd_core::Provider::display_name);
         let facts = CardFacts {
+            provider,
             agent: self.core.peer_name(first),
             color,
             version: self.core.live_claude_version(first).map(str::to_owned),

@@ -57,7 +57,9 @@ Beside each project row are two launch buttons: **`❯`** opens a plain shell in
 that project's directory, **`✳`** starts a fresh Claude session there — under a
 session id TermHerd picks (`claude --session-id <uuid>`), so once the session
 shows up in the list, clicking it brings its tab forward instead of resuming
-a second copy. The same
+a second copy. When another supported agent CLI is detected on the machine
+(such as Antigravity, `agy`), a compact **`▾`** button appears beside `✳` to
+open a picker and launch it (`✦ Antigravity`) in that project's directory. The same
 two actions are on the keyboard as <kbd>Cmd</kbd>+<kbd>T</kbd> (elsewhere
 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>)
 and <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd>, which use the
