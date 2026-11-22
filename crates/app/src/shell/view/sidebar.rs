@@ -25,21 +25,9 @@ use super::{
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
 use crate::strings;
 
-/// When a sidebar row control shows. At rest a row shows its title, and its
-/// ★ when starred, which is state rather than an action; every action shows
-/// only under the pointer, in the row redrawn on the hover fill.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Shown {
-    AtRest,
-    OnHover,
-}
-
-impl Shown {
-    fn star(starred: bool) -> Self {
-        if starred { Self::AtRest } else { Self::OnHover }
-    }
-}
-
+/// At rest a sidebar row shows its title, and its ★ when starred, which is
+/// state rather than an action. Its actions show only under the pointer, in the
+/// row redrawn on the hover fill.
 /// The width of a row's glyph control. It is fixed so that a slot left empty
 /// at rest lines up with the control the hover layer draws over it.
 const CONTROL_WIDTH: f32 = 12.0;
@@ -259,10 +247,7 @@ impl Shell {
             for (path, s) in &favorites {
                 let id = s.session_id.as_str();
                 // ★ (filled) unstars — which also removes it from here.
-                let star = button(text("★").size(12))
-                    .on_press(Message::ToggleStar(s.session_id.clone()))
-                    .style(button::text)
-                    .padding(0);
+                let star = row_button("★", Message::ToggleStar(s.session_id.clone()));
                 let mut label_row = row![].spacing(6).align_y(iced::Center);
                 if let Some(dot) = live
                     .get(id)
@@ -346,7 +331,7 @@ impl Shell {
             if empty {
                 // Aligned with the triangles above and below it, so an empty
                 // row does not shift its whole group left.
-                iced::widget::Space::new().width(CONTROL_WIDTH).into()
+                empty_slot()
             } else {
                 fold_toggle(&group.path, collapsed)
             }
@@ -378,11 +363,8 @@ impl Shell {
         // Only a declared repo can be taken back out; a discovered project has
         // no declaration to drop, and the button must not promise one.
         let declared = self.core.is_repo_declared(&group.path);
-        let header = |shown: Shown| {
-            let star = match shown {
-                Shown::AtRest => slot(Shown::star(repo_starred), repo_star()),
-                Shown::OnHover => repo_star().into(),
-            };
+        let header = |hovered: bool| {
+            let star = slot(hovered || repo_starred, repo_star());
             let mut header = row![
                 fold(),
                 star,
@@ -409,22 +391,15 @@ impl Shell {
                 ));
             }
             if declared {
-                let forget: Element<'_, Message> = match shown {
-                    Shown::AtRest => iced::widget::Space::new().width(CONTROL_WIDTH).into(),
-                    Shown::OnHover => container(launch_button(
-                        "✕",
-                        strings::SIDEBAR_FORGET_REPO,
-                        Message::ForgetRepo(group.path.clone()),
-                    ))
-                    .width(CONTROL_WIDTH)
-                    .center_x(CONTROL_WIDTH)
-                    .into(),
-                };
-                header = header.push(forget);
+                let forget = chrome_tooltip(
+                    row_button("✕", Message::ForgetRepo(group.path.clone())),
+                    strings::SIDEBAR_FORGET_REPO.to_owned(),
+                );
+                header = header.push(slot(hovered, forget));
             }
             header.into()
         };
-        let header = with_hover(header(Shown::AtRest), header(Shown::OnHover));
+        let header = with_hover(header(false), header(true));
         let mut g = column![header].spacing(4);
         if self.launch_picker.as_deref() == Some(group.path.as_str())
             && !secondary_agents.is_empty()
@@ -515,7 +490,7 @@ impl Shell {
 
         let title = self.core.session_title(s);
         let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);
-        let actions = || self.session_actions(s, renaming_this, title.clone());
+        let actions = || self.session_actions(s, renaming_this, &title);
 
         let entry: Element<'_, Message> = if renaming_this {
             let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
@@ -535,8 +510,11 @@ impl Shell {
                 .into()
         } else {
             let label = row_label(s, &title, disambiguators.get(id), now);
-            // The clickable title that resumes the session.
-            let resume = || -> Element<'_, Message> {
+            // The clickable title that resumes the session. Only the resting
+            // row carries the title's card: iced's hover shows the base
+            // layer's overlay first, so a card on the hovered row would be
+            // built and never seen.
+            let resume = |hovered: bool| -> Element<'_, Message> {
                 let mut content = row![].spacing(6).align_y(iced::Center);
                 if let Some(bar) = s.digest.agent_color.and_then(color_bar) {
                     content = content.push(bar);
@@ -557,6 +535,9 @@ impl Shell {
                     .style(button::text)
                     .padding(0)
                     .width(Fill);
+                if hovered {
+                    return launch.into();
+                }
                 // The narrow row clips the title; hover reveals a richer
                 // card — full title, last activity + message count, and the
                 // last few transcript lines so the session is recognisable
@@ -576,16 +557,16 @@ impl Shell {
                 )
                 .into()
             };
-            with_hover(
-                row![slot(Shown::star(starred), star()), resume()]
+            let layer = |hovered: bool| -> Element<'_, Message> {
+                let mut layer = row![slot(hovered || starred, star()), resume(hovered)]
                     .spacing(6)
-                    .align_y(iced::Center)
-                    .into(),
-                row![star(), resume(), actions()]
-                    .spacing(6)
-                    .align_y(iced::Center)
-                    .into(),
-            )
+                    .align_y(iced::Center);
+                if hovered {
+                    layer = layer.push(actions());
+                }
+                layer.into()
+            };
+            with_hover(layer(false), layer(true))
         };
         // A content hit shows its matched line in muted text beneath the
         // row, so search reveals *what* matched, not merely *that* it did.
@@ -610,7 +591,7 @@ impl Shell {
         &self,
         s: &SessionRecord,
         renaming_this: bool,
-        title: String,
+        title: &str,
     ) -> iced::widget::Row<'_, Message> {
         let rename = if renaming_this {
             row_button("✓", Message::CommitRename)
@@ -619,7 +600,7 @@ impl Shell {
                 "✎",
                 Message::StartRename {
                     session: s.session_id.clone(),
-                    current: title,
+                    current: title.to_owned(),
                 },
             )
         };
@@ -641,20 +622,25 @@ impl Shell {
 
 /// A glyph button on a sidebar row: a star, or one of a session's actions.
 fn row_button(glyph: &'static str, on_press: Message) -> button::Button<'static, Message> {
-    button(text(glyph).size(12).width(Fill).center())
+    button(text(glyph).size(12))
         .on_press(on_press)
         .style(button::text)
         .padding(0)
-        .width(CONTROL_WIDTH)
 }
 
-/// `control` where it shows at rest, else the empty slot the hover layer
-/// draws it in.
-fn slot<'a>(shown: Shown, control: button::Button<'a, Message>) -> Element<'a, Message> {
-    match shown {
-        Shown::AtRest => control.into(),
-        Shown::OnHover => iced::widget::Space::new().width(CONTROL_WIDTH).into(),
+/// `control` in a fixed-width slot when `visible`, else the slot left empty,
+/// so the resting row and the hovered row line up control for control.
+fn slot<'a>(visible: bool, control: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    if visible {
+        container(control).center_x(CONTROL_WIDTH).into()
+    } else {
+        empty_slot()
     }
+}
+
+/// A row control's slot with nothing in it.
+fn empty_slot<'a>() -> Element<'a, Message> {
+    iced::widget::Space::new().width(CONTROL_WIDTH).into()
 }
 
 /// `rest` with `hovered` drawn over it under the pointer, on the hovered
@@ -702,12 +688,13 @@ fn row_label(
 /// when folded, toggling the fold for `key`. Shared by the project headers and
 /// the Plans & mémoire section so the two can't drift apart.
 fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
-    button(text(if collapsed { "▸" } else { "▾" }).size(12))
-        .on_press(Message::ToggleCollapsed(key.to_owned()))
-        .style(button::text)
-        .padding(0)
-        .width(CONTROL_WIDTH)
-        .into()
+    slot(
+        true,
+        row_button(
+            if collapsed { "▸" } else { "▾" },
+            Message::ToggleCollapsed(key.to_owned()),
+        ),
+    )
 }
 
 /// A thin horizontal rule between sidebar sections (Favorites, Plans & mémoire,
@@ -827,11 +814,5 @@ mod tests {
             "Fix the race  ·  4",
             "a twin with no age to show adds nothing"
         );
-    }
-
-    #[test]
-    fn a_starred_row_keeps_its_star_at_rest_and_an_unstarred_one_on_hover() {
-        assert_eq!(Shown::star(true), Shown::AtRest);
-        assert_eq!(Shown::star(false), Shown::OnHover);
     }
 }
