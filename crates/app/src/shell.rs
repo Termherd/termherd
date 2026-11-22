@@ -7668,6 +7668,28 @@ mod key_routing {
     }
 
     #[test]
+    fn an_antigravity_spawn_gets_an_mcp_config_and_a_revocable_token() {
+        let (mut shell, _pty) = empty_shell();
+        shell.mcp_endpoint = Some(crate::mcp::Endpoint {
+            url: "http://127.0.0.1:9/mcp".into(),
+        });
+        let session = session_id(2);
+        let mut spec = bare_spawn(
+            session,
+            Launch::agent_fresh(termherd_core::Provider::Antigravity, None),
+        );
+
+        shell.attach_mcp(&mut spec);
+
+        let config = spec
+            .mcp
+            .expect("an Antigravity spawn carries an mcp config");
+        assert_eq!(config.url, "http://127.0.0.1:9/mcp");
+        assert!(!config.token.is_empty());
+        assert!(shell.mcp_session_tokens.contains_key(&session));
+    }
+
+    #[test]
     fn a_shell_spawn_never_gets_an_mcp_config() {
         let (mut shell, _pty) = empty_shell();
         shell.mcp_endpoint = Some(crate::mcp::Endpoint {

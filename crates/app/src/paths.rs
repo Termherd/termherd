@@ -21,6 +21,13 @@ pub fn home_dir() -> Option<PathBuf> {
     locations::home(&process_env)
 }
 
+/// Per-session live-bridge config path from `$TERMHERD_MCP_CONFIG`, read in
+/// `main()` alone for `termherd mcp-proxy`.
+#[must_use]
+pub fn mcp_config_path() -> Option<PathBuf> {
+    locations::mcp_config_path(&process_env)
+}
+
 /// The app data dir (PRD §7). Resolved in `main()` alone and injected.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataDir(PathBuf);
@@ -228,6 +235,7 @@ mod tests {
             .env_remove(locations::DATA_DIR_VAR)
             .env_remove(locations::CLAUDE_CONFIG_DIR_VAR)
             .env_remove(locations::ANTIGRAVITY_DIR_VAR)
+            .env_remove(locations::MCP_CONFIG_VAR)
             .env("TMPDIR", tmp.path())
             .env("TMP", tmp.path())
             .env("TEMP", tmp.path())

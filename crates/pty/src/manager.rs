@@ -18,8 +18,9 @@ use crate::events::EventSink;
 use crate::grid::Palette;
 use crate::kill::finish_kill;
 use crate::launch::{
-    PrivateFiles, apply_integration, apply_terminal_env, discard_private_files, launch_command,
-    strip_inherited_session_env, write_mcp_config, write_title_settings,
+    PrivateFiles, apply_integration, apply_mcp_config_env, apply_terminal_env,
+    discard_private_files, launch_command, strip_inherited_session_env, strip_termherd_session_env,
+    write_mcp_config, write_title_settings,
 };
 use crate::session::{
     SCREEN_INTERVAL, Session, SharedMaster, SharedPalette, SharedWriter, TermCmd, spawn_reader,
@@ -141,6 +142,7 @@ fn shell_command(configured: Option<&Shell>, cwd: Option<&str>) -> CommandBuilde
         cmd.cwd(cwd);
     }
     strip_inherited_session_env(&mut cmd);
+    strip_termherd_session_env(&mut cmd);
     apply_terminal_env(&mut cmd);
     cmd
 }
@@ -183,6 +185,7 @@ impl PtyHost for PtyManager {
             .mcp
             .as_ref()
             .and_then(|config| write_mcp_config(&self.private, spec.session, config));
+        apply_mcp_config_env(&mut cmd, mcp_config_path.as_deref());
 
         let child = match pair.slave.spawn_command(cmd) {
             Ok(child) => child,

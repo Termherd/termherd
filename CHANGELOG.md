@@ -7,6 +7,16 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (`termherd mcp-proxy` for Antigravity and non-`--mcp-config` CLIs)
+
+- Added the `termherd mcp-proxy` subcommand, a stdio-to-HTTP bridge that reads
+  `TERMHERD_MCP_CONFIG` (exported into every agent session's PTY environment,
+  pointing at the per-session `0600` config file) and forwards JSON-RPC to the
+  parent instance's live bridge. Registering `termherd mcp-proxy` once in `agy`
+  gives Antigravity sessions launched from TermHerd all live workspace tools;
+  outside TermHerd, it serves `settings.json` tools with explicit `initialize`
+  instructions explaining why the live tools are unavailable.
+
 ### Changed (larger, steadier text sizes)
 
 - The interface's text takes four sizes instead of eight: 11 for secondary

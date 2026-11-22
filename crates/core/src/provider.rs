@@ -153,7 +153,7 @@ impl Provider {
                 agent_name: false,
                 send_to_desktop: false,
                 reveal_transcript: true,
-                mcp_bridge_injection: false,
+                mcp_bridge_injection: true,
             },
         }
     }
@@ -265,10 +265,11 @@ mod tests {
             assert!(!caps.slash_commands);
             assert!(!caps.agent_name);
             assert!(!caps.send_to_desktop);
-            assert!(!caps.mcp_bridge_injection);
         }
         assert!(Provider::Antigravity.capabilities().launch_supported);
+        assert!(Provider::Antigravity.capabilities().mcp_bridge_injection);
         assert!(!Provider::Codex.capabilities().launch_supported);
+        assert!(!Provider::Codex.capabilities().mcp_bridge_injection);
     }
 
     #[test]

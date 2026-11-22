@@ -20,6 +20,7 @@ mod log_file;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mcp;
+mod mcp_proxy;
 mod metadata_store;
 mod paths;
 mod providers;
@@ -53,6 +54,16 @@ fn main() -> iced::Result {
         cli::Command::McpConfig => {
             tracing_init::init_tracing(None);
             return report_mcp_config(data_dir.as_ref());
+        }
+        cli::Command::McpProxy => {
+            let config_path = paths::mcp_config_path();
+            let settings_file = data_dir.as_ref().map(settings::path);
+            if let Err(err) = mcp_proxy::run(config_path.as_deref(), settings_file.as_deref()) {
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr(), "termherd mcp-proxy: {err}");
+                std::process::exit(1);
+            }
+            return Ok(());
         }
         cli::Command::Gui => {}
     }

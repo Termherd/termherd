@@ -355,6 +355,30 @@ pub(crate) fn strip_inherited_session_env(cmd: &mut CommandBuilder) {
     }
 }
 
+/// TermHerd's own per-session environment variables. Stripped before every
+/// spawn so a plain shell or a nested TermHerd instance never inherits an
+/// outer session's live-bridge pointer; agent launches that own a bridge
+/// re-export their own path via [`apply_mcp_config_env`].
+pub(crate) const TERMHERD_SESSION_VARS: &[&str] = &[termherd_core::locations::MCP_CONFIG_VAR];
+
+/// Remove every [`TERMHERD_SESSION_VARS`] entry from what `cmd` will spawn
+/// with.
+pub(crate) fn strip_termherd_session_env(cmd: &mut CommandBuilder) {
+    for name in TERMHERD_SESSION_VARS {
+        cmd.env_remove(name);
+    }
+}
+
+/// Export the session's private `mcpServers` file path into the spawned PTY
+/// environment so CLIs without a `--mcp-config` flag (such as Antigravity) can
+/// reach the parent instance's live bridge through `termherd mcp-proxy`. The
+/// file — not the environment — holds the bearer token.
+pub(crate) fn apply_mcp_config_env(cmd: &mut CommandBuilder, mcp_config: Option<&Path>) {
+    if let Some(path) = mcp_config {
+        cmd.env(termherd_core::locations::MCP_CONFIG_VAR, path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,6 +467,47 @@ mod tests {
                 "{name} was lost"
             );
         }
+    }
+
+    #[test]
+    fn stripping_termherd_session_env_removes_mcp_config_var() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        cmd.env(
+            termherd_core::locations::MCP_CONFIG_VAR,
+            "/tmp/parent-mcp.json",
+        );
+        cmd.env("TERMHERD_DATA_DIR", "/tmp/data");
+        strip_termherd_session_env(&mut cmd);
+        assert!(
+            cmd.get_env(termherd_core::locations::MCP_CONFIG_VAR)
+                .is_none(),
+            "parent TERMHERD_MCP_CONFIG must not leak into child spawns"
+        );
+        assert_eq!(
+            cmd.get_env("TERMHERD_DATA_DIR"),
+            Some("/tmp/data".as_ref()),
+            "unrelated TERMHERD_* vars stay intact"
+        );
+    }
+
+    #[test]
+    fn apply_mcp_config_env_exports_only_when_present() {
+        let mut without = CommandBuilder::new("/bin/sh");
+        strip_termherd_session_env(&mut without);
+        apply_mcp_config_env(&mut without, None);
+        assert!(
+            without
+                .get_env(termherd_core::locations::MCP_CONFIG_VAR)
+                .is_none()
+        );
+
+        let mut with = CommandBuilder::new("/bin/sh");
+        strip_termherd_session_env(&mut with);
+        apply_mcp_config_env(&mut with, Some(mcp()));
+        assert_eq!(
+            with.get_env(termherd_core::locations::MCP_CONFIG_VAR),
+            Some(mcp().as_os_str())
+        );
     }
 
     mod stripping {

@@ -22,10 +22,15 @@ pub(crate) enum Command {
     Gui,
     /// Print the `mcpServers` snippet for the running instance, then exit.
     McpConfig,
+    /// Run a stdio-to-HTTP MCP proxy to the parent session's live bridge.
+    McpProxy,
 }
 
 /// The subcommand that asks the running instance for its bridge config.
 const MCP_CONFIG: &str = "mcp-config";
+
+/// The subcommand that proxies stdio MCP traffic to the session's live bridge.
+const MCP_PROXY: &str = "mcp-proxy";
 
 /// Read the command out of `args`, which is the raw `std::env::args` including
 /// the program name.
@@ -37,6 +42,7 @@ const MCP_CONFIG: &str = "mcp-config";
 pub(crate) fn parse<I: IntoIterator<Item = String>>(args: I) -> Command {
     match args.into_iter().nth(1).as_deref() {
         Some(MCP_CONFIG) => Command::McpConfig,
+        Some(MCP_PROXY) => Command::McpProxy,
         _ => Command::Gui,
     }
 }
@@ -97,6 +103,7 @@ mod tests {
     #[test]
     fn the_subcommand_is_recognised_and_nothing_else_is() {
         assert_eq!(parse(argv(&[MCP_CONFIG])), Command::McpConfig);
+        assert_eq!(parse(argv(&[MCP_PROXY])), Command::McpProxy);
         assert_eq!(parse(argv(&[])), Command::Gui);
     }
 
