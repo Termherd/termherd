@@ -12,14 +12,14 @@ termherd-core = { path = "../core" }
 termherd-claude = { path = "../claude" }
 tracing = "0.1"
 notify = "8.2.0"
+rusqlite = { version = "0.43", features = ["bundled"] }
+serde_json = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
-# The dev instance's fixture generator (examples/dev_fixture) writes JSONL.
-serde_json = "1"
 # Captures what the watch logs, so the error path is asserted, not assumed.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 proptest = "1"

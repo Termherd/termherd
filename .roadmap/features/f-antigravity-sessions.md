@@ -2,7 +2,7 @@
 id = "F-antigravity-sessions"
 type = "feature"
 area = ["sessions", "terminal"]
-status = "todo"
+status = "done"
 target = ["Should"]
 +++
 

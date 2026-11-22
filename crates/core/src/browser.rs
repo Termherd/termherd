@@ -11,10 +11,14 @@ use std::time::{Duration, SystemTime};
 
 use termherd_claude::digest::SessionDigest;
 
+use crate::provider::Provider;
+
 /// One discovered session, as delivered by the scan adapter.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionRecord {
-    /// JSONL file stem — Claude CLI's session UUID.
+    /// Which agent CLI owns this session.
+    pub provider: Provider,
+    /// Provider-native session or conversation identifier (e.g. UUID).
     pub session_id: String,
     /// Real project path: derived from `cwd` and worktree-collapsed (with
     /// the fs existence check) by the adapter before it reaches the core.
@@ -300,6 +304,7 @@ mod tests {
 
     fn record(project: &str, id: &str, age_secs: u64) -> SessionRecord {
         SessionRecord {
+            provider: Provider::Claude,
             session_id: id.to_owned(),
             project_path: project.to_owned(),
             digest: SessionDigest {

@@ -252,6 +252,10 @@ impl Shell {
                 {
                     label_row = label_row.push(dot);
                 }
+                if s.provider != Provider::Claude {
+                    label_row =
+                        label_row.push(text(kind_glyph(SessionKind::Agent(s.provider))).size(11));
+                }
                 let title = self.core.session_title(s);
                 // The project label tells cross-project favourites apart.
                 label_row = label_row
@@ -261,6 +265,7 @@ impl Shell {
                     .on_press(Message::LaunchSession {
                         cwd: (*path).to_owned(),
                         resume: s.session_id.clone(),
+                        provider: s.provider,
                     })
                     .style(button::text)
                     .padding(0)
@@ -526,6 +531,10 @@ impl Shell {
                 {
                     content = content.push(dot);
                 }
+                if s.provider != Provider::Claude {
+                    content =
+                        content.push(text(kind_glyph(SessionKind::Agent(s.provider))).size(11));
+                }
                 // Title and twin hint share what the row leaves; the count
                 // keeps its own width at the end, so a cut never hides it.
                 content = content.push(fitted(title.clone(), 11.0, text::default));
@@ -537,6 +546,7 @@ impl Shell {
                     .on_press(Message::LaunchSession {
                         cwd: group_path.to_owned(),
                         resume: s.session_id.clone(),
+                        provider: s.provider,
                     })
                     .style(button::text)
                     .padding(0)
@@ -553,6 +563,8 @@ impl Shell {
                     session_card(
                         title.clone(),
                         &CardFacts {
+                            provider: (s.provider != Provider::Claude)
+                                .then_some(s.provider.display_name()),
                             color: s.digest.agent_color,
                             ..CardFacts::default()
                         },
@@ -781,6 +793,7 @@ mod tests {
 
     fn record(messages: u32, modified: Option<SystemTime>) -> SessionRecord {
         SessionRecord {
+            provider: Provider::Claude,
             session_id: "s1".to_owned(),
             project_path: "/p".to_owned(),
             digest: termherd_claude::digest::SessionDigest {
