@@ -12,6 +12,11 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A sidebar row shows its title, and its ★ when starred. The star, reveal,
   rename and archive buttons, and a repository's ✕, appear under the pointer,
   on the hovered row.
+- A sidebar title uses the whole width its row leaves, and ends in `…` only
+  where it no longer fits, instead of after a fixed number of characters. A
+  session's message count stays at the end of its row, whatever the title's
+  length. Favorites, Plans & memory and the search's matched line fit the same
+  way.
 
 ### Added (Antigravity `agy` launch and provider badge)
 

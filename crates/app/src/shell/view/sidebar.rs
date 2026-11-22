@@ -19,7 +19,7 @@ use termherd_core::{Provider, SessionKind, SessionRecord, SessionStatus, Sidebar
 
 use super::style::row_hover_fill;
 use super::{
-    Backdrop, CardFacts, clip, color_bar, kind_glyph, session_card, sidebar_secondary_text,
+    Backdrop, CardFacts, color_bar, fitted, kind_glyph, session_card, sidebar_secondary_text,
     status_dot,
 };
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
@@ -254,9 +254,9 @@ impl Shell {
                 }
                 let title = self.core.session_title(s);
                 // The project label tells cross-project favourites apart.
-                label_row = label_row.push(
-                    text(format!("{}  ·  {}", clip(&title, 22), project_label(path))).size(11),
-                );
+                label_row = label_row
+                    .push(fitted(title, 11.0, text::default))
+                    .push(text(format!("·  {}", project_label(path))).size(11));
                 let open = button(label_row)
                     .on_press(Message::LaunchSession {
                         cwd: (*path).to_owned(),
@@ -288,7 +288,7 @@ impl Shell {
         if !collapsed {
             for doc in &self.docs {
                 docs_col = docs_col.push(
-                    button(text(clip(&doc.label, 34)).size(11))
+                    button(fitted(doc.label.clone(), 11.0, text::default))
                         .on_press(Message::OpenDoc {
                             label: doc.label.clone(),
                             path: doc.path.clone(),
@@ -508,7 +508,7 @@ impl Shell {
                 .align_y(iced::Center)
                 .into()
         } else {
-            let label = row_label(s, &title, disambiguators.get(id), now);
+            let hint = twin_hint(s, disambiguators.get(id), now);
             // The clickable title that resumes the session. Only the resting
             // row carries the title's card: iced's hover shows the base
             // layer's overlay first, so a card on the hovered row would be
@@ -526,7 +526,14 @@ impl Shell {
                 {
                     content = content.push(dot);
                 }
-                let launch = button(content.push(text(label.clone()).size(11)))
+                // Title and twin hint share what the row leaves; the count
+                // keeps its own width at the end, so a cut never hides it.
+                content = content.push(fitted(title.clone(), 11.0, text::default));
+                if let Some(hint) = &hint {
+                    content = content.push(fitted(format!("·  {hint}"), 11.0, text::default));
+                }
+                content = content.push(text(s.digest.message_count.to_string()).size(11));
+                let launch = button(content)
                     .on_press(Message::LaunchSession {
                         cwd: group_path.to_owned(),
                         resume: s.session_id.clone(),
@@ -569,14 +576,9 @@ impl Shell {
         // Title-only hits return `None` and stay single-line. The
         // core windows the line around the hit; we clip to the sidebar.
         match self.core.search_snippet(s) {
-            Some(snip) => column![
-                entry,
-                text(clip(&snip.line, 44))
-                    .size(10)
-                    .style(sidebar_secondary_text),
-            ]
-            .spacing(1)
-            .into(),
+            Some(snip) => column![entry, fitted(snip.line, 10.0, sidebar_secondary_text),]
+                .spacing(1)
+                .into(),
             None => entry,
         }
     }
@@ -671,22 +673,6 @@ fn with_hover<'a>(
     )
 }
 
-/// A session row's label: the clipped title and message count, plus a
-/// disambiguator when the title repeats within its project.
-fn row_label(
-    s: &SessionRecord,
-    title: &str,
-    disambiguator: Option<&Option<String>>,
-    now: SystemTime,
-) -> String {
-    let mut label = format!("{}  ·  {}", clip(title, 26), s.digest.message_count);
-    if let Some(extra) = twin_hint(s, disambiguator, now) {
-        label.push_str("  ·  ");
-        label.push_str(&extra);
-    }
-    label
-}
-
 /// What tells a row apart from another with the same title in its project:
 /// the real summary when it separates the rows by content, else the
 /// last-activity age. `None` for a row with no twin, or no age to show.
@@ -696,7 +682,7 @@ fn twin_hint(
     now: SystemTime,
 ) -> Option<String> {
     match disambiguator? {
-        Some(summary) => Some(clip(summary, 28)),
+        Some(summary) => Some(summary.clone()),
         None => s
             .modified
             .and_then(|m| now.duration_since(m).ok())
@@ -807,30 +793,19 @@ mod tests {
     }
 
     #[test]
-    fn a_row_label_is_the_title_and_count_plus_what_tells_twins_apart() {
+    fn a_twin_is_told_apart_by_its_summary_else_its_age() {
         let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10_000);
         let two_hours_ago = Some(now - std::time::Duration::from_secs(2 * 3600));
         let row = record(4, two_hours_ago);
+        assert_eq!(twin_hint(&row, None, now), None, "a row with no twin");
         assert_eq!(
-            row_label(&row, "Fix the race", None, now),
-            "Fix the race  ·  4"
+            twin_hint(&row, Some(&Some("in the cache".to_owned())), now),
+            Some("in the cache".to_owned())
         );
+        assert_eq!(twin_hint(&row, Some(&None), now), Some("2h".to_owned()));
         assert_eq!(
-            row_label(
-                &row,
-                "Fix the race",
-                Some(&Some("in the cache".to_owned())),
-                now
-            ),
-            "Fix the race  ·  4  ·  in the cache"
-        );
-        assert_eq!(
-            row_label(&row, "Fix the race", Some(&None), now),
-            "Fix the race  ·  4  ·  2h"
-        );
-        assert_eq!(
-            row_label(&record(4, None), "Fix the race", Some(&None), now),
-            "Fix the race  ·  4",
+            twin_hint(&record(4, None), Some(&None), now),
+            None,
             "a twin with no age to show adds nothing"
         );
     }

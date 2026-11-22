@@ -141,6 +141,10 @@ buttons appear when the pointer is over the row, which is drawn on a lighter
 or darker fill; a row being renamed keeps them in view. A project's ☆, and the
 ✕ of a repository you added, work the same way.
 
+A title too long for its row ends in `…` where the row runs out, and the
+message count keeps its place at the end; the card on hover shows the title
+whole.
+
 | Button | Does |
 | --- | --- |
 | ★ | star / unstar — starred sessions collect under **★ Favorites** at the top |
