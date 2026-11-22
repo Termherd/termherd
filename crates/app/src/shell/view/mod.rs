@@ -35,8 +35,9 @@ use doc_editor::doc_editor;
 use fitted::fitted;
 use modals::modal;
 use style::{
-    Backdrop, COLOR_MARK_WIDTH, active_chip_fill, card_secondary_text, card_style, claude_color,
-    clip, color_bar, color_swatch, kind_glyph, kind_icon, mix, sidebar_secondary_text, status_dot,
+    BODY, Backdrop, CAPTION, COLOR_MARK_WIDTH, DISPLAY, HEADING, active_chip_fill,
+    card_secondary_text, card_style, claude_color, clip, color_bar, color_swatch, kind_glyph,
+    kind_icon, mix, sidebar_secondary_text, status_dot,
 };
 
 impl Shell {
@@ -55,7 +56,7 @@ impl Shell {
         // it occupies — keeping the pane geometry honest rather than estimating.
         let base: Element<'_, Message> = if self.core.sidebar.hidden {
             let handle = container(
-                button(text("▶").size(12))
+                button(text("▶").size(BODY))
                     .on_press(Message::ToggleSidebar)
                     .style(button::text)
                     .padding(4),
@@ -117,14 +118,14 @@ impl Shell {
                         .sum();
                     iced::widget::center(
                         column![
-                            text("TermHerd").size(40),
+                            text("TermHerd").size(DISPLAY),
                             text(strings::welcome_counts(
                                 total,
                                 self.core.sidebar.projects.len()
                             ))
-                            .size(14),
-                            text(strings::WELCOME_HINT_OPEN).size(13),
-                            text(strings::WELCOME_HINT_RESUME).size(13),
+                            .size(HEADING),
+                            text(strings::WELCOME_HINT_OPEN).size(BODY),
+                            text(strings::WELCOME_HINT_RESUME).size(BODY),
                         ]
                         .spacing(8)
                         .align_x(iced::Center),
@@ -284,12 +285,12 @@ impl Shell {
     /// `None` when there is nothing to report.
     fn notice_bar(&self) -> Option<Element<'_, Message>> {
         let notice = self.notice.as_deref()?;
-        let dismiss = button(text(strings::DISMISS).size(11))
+        let dismiss = button(text(strings::DISMISS).size(CAPTION))
             .on_press(Message::DismissNotice)
             .style(button::text)
             .padding(0);
         Some(
-            container(row![text(notice).size(12).width(Fill), dismiss].spacing(6))
+            container(row![text(notice).size(BODY).width(Fill), dismiss].spacing(6))
                 .padding([4, 8])
                 .style(container::bordered_box)
                 .into(),
@@ -310,7 +311,7 @@ impl Shell {
         // the final frame and ends the recording in the same step.
         let shown = (frames + 1).min(cap);
         Some(
-            container(text(format!("● REC {shown}/{cap}")).size(12).color(REC))
+            container(text(format!("● REC {shown}/{cap}")).size(BODY).color(REC))
                 .padding([2, 8])
                 .into(),
         )
@@ -372,7 +373,7 @@ pub(super) fn detail_lines(facts: &CardFacts, digest: Option<&SessionDigest>) ->
 /// One dimmed hover-card line. The title inherits the card's text colour;
 /// both colours come from the theme palette (see `card_style`).
 pub(super) fn card_secondary_line(line: String) -> Element<'static, Message> {
-    text(line).size(10).style(card_secondary_text).into()
+    text(line).size(CAPTION).style(card_secondary_text).into()
 }
 
 /// The frame both hover cards share, so the two surfaces read alike.
@@ -402,7 +403,7 @@ pub(super) fn session_card(
         .map(relative_age);
     let meta = strings::session_meta(age.as_deref(), count);
 
-    let mut card = column![text(title).size(12), card_secondary_line(meta)].spacing(4);
+    let mut card = column![text(title).size(BODY), card_secondary_line(meta)].spacing(4);
     for line in detail_lines(facts, Some(&session.digest)) {
         card = card.push(card_secondary_line(line));
     }

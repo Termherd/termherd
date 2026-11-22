@@ -26,7 +26,7 @@ pub(super) fn kind_glyph(kind: SessionKind) -> &'static str {
 /// The tab chip's kind mark. It takes the chip's text colour, leaving colour
 /// to the status dot beside it.
 pub(super) fn kind_icon<'a>(kind: SessionKind) -> Text<'a> {
-    text(kind_glyph(kind)).size(12)
+    text(kind_glyph(kind)).size(BODY)
 }
 
 /// The activity dot for a status (FR8), or `None` when the session's activity
@@ -38,7 +38,7 @@ pub(super) fn status_dot<'a>(status: SessionStatus, backdrop: Backdrop) -> Optio
     let hue = status_hue(status)?;
     Some(
         text("●")
-            .size(9)
+            .size(STATUS_DOT_SIZE)
             .style(move |theme: &iced::Theme| text::Style {
                 color: Some(shade_status(hue, theme.extended_palette(), backdrop)),
             }),
@@ -55,6 +55,23 @@ pub(super) enum Backdrop {
     /// A waiting tab chip's fill, [`waiting_chip_fill`].
     WaitingChip,
 }
+
+/// The type scale. Every text in the chrome takes one of these sizes, so the
+/// steps between them read as hierarchy: secondary lines, what is read,
+/// what names a group, and the welcome title.
+pub(super) const CAPTION: f32 = 11.0;
+/// Body text.
+pub(super) const BODY: f32 = 13.0;
+/// A group's or a surface's title, and the chrome's icon buttons.
+pub(super) const HEADING: f32 = 15.0;
+/// The welcome screen's title.
+pub(super) const DISPLAY: f32 = 40.0;
+// Steps closer than 15% read as the same size, not as hierarchy.
+const _: () =
+    assert!(BODY >= CAPTION * 1.15 && HEADING >= BODY * 1.15 && DISPLAY >= HEADING * 1.15);
+
+/// The status dot's glyph size: a mark, not text, so outside the scale.
+const STATUS_DOT_SIZE: f32 = 9.0;
 
 /// The hue of a waiting session's marks before any shading, tuned for a dark
 /// surface. The document editor's error note shares it.
@@ -373,6 +390,105 @@ pub(super) fn clip(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use crate::settings::ThemeChoice;
+
+    /// The size each `.size(…)`, `.text_size(…)` and `fitted(…)` call in
+    /// `source` is given, whitespace dropped, so a call rustfmt wrapped
+    /// over lines reads like one that fits on a line.
+    fn size_arguments(source: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        for (call, position) in [(".size(", 0), (".text_size(", 0), ("fitted(", 1)] {
+            for (at, _) in source.match_indices(call) {
+                if source[..at].ends_with("fn ") {
+                    continue;
+                }
+                let (mut depth, mut index, mut argument) = (0, 0, String::new());
+                for c in source[at + call.len()..].chars() {
+                    match c {
+                        '(' | '[' => depth += 1,
+                        ')' | ']' if depth == 0 => break,
+                        ')' | ']' => depth -= 1,
+                        ',' if depth == 0 => {
+                            index += 1;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    if index == position && !c.is_whitespace() {
+                        argument.push(c);
+                    }
+                    if index > position {
+                        break;
+                    }
+                }
+                found.push(argument);
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn a_size_is_read_whole_however_rustfmt_wrapped_the_call() {
+        let source = "text(a).size(BODY - 1.0)\n.text_size(\n    12,\n)\n\
+                      fitted(format!(\"{x}, {y}\"),\n    11.5, style)\nnode.size()";
+        assert_eq!(
+            size_arguments(source),
+            ["BODY-1.0", "", "12", "11.5"],
+            "a getter's empty `size()` reads as no argument"
+        );
+    }
+
+    #[test]
+    fn every_text_size_in_the_view_comes_from_the_type_scale() {
+        // The scale, the sizes that are marks rather than text, and a
+        // getter's empty `size()`.
+        const ALLOWED: [&str; 7] = [
+            "CAPTION",
+            "BODY",
+            "HEADING",
+            "DISPLAY",
+            "STATUS_DOT_SIZE",
+            "CHECKBOX_SIZE",
+            "",
+        ];
+        let mut literals = Vec::new();
+        let mut dirs = vec![std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/shell/view"
+        ))];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).expect("a view directory") {
+                let path = entry.expect("a directory entry").path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).expect("a view source file");
+                // A test-only `use` also carries `#[cfg(test)]`; the tests
+                // start at their module.
+                let view = source
+                    .split("#[cfg(test)]\nmod tests")
+                    .next()
+                    .unwrap_or_default();
+                // `fitted` passes its own `size` parameter through.
+                let pass_through = path.ends_with("fitted.rs");
+                for argument in size_arguments(view) {
+                    if !ALLOWED.contains(&argument.as_str())
+                        && (!pass_through || argument != "size")
+                    {
+                        literals.push(format!("{}: {argument}", path.display()));
+                    }
+                }
+            }
+        }
+        assert!(
+            literals.is_empty(),
+            "sizes outside the scale:\n{}",
+            literals.join("\n")
+        );
+    }
 
     /// Busy, the hue both cases in the report were measured with.
     const BUSY: SessionStatus = SessionStatus::Busy;

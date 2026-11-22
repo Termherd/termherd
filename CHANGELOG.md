@@ -7,6 +7,15 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (larger, steadier text sizes)
+
+- The interface's text takes four sizes instead of eight: 11 for secondary
+  lines, 13 for what you read, 15 for project names and panel titles, 40 for
+  the welcome title. Sidebar rows grow from 11 to 13 and tab titles from 12
+  to 13, so a long title is cut a little sooner.
+- **Titles only** and **Show archived** sit side by side under the search
+  box, giving the session list one more row.
+
 ### Changed (the terminal follows the theme)
 
 - With no `terminal.colors.scheme` set, the terminals take the interface
