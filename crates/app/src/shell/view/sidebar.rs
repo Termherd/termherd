@@ -753,6 +753,48 @@ fn launch_button(
 mod tests {
     use super::*;
 
+    fn record(messages: u32, modified: Option<SystemTime>) -> SessionRecord {
+        SessionRecord {
+            session_id: "s1".to_owned(),
+            project_path: "/p".to_owned(),
+            digest: termherd_claude::digest::SessionDigest {
+                message_count: messages,
+                ..termherd_claude::digest::SessionDigest::default()
+            },
+            modified,
+            transcript: std::path::PathBuf::new(),
+        }
+    }
+
+    #[test]
+    fn a_row_label_is_the_title_and_count_plus_what_tells_twins_apart() {
+        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10_000);
+        let two_hours_ago = Some(now - std::time::Duration::from_secs(2 * 3600));
+        let row = record(4, two_hours_ago);
+        assert_eq!(
+            row_label(&row, "Fix the race", None, now),
+            "Fix the race  ·  4"
+        );
+        assert_eq!(
+            row_label(
+                &row,
+                "Fix the race",
+                Some(&Some("in the cache".to_owned())),
+                now
+            ),
+            "Fix the race  ·  4  ·  in the cache"
+        );
+        assert_eq!(
+            row_label(&row, "Fix the race", Some(&None), now),
+            "Fix the race  ·  4  ·  2h"
+        );
+        assert_eq!(
+            row_label(&record(4, None), "Fix the race", Some(&None), now),
+            "Fix the race  ·  4",
+            "a twin with no age to show adds nothing"
+        );
+    }
+
     #[test]
     fn a_starred_row_keeps_its_star_at_rest_and_an_unstarred_one_on_hover() {
         assert_eq!(Shown::star(true), Shown::AtRest);
