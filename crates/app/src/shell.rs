@@ -6129,7 +6129,7 @@ mod key_routing {
     }
 
     #[test]
-    fn picking_a_theme_restyles_the_chrome_and_saves_it_without_recolouring() {
+    fn picking_a_theme_with_no_scheme_set_recolours_the_terminals_to_match() {
         let (mut shell, sink) = shell_with_appearance(ColorSettings::default());
         let _ = shell.update(Message::PickTheme(ThemeChoice::SolarizedLight));
         assert_eq!(shell.theme(), iced::Theme::SolarizedLight);
@@ -6137,8 +6137,21 @@ mod key_routing {
             *sink.persisted.lock().expect("lock"),
             [crate::settings::AppearanceChange::Theme(
                 ThemeChoice::SolarizedLight
-            )]
+            )],
+            "only the theme is saved: the scheme keeps following it"
         );
+        assert_eq!(
+            *sink.repainted.lock().expect("lock"),
+            [termherd_pty::Palette::named("solarized-light").expect("known scheme")]
+        );
+    }
+
+    #[test]
+    fn picking_a_theme_leaves_a_chosen_scheme_alone() {
+        let colors: ColorSettings =
+            serde_json::from_str(r#"{ "scheme": "dracula" }"#).expect("valid colours");
+        let (mut shell, sink) = shell_with_appearance(colors);
+        let _ = shell.update(Message::PickTheme(ThemeChoice::SolarizedLight));
         assert!(sink.repainted.lock().expect("lock").is_empty());
     }
 

@@ -71,21 +71,25 @@ only when named explicitly. See [Status and attention](../workspace/status.md).
 
 ### `theme`
 
-GUI chrome only: sidebar, tab strip, buttons. `"dark"` by default; an unknown
-value falls back to it. A ✓ value also names a `terminal.colors.scheme`; give
-both keys the same one for a matching window. Both are set live from the
+The GUI chrome: sidebar, tab strip, buttons. `"dark"` by default; an unknown
+value falls back to it. While `terminal.colors.scheme` is unset, or names no
+scheme, the terminals follow the theme too: a ✓ value brings the scheme of the
+same name, and the table names what the others bring. A scheme you set wins
+over the theme's. Both are set live from the
 [settings panel](../workspace/settings-panel.md).
 
-| `theme` values | Same-name `colors.scheme` |
-| --- | --- |
-| `dark`, `light` | — |
-| `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` | ✓ |
-| `dracula`, `nord` | ✓ |
-| `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha` | ✓ |
-| `tokyo-night`, `tokyo-night-storm`, `tokyo-night-light` | ✓ |
-| `kanagawa-wave`, `kanagawa-dragon` | ✓ |
-| `kanagawa-lotus`, `ferra` | — none published |
-| `moonfly`, `nightfly`, `oxocarbon` | ✓ |
+| `theme` values | Same-name `colors.scheme` | Terminal with no scheme set |
+| --- | --- | --- |
+| `dark` | — | the built-in palette |
+| `light` | — | `catppuccin-latte` |
+| `solarized-dark`, `solarized-light`, `gruvbox-dark`, `gruvbox-light` | ✓ | the same name |
+| `dracula`, `nord` | ✓ | the same name |
+| `catppuccin-latte`, `catppuccin-frappe`, `catppuccin-macchiato`, `catppuccin-mocha` | ✓ | the same name |
+| `tokyo-night`, `tokyo-night-storm`, `tokyo-night-light` | ✓ | the same name |
+| `kanagawa-wave`, `kanagawa-dragon` | ✓ | the same name |
+| `kanagawa-lotus` | — none published | `gruvbox-light` |
+| `ferra` | — none published | the built-in palette |
+| `moonfly`, `nightfly`, `oxocarbon` | ✓ | the same name |
 
 Status dots and `/color` marks are shaded per theme to stay legible, at 3:1
 or better. The active tab's dot is shaded against that tab's own fill, so it
@@ -132,7 +136,7 @@ policy covers the sessions a quit stops, not text it would lose.
 | `copy_on_select` | `false` | a drag release, a double-click or a triple-click copies the selection outright, no chord needed |
 | `paste_on_right_click` | `false` | a right-click pastes into the pane under the pointer, not necessarily the focused one |
 | `option_as_meta` | `"left"` | macOS only: which Option key is Meta — `"none"`, `"left"`, `"right"` or `"both"`; the other one types what the layout composes. Another value falls back to `"left"`. |
-| `colors.scheme` | built-in | every [`theme`](#theme) value marked ✓, e.g. `catppuccin-mocha` |
+| `colors.scheme` | the [`theme`](#theme)'s | every [`theme`](#theme) value marked ✓, e.g. `catppuccin-mocha` |
 | `colors.foreground` / `.background` / `.cursor` | from the scheme | `"#rrggbb"`; the `#` is optional |
 | `colors.palette` | from the scheme | the 16 ANSI colours — normal 0–7, then bright 8–15 |
 

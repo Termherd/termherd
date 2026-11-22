@@ -21,17 +21,20 @@ An edit to the file while the panel is open shows in it at once.
 There is no Apply button. Picking a value:
 
 - **Interface theme** restyles the sidebar, tab strip and buttons on the next
-  frame. Every theme iced ships: 22.
+  frame. Every theme iced ships: 22. While the terminal colours are
+  `Same as theme`, it recolours every open terminal with them.
 - **Terminal colours** recolours every open terminal, not only new ones.
-  `Built-in` is the default palette. Explicit colour overrides in
+  `Same as theme`, the default, follows the interface theme; a scheme picked
+  here stays when the theme changes. Explicit colour overrides in
   `terminal.colors` still win over the scheme, as they do at startup.
 
 Each pick writes its own key to `settings.json` — `theme` or
 `terminal.colors.scheme` — and leaves the rest of the file as you wrote it.
 A file that does not parse is left alone rather than rewritten.
 
-Pick the same name in both for a matching window. 18 themes have a scheme;
-[the list](../reference/settings.md#theme) shows which.
+With `Same as theme`, the window matches by itself. 18 themes have a scheme
+of their own; [the list](../reference/settings.md#theme) shows which, and
+what the others bring.
 
 ## One thing a live change cannot reach
 
