@@ -250,6 +250,10 @@ impl Shell {
                 {
                     label_row = label_row.push(dot);
                 }
+                if s.provider != Provider::Claude {
+                    label_row =
+                        label_row.push(text(kind_glyph(SessionKind::Agent(s.provider))).size(11));
+                }
                 let title = self.core.session_title(s);
                 // The project label tells cross-project favourites apart.
                 label_row = label_row.push(
@@ -259,6 +263,7 @@ impl Shell {
                     .on_press(Message::LaunchSession {
                         cwd: (*path).to_owned(),
                         resume: s.session_id.clone(),
+                        provider: s.provider,
                     })
                     .style(button::text)
                     .padding(0)
@@ -510,11 +515,15 @@ impl Shell {
                     label.push_str(&extra);
                 }
             }
+            if s.provider != Provider::Claude {
+                content = content.push(text(kind_glyph(SessionKind::Agent(s.provider))).size(11));
+            }
             content = content.push(text(label).size(11));
             let launch = button(content)
                 .on_press(Message::LaunchSession {
                     cwd: group_path.to_owned(),
                     resume: s.session_id.clone(),
+                    provider: s.provider,
                 })
                 .style(button::text)
                 .padding(0)
@@ -528,6 +537,8 @@ impl Shell {
                 session_card(
                     title.clone(),
                     &CardFacts {
+                        provider: (s.provider != Provider::Claude)
+                            .then_some(s.provider.display_name()),
                         color: s.digest.agent_color,
                         ..CardFacts::default()
                     },

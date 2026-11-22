@@ -117,6 +117,7 @@ fn scan_folder(dir: &Path, old: &ScanCache, next: &mut ScanCache) -> Option<Vec<
             continue;
         };
         records.push(SessionRecord {
+            provider: termherd_core::Provider::Claude,
             session_id,
             project_path: project_path.clone(),
             digest,
@@ -403,11 +404,11 @@ mod tests {
         let after = scanner.scan().unwrap();
         assert_eq!(after.len(), 1, "the removed session is gone");
         // The cache generation was rebuilt without the removed file.
-        let cache = scanner
-            .cache
+        let caches = scanner
+            .caches
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        assert_eq!(cache.digests.len(), 1);
+        assert_eq!(caches.claude.digests.len(), 1);
     }
 
     #[test]
@@ -444,8 +445,8 @@ mod tests {
 
         fs::remove_dir_all(&root).unwrap();
         assert!(scanner.scan().unwrap().is_empty());
-        let cache = scanner.cache.lock().unwrap();
-        assert!(cache.digests.is_empty() && cache.cwds.is_empty());
+        let caches = scanner.caches.lock().unwrap();
+        assert!(caches.claude.digests.is_empty() && caches.claude.cwds.is_empty());
     }
 
     #[test]

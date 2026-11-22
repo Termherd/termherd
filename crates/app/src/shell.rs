@@ -481,10 +481,11 @@ enum Message {
         ask: launch::WorktreeAsk,
         added: Result<String, String>,
     },
-    /// Resume a Claude session in its project directory (FR4).
+    /// Resume a discovered agent session in its project directory (FR4).
     LaunchSession {
         cwd: String,
         resume: String,
+        provider: Provider,
     },
     /// New screen contents for a session.
     PtyOutput {
@@ -1198,18 +1199,23 @@ impl Shell {
                 }
                 Task::none()
             }
-            Message::LaunchSession { cwd, resume } => {
+            Message::LaunchSession {
+                cwd,
+                resume,
+                provider,
+            } => {
                 // Re-clicking a session already open in TermHerd re-focuses its
-                // tab instead of spawning a second terminal for the same Claude
-                // session (FR4). A re-key rewrites the session file under the
-                // same pid, which no job change announces, so read them first.
+                // tab instead of spawning a second terminal for the same
+                // session (FR4). A Claude re-key rewrites the session file
+                // under the same pid, which no job change announces, so read
+                // them first.
                 self.refresh_session_files();
                 if let Some(session) = self.core.open_session_for(&resume)
                     && let Some(index) = self.core.workspace.tab_of(session)
                 {
                     return self.activate_tab(index);
                 }
-                self.launch(cwd, Launch::claude_resume(resume))
+                self.launch(cwd, Launch::agent_resume(provider, resume))
             }
             Message::PtyOutput { session, screen } => {
                 self.screens.insert(session, screen);
@@ -2264,6 +2270,7 @@ mod key_routing {
         let _ = shell.update(Message::LaunchSession {
             cwd: "/tmp/project".to_string(),
             resume: "re-keyed".to_string(),
+            provider: Provider::Claude,
         });
         assert_eq!(shell.core.workspace.tabs.len(), 2, "no duplicate resume");
         assert_eq!(
@@ -3019,6 +3026,7 @@ mod key_routing {
     /// A scanned session record in `project`, for the sidebar-membership tests.
     fn scan_record(id: &str, project: &str) -> SessionRecord {
         SessionRecord {
+            provider: Provider::Claude,
             session_id: id.to_owned(),
             project_path: project.to_owned(),
             digest: termherd_claude::digest::SessionDigest {
@@ -4839,6 +4847,7 @@ mod key_routing {
         let _ = shell.update(Message::LaunchSession {
             cwd: "/tmp/project".to_string(),
             resume: "abc-123".to_string(),
+            provider: Provider::Claude,
         });
         assert_eq!(
             pty.launches(),
@@ -4890,6 +4899,7 @@ mod key_routing {
     /// later resume can pick its digest title up.
     fn browse_named(shell: &mut Shell, id: &str, path: &str, summary: &str, custom: Option<&str>) {
         let record = SessionRecord {
+            provider: Provider::Claude,
             session_id: id.to_string(),
             project_path: path.to_string(),
             digest: termherd_claude::digest::SessionDigest {
@@ -4915,6 +4925,7 @@ mod key_routing {
     fn the_split_sidebar_renders_every_section() {
         let (mut shell, _pty) = shell_with_terminal();
         let row = |id: &str| SessionRecord {
+            provider: Provider::Claude,
             session_id: id.to_string(),
             project_path: "/tmp/alpha".to_string(),
             digest: termherd_claude::digest::SessionDigest {
@@ -4989,6 +5000,7 @@ mod key_routing {
         let _ = shell.update(Message::LaunchSession {
             cwd: "/tmp/project".to_string(),
             resume: "sess".to_string(),
+            provider: Provider::Claude,
         });
         let tab = shell.core.workspace.focused_session().expect("focused");
         assert_eq!(
@@ -5012,6 +5024,7 @@ mod key_routing {
         let _ = shell.update(Message::LaunchSession {
             cwd: "/tmp/project".to_string(),
             resume: "sess".to_string(),
+            provider: Provider::Claude,
         });
         let tab = shell.core.workspace.focused_session().expect("focused");
         assert_eq!(
@@ -5036,6 +5049,7 @@ mod key_routing {
         let _ = shell.update(Message::LaunchSession {
             cwd: "/tmp/project".to_string(),
             resume: "sess".to_string(),
+            provider: Provider::Claude,
         });
         let tab = shell.core.workspace.focused_session().expect("focused");
         let _ = shell.update(Message::PtyTitle {
@@ -5058,6 +5072,7 @@ mod key_routing {
         let _ = shell.update(Message::LaunchSession {
             cwd: "/tmp/project".to_string(),
             resume: "sess".to_string(),
+            provider: Provider::Claude,
         });
         let tab = shell.core.workspace.focused_session().expect("focused");
         assert_eq!(shell.core.workspace.session_title(tab), Some("project"));
@@ -5072,6 +5087,7 @@ mod key_routing {
         let _ = shell.update(Message::LaunchSession {
             cwd: "/tmp/ghost".to_string(),
             resume: "missing".to_string(),
+            provider: Provider::Claude,
         });
         let tab = shell.core.workspace.focused_session().expect("focused");
         assert_eq!(shell.core.workspace.session_title(tab), Some("ghost"));
@@ -8307,6 +8323,7 @@ mod key_routing {
     /// has something to act on.
     fn browse_one(shell: &mut Shell, id: &str) {
         let record = SessionRecord {
+            provider: Provider::Claude,
             session_id: id.to_string(),
             project_path: "/tmp/project".to_string(),
             digest: termherd_claude::digest::SessionDigest {
@@ -8899,6 +8916,7 @@ mod key_routing {
         let _ = shell.update(Message::LaunchSession {
             cwd: "/tmp/project".to_string(),
             resume: "sess".to_string(),
+            provider: Provider::Claude,
         });
         assert_eq!(
             shell.core.workspace.active, sess_tab,

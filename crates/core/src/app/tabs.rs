@@ -134,7 +134,8 @@ impl App {
     pub fn tab_title(&self, cwd: &str, launch: &Launch) -> String {
         launch
             .claude_id()
-            .and_then(|claude_id| self.record_for(claude_id))
+            .or_else(|| launch.resume_id())
+            .and_then(|id| self.record_for(id))
             .map(|record| self.session_title(record))
             .filter(|name| !name.trim().is_empty())
             .unwrap_or_else(|| project_label(cwd).to_owned())

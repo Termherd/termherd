@@ -16,6 +16,7 @@ pub(crate) fn sid(n: u64) -> SessionId {
 /// A browsed session record with the given id / project / first-prompt summary.
 pub(crate) fn record(id: &str, path: &str, summary: &str) -> SessionRecord {
     SessionRecord {
+        provider: crate::Provider::Claude,
         session_id: id.into(),
         project_path: path.into(),
         digest: SessionDigest {
