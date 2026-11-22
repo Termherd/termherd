@@ -50,7 +50,7 @@ pub(crate) fn scan_antigravity(
     next: &mut ScanCache,
 ) -> Vec<SessionRecord> {
     let db_path = root.join("conversation_summaries.db");
-    if !db_path.is_file() {
+    if !std::fs::symlink_metadata(&db_path).is_ok_and(|m| m.file_type().is_file()) {
         return Vec::new();
     }
     let rows = match read_summaries(&db_path) {
@@ -118,11 +118,7 @@ fn digest_for_row(
     }
     match parsed {
         Some(mut digest) => {
-            if let Some(title) = fallback_title
-                && digest.ai_title.is_none()
-            {
-                digest.ai_title = Some(truncate_utf16(title, SUMMARY_MAX_UNITS));
-            }
+            digest.ai_title = fallback_title.map(|t| truncate_utf16(t, SUMMARY_MAX_UNITS));
             if digest.summary.is_empty()
                 && let Some(title) = fallback_title
             {
@@ -175,13 +171,13 @@ fn sqlite_readonly_uri(path: &Path) -> String {
     if !raw.starts_with('/') {
         encoded.push('/');
     }
-    for byte in raw.bytes() {
-        match byte {
-            b'?' => encoded.push_str("%3F"),
-            b'#' => encoded.push_str("%23"),
-            b'%' => encoded.push_str("%25"),
-            b' ' => encoded.push_str("%20"),
-            _ => encoded.push(char::from(byte)),
+    for ch in raw.chars() {
+        match ch {
+            '?' => encoded.push_str("%3F"),
+            '#' => encoded.push_str("%23"),
+            '%' => encoded.push_str("%25"),
+            ' ' => encoded.push_str("%20"),
+            _ => encoded.push(ch),
         }
     }
     encoded.push_str("?mode=ro&immutable=1");
@@ -549,11 +545,54 @@ mod tests {
         );
         assert!(next.digests.contains_key(&transcript));
 
-        // Second scan reuses the cached digest when the file signature matches.
+        // Second scan reuses the cached digest when the file signature matches,
+        // while picking up an updated title from SQLite without re-parsing JSONL.
+        let conn = Connection::open(tmp.path().join("conversation_summaries.db")).expect("reopen");
+        conn.execute(
+            "UPDATE conversation_summaries SET title = ?1 WHERE conversation_id = ?2",
+            (
+                "Updated scanner title",
+                "0b9f2c4e-7d1a-4e8b-9c3f-5a6d7e8f9012",
+            ),
+        )
+        .expect("update title");
+        drop(conn);
+
         let mut third = ScanCache::default();
         let records2 = scan_antigravity(tmp.path(), &next, &mut third);
         assert_eq!(records2.len(), 1);
-        assert_eq!(records2[0].digest, records[0].digest);
+        assert_eq!(records2[0].digest.summary, "Hello agy");
+        assert_eq!(
+            records2[0].digest.ai_title.as_deref(),
+            Some("Updated scanner title")
+        );
+    }
+
+    #[test]
+    fn scans_database_under_non_ascii_directory_path() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("Benoît #1");
+        fs::create_dir_all(&root).expect("mkdir utf8 root");
+        let conn = create_mock_db(&root);
+        conn.execute(
+            "INSERT INTO conversation_summaries VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            (
+                "conv-utf8",
+                "UTF-8 path works",
+                "",
+                1i64,
+                "2026-11-21 16:48:11+00:00",
+                r#"["file:///tmp/repo"]"#,
+                0i64,
+            ),
+        )
+        .expect("insert");
+        drop(conn);
+
+        let mut next = ScanCache::default();
+        let records = scan_antigravity(&root, &ScanCache::default(), &mut next);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].session_id, "conv-utf8");
     }
 
     #[test]
