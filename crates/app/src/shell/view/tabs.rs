@@ -14,7 +14,7 @@ use termherd_core::ClaudeColor;
 
 use super::modals::modal_card;
 use super::style::{
-    ATTENTION_HUE, BODY, HEADING, text_on_surface, waiting_chip_fill, waiting_chip_text,
+    ATTENTION_HUE, BODY, CAPTION, HEADING, text_on_surface, waiting_chip_fill, waiting_chip_text,
 };
 use super::{
     Backdrop, COLOR_MARK_WIDTH, CardFacts, active_chip_fill, card_frame, card_secondary_line,
@@ -275,7 +275,7 @@ impl Shell {
 
 /// A list's heading: the title of the tab it acts on.
 fn list_heading<'a>(title: &str) -> Element<'a, Message> {
-    text(clip(title, 32)).size(BODY).into()
+    text(clip(title, 32)).size(CAPTION).into()
 }
 
 /// One tab menu entry as its card line: the label with the entry's shortcut

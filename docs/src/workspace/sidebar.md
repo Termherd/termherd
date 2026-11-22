@@ -25,27 +25,27 @@ Toggle it with <kbd>Cmd</kbd>+<kbd>B</kbd> (macOS) or
 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>B</kbd> (Windows, Linux).
 
 ```text
-┌──────────────────────────┐
-│ ◀ Hide       + Add a repo  ⚙ │  ← add a folder · open the settings panel
-│ Search…                  │  ← focus: Cmd+F / Ctrl+Shift+F
+┌────────────────────────────────┐
+│ ◀ Hide       + Add a repo  ⚙   │  ← add a folder · open the settings panel
+│ Search…                        │  ← focus: Cmd+F / Ctrl+Shift+F
 │ ☐ Titles only  ☐ Show archived │
-├──────────────────────────┤
-│ ★ Favorites              │
-│   my-app · fix the race  │
-├──────────────────────────┤
-│   new-repo     ❯  ✳      │  ← added by hand, no sessions yet
-│     No sessions yet …    │
-│ ▾ ★ my-app        ❯  ✳   │  ← launch a shell / a fresh Claude session
-│   ★ fix the race         │  ← starred
-│   ☆ add the cache  ↗ ✎ ⊟ │  ← under the pointer
-│     … 3 more             │
-│ ▸ other-repo      ❯  ✳   │
-├──────────────────────────┤
-│ Plans & memory           │
-│   CLAUDE.md (global)     │
-│   my-app/CLAUDE.md       │
-│   plan-2026-08-01.md     │
-└──────────────────────────┘
+├────────────────────────────────┤
+│ ★ Favorites                    │
+│   my-app · fix the race        │
+├────────────────────────────────┤
+│   new-repo     ❯  ✳            │  ← added by hand, no sessions yet
+│     No sessions yet …          │
+│ ▾ ★ my-app        ❯  ✳         │  ← launch a shell / a fresh Claude session
+│   ★ fix the race               │  ← starred
+│   ☆ add the cache  ↗ ✎ ⊟       │  ← under the pointer
+│     … 3 more                   │
+│ ▸ other-repo      ❯  ✳         │
+├────────────────────────────────┤
+│ Plans & memory                 │
+│   CLAUDE.md (global)           │
+│   my-app/CLAUDE.md             │
+│   plan-2026-08-01.md           │
+└────────────────────────────────┘
 ```
 
 ## Opening a session

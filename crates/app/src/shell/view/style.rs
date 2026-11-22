@@ -439,30 +439,47 @@ mod tests {
 
     #[test]
     fn every_text_size_in_the_view_comes_from_the_type_scale() {
-        // The scale, and the sizes that are marks or plumbing rather than
-        // text: `size` is `fitted`'s own parameter, passed through.
-        const ALLOWED: [&str; 8] = [
+        // The scale, the sizes that are marks rather than text, and a
+        // getter's empty `size()`.
+        const ALLOWED: [&str; 7] = [
             "CAPTION",
             "BODY",
             "HEADING",
             "DISPLAY",
             "STATUS_DOT_SIZE",
             "CHECKBOX_SIZE",
-            "size",
             "",
         ];
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/src/shell/view");
         let mut literals = Vec::new();
-        for entry in std::fs::read_dir(dir).expect("the view directory") {
-            let path = entry.expect("a directory entry").path();
-            if path.extension().is_none_or(|ext| ext != "rs") {
-                continue;
-            }
-            let source = std::fs::read_to_string(&path).expect("a view source file");
-            let view = source.split("#[cfg(test)]").next().unwrap_or_default();
-            for argument in size_arguments(view) {
-                if !ALLOWED.contains(&argument.as_str()) {
-                    literals.push(format!("{}: {argument}", path.display()));
+        let mut dirs = vec![std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/shell/view"
+        ))];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).expect("a view directory") {
+                let path = entry.expect("a directory entry").path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).expect("a view source file");
+                // A test-only `use` also carries `#[cfg(test)]`; the tests
+                // start at their module.
+                let view = source
+                    .split("#[cfg(test)]\nmod tests")
+                    .next()
+                    .unwrap_or_default();
+                // `fitted` passes its own `size` parameter through.
+                let pass_through = path.ends_with("fitted.rs");
+                for argument in size_arguments(view) {
+                    if !ALLOWED.contains(&argument.as_str())
+                        && (!pass_through || argument != "size")
+                    {
+                        literals.push(format!("{}: {argument}", path.display()));
+                    }
                 }
             }
         }

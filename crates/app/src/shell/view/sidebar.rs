@@ -32,8 +32,9 @@ const CONTROL_WIDTH: f32 = BODY + 1.0;
 /// A search toggle's box: a control, not text, so outside the type scale.
 const CHECKBOX_SIZE: f32 = 14.0;
 
-/// The widest a twin's hint grows, so a long summary leaves the title room.
-const TWIN_HINT_MAX_WIDTH: f32 = 120.0;
+/// The widest a twin's hint grows, so a long summary leaves the title room:
+/// eleven ems of the hint's own size, so it keeps its share as BODY grows.
+const TWIN_HINT_MAX_WIDTH: f32 = BODY * 11.0;
 
 /// Fold key for the Plans & mémoire section. Project groups key their
 /// fold by real (always absolute) path; this reserved, non-path key shares the
