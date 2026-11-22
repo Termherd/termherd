@@ -340,8 +340,6 @@ fn list_card<'a>(
     modal_card(card)
 }
 
-/// A tab chip's text colour: the primary tier on the active (filled) chip, the
-/// background tier otherwise, so the label stays legible on either fill.
 /// The strip's count of the sessions waiting for the user, in the attention
 /// hue; a click goes to the next one, as `next-attention` does.
 fn waiting_count<'a>(waiting: usize) -> Element<'a, Message> {
@@ -391,6 +389,7 @@ impl ChipLook {
     }
 }
 
+/// A tab chip's text colour, legible on the fill its `look` gives it.
 fn tab_chip_text(theme: &iced::Theme, look: ChipLook) -> Color {
     let palette = theme.extended_palette();
     match look {

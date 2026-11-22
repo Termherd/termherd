@@ -1,6 +1,7 @@
 //! OS handoffs the effect executor performs: opening a detected link in the
 //! default handler ([`open_url`]), posting a desktop notification
-//! ([`notify`]), and the Dock badge ([`show_dock_badge`]). Both are fire-and-forget, never fatal. This module plus
+//! ([`notify`]), and the Dock badge ([`show_dock_badge`]). All are
+//! fire-and-forget, never fatal. This module plus
 //! `crate::macos` are the only homes for `cfg(target_os)` in the app crate — OS
 //! divergence is quarantined here rather than scattered through the shell.
 
