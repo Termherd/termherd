@@ -72,7 +72,7 @@ impl Shell {
         self.appearance.colors.scheme.clone_from(&name);
         self.config.terminal_scheme = name;
         self.settings_sink
-            .repaint(self.appearance.colors.to_palette());
+            .repaint(self.appearance.colors.to_palette(self.appearance.theme));
         self.settings_sink.persist(&AppearanceChange::Scheme(
             self.appearance.colors.scheme.clone(),
         ));

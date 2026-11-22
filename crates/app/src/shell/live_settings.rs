@@ -84,7 +84,7 @@ impl Shell {
     /// harmless.
     pub(super) fn apply_settings(&mut self, settings: &Settings) -> Task<Message> {
         let palette = settings.palette();
-        if palette != self.appearance.colors.to_palette() {
+        if palette != self.appearance.colors.to_palette(self.appearance.theme) {
             self.settings_sink.repaint(palette);
         }
         self.settings_sink.set_shell(settings.shell_profile());

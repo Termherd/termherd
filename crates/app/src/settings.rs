@@ -364,7 +364,7 @@ impl ColorSettings {
     /// slot; each invalid one is warned about and skipped, so one bad value
     /// never costs the rest of the scheme.
     #[must_use]
-    pub fn to_palette(&self) -> Palette {
+    pub fn to_palette(&self, _theme: ThemeChoice) -> Palette {
         let mut palette = match &self.scheme {
             None => Palette::default(),
             Some(name) => Palette::named(name).unwrap_or_else(|| {
@@ -647,7 +647,7 @@ impl Settings {
     /// user's valid `terminal.colors` overrides applied.
     #[must_use]
     pub fn palette(&self) -> Palette {
-        self.terminal.colors.to_palette()
+        self.terminal.colors.to_palette(self.theme)
     }
 
     /// The active keymap: platform defaults with the user's `keys` overrides
