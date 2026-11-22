@@ -17,12 +17,17 @@ use termherd_core::browser::{ProjectGroup, project_label, relative_age};
 use termherd_core::keymap::Action;
 use termherd_core::{Provider, SessionKind, SessionRecord, SessionStatus, SidebarFold};
 
+use super::style::row_hover_fill;
 use super::{
     Backdrop, CardFacts, clip, color_bar, kind_glyph, session_card, sidebar_secondary_text,
     status_dot,
 };
 use crate::shell::{Focus, Message, Shell, rename_id, search_id};
 use crate::strings;
+
+/// The width of a row's glyph control. It is fixed so that a slot left empty
+/// at rest lines up with the control the hover layer draws over it.
+const CONTROL_WIDTH: f32 = 12.0;
 
 /// Fold key for the Plans & mémoire section. Project groups key their
 /// fold by real (always absolute) path; this reserved, non-path key shares the
@@ -239,10 +244,7 @@ impl Shell {
             for (path, s) in &favorites {
                 let id = s.session_id.as_str();
                 // ★ (filled) unstars — which also removes it from here.
-                let star = button(text("★").size(12))
-                    .on_press(Message::ToggleStar(s.session_id.clone()))
-                    .style(button::text)
-                    .padding(0);
+                let star = row_button("★", Message::ToggleStar(s.session_id.clone()));
                 let mut label_row = row![].spacing(6).align_y(iced::Center);
                 if let Some(dot) = live
                     .get(id)
@@ -322,60 +324,75 @@ impl Shell {
         // a tree header should fold, not launch. Launching moved
         // to two explicit buttons beside it: `❯` opens a plain shell, `✳` a
         // fresh Claude session, both in the repo dir (FR4a).
-        let fold: Element<'_, Message> = if empty {
-            // Aligned with the triangles above and below it, so an empty row
-            // does not shift its whole group left.
-            iced::widget::Space::new().width(12).into()
-        } else {
-            fold_toggle(&group.path, collapsed)
+        let fold = || -> Element<'_, Message> {
+            if empty {
+                // Aligned with the triangles above and below it, so an empty
+                // row does not shift its whole group left.
+                empty_slot()
+            } else {
+                fold_toggle(&group.path, collapsed)
+            }
         };
         // A repo star pins the whole project group to the top of the sidebar
         // (F-favorites), mirroring the per-session star below.
         let repo_starred = self.core.is_repo_starred(&group.path);
-        let repo_star = button(text(if repo_starred { "★" } else { "☆" }).size(12))
-            .on_press(Message::ToggleRepoStar(group.path.clone()))
-            .style(button::text)
-            .padding(0);
-        let mut name = button(text(project_label(&group.path).to_owned()).size(14))
-            .style(button::text)
-            .padding(0)
-            .width(Fill);
-        // An empty row has no list to fold, so the click is not merely
-        // ineffective — it would store a fold nothing shows, to surface the day
-        // the repo gains its first session.
-        if !empty {
-            name = name.on_press(Message::ToggleCollapsed(group.path.clone()));
-        }
-        let launch_shell = launch_button(
-            kind_glyph(SessionKind::Shell),
-            strings::SIDEBAR_LAUNCH_SHELL,
-            Message::LaunchProject(group.path.clone()),
-        );
-        let launch_claude = launch_button(
-            kind_glyph(SessionKind::Agent(Provider::Claude)),
-            strings::SIDEBAR_LAUNCH_CLAUDE,
-            Message::LaunchClaude(group.path.clone()),
-        );
+        let repo_star_glyph = if repo_starred { "★" } else { "☆" };
+        let repo_star = || row_button(repo_star_glyph, Message::ToggleRepoStar(group.path.clone()));
+        let name = || {
+            let name = button(text(project_label(&group.path).to_owned()).size(14))
+                .style(button::text)
+                .padding(0)
+                .width(Fill);
+            // An empty row has no list to fold, so the click is not merely
+            // ineffective — it would store a fold nothing shows, to surface
+            // the day the repo gains its first session.
+            if empty {
+                name
+            } else {
+                name.on_press(Message::ToggleCollapsed(group.path.clone()))
+            }
+        };
         let secondary_agents = self.providers.secondary_launchable(Provider::Claude);
-        let mut header = row![fold, repo_star, name, launch_shell, launch_claude]
-            .spacing(6)
-            .align_y(iced::Center);
-        if !secondary_agents.is_empty() {
-            header = header.push(launch_button(
-                "▾",
-                strings::SIDEBAR_LAUNCH_OTHER,
-                Message::ToggleLaunchPicker(group.path.clone()),
-            ));
-        }
         // Only a declared repo can be taken back out; a discovered project has
         // no declaration to drop, and the button must not promise one.
-        if self.core.is_repo_declared(&group.path) {
-            header = header.push(launch_button(
-                "✕",
-                strings::SIDEBAR_FORGET_REPO,
-                Message::ForgetRepo(group.path.clone()),
-            ));
-        }
+        let declared = self.core.is_repo_declared(&group.path);
+        let header = |hovered: bool| {
+            let star = slot(hovered || repo_starred, repo_star_glyph, repo_star());
+            let mut header = row![
+                fold(),
+                star,
+                name(),
+                launch_button(
+                    kind_glyph(SessionKind::Shell),
+                    strings::SIDEBAR_LAUNCH_SHELL,
+                    Message::LaunchProject(group.path.clone()),
+                ),
+                launch_button(
+                    kind_glyph(SessionKind::Agent(Provider::Claude)),
+                    strings::SIDEBAR_LAUNCH_CLAUDE,
+                    Message::LaunchClaude(group.path.clone()),
+                )
+            ]
+            .spacing(6)
+            .align_y(iced::Center);
+            // The other agents' picker is a launch action: always in view.
+            if !secondary_agents.is_empty() {
+                header = header.push(launch_button(
+                    "▾",
+                    strings::SIDEBAR_LAUNCH_OTHER,
+                    Message::ToggleLaunchPicker(group.path.clone()),
+                ));
+            }
+            if declared {
+                let forget = chrome_tooltip(
+                    row_button("✕", Message::ForgetRepo(group.path.clone())),
+                    strings::SIDEBAR_FORGET_REPO.to_owned(),
+                );
+                header = header.push(slot(hovered, "✕", forget));
+            }
+            header.into()
+        };
+        let header = with_hover(header(false), header(true));
         let mut g = column![header].spacing(4);
         if self.launch_picker.as_deref() == Some(group.path.as_str())
             && !secondary_agents.is_empty()
@@ -444,7 +461,10 @@ impl Shell {
 
     /// One session row: its star pin, the resumable title (an edit field while
     /// renaming), the rename and archive controls, and — under a content search
-    /// hit — the matched line in muted text beneath it.
+    /// hit — the matched line in muted text beneath it. At rest the row shows
+    /// its title, and its ★ when starred, which is state rather than an
+    /// action; its actions show only under the pointer, in the row redrawn on
+    /// the hover fill.
     fn session_row(
         &self,
         s: &SessionRecord,
@@ -455,128 +475,95 @@ impl Shell {
     ) -> Element<'_, Message> {
         let id = s.session_id.as_str();
         let starred = self.core.is_starred(id);
-        let archived = self.core.is_archived(id);
 
         // Star toggles the pin; archive hides/shows (F-session-metadata).
-        let star = button(text(if starred { "★" } else { "☆" }).size(12))
-            .on_press(Message::ToggleStar(s.session_id.clone()))
-            .style(button::text)
-            .padding(0);
+        let star_glyph = if starred { "★" } else { "☆" };
+        let star = |visible: bool| {
+            slot(
+                visible,
+                star_glyph,
+                row_button(star_glyph, Message::ToggleStar(s.session_id.clone())),
+            )
+        };
 
-        let mut content = row![].spacing(6).align_y(iced::Center);
-        if let Some(bar) = s.digest.agent_color.and_then(color_bar) {
-            content = content.push(bar);
-        }
-        // A coloured dot marks a session already open in TermHerd and
-        // carries its live activity (FR8).
-        if let Some(dot) = live
-            .get(id)
-            .and_then(|status| status_dot(*status, Backdrop::Chrome))
-        {
-            content = content.push(dot);
-        }
         let title = self.core.session_title(s);
         let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);
+        let actions =
+            |visible: bool| controls(self.session_actions(s, renaming_this, &title), visible);
 
-        // The middle is an edit field while renaming this row, else the
-        // clickable title that resumes the session.
-        let middle: Element<'_, Message> = if renaming_this {
+        let entry: Element<'_, Message> = if renaming_this {
             let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
             // The hint is what a blank commit leaves: it clears only the
-            // sidebar's own name.
-            text_input(&self.core.session_title_unnamed_here(s), buffer)
+            // sidebar's own name. The row keeps its ✓ in view, away from the
+            // pointer, while the name is typed.
+            let field = text_input(&self.core.session_title_unnamed_here(s), buffer)
                 .id(rename_id())
                 .on_input(Message::RenameInput)
                 .on_submit(Message::CommitRename)
                 .size(11)
                 .padding(2)
-                .width(Fill)
+                .width(Fill);
+            row![star(true), field, actions(true)]
+                .spacing(6)
+                .align_y(iced::Center)
                 .into()
         } else {
-            // Colliding rows carry a disambiguator so duplicate titles stay
-            // distinguishable: the real summary when it separates them by
-            // content, else the last-activity age.
-            let mut label = format!("{}  ·  {}", clip(&title, 26), s.digest.message_count);
-            if let Some(subtitle) = disambiguators.get(id) {
-                let extra = match subtitle {
-                    Some(summary) => Some(clip(summary, 28)),
-                    None => s
-                        .modified
-                        .and_then(|m| now.duration_since(m).ok())
-                        .map(relative_age),
-                };
-                if let Some(extra) = extra {
-                    label.push_str("  ·  ");
-                    label.push_str(&extra);
+            let label = row_label(s, &title, disambiguators.get(id), now);
+            // The clickable title that resumes the session. Only the resting
+            // row carries the title's card: iced's hover shows the base
+            // layer's overlay first, so a card on the hovered row would be
+            // built and never seen.
+            let resume = |hovered: bool| -> Element<'_, Message> {
+                let mut content = row![].spacing(6).align_y(iced::Center);
+                if let Some(bar) = s.digest.agent_color.and_then(color_bar) {
+                    content = content.push(bar);
                 }
-            }
-            content = content.push(text(label).size(11));
-            let launch = button(content)
-                .on_press(Message::LaunchSession {
-                    cwd: group_path.to_owned(),
-                    resume: s.session_id.clone(),
-                })
-                .style(button::text)
-                .padding(0)
-                .width(Fill);
-            // The narrow row clips the title; hover reveals a richer
-            // card — full title, last activity + message count, and the
-            // last few transcript lines so the session is recognisable
-            // without opening it.
-            tooltip(
-                launch,
-                session_card(
-                    title.clone(),
-                    &CardFacts {
-                        color: s.digest.agent_color,
-                        ..CardFacts::default()
-                    },
-                    s,
-                    now,
-                ),
-                tooltip::Position::Right,
-            )
-            .into()
+                // A coloured dot marks a session already open in TermHerd
+                // and carries its live activity (FR8).
+                if let Some(dot) = live
+                    .get(id)
+                    .and_then(|status| status_dot(*status, Backdrop::Chrome))
+                {
+                    content = content.push(dot);
+                }
+                let launch = button(content.push(text(label.clone()).size(11)))
+                    .on_press(Message::LaunchSession {
+                        cwd: group_path.to_owned(),
+                        resume: s.session_id.clone(),
+                    })
+                    .style(button::text)
+                    .padding(0)
+                    .width(Fill);
+                if hovered {
+                    return launch.into();
+                }
+                // The narrow row clips the title; hover reveals a richer
+                // card — full title, last activity + message count, and the
+                // last few transcript lines so the session is recognisable
+                // without opening it.
+                tooltip(
+                    launch,
+                    session_card(
+                        title.clone(),
+                        &CardFacts {
+                            color: s.digest.agent_color,
+                            ..CardFacts::default()
+                        },
+                        s,
+                        now,
+                    ),
+                    tooltip::Position::Right,
+                )
+                .into()
+            };
+            let layer = |hovered: bool| -> Element<'_, Message> {
+                row![star(hovered || starred), resume(hovered), actions(hovered)]
+                    .spacing(6)
+                    .align_y(iced::Center)
+                    .into()
+            };
+            with_hover(layer(false), layer(true))
         };
-
-        // ✎ starts the rename; ✓ commits it.
-        let rename = if renaming_this {
-            button(text("✓").size(12))
-                .on_press(Message::CommitRename)
-                .style(button::text)
-                .padding(0)
-        } else {
-            button(text("✎").size(12))
-                .on_press(Message::StartRename {
-                    session: s.session_id.clone(),
-                    current: title.clone(),
-                })
-                .style(button::text)
-                .padding(0)
-        };
-
-        // Archiving is deliberate: arm the confirmation bar.
-        // Un-archiving is a harmless restore, so it stays one-click.
-        let archive_msg = if archived {
-            Message::ToggleArchive(s.session_id.clone())
-        } else {
-            Message::RequestArchive(s.session_id.clone())
-        };
-        let archive = button(text(if archived { "⊞" } else { "⊟" }).size(12))
-            .on_press(archive_msg)
-            .style(button::text)
-            .padding(0);
-
-        // Shows the file this row was read from: the scan's own path, which a
-        // worktree session's collapsed project path could not rebuild.
-        let reveal = button(text("↗").size(12))
-            .on_press(Message::RevealRowTranscript(s.transcript.clone()))
-            .style(button::text)
-            .padding(0);
-
-        let entry = row![star, middle, reveal, rename, archive]
-            .spacing(6)
-            .align_y(iced::Center);
         // A content hit shows its matched line in muted text beneath the
         // row, so search reveals *what* matched, not merely *that* it did.
         // Title-only hits return `None` and stay single-line. The
@@ -590,20 +577,136 @@ impl Shell {
             ]
             .spacing(1)
             .into(),
-            None => entry.into(),
+            None => entry,
         }
     }
+
+    /// A session row's actions, each a glyph and what it sends: reveal the
+    /// transcript, rename (✎ starts it, ✓ commits it), and archive.
+    fn session_actions(
+        &self,
+        s: &SessionRecord,
+        renaming_this: bool,
+        title: &str,
+    ) -> [(&'static str, Message); 3] {
+        let rename = if renaming_this {
+            ("✓", Message::CommitRename)
+        } else {
+            (
+                "✎",
+                Message::StartRename {
+                    session: s.session_id.clone(),
+                    current: title.to_owned(),
+                },
+            )
+        };
+        // Archiving is deliberate: arm the confirmation bar.
+        // Un-archiving is a harmless restore, so it stays one-click.
+        let archive = if self.core.is_archived(&s.session_id) {
+            ("⊞", Message::ToggleArchive(s.session_id.clone()))
+        } else {
+            ("⊟", Message::RequestArchive(s.session_id.clone()))
+        };
+        // Shows the file this row was read from: the scan's own path, which a
+        // worktree session's collapsed project path could not rebuild.
+        let reveal = ("↗", Message::RevealRowTranscript(s.transcript.clone()));
+        [reveal, rename, archive]
+    }
+}
+
+/// A glyph button on a sidebar row: a star, or one of a session's actions.
+fn row_button(glyph: &'static str, on_press: Message) -> button::Button<'static, Message> {
+    button(text(glyph).size(12))
+        .on_press(on_press)
+        .style(button::text)
+        .padding(0)
+}
+
+/// `control` in a fixed-width slot when `visible`, else its `glyph` drawn
+/// transparent and inert. The resting row keeps the hovered row's exact
+/// layout and height, so the two layers line up control for control and a
+/// press between the hovered row's buttons finds nothing beneath it.
+fn slot<'a>(
+    visible: bool,
+    glyph: &'static str,
+    control: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    let content: Element<'a, Message> = if visible {
+        control.into()
+    } else {
+        text(glyph).size(12).color(iced::Color::TRANSPARENT).into()
+    };
+    container(content).center_x(CONTROL_WIDTH).into()
+}
+
+/// A row of glyph `actions`, shown as buttons when `visible`, else held by
+/// their inert [`slot`]s.
+fn controls<'a>(actions: [(&'static str, Message); 3], visible: bool) -> Element<'a, Message> {
+    actions
+        .into_iter()
+        .fold(
+            row![].spacing(6).align_y(iced::Center),
+            |row, (glyph, message)| row.push(slot(visible, glyph, row_button(glyph, message))),
+        )
+        .into()
+}
+
+/// A row control's slot with nothing in it.
+fn empty_slot<'a>() -> Element<'a, Message> {
+    iced::widget::Space::new().width(CONTROL_WIDTH).into()
+}
+
+/// `rest` with `hovered` drawn over it under the pointer, on the hovered
+/// row's opaque fill: the same row with its actions. Opaque, because a
+/// translucent tint over the title would lower its contrast.
+fn with_hover<'a>(
+    rest: Element<'a, Message>,
+    hovered: Element<'a, Message>,
+) -> Element<'a, Message> {
+    iced::widget::hover(
+        rest,
+        container(hovered).width(Fill).style(|theme: &iced::Theme| {
+            container::background(row_hover_fill(theme.extended_palette()))
+        }),
+    )
+}
+
+/// A session row's label: the clipped title and message count, plus a
+/// disambiguator when the title repeats within its project — the real summary
+/// when it separates the rows by content, else the last-activity age.
+fn row_label(
+    s: &SessionRecord,
+    title: &str,
+    disambiguator: Option<&Option<String>>,
+    now: SystemTime,
+) -> String {
+    let mut label = format!("{}  ·  {}", clip(title, 26), s.digest.message_count);
+    if let Some(subtitle) = disambiguator {
+        let extra = match subtitle {
+            Some(summary) => Some(clip(summary, 28)),
+            None => s
+                .modified
+                .and_then(|m| now.duration_since(m).ok())
+                .map(relative_age),
+        };
+        if let Some(extra) = extra {
+            label.push_str("  ·  ");
+            label.push_str(&extra);
+        }
+    }
+    label
 }
 
 /// The disclosure triangle that folds a sidebar section: ▾ when open, ▸
 /// when folded, toggling the fold for `key`. Shared by the project headers and
 /// the Plans & mémoire section so the two can't drift apart.
 fn fold_toggle(key: &str, collapsed: bool) -> Element<'static, Message> {
-    button(text(if collapsed { "▸" } else { "▾" }).size(12))
-        .on_press(Message::ToggleCollapsed(key.to_owned()))
-        .style(button::text)
-        .padding(0)
-        .into()
+    let glyph = if collapsed { "▸" } else { "▾" };
+    slot(
+        true,
+        glyph,
+        row_button(glyph, Message::ToggleCollapsed(key.to_owned())),
+    )
 }
 
 /// A thin horizontal rule between sidebar sections (Favorites, Plans & mémoire,
@@ -677,4 +780,51 @@ fn launch_button(
         tooltip::Position::Bottom,
     )
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(messages: u32, modified: Option<SystemTime>) -> SessionRecord {
+        SessionRecord {
+            session_id: "s1".to_owned(),
+            project_path: "/p".to_owned(),
+            digest: termherd_claude::digest::SessionDigest {
+                message_count: messages,
+                ..termherd_claude::digest::SessionDigest::default()
+            },
+            modified,
+            transcript: std::path::PathBuf::new(),
+        }
+    }
+
+    #[test]
+    fn a_row_label_is_the_title_and_count_plus_what_tells_twins_apart() {
+        let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10_000);
+        let two_hours_ago = Some(now - std::time::Duration::from_secs(2 * 3600));
+        let row = record(4, two_hours_ago);
+        assert_eq!(
+            row_label(&row, "Fix the race", None, now),
+            "Fix the race  ·  4"
+        );
+        assert_eq!(
+            row_label(
+                &row,
+                "Fix the race",
+                Some(&Some("in the cache".to_owned())),
+                now
+            ),
+            "Fix the race  ·  4  ·  in the cache"
+        );
+        assert_eq!(
+            row_label(&row, "Fix the race", Some(&None), now),
+            "Fix the race  ·  4  ·  2h"
+        );
+        assert_eq!(
+            row_label(&record(4, None), "Fix the race", Some(&None), now),
+            "Fix the race  ·  4",
+            "a twin with no age to show adds nothing"
+        );
+    }
 }
