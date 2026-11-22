@@ -49,9 +49,12 @@ fn main() -> iced::Result {
     // that would disturb it: the single-instance lock below exits(2) on a second
     // process, which is the wrong answer to `termherd mcp-config`. Nor does it
     // open the log file, which could rotate the running instance's log.
-    if cli::parse(std::env::args()) == cli::Command::McpConfig {
-        tracing_init::init_tracing(None);
-        return report_mcp_config(data_dir.as_ref());
+    match cli::parse(std::env::args()) {
+        cli::Command::McpConfig => {
+            tracing_init::init_tracing(None);
+            return report_mcp_config(data_dir.as_ref());
+        }
+        cli::Command::Gui => {}
     }
 
     tracing_init::init_tracing(log_file::path(data_dir.as_ref()).as_deref());
