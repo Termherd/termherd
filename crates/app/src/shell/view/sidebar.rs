@@ -332,10 +332,10 @@ impl Shell {
         // A repo star pins the whole project group to the top of the sidebar
         // (F-favorites), mirroring the per-session star below.
         let repo_starred = self.core.is_repo_starred(&group.path);
-        let repo_star = button(text(if repo_starred { "★" } else { "☆" }).size(12))
-            .on_press(Message::ToggleRepoStar(group.path.clone()))
-            .style(button::text)
-            .padding(0);
+        let repo_star = row_button(
+            if repo_starred { "★" } else { "☆" },
+            Message::ToggleRepoStar(group.path.clone()),
+        );
         let mut name = button(text(project_label(&group.path).to_owned()).size(14))
             .style(button::text)
             .padding(0)
@@ -422,13 +422,12 @@ impl Shell {
     ) -> Element<'_, Message> {
         let id = s.session_id.as_str();
         let starred = self.core.is_starred(id);
-        let archived = self.core.is_archived(id);
 
         // Star toggles the pin; archive hides/shows (F-session-metadata).
-        let star = button(text(if starred { "★" } else { "☆" }).size(12))
-            .on_press(Message::ToggleStar(s.session_id.clone()))
-            .style(button::text)
-            .padding(0);
+        let star = row_button(
+            if starred { "★" } else { "☆" },
+            Message::ToggleStar(s.session_id.clone()),
+        );
 
         let mut content = row![].spacing(6).align_y(iced::Center);
         if let Some(bar) = s.digest.agent_color.and_then(color_bar) {
@@ -506,44 +505,8 @@ impl Shell {
             .into()
         };
 
-        // ✎ starts the rename; ✓ commits it.
-        let rename = if renaming_this {
-            button(text("✓").size(12))
-                .on_press(Message::CommitRename)
-                .style(button::text)
-                .padding(0)
-        } else {
-            button(text("✎").size(12))
-                .on_press(Message::StartRename {
-                    session: s.session_id.clone(),
-                    current: title.clone(),
-                })
-                .style(button::text)
-                .padding(0)
-        };
-
-        // Archiving is deliberate: arm the confirmation bar.
-        // Un-archiving is a harmless restore, so it stays one-click.
-        let archive_msg = if archived {
-            Message::ToggleArchive(s.session_id.clone())
-        } else {
-            Message::RequestArchive(s.session_id.clone())
-        };
-        let archive = button(text(if archived { "⊞" } else { "⊟" }).size(12))
-            .on_press(archive_msg)
-            .style(button::text)
-            .padding(0);
-
-        // Shows the file this row was read from: the scan's own path, which a
-        // worktree session's collapsed project path could not rebuild.
-        let reveal = button(text("↗").size(12))
-            .on_press(Message::RevealRowTranscript(s.transcript.clone()))
-            .style(button::text)
-            .padding(0);
-
-        let entry = row![star, middle, reveal, rename, archive]
-            .spacing(6)
-            .align_y(iced::Center);
+        let actions = self.session_actions(s, renaming_this, title);
+        let entry = row![star, middle, actions].spacing(6).align_y(iced::Center);
         // A content hit shows its matched line in muted text beneath the
         // row, so search reveals *what* matched, not merely *that* it did.
         // Title-only hits return `None` and stay single-line. The
@@ -560,6 +523,48 @@ impl Shell {
             None => entry.into(),
         }
     }
+
+    /// A session row's actions: reveal the transcript, rename (✎ starts it,
+    /// ✓ commits it), and archive.
+    fn session_actions(
+        &self,
+        s: &SessionRecord,
+        renaming_this: bool,
+        title: String,
+    ) -> iced::widget::Row<'_, Message> {
+        let rename = if renaming_this {
+            row_button("✓", Message::CommitRename)
+        } else {
+            row_button(
+                "✎",
+                Message::StartRename {
+                    session: s.session_id.clone(),
+                    current: title,
+                },
+            )
+        };
+        // Archiving is deliberate: arm the confirmation bar.
+        // Un-archiving is a harmless restore, so it stays one-click.
+        let archive = if self.core.is_archived(&s.session_id) {
+            row_button("⊞", Message::ToggleArchive(s.session_id.clone()))
+        } else {
+            row_button("⊟", Message::RequestArchive(s.session_id.clone()))
+        };
+        // Shows the file this row was read from: the scan's own path, which a
+        // worktree session's collapsed project path could not rebuild.
+        let reveal = row_button("↗", Message::RevealRowTranscript(s.transcript.clone()));
+        row![reveal, rename, archive]
+            .spacing(6)
+            .align_y(iced::Center)
+    }
+}
+
+/// A glyph button on a sidebar row: a star, or one of a session's actions.
+fn row_button(glyph: &'static str, on_press: Message) -> button::Button<'static, Message> {
+    button(text(glyph).size(12))
+        .on_press(on_press)
+        .style(button::text)
+        .padding(0)
 }
 
 /// The disclosure triangle that folds a sidebar section: ▾ when open, ▸
