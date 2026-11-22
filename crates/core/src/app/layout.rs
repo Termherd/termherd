@@ -310,18 +310,11 @@ mod tests {
     fn a_capture_resumes_a_claude_conversation_the_scan_found() {
         let mut app = App::new();
         app.apply(Event::ScanCompleted(vec![record("conv", "/p", "work")]));
-        open(
-            &mut app,
-            "/p",
-            Launch::Claude(ClaudeLaunch::Fresh(Some("conv".into()))),
-        );
+        open(&mut app, "/p", Launch::claude_fresh(Some("conv".into())));
         let PaneLayout::Leaf(pane) = &app.layout().tabs[0].root else {
             panic!("a lone pane");
         };
-        assert_eq!(
-            pane.launch,
-            Launch::Claude(ClaudeLaunch::Resume("conv".into()))
-        );
+        assert_eq!(pane.launch, Launch::claude_resume("conv".into()));
     }
 
     #[test]
@@ -330,15 +323,12 @@ mod tests {
         open(
             &mut app,
             "/p",
-            Launch::Claude(ClaudeLaunch::Fresh(Some("unwritten".into()))),
+            Launch::claude_fresh(Some("unwritten".into())),
         );
         let PaneLayout::Leaf(pane) = &app.layout().tabs[0].root else {
             panic!("a lone pane");
         };
-        assert_eq!(
-            pane.launch,
-            Launch::Claude(ClaudeLaunch::Fresh(Some("unwritten".into())))
-        );
+        assert_eq!(pane.launch, Launch::claude_fresh(Some("unwritten".into())));
     }
 
     #[test]
@@ -454,11 +444,11 @@ mod tests {
     fn fresh_ids_are_minted_for_fresh_claude_panes_only() {
         let fresh = PaneLayout::Leaf(PaneLaunch {
             cwd: None,
-            launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
+            launch: Launch::claude_fresh(None),
         });
         let resumed = PaneLayout::Leaf(PaneLaunch {
             cwd: None,
-            launch: Launch::Claude(ClaudeLaunch::Resume("kept".into())),
+            launch: Launch::claude_resume("kept".into()),
         });
         let layout = Layout {
             tabs: vec![
@@ -482,9 +472,9 @@ mod tests {
         assert_eq!(
             launches,
             [
-                Launch::Claude(ClaudeLaunch::Fresh(Some("id-1".into()))),
-                Launch::Claude(ClaudeLaunch::Resume("kept".into())),
-                Launch::Claude(ClaudeLaunch::Fresh(Some("id-2".into()))),
+                Launch::claude_fresh(Some("id-1".into())),
+                Launch::claude_resume("kept".into()),
+                Launch::claude_fresh(Some("id-2".into())),
                 Launch::Shell,
             ]
         );

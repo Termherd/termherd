@@ -270,7 +270,7 @@ mod tests {
     fn launch_claude_in(app: &mut App, cwd: &str, title: &str) -> u64 {
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some(cwd.to_owned()),
-            launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
+            launch: Launch::claude_fresh(None),
             title: title.to_owned(),
             placement: Placement::Foreground,
         }));
@@ -532,7 +532,10 @@ mod tests {
 
         let claude_pane = &tab.panes[0];
         assert_eq!(claude_pane.handle, claude);
-        assert_eq!(claude_pane.kind, SessionKind::Claude);
+        assert_eq!(
+            claude_pane.kind,
+            SessionKind::Agent(crate::Provider::Claude)
+        );
         assert_eq!(claude_pane.cwd.as_deref(), Some("/proj"));
         assert_eq!(claude_pane.status, SessionStatus::Busy);
 
@@ -627,7 +630,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
+            launch: Launch::claude_fresh(Some(minted.into())),
             title: "work".into(),
             placement: Placement::Foreground,
         }));

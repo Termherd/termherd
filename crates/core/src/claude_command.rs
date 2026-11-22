@@ -73,7 +73,10 @@ impl CommandKind {
         match status {
             SessionStatus::Idle => true,
             SessionStatus::Busy => matches!(self, Self::Rename | Self::Color),
-            SessionStatus::Starting | SessionStatus::Attention | SessionStatus::Exited => false,
+            SessionStatus::Starting
+            | SessionStatus::Unmonitored
+            | SessionStatus::Attention
+            | SessionStatus::Exited => false,
         }
     }
 }
@@ -226,9 +229,10 @@ mod tests {
     }
 
     /// Every status, kept complete the same way.
-    fn every_status() -> [SessionStatus; 5] {
+    fn every_status() -> [SessionStatus; 6] {
         let _ = |status: SessionStatus| match status {
             SessionStatus::Starting
+            | SessionStatus::Unmonitored
             | SessionStatus::Busy
             | SessionStatus::Idle
             | SessionStatus::Attention
@@ -236,6 +240,7 @@ mod tests {
         };
         [
             SessionStatus::Starting,
+            SessionStatus::Unmonitored,
             SessionStatus::Busy,
             SessionStatus::Idle,
             SessionStatus::Attention,

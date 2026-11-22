@@ -8,16 +8,18 @@ use iced::theme::palette::Extended;
 use iced::widget::text::Text;
 use iced::widget::{container, text};
 use iced::{Color, Element};
-use termherd_core::{ClaudeColor, SessionKind, SessionStatus};
+use termherd_core::{ClaudeColor, Provider, SessionKind, SessionStatus};
 
 /// The mark for what a session runs, shared by the sidebar's launch buttons
 /// and the tab chips so the button that opens a tab shows what the tab will
 /// show: `✳` is the glyph Claude Code puts in its own title, `❯` a shell
-/// prompt.
+/// prompt, `◈` Codex, and `✦` Antigravity.
 pub(super) fn kind_glyph(kind: SessionKind) -> &'static str {
     match kind {
-        SessionKind::Claude => "✳",
         SessionKind::Shell => "❯",
+        SessionKind::Agent(Provider::Claude) => "✳",
+        SessionKind::Agent(Provider::Codex) => "◈",
+        SessionKind::Agent(Provider::Antigravity) => "✦",
     }
 }
 
@@ -27,16 +29,22 @@ pub(super) fn kind_icon<'a>(kind: SessionKind) -> Text<'a> {
     text(kind_glyph(kind)).size(12)
 }
 
-/// The activity dot for a status (FR8). Shared by the tab strip's chips and
-/// the sidebar's per-session dots so both stay in sync. The colour is the only
-/// place the UI shows a status; the word form an agent reads lives in
-/// [`crate::snapshot_dto`], not on the screen.
-pub(super) fn status_dot<'a>(status: SessionStatus, backdrop: Backdrop) -> Text<'a> {
-    text("●")
-        .size(9)
-        .style(move |theme: &iced::Theme| text::Style {
-            color: Some(status_color(status, theme.extended_palette(), backdrop)),
-        })
+/// The activity dot for a status (FR8), or `None` when the session's activity
+/// is unmonitored so the UI never shows a misleading dot. Shared by the tab
+/// strip's chips and the sidebar's per-session dots so both stay in sync. The
+/// colour is the only place the UI shows a status; the word form an agent
+/// reads lives in [`crate::snapshot_dto`], not on the screen.
+pub(super) fn status_dot<'a>(status: SessionStatus, backdrop: Backdrop) -> Option<Text<'a>> {
+    if status == SessionStatus::Unmonitored {
+        return None;
+    }
+    Some(
+        text("●")
+            .size(9)
+            .style(move |theme: &iced::Theme| text::Style {
+                color: Some(status_color(status, theme.extended_palette(), backdrop)),
+            }),
+    )
 }
 
 /// What a mark is drawn on, which decides the shade that reads there.
@@ -50,7 +58,7 @@ pub(super) enum Backdrop {
 
 fn status_color(status: SessionStatus, palette: &Extended, backdrop: Backdrop) -> Color {
     let hue = match status {
-        SessionStatus::Starting => Color::from_rgb(0.55, 0.55, 0.6),
+        SessionStatus::Starting | SessionStatus::Unmonitored => Color::from_rgb(0.55, 0.55, 0.6),
         SessionStatus::Busy => Color::from_rgb(0.95, 0.7, 0.2),
         SessionStatus::Idle => Color::from_rgb(0.3, 0.8, 0.4),
         SessionStatus::Attention => Color::from_rgb(0.95, 0.35, 0.35),
@@ -458,5 +466,23 @@ mod tests {
                 "{status:?} darkens"
             );
         }
+    }
+
+    #[test]
+    fn unmonitored_status_omits_dot_and_every_kind_has_a_distinct_glyph() {
+        assert!(status_dot(SessionStatus::Unmonitored, Backdrop::Chrome).is_none());
+        for status in ALL {
+            assert!(status_dot(status, Backdrop::Chrome).is_some());
+        }
+        let glyphs: std::collections::HashSet<&str> = [
+            SessionKind::Shell,
+            SessionKind::Agent(Provider::Claude),
+            SessionKind::Agent(Provider::Codex),
+            SessionKind::Agent(Provider::Antigravity),
+        ]
+        .into_iter()
+        .map(kind_glyph)
+        .collect();
+        assert_eq!(glyphs.len(), 4);
     }
 }

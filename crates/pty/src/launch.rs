@@ -8,23 +8,41 @@ use std::path::{Path, PathBuf};
 use portable_pty::CommandBuilder;
 use termherd_claude::session_id::{is_uuid, is_valid};
 use termherd_core::workspace::SessionId;
-use termherd_core::{ClaudeLaunch, Launch, McpConfig};
+use termherd_core::{AgentLaunch, Launch, McpConfig, Provider};
 
 use crate::integration::{SHELL_DIR_PREFIX, integration_for};
 
 /// The line to type into the freshly spawned shell to start a [`Launch`], or
 /// `None` for a plain shell (the bare shell *is* the deliverable). Typing keeps
-/// `claude` resolution on the user's own shell + PATH, robust across platforms
+/// CLI resolution on the user's own shell + PATH, robust across platforms
 /// (FR4a). `mcp_config`, when set, is the path to a written `mcpServers` file
-/// passed as `--mcp-config` so the session can reach termherd's live bridge —
-/// the path is on argv, but the token inside the file is not. `settings` is the
-/// [`write_title_settings`] overlay that keeps the status channel open. A fresh
-/// launch's minted id goes on as `--session-id` only when it is UUID-shaped:
-/// anything else is dropped, and Claude picks its own. A resume id outside
-/// Claude's charset types nothing at all. Pure so
-/// the command contract is unit-tested without a real PTY.
+/// passed as `--mcp-config` so a Claude session can reach termherd's live
+/// bridge — the path is on argv, but the token inside the file is not.
+/// `settings` is the [`write_title_settings`] overlay that keeps Claude's
+/// status channel open. A fresh Claude launch's minted id goes on as
+/// `--session-id` only when it is UUID-shaped: anything else is dropped, and
+/// Claude picks its own. A resume id outside Claude's charset types nothing at
+/// all. Pure so the command contract is unit-tested without a real PTY.
 pub(crate) fn launch_command(
     launch: &Launch,
+    mcp_config: Option<&Path>,
+    settings: Option<&Path>,
+) -> Option<String> {
+    match launch {
+        Launch::Shell => None,
+        Launch::Agent {
+            provider: Provider::Claude,
+            launch,
+        } => claude_launch_command(launch, mcp_config, settings),
+        Launch::Agent {
+            provider: Provider::Codex | Provider::Antigravity,
+            ..
+        } => None,
+    }
+}
+
+fn claude_launch_command(
+    launch: &AgentLaunch,
     mcp_config: Option<&Path>,
     settings: Option<&Path>,
 ) -> Option<String> {
@@ -36,27 +54,24 @@ pub(crate) fn launch_command(
     .flatten()
     .collect::<String>();
     match launch {
-        Launch::Shell => None,
-        Launch::Claude(ClaudeLaunch::Fresh(None)) => Some(format!("claude{flags}\r")),
-        Launch::Claude(ClaudeLaunch::Fresh(Some(id))) if is_uuid(id) => {
+        AgentLaunch::Fresh(None) => Some(format!("claude{flags}\r")),
+        AgentLaunch::Fresh(Some(id)) if is_uuid(id) => {
             Some(format!("claude{flags} --session-id {id}\r"))
         }
         // Production ids are minted as UUIDs, so this arm guards the seam rather
         // than a known path. `core` still records the id it was given; that
         // disagreement only costs a transcript lookup that finds nothing.
-        Launch::Claude(ClaudeLaunch::Fresh(Some(id))) => {
+        AgentLaunch::Fresh(Some(id)) => {
             tracing::warn!(
                 id,
                 "refusing a session id that is not a UUID; launching without --session-id"
             );
             Some(format!("claude{flags}\r"))
         }
-        Launch::Claude(ClaudeLaunch::Resume(id)) if is_valid(id) => {
-            Some(format!("claude{flags} --resume {id}\r"))
-        }
+        AgentLaunch::Resume(id) if is_valid(id) => Some(format!("claude{flags} --resume {id}\r")),
         // A resume cannot go ahead without its id, and a fresh conversation in
         // its place would pass for the one asked for: the shell is left bare.
-        Launch::Claude(ClaudeLaunch::Resume(id)) => {
+        AgentLaunch::Resume(id) => {
             tracing::warn!(id, "refusing to resume a malformed session id");
             None
         }
@@ -648,7 +663,7 @@ mod tests {
         // The Claude button must start Claude *fresh*, never with
         // a stray `--resume`.
         assert_eq!(
-            launch_command(&Launch::Claude(ClaudeLaunch::Fresh(None)), None, None),
+            launch_command(&Launch::claude_fresh(None), None, None),
             Some("claude\r".to_owned())
         );
     }
@@ -656,17 +671,13 @@ mod tests {
     #[test]
     fn a_claude_launch_with_an_mcp_config_passes_the_flag_before_resume() {
         assert_eq!(
-            launch_command(
-                &Launch::Claude(ClaudeLaunch::Fresh(None)),
-                Some(mcp()),
-                None
-            ),
+            launch_command(&Launch::claude_fresh(None), Some(mcp()), None),
             Some("claude --mcp-config /tmp/termherd-mcp-3.json\r".to_owned()),
             "a fresh Claude gets the mcp flag"
         );
         assert_eq!(
             launch_command(
-                &Launch::Claude(ClaudeLaunch::Resume("abc-123".to_owned())),
+                &Launch::claude_resume("abc-123".to_owned()),
                 Some(mcp()),
                 None
             ),
@@ -680,16 +691,12 @@ mod tests {
         // The overlay is what keeps the OSC title — and therefore the whole
         // status channel — alive against a user who disabled it globally.
         assert_eq!(
-            launch_command(
-                &Launch::Claude(ClaudeLaunch::Fresh(None)),
-                None,
-                Some(settings())
-            ),
+            launch_command(&Launch::claude_fresh(None), None, Some(settings())),
             Some("claude --settings /tmp/termherd-settings-3.json\r".to_owned())
         );
         assert_eq!(
             launch_command(
-                &Launch::Claude(ClaudeLaunch::Resume("abc-123".to_owned())),
+                &Launch::claude_resume("abc-123".to_owned()),
                 Some(mcp()),
                 Some(settings())
             ),
@@ -724,11 +731,7 @@ mod tests {
     #[test]
     fn a_resumed_claude_launch_types_resume_with_the_id() {
         assert_eq!(
-            launch_command(
-                &Launch::Claude(ClaudeLaunch::Resume("abc-123".to_owned())),
-                None,
-                None
-            ),
+            launch_command(&Launch::claude_resume("abc-123".to_owned()), None, None),
             Some("claude --resume abc-123\r".to_owned())
         );
     }
@@ -739,7 +742,7 @@ mod tests {
     fn a_fresh_claude_launch_under_a_minted_id_passes_it_as_session_id() {
         assert_eq!(
             launch_command(
-                &Launch::Claude(ClaudeLaunch::Fresh(Some(MINTED.to_owned()))),
+                &Launch::claude_fresh(Some(MINTED.to_owned())),
                 Some(mcp()),
                 Some(settings())
             ),
@@ -754,12 +757,8 @@ mod tests {
     fn a_resumed_claude_launch_never_carries_a_session_id() {
         // `--session-id` beside `--resume` asks Claude to fork the resumed
         // conversation under a new id, which is not what resuming means.
-        let line = launch_command(
-            &Launch::Claude(ClaudeLaunch::Resume(MINTED.to_owned())),
-            None,
-            None,
-        )
-        .expect("a Claude launch types a line");
+        let line = launch_command(&Launch::claude_resume(MINTED.to_owned()), None, None)
+            .expect("a Claude launch types a line");
         assert!(!line.contains("--session-id"), "got {line}");
     }
 
@@ -775,11 +774,7 @@ mod tests {
             "",
         ] {
             assert_eq!(
-                launch_command(
-                    &Launch::Claude(ClaudeLaunch::Fresh(Some(bad.to_owned()))),
-                    None,
-                    None
-                ),
+                launch_command(&Launch::claude_fresh(Some(bad.to_owned())), None, None),
                 Some("claude\r".to_owned()),
                 "{bad:?} must be dropped, the launch going ahead without it"
             );
@@ -790,13 +785,31 @@ mod tests {
     fn a_malformed_resume_id_is_never_typed() {
         for bad in ["--help", "-rf", "abc; rm -rf ~", ""] {
             assert_eq!(
-                launch_command(
-                    &Launch::Claude(ClaudeLaunch::Resume(bad.to_owned())),
-                    None,
-                    None
-                ),
+                launch_command(&Launch::claude_resume(bad.to_owned()), None, None),
                 None,
                 "{bad:?} must leave the shell bare"
+            );
+        }
+    }
+
+    #[test]
+    fn unimplemented_agent_providers_emit_no_claude_command() {
+        for provider in [Provider::Codex, Provider::Antigravity] {
+            assert_eq!(
+                launch_command(
+                    &Launch::agent_fresh(provider, None),
+                    Some(Path::new("/tmp/mcp.json")),
+                    Some(Path::new("/tmp/settings.json")),
+                ),
+                None
+            );
+            assert_eq!(
+                launch_command(
+                    &Launch::agent_resume(provider, "conv-123".to_owned()),
+                    None,
+                    None,
+                ),
+                None
             );
         }
     }

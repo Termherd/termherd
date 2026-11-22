@@ -15,6 +15,7 @@ pub mod metadata;
 pub mod open;
 pub mod paths;
 pub mod ports;
+pub mod provider;
 pub mod record;
 pub mod redact;
 pub mod snapshot;
@@ -23,7 +24,7 @@ pub mod workspace;
 
 pub use app::layout::{Layout, PaneLaunch, PaneLayout, TabLayout};
 pub use app::{
-    App, ClaudeLaunch, ClickCount, ColorKeeper, CommandRefusal, DEFAULT_FONT_SIZE, Effect, Event,
+    AgentLaunch, App, ClickCount, ColorKeeper, CommandRefusal, DEFAULT_FONT_SIZE, Effect, Event,
     ForegroundJob, HoverTarget, Launch, LaunchSpec, LiveSession, McpConfig, MouseReporting,
     PathPurpose, PathRequest, PathRoots, PendingPaste, Placement, PointerButton, PointerEvent,
     PointerKind, PointerRoute, ProbeKind, ResolvedPath, ScrollTarget, SelectOp, SelectSide,
@@ -40,6 +41,7 @@ pub use keymap::{
 };
 pub use metadata::{Overlay, RepoMeta, SessionMeta};
 pub use open::{OpenCommand, OpenCommandError, OpenTarget};
+pub use provider::{ActivitySupport, Provider, ProviderCapabilities, RenameSupport};
 pub use record::Recording;
 pub use snapshot::{
     ClaudeIdentity, ConfigInput, ConfigSummary, FocusRef, PaneSnapshot, ProjectSnapshot, Section,

@@ -71,7 +71,9 @@ impl Shell {
                 } else {
                     Backdrop::Chrome
                 };
-                inner = inner.push(status_dot(status, backdrop));
+                if let Some(dot) = status_dot(status, backdrop) {
+                    inner = inner.push(dot);
+                }
             }
             if let Some(kind) = self.core.tab_kind(index) {
                 inner = inner.push(kind_icon(kind));

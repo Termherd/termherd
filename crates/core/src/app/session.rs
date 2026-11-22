@@ -8,6 +8,7 @@ use std::num::NonZeroU64;
 use std::time::SystemTime;
 
 use super::snapshot::{identity_of, proven};
+use crate::provider::{ActivitySupport, Provider, ProviderCapabilities};
 use crate::snapshot::SessionKind;
 use crate::workspace::SplitDir;
 use termherd_claude::session_file::SessionFile;
@@ -144,7 +145,7 @@ impl LiveSession {
     /// into it would reach whichever program is in front.
     #[must_use]
     pub fn is_claude_launch(&self) -> bool {
-        matches!(self.launch, Launch::Claude(_))
+        self.launch.provider() == Some(Provider::Claude)
     }
 
     /// Whether Claude is still what this pane runs: a Claude launch whose
@@ -157,10 +158,10 @@ impl LiveSession {
     }
 
     /// Whether this session still holds a **running foreground process** whose
-    /// loss is worth confirming before a close. A Claude session *is* that
-    /// process — the `claude` CLI runs in the shell's foreground until it
-    /// exits, so any non-exited Claude counts, an idle prompt included. A plain
-    /// shell counts while it reports work (`Busy`) or wants the user
+    /// loss is worth confirming before a close. An agent CLI session *is* that
+    /// process — the CLI runs in the shell's foreground until it exits, so any
+    /// non-exited agent session counts, an idle or unmonitored prompt included.
+    /// A plain shell counts while it reports work (`Busy`) or wants the user
     /// (`Attention`), and while a program runs in front of it — which its
     /// status cannot be trusted to say, since a program that is not Claude
     /// and emits no prompt marks leaves it reading idle. Parked at its prompt
@@ -170,7 +171,7 @@ impl LiveSession {
         match self.status {
             SessionStatus::Exited => false,
             status => match self.launch {
-                Launch::Claude(_) => true,
+                Launch::Agent { .. } => true,
                 Launch::Shell => {
                     matches!(status, SessionStatus::Busy | SessionStatus::Attention)
                         || self.runs_program_in_front()
@@ -194,11 +195,16 @@ impl LiveSession {
 /// Derived in the `pty` adapter from whichever source the terminal offers: a
 /// Claude session's own OSC stream (`termherd_claude::osc`), a plain shell's
 /// OSC 133 shell-integration marks, or — where neither speaks — the PTY's
-/// foreground process group. `core` only records the verdict.
+/// foreground process group. Providers whose live activity is not yet monitored
+/// transition from `Starting` to `Unmonitored` once spawned. `core` only
+/// records the verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionStatus {
     /// Spawned; no activity classified yet.
     Starting,
+    /// Running a provider whose live activity (`Busy`/`Attention`/`Idle`) is
+    /// not monitored; only process exit is tracked.
+    Unmonitored,
     /// Work is running: Claude's spinner, or a command the shell reported.
     Busy,
     /// Idle, or waiting at a prompt for input.
@@ -215,13 +221,14 @@ impl SessionStatus {
     /// Urgency rank for collapsing several sessions into one indicator — the
     /// sidebar dedupe of duplicate live rows and the per-tab badge (FR8). The
     /// status that most wants the user's eyes wins: `Attention` over `Busy`
-    /// over `Idle` over `Starting` over `Exited`.
+    /// over `Idle` over `Unmonitored` over `Starting` over `Exited`.
     #[must_use]
     pub fn urgency(self) -> u8 {
         match self {
-            SessionStatus::Attention => 4,
-            SessionStatus::Busy => 3,
-            SessionStatus::Idle => 2,
+            SessionStatus::Attention => 5,
+            SessionStatus::Busy => 4,
+            SessionStatus::Idle => 3,
+            SessionStatus::Unmonitored => 2,
             SessionStatus::Starting => 1,
             SessionStatus::Exited => 0,
         }
@@ -230,62 +237,138 @@ impl SessionStatus {
 
 /// What to run in a launched terminal (FR4a). The core decides the *kind*; the
 /// `pty` adapter decides *how* to start it. `Shell` is a bare login shell;
-/// `Claude` starts the CLI, as a [`ClaudeLaunch`] says.
+/// `Agent` starts a provider CLI, as its [`AgentLaunch`] says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launch {
     /// A plain login shell in the working directory.
     Shell,
-    /// A Claude session, fresh or resumed.
-    Claude(ClaudeLaunch),
+    /// An agent CLI session, fresh or resumed.
+    Agent {
+        provider: Provider,
+        launch: AgentLaunch,
+    },
 }
 
-/// How a Claude launch starts its conversation.
+/// How an agent launch starts its conversation or thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ClaudeLaunch {
-    /// A new conversation. `Some` is the id the shell minted for it
-    /// (`claude --session-id <id>`), so its transcript is known before Claude
-    /// has written anything; `None` leaves Claude to pick one, which only its
-    /// session file then reveals. `core` never mints one itself: it holds no
-    /// source of randomness.
+pub enum AgentLaunch {
+    /// A new conversation. `Some` is the id the shell minted for it when the
+    /// provider supports caller-minted ids (e.g. `claude --session-id <id>`),
+    /// so its transcript is known before anything is written; `None` leaves the
+    /// provider to pick one. `core` never mints one itself: it holds no source
+    /// of randomness.
     Fresh(Option<String>),
-    /// An existing conversation, resumed by its id (`claude --resume <id>`).
+    /// An existing conversation or thread, resumed by its provider-native id.
     Resume(String),
 }
 
 impl Launch {
-    /// The Claude session id this launch resumes, if any — `None` for a shell
-    /// or a fresh Claude session, minted id or not. The id a pane's transcript
+    /// A fresh session for `provider`, with an optional caller-minted id.
+    #[must_use]
+    pub fn agent_fresh(provider: Provider, id: Option<String>) -> Self {
+        Self::Agent {
+            provider,
+            launch: AgentLaunch::Fresh(id),
+        }
+    }
+
+    /// A resumed session for `provider` under its provider-native `id`.
+    #[must_use]
+    pub fn agent_resume(provider: Provider, id: String) -> Self {
+        Self::Agent {
+            provider,
+            launch: AgentLaunch::Resume(id),
+        }
+    }
+
+    /// A fresh Claude session, with an optional caller-minted id.
+    #[must_use]
+    pub fn claude_fresh(id: Option<String>) -> Self {
+        Self::agent_fresh(Provider::Claude, id)
+    }
+
+    /// A resumed Claude session under `id`.
+    #[must_use]
+    pub fn claude_resume(id: String) -> Self {
+        Self::agent_resume(Provider::Claude, id)
+    }
+
+    /// The agent provider this launch runs, or `None` for a plain shell.
+    #[must_use]
+    pub const fn provider(&self) -> Option<Provider> {
+        match self {
+            Self::Shell => None,
+            Self::Agent { provider, .. } => Some(*provider),
+        }
+    }
+
+    /// The capability descriptor for this launch's provider, or `None` for a
+    /// plain shell.
+    #[must_use]
+    pub const fn capabilities(&self) -> Option<ProviderCapabilities> {
+        match self {
+            Self::Shell => None,
+            Self::Agent { provider, .. } => Some(provider.capabilities()),
+        }
+    }
+
+    /// Whether this launch runs a provider whose live activity is not monitored
+    /// beyond process exit.
+    #[must_use]
+    pub const fn is_unmonitored(&self) -> bool {
+        matches!(
+            self.capabilities(),
+            Some(ProviderCapabilities {
+                live_activity: ActivitySupport::ProcessOnly,
+                ..
+            })
+        )
+    }
+
+    /// The session id this launch resumes, if any — `None` for a shell or a
+    /// fresh launch, minted id or not. For Claude, the id a pane's transcript
     /// lives under is [`LiveSession::claude_session_id`].
     #[must_use]
     pub fn resume_id(&self) -> Option<&str> {
         match self {
-            Launch::Claude(ClaudeLaunch::Resume(id)) => Some(id),
+            Self::Agent {
+                launch: AgentLaunch::Resume(id),
+                ..
+            } => Some(id),
             _ => None,
         }
     }
 
     /// The Claude session id this launch starts under: the one it resumes, or
-    /// the one minted for a fresh conversation. `None` for a shell, or a fresh
-    /// launch nobody minted an id for.
+    /// the one minted for a fresh conversation. `None` for a shell, a
+    /// non-Claude provider, or a fresh launch nobody minted an id for.
     #[must_use]
     pub fn claude_id(&self) -> Option<&str> {
         match self {
-            Launch::Claude(ClaudeLaunch::Resume(id) | ClaudeLaunch::Fresh(Some(id))) => Some(id),
+            Self::Agent {
+                provider: Provider::Claude,
+                launch: AgentLaunch::Resume(id) | AgentLaunch::Fresh(Some(id)),
+            } => Some(id),
             _ => None,
         }
     }
 
-    /// This launch with a fresh Claude conversation started under an id from
-    /// `mint`, called only then, in
-    /// place of any id it carried; a shell or a resume is returned as is. A
-    /// minted id names one conversation only: a second Claude launched under
+    /// This launch with a fresh conversation started under an id from `mint`,
+    /// called only when the launch is fresh and its provider supports
+    /// caller-minted ids (`capabilities().mint_session_id`); a shell, a resume,
+    /// or a provider that does not accept minted ids is returned as is. A
+    /// minted id names one conversation only: a second session launched under
     /// it would collide with the first one's transcript.
     #[must_use]
     pub fn with_fresh_id(self, mint: impl FnOnce() -> String) -> Self {
         match self {
-            Launch::Claude(ClaudeLaunch::Fresh(_)) => {
-                Launch::Claude(ClaudeLaunch::Fresh(Some(mint())))
-            }
+            Self::Agent {
+                provider,
+                launch: AgentLaunch::Fresh(_),
+            } if provider.capabilities().mint_session_id => Self::Agent {
+                provider,
+                launch: AgentLaunch::Fresh(Some(mint())),
+            },
             other => other,
         }
     }
@@ -294,8 +377,8 @@ impl Launch {
     #[must_use]
     pub fn kind(&self) -> SessionKind {
         match self {
-            Launch::Shell => SessionKind::Shell,
-            Launch::Claude(_) => SessionKind::Claude,
+            Self::Shell => SessionKind::Shell,
+            Self::Agent { provider, .. } => SessionKind::Agent(*provider),
         }
     }
 }
@@ -504,8 +587,11 @@ impl App {
     }
 
     /// Record `session`'s new activity. An exited session stays exited: a late
-    /// report from its dying terminal must not revive it. A session asking for
-    /// attention unparks its tab, without taking the focus.
+    /// report from its dying terminal must not revive it. A session whose
+    /// provider has `ActivitySupport::ProcessOnly` stays `Unmonitored` while
+    /// alive, so stray shell marks or foreground probes never report fake
+    /// busy/idle transitions. A session asking for attention unparks its tab,
+    /// without taking the focus.
     pub(super) fn status_changed(
         &mut self,
         session: SessionId,
@@ -514,6 +600,10 @@ impl App {
         if let Some(s) = self.sessions.get_mut(&session)
             && s.status != SessionStatus::Exited
         {
+            if s.launch.is_unmonitored() && status != SessionStatus::Exited {
+                s.status = SessionStatus::Unmonitored;
+                return Vec::new();
+            }
             s.status = status;
             if status == SessionStatus::Attention
                 && let Some(index) = self.workspace.tab_of(session)
@@ -575,10 +665,14 @@ impl App {
     }
 
     /// Stamp `session` with the moment the shell spawned its PTY. Unknown
-    /// sessions are ignored.
+    /// sessions are ignored. A provider with `ActivitySupport::ProcessOnly`
+    /// transitions from `Starting` to `Unmonitored` once spawned.
     pub(super) fn session_spawned(&mut self, session: SessionId, at: SystemTime) -> Vec<Effect> {
         if let Some(live) = self.sessions.get_mut(&session) {
             live.spawned_at = Some(at);
+            if live.launch.is_unmonitored() && live.status == SessionStatus::Starting {
+                live.status = SessionStatus::Unmonitored;
+            }
         }
         Vec::new()
     }
@@ -802,7 +896,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
+            launch: Launch::claude_resume("abc-123".into()),
             title: "proj".into(),
             placement: Placement::Foreground,
         }));
@@ -823,7 +917,7 @@ mod tests {
     }
 
     fn fresh(id: Option<&str>) -> Launch {
-        Launch::Claude(ClaudeLaunch::Fresh(id.map(str::to_owned)))
+        Launch::claude_fresh(id.map(str::to_owned))
     }
 
     /// A pane launched as `launch`, told of `job` in front and then of `file`.
@@ -865,10 +959,7 @@ mod tests {
             None,
             "a minted id is no resume"
         );
-        assert_eq!(
-            Launch::Claude(ClaudeLaunch::Resume("abc".into())).claude_id(),
-            Some("abc")
-        );
+        assert_eq!(Launch::claude_resume("abc".into()).claude_id(), Some("abc"));
         assert_eq!(fresh(None).claude_id(), None);
         assert_eq!(Launch::Shell.claude_id(), None);
     }
@@ -884,7 +975,7 @@ mod tests {
             fresh(Some(MINTED)),
             "a minted id is never launched twice"
         );
-        let resume = Launch::Claude(ClaudeLaunch::Resume("abc".into()));
+        let resume = Launch::claude_resume("abc".into());
         assert_eq!(resume.clone().with_fresh_id(|| MINTED.into()), resume);
         assert_eq!(Launch::Shell.with_fresh_id(|| MINTED.into()), Launch::Shell);
     }
@@ -1028,7 +1119,7 @@ mod tests {
             last_proven in proptest::option::of("[0-9]{1,8}"),
         ) {
             let launch = match (&launched, resumed) {
-                (Some(id), true) => Launch::Claude(ClaudeLaunch::Resume(id.clone())),
+                (Some(id), true) => Launch::claude_resume(id.clone()),
                 (id, _) => fresh(id.as_deref()),
             };
             let file = SessionFile {
@@ -1935,6 +2026,62 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn with_fresh_id_only_mints_for_providers_that_support_minted_ids() {
+        for provider in [Provider::Codex, Provider::Antigravity] {
+            let fresh = Launch::agent_fresh(provider, None);
+            assert_eq!(
+                fresh
+                    .clone()
+                    .with_fresh_id(|| panic!("must not mint for {provider:?}")),
+                fresh
+            );
+            let resumed = Launch::agent_resume(provider, "thread-1".into());
+            assert_eq!(resumed.resume_id(), Some("thread-1"));
+            assert_eq!(resumed.claude_id(), None);
+            assert_eq!(resumed.kind(), SessionKind::Agent(provider));
+        }
+    }
+
+    #[test]
+    fn unmonitored_provider_transitions_to_unmonitored_on_spawn_and_ignores_fake_activity() {
+        for provider in [Provider::Codex, Provider::Antigravity] {
+            let mut app = App::new();
+            let effects = app.apply(Event::LaunchSession(LaunchSpec {
+                cwd: Some("/repo".into()),
+                launch: Launch::agent_fresh(provider, None),
+                title: "repo".into(),
+                placement: Placement::Foreground,
+            }));
+            let Effect::Spawn(spec) = &effects[0] else {
+                panic!("expected Spawn");
+            };
+            let id = spec.session;
+            assert_eq!(app.sessions[&id].status, SessionStatus::Starting);
+            assert!(app.sessions[&id].has_running_process());
+
+            app.apply(Event::SessionSpawned {
+                session: id,
+                at: SystemTime::UNIX_EPOCH,
+            });
+            assert_eq!(app.sessions[&id].status, SessionStatus::Unmonitored);
+            assert!(app.sessions[&id].has_running_process());
+
+            app.apply(Event::StatusChanged {
+                session: id,
+                status: SessionStatus::Idle,
+            });
+            assert_eq!(app.sessions[&id].status, SessionStatus::Unmonitored);
+
+            app.apply(Event::PtyExited {
+                session: id,
+                clean: false,
+            });
+            assert_eq!(app.sessions[&id].status, SessionStatus::Exited);
+            assert!(!app.sessions[&id].has_running_process());
         }
     }
 }
