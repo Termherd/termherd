@@ -24,6 +24,7 @@ use super::{Message, Shell};
 use crate::strings;
 
 mod doc_editor;
+mod fitted;
 mod modals;
 mod settings_panel;
 mod sidebar;
@@ -31,11 +32,11 @@ mod style;
 mod tabs;
 
 use doc_editor::doc_editor;
+use fitted::fitted;
 use modals::modal;
 use style::{
     Backdrop, COLOR_MARK_WIDTH, active_chip_fill, card_secondary_text, card_style, claude_color,
-    clip, color_bar, color_swatch, fitted, kind_glyph, kind_icon, mix, sidebar_secondary_text,
-    status_dot,
+    clip, color_bar, color_swatch, kind_glyph, kind_icon, mix, sidebar_secondary_text, status_dot,
 };
 
 impl Shell {
