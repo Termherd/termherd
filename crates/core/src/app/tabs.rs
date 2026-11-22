@@ -165,8 +165,15 @@ impl App {
         let tab = self.workspace.tabs.get(index)?;
         tab.sessions()
             .into_iter()
-            .filter_map(|id| self.sessions.get(&id).map(|s| s.status))
+            .filter_map(|id| self.session_status(id))
             .max_by_key(|status| status.urgency())
+    }
+
+    /// The activity status of the live session `id`, or `None` once it is
+    /// gone from the registry.
+    #[must_use]
+    pub fn session_status(&self, id: SessionId) -> Option<SessionStatus> {
+        self.sessions.get(&id).map(|s| s.status)
     }
 
     /// The kind of program the tab at `index` runs, read from its focused

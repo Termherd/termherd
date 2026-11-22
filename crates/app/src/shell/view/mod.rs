@@ -7,6 +7,7 @@
 
 use std::time::{Duration, SystemTime};
 
+use iced::theme::palette::Extended;
 use iced::widget::canvas::Canvas;
 use iced::widget::{Column, Space, button, column, container, mouse_area, row, text};
 use iced::{Border, Color, Element, Fill, Length, Size, mouse};
@@ -271,25 +272,7 @@ impl Shell {
             .height(Fill)
             .padding(PANE_PAD)
             .style(move |theme: &iced::Theme| {
-                // Every split pane is outlined so the layout is legible; the
-                // focused one gets a thicker, accent-coloured border so which
-                // terminal holds the keyboard is unmistakable, the rest a thin
-                // muted one. An unfocused window mutes even the focus accent —
-                // no pane in it holds the keyboard.
-                let palette = theme.extended_palette();
-                let (color, width) = if is_focused && window_focused {
-                    (palette.primary.strong.color, PANE_BORDER)
-                } else {
-                    (palette.background.strong.color, PANE_BORDER / 2.0)
-                };
-                container::Style {
-                    border: Border {
-                        color,
-                        width,
-                        radius: 3.0.into(),
-                    },
-                    ..container::Style::default()
-                }
+                pane_frame_style(theme.extended_palette(), is_focused && window_focused)
             })
             .into()
     }
@@ -418,6 +401,26 @@ pub(super) fn session_card(
         card = card.push(card_secondary_line(format!("› {line}")));
     }
     card_frame(card)
+}
+
+/// A split pane's frame. Every split pane is outlined so the layout is
+/// legible; the one holding the keyboard gets a thicker, accent-coloured
+/// border so which terminal that is stays unmistakable, the rest a thin muted
+/// one. An unfocused window holds no keyboard, so it shows no accent.
+fn pane_frame_style(palette: &Extended, holds_keyboard: bool) -> container::Style {
+    let (color, width) = if holds_keyboard {
+        (palette.primary.strong.color, PANE_BORDER)
+    } else {
+        (palette.background.strong.color, PANE_BORDER / 2.0)
+    };
+    container::Style {
+        border: Border {
+            color,
+            width,
+            radius: 3.0.into(),
+        },
+        ..container::Style::default()
+    }
 }
 
 #[cfg(test)]
