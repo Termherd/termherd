@@ -183,6 +183,24 @@ fn mark_surfaces(palette: &Extended) -> [Color; 2] {
     [palette.background.base.color, palette.background.weak.color]
 }
 
+/// How far a hovered sidebar row moves from the sidebar: enough to show which
+/// row the revealed actions belong to.
+const ROW_HOVER_TINT: f32 = 0.12;
+
+/// The fill of a hovered sidebar row: the sidebar's surface pushed away from
+/// its text, so the hovered title reads at least as well as at rest. Several
+/// themes sit at the text floor at rest; a tint toward the text would sink
+/// them below it.
+pub(super) fn row_hover_fill(palette: &Extended) -> Color {
+    let surface = palette.background.weak.color;
+    let away = if luminance(palette.background.base.text) > luminance(surface) {
+        Color::BLACK
+    } else {
+        Color::WHITE
+    };
+    mix(surface, away, ROW_HOVER_TINT)
+}
+
 /// The WCAG contrast floor for body text.
 pub(super) const TEXT_FLOOR: f32 = 4.5;
 
@@ -366,6 +384,37 @@ mod tests {
         SessionStatus::Attention,
         SessionStatus::Exited,
     ];
+
+    #[test]
+    fn a_hovered_sidebar_row_reads_at_least_as_well_as_at_rest_on_every_theme() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            let (surface, fill) = (palette.background.weak.color, row_hover_fill(palette));
+            let ink = palette.background.base.text;
+            let (rest, hovered) = (contrast(ink, surface), contrast(ink, fill));
+            assert!(
+                hovered >= rest,
+                "{theme}: title {rest:.2} at rest, {hovered:.2} hovered"
+            );
+            assert_ne!(fill, surface, "{theme}: no visible tint");
+        }
+    }
+
+    #[test]
+    fn every_status_dot_reads_on_every_themes_hovered_row() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            let fill = row_hover_fill(palette);
+            for status in ALL {
+                let dot = status_color(status, palette, Backdrop::Chrome).expect("monitored");
+                let ratio = contrast(dot, fill);
+                assert!(
+                    ratio >= MARK_FLOOR,
+                    "{status:?} on {theme}'s hovered row: {ratio:.2}"
+                );
+            }
+        }
+    }
 
     fn every_theme() -> impl Iterator<Item = iced::Theme> {
         ThemeChoice::ALL.map(ThemeChoice::to_iced).into_iter()

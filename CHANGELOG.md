@@ -7,6 +7,12 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed (a quieter sidebar)
+
+- A sidebar row shows its title, and its ★ when starred. The star, reveal,
+  rename and archive buttons, and a repository's ✕, appear under the pointer,
+  on the hovered row.
+
 ### Added (Antigravity `agy` launch, discovery, and provider badge)
 
 - TermHerd detects installed agent CLIs at startup and shows a `▾` picker beside
