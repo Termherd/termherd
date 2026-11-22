@@ -769,7 +769,6 @@ impl TermherdMcp {
     async fn wait_for_start(&self, session: u64, targets: &[SessionStatus], bound: Duration) {
         let others: Vec<SessionStatus> = [
             SessionStatus::Starting,
-            SessionStatus::Unmonitored,
             SessionStatus::Busy,
             SessionStatus::Idle,
             SessionStatus::Attention,
