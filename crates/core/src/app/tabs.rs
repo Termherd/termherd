@@ -177,7 +177,7 @@ impl App {
             .tabs
             .iter()
             .flat_map(crate::workspace::Tab::sessions)
-            .filter(|id| self.session_status(*id) == Some(SessionStatus::Attention))
+            .filter(|id| self.is_waiting(*id))
             .collect()
     }
 
@@ -203,7 +203,22 @@ impl App {
             .skip(after)
             .take(order.len())
             .copied()
-            .find(|id| self.session_status(*id) == Some(SessionStatus::Attention))
+            .find(|id| self.is_waiting(*id))
+    }
+
+    /// Whether the session `id` waits for the user (status `attention`).
+    #[must_use]
+    pub fn is_waiting(&self, id: SessionId) -> bool {
+        self.session_status(id) == Some(SessionStatus::Attention)
+    }
+
+    /// Whether the tab at `index` hosts a session waiting for the user.
+    #[must_use]
+    pub fn tab_waits(&self, index: usize) -> bool {
+        self.workspace
+            .tabs
+            .get(index)
+            .is_some_and(|tab| tab.sessions().into_iter().any(|id| self.is_waiting(id)))
     }
 
     /// The activity status of the live session `id`, or `None` once it is
@@ -1061,6 +1076,22 @@ mod tests {
 
         app.apply(Event::ActivateTab(0));
         assert_eq!(app.next_waiting(), Some(third));
+    }
+
+    #[test]
+    fn a_tab_waits_when_any_of_its_panes_does() {
+        let mut app = App::new();
+        let first = launch(&mut app, "a");
+        launch(&mut app, "b");
+        app.apply(Event::SplitFocused(SplitDir::Vertical));
+        let beside = app.workspace.focused_session().expect("the split pane");
+        assert!(!app.tab_waits(0) && !app.tab_waits(1));
+
+        wait(&mut app, beside);
+        assert!(app.is_waiting(beside) && !app.is_waiting(first));
+        assert!(!app.tab_waits(0), "the first tab hosts no waiting pane");
+        assert!(app.tab_waits(1), "its second pane waits");
+        assert!(!app.tab_waits(7), "no such tab");
     }
 
     #[test]

@@ -15,7 +15,7 @@ use termherd_claude::digest::SessionDigest;
 use termherd_core::browser::{compact_elapsed, relative_age};
 use termherd_core::keymap::{Action, Platform};
 use termherd_core::workspace::{Branch, Pane, SessionId, SplitDir};
-use termherd_core::{ClaudeColor, SessionRecord, SessionStatus};
+use termherd_core::{ClaudeColor, SessionRecord};
 
 use super::geometry::{HANDLE_W, PANE_BORDER, PANE_PAD, SPLIT_HANDLE};
 use super::ime::ime_area;
@@ -266,8 +266,10 @@ impl Shell {
         if !bordered {
             return inner;
         }
-        let waiting = self.core.session_status(session) == Some(SessionStatus::Attention);
-        let frame = pane_frame(is_focused && self.core.window_focused(), waiting);
+        let frame = pane_frame(
+            is_focused && self.core.window_focused(),
+            self.core.is_waiting(session),
+        );
         container(inner)
             .width(Fill)
             .height(Fill)
@@ -446,6 +448,27 @@ fn pane_frame_style(palette: &Extended, frame: PaneFrame) -> container::Style {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pane_frame_is_as_thick_as_the_focus_only_when_it_says_something() {
+        let palette = iced::Theme::Dark.extended_palette();
+        let border = |frame| pane_frame_style(palette, frame).border;
+        assert_eq!(
+            border(PaneFrame::Keyboard).color,
+            palette.primary.strong.color
+        );
+        assert_eq!(border(PaneFrame::Keyboard).width, PANE_BORDER);
+        assert_eq!(
+            border(PaneFrame::Waiting).color,
+            style::waiting_ring(palette)
+        );
+        assert_eq!(border(PaneFrame::Waiting).width, PANE_BORDER);
+        assert_eq!(
+            border(PaneFrame::Plain).color,
+            palette.background.strong.color
+        );
+        assert_eq!(border(PaneFrame::Plain).width, PANE_BORDER / 2.0);
+    }
 
     #[test]
     fn a_waiting_pane_is_ringed_unless_it_holds_the_keyboard() {

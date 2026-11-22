@@ -21,7 +21,6 @@ use super::{
 use crate::shell::{Message, Shell, tab_rename_id};
 use crate::strings;
 use iced::theme::palette::Extended;
-use termherd_core::SessionStatus;
 
 impl Shell {
     /// The tab strip (FR5): one chip per open session, the active one
@@ -58,7 +57,7 @@ impl Shell {
             let dragging_this = drag.is_some_and(|(from, _)| from == index);
             let color = self.core.tab_color(index);
             let status = self.core.tab_status(index);
-            let look = ChipLook::of(active, status == Some(SessionStatus::Attention));
+            let look = ChipLook::of(active, self.core.tab_waits(index));
 
             // Double-clicking a chip opens an inline field over it; while that
             // field is up the chip is the editor, not a draggable button — so it
@@ -163,11 +162,10 @@ impl Shell {
         if caret_at == Some(tabs.len()) {
             bar = bar.push(insertion_caret());
         }
-        let waiting = self.core.waiting_sessions().len();
-        if waiting > 0 {
+        if let Some(count) = strings::waiting_count(self.core.waiting_sessions().len()) {
             bar = bar
                 .push(iced::widget::Space::new().width(Fill))
-                .push(waiting_count(waiting));
+                .push(waiting_count(count));
         }
         // The release that ends a drag is heard window-wide by the shell's
         // subscription, so the strip carries no release or exit handler.
@@ -342,8 +340,8 @@ fn list_card<'a>(
 
 /// The strip's count of the sessions waiting for the user, in the attention
 /// hue; a click goes to the next one, as `next-attention` does.
-fn waiting_count<'a>(waiting: usize) -> Element<'a, Message> {
-    button(text(strings::waiting_count(waiting)).size(12))
+fn waiting_count<'a>(count: String) -> Element<'a, Message> {
+    button(text(count).size(12))
         .on_press(Message::NextAttention)
         .style(|theme: &iced::Theme, _status| button::Style {
             background: None,
@@ -479,5 +477,33 @@ mod tests {
 
         assert_eq!(active.background, Some(iced::Background::Color(fill)));
         assert_eq!(idle.background, None);
+    }
+
+    #[test]
+    fn each_chip_look_paints_its_own_fill_and_text() {
+        let theme = iced::Theme::Dracula;
+        let palette = theme.extended_palette();
+        let waiting = tab_chip_style(&theme, ChipLook::Waiting, false, None);
+        assert_eq!(
+            waiting.background,
+            Some(iced::Background::Color(waiting_chip_fill(palette)))
+        );
+        assert_eq!(waiting.text_color, Some(waiting_chip_text(palette)));
+        assert_eq!(
+            tab_chip_text(&theme, ChipLook::Active),
+            palette.primary.base.text
+        );
+        assert_eq!(
+            tab_chip_text(&theme, ChipLook::Plain),
+            palette.background.base.text
+        );
+    }
+
+    #[test]
+    fn the_active_tab_never_looks_waiting() {
+        assert_eq!(ChipLook::of(true, true), ChipLook::Active);
+        assert_eq!(ChipLook::of(true, false), ChipLook::Active);
+        assert_eq!(ChipLook::of(false, true), ChipLook::Waiting);
+        assert_eq!(ChipLook::of(false, false), ChipLook::Plain);
     }
 }

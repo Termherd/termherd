@@ -267,10 +267,11 @@ pub fn archive_prompt(title: &str) -> String {
     format!("Archive “{title}”?")
 }
 
-/// The tab strip's count of the sessions waiting for the user.
+/// The tab strip's count of the sessions waiting for the user; none when
+/// none waits.
 #[must_use]
-pub fn waiting_count(waiting: usize) -> String {
-    format!("{waiting} waiting")
+pub fn waiting_count(waiting: usize) -> Option<String> {
+    (waiting > 0).then(|| format!("{waiting} waiting"))
 }
 
 /// The Dock badge for `waiting` sessions; none when none waits.
@@ -325,8 +326,9 @@ mod tests {
 
     #[test]
     fn the_waiting_count_names_how_many_wait() {
-        assert_eq!(waiting_count(1), "1 waiting");
-        assert_eq!(waiting_count(3), "3 waiting");
+        assert_eq!(waiting_count(0), None);
+        assert_eq!(waiting_count(1).as_deref(), Some("1 waiting"));
+        assert_eq!(waiting_count(3).as_deref(), Some("3 waiting"));
     }
 
     #[test]
