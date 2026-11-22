@@ -1,6 +1,8 @@
 //! `cargo run -p termherd-scan --example dev_fixture -- <root>`: write the dev
-//! instance's Claude fixture under `<root>` (see `fixture.rs`), dated from now.
-//! Point `CLAUDE_CONFIG_DIR` at `<root>/claude`; `just dev-instance` does both.
+//! instance's Claude and Antigravity fixtures under `<root>` (see `fixture.rs`),
+//! dated from now. Point `CLAUDE_CONFIG_DIR` at `<root>/claude` and
+//! `TERMHERD_ANTIGRAVITY_DIR` at `<root>/antigravity`; `just dev-instance` does
+//! all three.
 
 mod fixture;
 
