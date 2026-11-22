@@ -35,9 +35,42 @@ pub(crate) fn launch_command(
             launch,
         } => claude_launch_command(launch, mcp_config, settings),
         Launch::Agent {
-            provider: Provider::Codex | Provider::Antigravity,
+            provider: Provider::Antigravity,
+            launch,
+        } => antigravity_launch_command(launch),
+        Launch::Agent {
+            provider: Provider::Codex,
             ..
         } => None,
+    }
+}
+
+/// Whether `id` is safe to interpolate as a single argument after
+/// `--conversation` on a shell command line: non-empty, not flag-shaped (no
+/// leading `-`), and restricted to `[A-Za-z0-9_-]`.
+fn is_safe_conversation_id(id: &str) -> bool {
+    !id.is_empty()
+        && !id.starts_with('-')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn antigravity_launch_command(launch: &AgentLaunch) -> Option<String> {
+    match launch {
+        AgentLaunch::Fresh(_) => Some("agy\r".to_owned()),
+        AgentLaunch::Resume(id) if is_safe_conversation_id(id) => {
+            Some(format!("agy --conversation {id}\r"))
+        }
+        // A resume cannot go ahead without its id, and a fresh conversation in
+        // its place would pass for the one asked for: the shell is left bare.
+        AgentLaunch::Resume(id) => {
+            tracing::warn!(
+                id,
+                "refusing to resume a malformed Antigravity conversation id"
+            );
+            None
+        }
     }
 }
 
@@ -793,24 +826,80 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_agent_providers_emit_no_claude_command() {
-        for provider in [Provider::Codex, Provider::Antigravity] {
+    fn a_fresh_antigravity_launch_types_agy_without_claude_flags() {
+        assert_eq!(
+            launch_command(
+                &Launch::agent_fresh(Provider::Antigravity, None),
+                Some(mcp()),
+                Some(settings()),
+            ),
+            Some("agy\r".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_resumed_antigravity_launch_types_conversation_flag_with_the_id() {
+        assert_eq!(
+            launch_command(
+                &Launch::agent_resume(Provider::Antigravity, MINTED.to_owned()),
+                Some(mcp()),
+                Some(settings()),
+            ),
+            Some(format!("agy --conversation {MINTED}\r"))
+        );
+        assert_eq!(
+            launch_command(
+                &Launch::agent_resume(Provider::Antigravity, "conv_123-abc".to_owned()),
+                None,
+                None,
+            ),
+            Some("agy --conversation conv_123-abc\r".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_malformed_antigravity_conversation_id_is_never_typed() {
+        for bad in [
+            "",
+            "-",
+            "-rf",
+            "--help",
+            "--dangerously-skip-permissions",
+            "abc def",
+            "abc; rm -rf ~",
+            "$(id)",
+            "a/b",
+            "a\nb",
+        ] {
             assert_eq!(
                 launch_command(
-                    &Launch::agent_fresh(provider, None),
-                    Some(Path::new("/tmp/mcp.json")),
-                    Some(Path::new("/tmp/settings.json")),
-                ),
-                None
-            );
-            assert_eq!(
-                launch_command(
-                    &Launch::agent_resume(provider, "conv-123".to_owned()),
+                    &Launch::agent_resume(Provider::Antigravity, bad.to_owned()),
                     None,
                     None,
                 ),
-                None
+                None,
+                "{bad:?} must leave the shell bare"
             );
         }
+    }
+
+    #[test]
+    fn unimplemented_codex_provider_emits_no_command() {
+        assert_eq!(
+            launch_command(
+                &Launch::agent_fresh(Provider::Codex, None),
+                Some(Path::new("/tmp/mcp.json")),
+                Some(Path::new("/tmp/settings.json")),
+            ),
+            None
+        );
+        assert_eq!(
+            launch_command(
+                &Launch::agent_resume(Provider::Codex, "thread-123".to_owned()),
+                None,
+                None,
+            ),
+            None
+        );
     }
 }
