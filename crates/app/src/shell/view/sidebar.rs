@@ -29,6 +29,9 @@ use crate::strings;
 /// at rest lines up with the control the hover layer draws over it.
 const CONTROL_WIDTH: f32 = 12.0;
 
+/// The widest a twin's hint grows, so a long summary leaves the title room.
+const TWIN_HINT_MAX_WIDTH: f32 = 120.0;
+
 /// Fold key for the Plans & mémoire section. Project groups key their
 /// fold by real (always absolute) path; this reserved, non-path key shares the
 /// same persisted set without ever colliding with a project.
@@ -535,11 +538,16 @@ impl Shell {
                     content =
                         content.push(text(kind_glyph(SessionKind::Agent(s.provider))).size(11));
                 }
-                // Title and twin hint share what the row leaves; the count
-                // keeps its own width at the end, so a cut never hides it.
+                // The title takes what the row leaves; the twin hint only
+                // what it needs, up to a cap, and the count keeps its own
+                // width at the end, so a cut never hides it.
                 content = content.push(fitted(title.clone(), 11.0, text::default));
                 if let Some(hint) = &hint {
-                    content = content.push(fitted(format!("·  {hint}"), 11.0, text::default));
+                    content = content.push(
+                        fitted(format!("·  {hint}"), 11.0, text::default)
+                            .width(iced::Length::Shrink)
+                            .max_width(TWIN_HINT_MAX_WIDTH),
+                    );
                 }
                 content = content.push(text(s.digest.message_count.to_string()).size(11));
                 let launch = button(content)

@@ -1,8 +1,11 @@
 //! One line of text cut to the width the layout gives it, with an ellipsis
 //! where it runs out: the sidebar's titles, labels and matched lines.
 
-use iced::Element;
+use iced::advanced::layout::{self, Layout};
+use iced::advanced::widget::{Tree, Widget, tree};
+use iced::advanced::{mouse, renderer};
 use iced::widget::text;
+use iced::{Element, Length, Rectangle, Renderer, Size, Theme};
 
 /// `s` on one line, cut to the longest start that fits `max_width` pixels at
 /// `size` with an ellipsis after it, measured in the font the sidebar draws.
@@ -28,21 +31,149 @@ pub(super) fn fit(s: &str, size: f32, max_width: f32) -> String {
 }
 
 /// `s` as one line of text cut to the width its place in the layout gives
-/// it, by [`fit`]. The cut is made at layout, when that width is known.
-pub(super) fn fitted<'a, M: 'a>(
+/// it, by [`fit`]. It fills the width it is given unless told otherwise.
+pub(super) fn fitted<'a, M>(
     s: String,
     size: f32,
-    style: fn(&iced::Theme) -> text::Style,
-) -> Element<'a, M> {
-    iced::widget::responsive(move |space| {
-        text(fit(&s, size, space.width))
+    style: fn(&Theme) -> text::Style,
+) -> Fitted<'a, M> {
+    Fitted {
+        source: s,
+        size,
+        style,
+        width: Length::Fill,
+        max_width: f32::INFINITY,
+        content: Element::new(iced::widget::space()),
+    }
+}
+
+/// A line of text cut at layout, when its width is known. The cut is kept in
+/// the widget's state and remade only when the text, size or width change.
+pub(super) struct Fitted<'a, M> {
+    source: String,
+    size: f32,
+    style: fn(&Theme) -> text::Style,
+    width: Length,
+    max_width: f32,
+    /// The text widget drawing the cut, rebuilt at each layout.
+    content: Element<'a, M>,
+}
+
+impl<M> Fitted<'_, M> {
+    /// How wide the line may grow: `Shrink` takes only what its text needs.
+    pub(super) fn width(mut self, width: Length) -> Self {
+        self.width = width;
+        self
+    }
+
+    /// The widest the line may grow, in pixels.
+    pub(super) fn max_width(mut self, max_width: f32) -> Self {
+        self.max_width = max_width;
+        self
+    }
+}
+
+impl<M> Widget<M, Theme, Renderer> for Fitted<'_, M> {
+    fn tag(&self) -> tree::Tag {
+        tree::Tag::of::<FitCache>()
+    }
+
+    fn state(&self) -> tree::State {
+        tree::State::new(FitCache::default())
+    }
+
+    fn diff(&self, _tree: &mut Tree) {
+        // The text child is built at layout, so it is diffed there.
+    }
+
+    fn size(&self) -> Size<Length> {
+        Size::new(self.width, Length::Shrink)
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        let limits = limits
+            .max_width(self.max_width)
+            .width(self.width)
+            .height(Length::Shrink);
+        let width = limits.max().width;
+        let (source, size) = (&self.source, self.size);
+        let line = tree
+            .state
+            .downcast_mut::<FitCache>()
+            .get(source, size, width, || fit(source, size, width))
+            .to_owned();
+        self.content = text(line)
             .size(size)
             .wrapping(text::Wrapping::None)
-            .style(style)
-            .into()
-    })
-    .height(iced::Length::Shrink)
-    .into()
+            .style(self.style)
+            .into();
+        tree.diff_children(std::slice::from_ref(&self.content));
+        let node =
+            self.content
+                .as_widget_mut()
+                .layout(&mut tree.children[0], renderer, &limits.loose());
+        let size = limits.resolve(self.width, Length::Shrink, node.size());
+        layout::Node::with_children(size, vec![node])
+    }
+
+    fn draw(
+        &self,
+        tree: &Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        if let (Some(child), Some(child_layout)) = (tree.children.first(), layout.children().next())
+        {
+            self.content.as_widget().draw(
+                child,
+                renderer,
+                theme,
+                style,
+                child_layout,
+                cursor,
+                viewport,
+            );
+        }
+    }
+}
+
+impl<'a, M: 'a> From<Fitted<'a, M>> for Element<'a, M> {
+    fn from(fitted: Fitted<'a, M>) -> Self {
+        Element::new(fitted)
+    }
+}
+
+/// The last cut a fitted text made, kept across layouts so that a scroll or
+/// a redraw at an unchanged width measures nothing.
+#[derive(Debug, Default)]
+struct FitCache {
+    key: Option<(String, u32, u32)>,
+    fitted: String,
+}
+
+impl FitCache {
+    /// The cut of `source` at `size` within `width`: the one kept when the
+    /// three are those of the last call, else what `cut` computes.
+    fn get(&mut self, source: &str, size: f32, width: f32, cut: impl FnOnce() -> String) -> &str {
+        let fresh = self
+            .key
+            .as_ref()
+            .is_some_and(|(s, z, w)| s == source && *z == size.to_bits() && *w == width.to_bits());
+        if !fresh {
+            self.fitted = cut();
+            self.key = Some((source.to_owned(), size.to_bits(), width.to_bits()));
+        }
+        &self.fitted
+    }
 }
 
 /// The width `s` takes on one line at `size`, in the default font.
@@ -65,6 +196,27 @@ fn text_width(s: &str, size: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_relayout_with_nothing_changed_measures_nothing() {
+        let mut cache = FitCache::default();
+        let mut cuts = 0;
+        let mut layout = |source: &str, size: f32, width: f32| {
+            cache
+                .get(source, size, width, || {
+                    cuts += 1;
+                    format!("{source}@{width}")
+                })
+                .to_owned()
+        };
+        for _ in 0..3 {
+            assert_eq!(layout("fix the race", 11.0, 100.0), "fix the race@100");
+        }
+        layout("fix the race", 11.0, 90.0);
+        layout("fix the cache", 11.0, 90.0);
+        layout("fix the cache", 10.0, 90.0);
+        assert_eq!(cuts, 4, "one cut per change of text, size or width");
+    }
 
     #[test]
     fn a_line_that_fits_is_kept_whole_on_one_line() {
