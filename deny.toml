@@ -27,6 +27,10 @@ ignore = [
     # `fxhash` is unmaintained (no vulnerability), pulled in transitively by
     # `display-info` (monitor geometry for the off-screen window guard).
     { id = "RUSTSEC-2025-0057", reason = "unmaintained, transitive via display-info" },
+    # `chrono` is unmaintained (no vulnerability). rmcp depends on it outright
+    # and turns on schemars' `chrono04` feature, so no termherd feature drops
+    # it; drops out whenever rmcp moves off it.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained, transitive via rmcp and schemars" },
     # `ttf-parser` is unmaintained (no vulnerability), reached only
     # transitively through iced's font stack: iced → cosmic-text → fontdb →
     # ttf-parser, and sctk-adwaita → ab_glyph → owned_ttf_parser. No safe bump
