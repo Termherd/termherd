@@ -179,14 +179,9 @@ pub fn write(root: &Path, now: SystemTime) -> io::Result<Vec<PathBuf>> {
     let claude_dir = root.join("claude");
     let mut transcripts = Vec::with_capacity(SESSIONS.len());
     for session in SESSIONS {
-        let repo = root.join("repos").join(session.repo);
-        std::fs::create_dir_all(repo.join(".git"))?;
-        let cwd = match session.worktree {
-            Some(name) => repo.join(".claude").join("worktrees").join(name),
-            None => repo,
-        };
-        std::fs::create_dir_all(&cwd)?;
-        let cwd = cwd.to_string_lossy().into_owned();
+        let cwd = ensure_repo(root, session.repo, session.worktree)?
+            .to_string_lossy()
+            .into_owned();
 
         let folder = claude_dir.join("projects").join(encode_project_path(&cwd));
         std::fs::create_dir_all(&folder)?;
@@ -206,6 +201,20 @@ pub fn write(root: &Path, now: SystemTime) -> io::Result<Vec<PathBuf>> {
         transcripts.push(transcript);
     }
     Ok(transcripts)
+}
+
+/// Create `<root>/repos/<repo>` (with a `.git` marker so repo resolution
+/// recognises it) and, when `worktree` is set, its `.claude/worktrees/<name>`
+/// subdirectory, returning the session's working directory.
+fn ensure_repo(root: &Path, repo: &str, worktree: Option<&str>) -> io::Result<PathBuf> {
+    let repo_dir = root.join("repos").join(repo);
+    std::fs::create_dir_all(repo_dir.join(".git"))?;
+    let cwd = match worktree {
+        Some(name) => repo_dir.join(".claude").join("worktrees").join(name),
+        None => repo_dir,
+    };
+    std::fs::create_dir_all(&cwd)?;
+    Ok(cwd)
 }
 
 /// The transcript's entries, the last message stamped `last` and each one

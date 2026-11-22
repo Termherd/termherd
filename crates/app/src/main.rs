@@ -96,7 +96,8 @@ fn main() -> iced::Result {
         "termherd starting (M1 browser)"
     );
 
-    let (scanner, watch_root) = build_scanner(claude_dir.as_ref());
+    let antigravity_dir = paths::home_dir().map(|home| home.join(".gemini").join("antigravity-cli"));
+    let (scanner, watch_root) = build_scanner(claude_dir.as_ref(), antigravity_dir.as_deref());
 
     // Thin user settings (FR10): the configured shell is injected into the PTY
     // host, the theme into the iced shell. A corrupt file falls back to
@@ -293,14 +294,14 @@ fn build_bridge_runtime() -> Option<tokio::runtime::Runtime> {
 
 fn build_scanner(
     claude_dir: Option<&paths::ClaudeDir>,
+    antigravity_dir: Option<&std::path::Path>,
 ) -> (Arc<dyn ProjectScanner>, Option<std::path::PathBuf>) {
     match claude_dir {
         Some(dir) => {
             let root = dir.join("projects");
             let mut fs_scanner = FsScanner::new(root.clone());
-            if let Some(home) = paths::home_dir() {
-                fs_scanner =
-                    fs_scanner.with_antigravity_dir(home.join(".gemini").join("antigravity-cli"));
+            if let Some(agy) = antigravity_dir {
+                fs_scanner = fs_scanner.with_antigravity_dir(agy.to_path_buf());
             }
             (Arc::new(fs_scanner), Some(root))
         }
