@@ -112,7 +112,7 @@ impl From<&ClaudeIdentity> for IdentityDto {
 pub(crate) fn kind_str(kind: SessionKind) -> &'static str {
     match kind {
         SessionKind::Shell => "shell",
-        SessionKind::Claude => "claude",
+        SessionKind::Agent(provider) => provider.id(),
     }
 }
 
@@ -120,6 +120,7 @@ pub(crate) fn kind_str(kind: SessionKind) -> &'static str {
 pub(crate) fn status_str(status: SessionStatus) -> &'static str {
     match status {
         SessionStatus::Starting => "starting",
+        SessionStatus::Unmonitored => "unmonitored",
         SessionStatus::Busy => "busy",
         SessionStatus::Idle => "idle",
         SessionStatus::Attention => "attention",
@@ -213,7 +214,7 @@ mod tests {
     #[test]
     fn a_coloured_pane_names_its_colour_as_slash_color_spells_it() {
         let json = coloured_pane(
-            SessionKind::Claude,
+            SessionKind::Agent(termherd_core::Provider::Claude),
             ClaudeIdentity::default(),
             Some(ClaudeColor::Purple),
         );
@@ -223,7 +224,7 @@ mod tests {
     #[test]
     fn a_claude_pane_carries_pid_peer_name_and_session_id_flat() {
         let json = pane(
-            SessionKind::Claude,
+            SessionKind::Agent(termherd_core::Provider::Claude),
             ClaudeIdentity {
                 pid: Some(4399),
                 peer_name: Some("proj-35".to_owned()),

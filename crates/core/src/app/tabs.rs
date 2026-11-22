@@ -85,11 +85,11 @@ impl App {
     /// was launched. A fresh tab whose transcript was never written then
     /// starts a new conversation, since there is nothing to resume.
     pub(super) fn reopen_launch(&self, session: &LiveSession) -> Launch {
-        if let Launch::Claude(_) = session.launch
+        if session.is_claude_launch()
             && let Some(id) = session.claude_session_id()
             && self.record_for(id).is_some()
         {
-            return Launch::Claude(ClaudeLaunch::Resume(id.to_owned()));
+            return Launch::claude_resume(id.to_owned());
         }
         session.launch.clone()
     }
@@ -340,7 +340,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/repo".into()),
-            launch: Launch::Claude(ClaudeLaunch::Resume("abc".into())),
+            launch: Launch::claude_resume("abc".into()),
             title: "repo".into(),
             placement: Placement::Foreground,
         }));
@@ -357,10 +357,7 @@ mod tests {
         };
         assert_ne!(spec.session, original, "reopen mints a fresh session id");
         assert_eq!(spec.cwd.as_deref(), Some("/repo"));
-        assert_eq!(
-            spec.launch,
-            Launch::Claude(ClaudeLaunch::Resume("abc".into()))
-        );
+        assert_eq!(spec.launch, Launch::claude_resume("abc".into()));
         assert_eq!(app.workspace.tabs.len(), 1);
         assert_eq!(app.workspace.tabs[0].title, "repo");
     }
@@ -474,7 +471,10 @@ mod tests {
         app.apply(Event::SplitFocused(SplitDir::Vertical));
         assert_eq!(app.tab_kind(0), Some(SessionKind::Shell));
         app.apply(Event::FocusPrevPane);
-        assert_eq!(app.tab_kind(0), Some(SessionKind::Claude));
+        assert_eq!(
+            app.tab_kind(0),
+            Some(SessionKind::Agent(crate::Provider::Claude))
+        );
         assert_eq!(app.tab_kind(1), None, "no such tab");
     }
 
@@ -504,7 +504,7 @@ mod tests {
         let mut app = App::new();
         assert_eq!(app.tab_title("/home/me/proj", &Launch::Shell), "proj");
         assert_eq!(
-            app.tab_title("/home/me/proj", &Launch::Claude(ClaudeLaunch::Fresh(None))),
+            app.tab_title("/home/me/proj", &Launch::claude_fresh(None)),
             "proj"
         );
 
@@ -516,10 +516,7 @@ mod tests {
             "fix the login bug",
         )]));
         assert_eq!(
-            app.tab_title(
-                "/home/me/proj",
-                &Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
-            ),
+            app.tab_title("/home/me/proj", &Launch::claude_resume("abc-123".into()),),
             "fix the login bug"
         );
 
@@ -527,7 +524,7 @@ mod tests {
         assert_eq!(
             app.tab_title(
                 "/home/me/proj",
-                &Launch::Claude(ClaudeLaunch::Resume("not-scanned".into())),
+                &Launch::claude_resume("not-scanned".into()),
             ),
             "proj"
         );
@@ -546,7 +543,7 @@ mod tests {
         // Tab 0: a resumed Claude session that the scan knows.
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
+            launch: Launch::claude_resume("abc-123".into()),
             title: "proj".into(),
             placement: Placement::Foreground,
         }));
@@ -571,7 +568,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
+            launch: Launch::claude_fresh(Some(minted.into())),
             title: "proj".into(),
             placement: Placement::Foreground,
         }));
@@ -592,7 +589,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/repo".into()),
-            launch: Launch::Claude(ClaudeLaunch::Resume("before".into())),
+            launch: Launch::claude_resume("before".into()),
             title: "repo".into(),
             placement: Placement::Foreground,
         }));
@@ -625,7 +622,7 @@ mod tests {
         };
         assert_eq!(
             spec.launch,
-            Launch::Claude(ClaudeLaunch::Resume("after".into())),
+            Launch::claude_resume("after".into()),
             "the re-keyed conversation, whose transcript the scan has"
         );
     }
@@ -635,7 +632,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/repo".into()),
-            launch: Launch::Claude(ClaudeLaunch::Fresh(Some("first".into()))),
+            launch: Launch::claude_fresh(Some("first".into())),
             title: "repo".into(),
             placement: Placement::Foreground,
         }));
@@ -648,7 +645,7 @@ mod tests {
         };
         assert_eq!(
             spec.launch,
-            Launch::Claude(ClaudeLaunch::Fresh(Some("second".into()))),
+            Launch::claude_fresh(Some("second".into())),
             "the closed tab's id already names a transcript"
         );
         assert_eq!(app.tab_claude_session_id(0), Some("second"));
@@ -665,7 +662,7 @@ mod tests {
         match app
             .apply(Event::LaunchSession(LaunchSpec {
                 cwd: Some("/proj".into()),
-                launch: Launch::Claude(ClaudeLaunch::Resume(id.into())),
+                launch: Launch::claude_resume(id.into()),
                 title: "proj".into(),
                 placement: Placement::Foreground,
             }))
@@ -709,7 +706,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude(ClaudeLaunch::Fresh(Some(minted.into()))),
+            launch: Launch::claude_fresh(Some(minted.into())),
             title: "proj".into(),
             placement: Placement::Foreground,
         }));

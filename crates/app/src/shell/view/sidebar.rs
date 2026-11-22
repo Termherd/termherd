@@ -14,7 +14,7 @@ use iced::widget::{
 };
 use iced::{Element, Fill};
 use termherd_core::browser::{ProjectGroup, project_label, relative_age};
-use termherd_core::{SessionKind, SessionRecord, SessionStatus, SidebarFold};
+use termherd_core::{Provider, SessionKind, SessionRecord, SessionStatus, SidebarFold};
 
 use super::{
     Backdrop, CardFacts, clip, color_bar, kind_glyph, session_card, sidebar_secondary_text,
@@ -236,8 +236,11 @@ impl Shell {
                     .style(button::text)
                     .padding(0);
                 let mut label_row = row![].spacing(6).align_y(iced::Center);
-                if let Some(status) = live.get(id) {
-                    label_row = label_row.push(status_dot(*status, Backdrop::Chrome));
+                if let Some(dot) = live
+                    .get(id)
+                    .and_then(|status| status_dot(*status, Backdrop::Chrome))
+                {
+                    label_row = label_row.push(dot);
                 }
                 let title = self.core.session_title(s);
                 // The project label tells cross-project favourites apart.
@@ -341,7 +344,7 @@ impl Shell {
             Message::LaunchProject(group.path.clone()),
         );
         let launch_claude = launch_button(
-            kind_glyph(SessionKind::Claude),
+            kind_glyph(SessionKind::Agent(Provider::Claude)),
             strings::SIDEBAR_LAUNCH_CLAUDE,
             Message::LaunchClaude(group.path.clone()),
         );
@@ -425,8 +428,11 @@ impl Shell {
         }
         // A coloured dot marks a session already open in TermHerd and
         // carries its live activity (FR8).
-        if let Some(status) = live.get(id) {
-            content = content.push(status_dot(*status, Backdrop::Chrome));
+        if let Some(dot) = live
+            .get(id)
+            .and_then(|status| status_dot(*status, Backdrop::Chrome))
+        {
+            content = content.push(dot);
         }
         let title = self.core.session_title(s);
         let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);

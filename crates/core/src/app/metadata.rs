@@ -226,7 +226,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude(ClaudeLaunch::Resume("abc-123".into())),
+            launch: Launch::claude_resume("abc-123".into()),
             title: "proj".into(),
             placement: Placement::Foreground,
         }));
@@ -269,8 +269,8 @@ mod tests {
             }));
             app.workspace.focused_session().expect("a focused session")
         };
-        let resumed = open(Launch::Claude(ClaudeLaunch::Resume("abc-123".into())));
-        let fresh = open(Launch::Claude(ClaudeLaunch::Fresh(Some("not-yet".into()))));
+        let resumed = open(Launch::claude_resume("abc-123".into()));
+        let fresh = open(Launch::claude_fresh(Some("not-yet".into())));
         let shell = open(Launch::Shell);
         assert_eq!(
             app.transcript_of(resumed),
@@ -470,7 +470,7 @@ mod tests {
         )]));
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/p".into()),
-            launch: Launch::Claude(ClaudeLaunch::Resume("a".into())),
+            launch: Launch::claude_resume("a".into()),
             title: "derived summary".into(),
             placement: Placement::Foreground,
         }));

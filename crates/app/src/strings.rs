@@ -148,6 +148,7 @@ pub fn tab_menu_refusal(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::NotClaude => "not a Claude session",
         CommandRefusal::NotIdle(status) => match status {
             SessionStatus::Starting => "Claude starting",
+            SessionStatus::Unmonitored => "status unmonitored",
             SessionStatus::Busy => "Claude busy",
             SessionStatus::Attention => "Claude waiting for an answer",
             SessionStatus::Exited => "session exited",

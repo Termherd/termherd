@@ -6,7 +6,9 @@
 
 use serde::{Deserialize, Serialize};
 use termherd_core::workspace::{Branch, SplitDir};
-use termherd_core::{ClaudeColor, ClaudeLaunch, Launch, Layout, PaneLaunch, PaneLayout, TabLayout};
+use termherd_core::{
+    AgentLaunch, ClaudeColor, Launch, Layout, PaneLaunch, PaneLayout, Provider, TabLayout,
+};
 
 use crate::paths::DataDir;
 
@@ -55,6 +57,16 @@ enum PaneFile {
     /// A fresh conversation is saved without the id it ran under: the restore
     /// mints a new one, as reopening a closed tab does.
     Claude {
+        cwd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resume: Option<String>,
+    },
+    Codex {
+        cwd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resume: Option<String>,
+    },
+    Antigravity {
         cwd: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         resume: Option<String>,
@@ -130,10 +142,14 @@ impl From<&PaneLayout> for PaneFile {
                 let cwd = cwd.clone();
                 match launch {
                     Launch::Shell => Self::Shell { cwd },
-                    Launch::Claude(claude) => Self::Claude {
-                        cwd,
-                        resume: claude_resume(claude),
-                    },
+                    Launch::Agent { provider, launch } => {
+                        let resume = agent_resume(launch);
+                        match provider {
+                            Provider::Claude => Self::Claude { cwd, resume },
+                            Provider::Codex => Self::Codex { cwd, resume },
+                            Provider::Antigravity => Self::Antigravity { cwd, resume },
+                        }
+                    }
                 }
             }
             PaneLayout::Split { dir, ratio, a, b } => Self::Split {
@@ -146,10 +162,17 @@ impl From<&PaneLayout> for PaneFile {
     }
 }
 
-fn claude_resume(claude: &ClaudeLaunch) -> Option<String> {
-    match claude {
-        ClaudeLaunch::Resume(id) => Some(id.clone()),
-        ClaudeLaunch::Fresh(_) => None,
+fn agent_resume(launch: &AgentLaunch) -> Option<String> {
+    match launch {
+        AgentLaunch::Resume(id) => Some(id.clone()),
+        AgentLaunch::Fresh(_) => None,
+    }
+}
+
+fn agent_launch(provider: Provider, resume: Option<String>) -> Launch {
+    Launch::Agent {
+        provider,
+        launch: resume.map_or(AgentLaunch::Fresh(None), AgentLaunch::Resume),
     }
 }
 
@@ -162,9 +185,15 @@ impl From<PaneFile> for PaneLayout {
             }),
             PaneFile::Claude { cwd, resume } => Self::Leaf(PaneLaunch {
                 cwd,
-                launch: Launch::Claude(
-                    resume.map_or(ClaudeLaunch::Fresh(None), ClaudeLaunch::Resume),
-                ),
+                launch: agent_launch(Provider::Claude, resume),
+            }),
+            PaneFile::Codex { cwd, resume } => Self::Leaf(PaneLaunch {
+                cwd,
+                launch: agent_launch(Provider::Codex, resume),
+            }),
+            PaneFile::Antigravity { cwd, resume } => Self::Leaf(PaneLaunch {
+                cwd,
+                launch: agent_launch(Provider::Antigravity, resume),
             }),
             PaneFile::Split { dir, ratio, a, b } => Self::Split {
                 dir: dir.into(),
@@ -233,10 +262,7 @@ mod tests {
                     root: PaneLayout::Split {
                         dir: SplitDir::Horizontal,
                         ratio: 0.25,
-                        a: Box::new(pane(
-                            "/repo",
-                            Launch::Claude(ClaudeLaunch::Resume("conv".into())),
-                        )),
+                        a: Box::new(pane("/repo", Launch::claude_resume("conv".into()))),
                         b: Box::new(pane("/repo/sub", Launch::Shell)),
                     },
                     focus: vec![Branch::B],
@@ -268,7 +294,7 @@ mod tests {
     #[test]
     fn a_saved_layout_loads_back_as_it_was() {
         let (_tmp, dir) = data_dir();
-        let saved = layout(Launch::Claude(ClaudeLaunch::Fresh(None)));
+        let saved = layout(Launch::claude_fresh(None));
         save(&dir, &saved);
         assert_eq!(load(&dir).0, saved);
     }
@@ -277,14 +303,8 @@ mod tests {
     fn a_fresh_claude_pane_is_saved_without_the_id_it_ran_under() {
         // The restore mints a new one: the old id may already name a transcript.
         let (_tmp, dir) = data_dir();
-        save(
-            &dir,
-            &layout(Launch::Claude(ClaudeLaunch::Fresh(Some("old".into())))),
-        );
-        assert_eq!(
-            load(&dir).0,
-            layout(Launch::Claude(ClaudeLaunch::Fresh(None)))
-        );
+        save(&dir, &layout(Launch::claude_fresh(Some("old".into()))));
+        assert_eq!(load(&dir).0, layout(Launch::claude_fresh(None)));
     }
 
     #[test]
@@ -326,5 +346,19 @@ mod tests {
         let loaded = load(&dir).0;
         assert_eq!(loaded.tabs.len(), 2);
         assert_eq!(loaded.tabs[0].color, None);
+    }
+
+    #[test]
+    fn codex_and_antigravity_panes_round_trip_through_layout_json() {
+        let (_tmp, dir) = data_dir();
+        for provider in [Provider::Codex, Provider::Antigravity] {
+            let fresh = layout(Launch::agent_fresh(provider, None));
+            save(&dir, &fresh);
+            assert_eq!(load(&dir).0, fresh);
+
+            let resumed = layout(Launch::agent_resume(provider, "thread-42".into()));
+            save(&dir, &resumed);
+            assert_eq!(load(&dir).0, resumed);
+        }
     }
 }

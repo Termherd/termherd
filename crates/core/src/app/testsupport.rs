@@ -64,7 +64,7 @@ pub(crate) fn launch_claude(app: &mut App) -> SessionId {
     match app
         .apply(Event::LaunchSession(LaunchSpec {
             cwd: None,
-            launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
+            launch: Launch::claude_fresh(None),
             title: "claude".into(),
             placement: Placement::Foreground,
         }))

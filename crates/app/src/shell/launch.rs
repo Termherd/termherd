@@ -5,7 +5,7 @@
 
 use iced::Task;
 use termherd_core::workspace::SessionId;
-use termherd_core::{ClaudeLaunch, Effect, Launch, LaunchSpec, Placement};
+use termherd_core::{Effect, Launch, LaunchSpec, Placement};
 
 use super::{Focus, Message, Shell};
 
@@ -131,7 +131,7 @@ impl Shell {
         let root = self
             .focused_repo()
             .map_or(cwd, |root| root.to_string_lossy().into_owned());
-        Some(self.launch(root, Launch::Claude(ClaudeLaunch::Fresh(None))))
+        Some(self.launch(root, Launch::claude_fresh(None)))
     }
 
     /// Add a git worktree to the focused session's repo, off the HEAD of its
@@ -171,13 +171,8 @@ impl Shell {
                     Placement::Background
                 };
                 let id = ask.id;
-                self.launch_minting(
-                    path,
-                    Launch::Claude(ClaudeLaunch::Fresh(None)),
-                    placement,
-                    || id,
-                )
-                .1
+                self.launch_minting(path, Launch::claude_fresh(None), placement, || id)
+                    .1
             }
             Err(why) => {
                 let repo = ask.repo.to_string_lossy();

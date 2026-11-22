@@ -41,6 +41,7 @@ impl fmt::Display for CommandRefusal {
             Self::NotIdle(status) => {
                 let status = match status {
                     SessionStatus::Starting => "still starting",
+                    SessionStatus::Unmonitored => "unmonitored",
                     SessionStatus::Busy => "busy",
                     SessionStatus::Idle => "idle",
                     SessionStatus::Attention => "waiting for an answer",

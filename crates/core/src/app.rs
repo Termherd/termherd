@@ -55,7 +55,7 @@ pub use pointer::{
     pointer_select,
 };
 pub use session::{
-    ClaudeLaunch, ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, Placement,
+    AgentLaunch, ForegroundJob, Launch, LaunchSpec, LiveSession, McpConfig, Placement,
     SessionStatus, Sessions, SpawnSpec,
 };
 pub use settings::{DEFAULT_FONT_SIZE, Zoom};

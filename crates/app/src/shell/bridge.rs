@@ -720,8 +720,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use termherd_core::{
-        ClaudeLaunch, Event, ForegroundJob, Launch, LaunchSpec, SessionStatus, SnapshotFilter,
-        SnapshotInputs,
+        Event, ForegroundJob, Launch, LaunchSpec, SessionStatus, SnapshotFilter, SnapshotInputs,
     };
 
     /// Open `n` shell tabs in a fresh `App`, so a snapshot has real workspace
@@ -855,9 +854,10 @@ mod tests {
     fn launch_claude(app: &mut App, cwd: &str, title: &str, resume: Option<&str>) -> String {
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some(cwd.to_owned()),
-            launch: Launch::Claude(resume.map_or(ClaudeLaunch::Fresh(None), |id| {
-                ClaudeLaunch::Resume(id.to_owned())
-            })),
+            launch: resume.map_or_else(
+                || Launch::claude_fresh(None),
+                |id| Launch::claude_resume(id.to_owned()),
+            ),
             title: title.to_owned(),
             placement: termherd_core::Placement::Foreground,
         }));
@@ -899,7 +899,10 @@ mod tests {
         let mut app = App::new();
         let handle = launch_claude(&mut app, "/proj", "proj", Some("claude-abc-123"));
         let info = &list_sessions(&app, &BTreeMap::new())[0];
-        assert_eq!(info.kind, SessionKind::Claude);
+        assert_eq!(
+            info.kind,
+            SessionKind::Agent(termherd_core::Provider::Claude)
+        );
         assert_eq!(info.handle, handle, "the handle is the runtime id");
         assert_eq!(
             info.resume_id.as_deref(),

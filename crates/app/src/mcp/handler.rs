@@ -237,7 +237,7 @@ impl TermherdMcp {
             project: args.project,
             kind: match args.kind.as_deref() {
                 None | Some("shell") => SessionKind::Shell,
-                Some("claude") => SessionKind::Claude,
+                Some("claude") => SessionKind::Agent(termherd_core::Provider::Claude),
                 Some(other) => {
                     return Err(ErrorData::invalid_params(
                         format!("unknown kind {other:?}; expected \"shell\" or \"claude\""),
@@ -1572,6 +1572,7 @@ fn wait_timeout(timeout_ms: Option<u64>) -> Duration {
 fn status_from_str(name: &str) -> Option<SessionStatus> {
     match name {
         "starting" => Some(SessionStatus::Starting),
+        "unmonitored" => Some(SessionStatus::Unmonitored),
         "busy" => Some(SessionStatus::Busy),
         "idle" => Some(SessionStatus::Idle),
         "attention" => Some(SessionStatus::Attention),
@@ -1582,13 +1583,13 @@ fn status_from_str(name: &str) -> Option<SessionStatus> {
 
 /// Validate whether prompting a nested session of `kind` is permitted under
 /// `allow_setting` (from `settings.json`) or `allow_param` (per-call argument).
-/// `SessionKind::Shell` is always allowed; `SessionKind::Claude` requires opt-in.
+/// `SessionKind::Shell` is always allowed; `SessionKind::Agent(termherd_core::Provider::Claude)` requires opt-in.
 fn check_claude_nesting(
     kind: SessionKind,
     allow_setting: bool,
     allow_param: Option<bool>,
 ) -> Result<(), ErrorData> {
-    if kind == SessionKind::Claude {
+    if kind == SessionKind::Agent(termherd_core::Provider::Claude) {
         let allowed = allow_setting || allow_param.unwrap_or(false);
         if !allowed {
             return Err(ErrorData::invalid_params(
@@ -1606,7 +1607,7 @@ mod tests {
     use super::*;
     use crate::shell::bridge::{Reply, Request, ShotResult, channel, spawn_test_shell};
     use termherd_core::{
-        App, ClaudeIdentity, ClaudeLaunch, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs,
+        App, ClaudeIdentity, Event, Launch, LaunchSpec, SessionStatus, SnapshotInputs,
     };
 
     /// A `list_sessions` row for an idle shell, the bridge's plainest answer.
@@ -1632,7 +1633,7 @@ mod tests {
                 handle: "7".into(),
                 title: "proj".into(),
                 cwd: Some("/proj".into()),
-                kind: SessionKind::Claude,
+                kind: SessionKind::Agent(termherd_core::Provider::Claude),
                 resume_id: Some("claude-xyz".into()),
                 status: SessionStatus::Busy,
                 identity: ClaudeIdentity::default(),
@@ -1681,7 +1682,7 @@ mod tests {
             Reply::Sessions(vec![
                 row(
                     "7",
-                    SessionKind::Claude,
+                    SessionKind::Agent(termherd_core::Provider::Claude),
                     ClaudeIdentity {
                         pid: Some(4399),
                         peer_name: Some("proj-35".into()),
@@ -2282,7 +2283,7 @@ mod tests {
         let mut app = App::new();
         app.apply(Event::LaunchSession(LaunchSpec {
             cwd: Some("/proj".into()),
-            launch: Launch::Claude(ClaudeLaunch::Fresh(None)),
+            launch: Launch::claude_fresh(None),
             title: "work".into(),
             placement: termherd_core::Placement::Foreground,
         }));
@@ -2368,7 +2369,7 @@ mod tests {
             action,
             Action::Open {
                 project: Some("/proj".into()),
-                kind: SessionKind::Claude,
+                kind: SessionKind::Agent(termherd_core::Provider::Claude),
                 placement: Placement::Background,
             }
         );
@@ -3224,7 +3225,7 @@ mod tests {
                 handle: "7".into(),
                 title: "claude".into(),
                 cwd: Some("/tmp".into()),
-                kind: SessionKind::Claude,
+                kind: SessionKind::Agent(termherd_core::Provider::Claude),
                 resume_id: Some("id1".into()),
                 status: SessionStatus::Idle,
                 identity: ClaudeIdentity::default(),
@@ -3259,7 +3260,7 @@ mod tests {
                     handle: "7".into(),
                     title: "claude".into(),
                     cwd: Some("/tmp".into()),
-                    kind: SessionKind::Claude,
+                    kind: SessionKind::Agent(termherd_core::Provider::Claude),
                     resume_id: Some("id1".into()),
                     status: SessionStatus::Idle,
                     identity: ClaudeIdentity::default(),
@@ -3303,11 +3304,46 @@ mod tests {
 
     #[test]
     fn check_claude_nesting_gates_claude_sessions_on_setting_or_param() {
-        assert!(check_claude_nesting(SessionKind::Claude, false, None).is_err());
-        assert!(check_claude_nesting(SessionKind::Claude, false, Some(false)).is_err());
-        assert!(check_claude_nesting(SessionKind::Claude, true, None).is_ok());
-        assert!(check_claude_nesting(SessionKind::Claude, true, Some(false)).is_ok());
-        assert!(check_claude_nesting(SessionKind::Claude, false, Some(true)).is_ok());
+        assert!(
+            check_claude_nesting(
+                SessionKind::Agent(termherd_core::Provider::Claude),
+                false,
+                None
+            )
+            .is_err()
+        );
+        assert!(
+            check_claude_nesting(
+                SessionKind::Agent(termherd_core::Provider::Claude),
+                false,
+                Some(false)
+            )
+            .is_err()
+        );
+        assert!(
+            check_claude_nesting(
+                SessionKind::Agent(termherd_core::Provider::Claude),
+                true,
+                None
+            )
+            .is_ok()
+        );
+        assert!(
+            check_claude_nesting(
+                SessionKind::Agent(termherd_core::Provider::Claude),
+                true,
+                Some(false)
+            )
+            .is_ok()
+        );
+        assert!(
+            check_claude_nesting(
+                SessionKind::Agent(termherd_core::Provider::Claude),
+                false,
+                Some(true)
+            )
+            .is_ok()
+        );
     }
 
     // ---- screenshot: the pixel companion to `snapshot` ----
@@ -3740,5 +3776,29 @@ mod tests {
             .await
             .expect_err("a closed bridge is a tool error");
         assert!(error.message.contains("closed"), "got: {}", error.message);
+    }
+
+    #[test]
+    fn status_from_str_is_the_exact_inverse_of_status_str() {
+        let all = [
+            SessionStatus::Starting,
+            SessionStatus::Unmonitored,
+            SessionStatus::Busy,
+            SessionStatus::Idle,
+            SessionStatus::Attention,
+            SessionStatus::Exited,
+        ];
+        for status in all {
+            match status {
+                SessionStatus::Starting
+                | SessionStatus::Unmonitored
+                | SessionStatus::Busy
+                | SessionStatus::Idle
+                | SessionStatus::Attention
+                | SessionStatus::Exited => {}
+            }
+            assert_eq!(status_from_str(status_str(status)), Some(status));
+        }
+        assert_eq!(status_from_str("unknown"), None);
     }
 }

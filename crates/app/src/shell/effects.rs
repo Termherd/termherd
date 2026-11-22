@@ -14,8 +14,8 @@ use std::time::{Duration, SystemTime};
 
 use iced::{Task, window};
 use termherd_core::{
-    Effect, Launch, McpConfig, OpenTarget, Section, SessionId, SnapshotFilter, SnapshotInputs,
-    SpawnSpec, TerminalScope, WorkspaceSnapshot, ports::PtyError,
+    Effect, McpConfig, OpenTarget, Section, SessionId, SnapshotFilter, SnapshotInputs, SpawnSpec,
+    TerminalScope, WorkspaceSnapshot, ports::PtyError,
 };
 
 use termherd_claude::session_file::SessionFile;
@@ -229,7 +229,11 @@ impl Shell {
         let Some(endpoint) = &self.mcp_endpoint else {
             return;
         };
-        if !matches!(spec.launch, Launch::Claude(_)) {
+        if !spec
+            .launch
+            .capabilities()
+            .is_some_and(|caps| caps.mcp_bridge_injection)
+        {
             return;
         }
         let token = self.mcp_tokens.issue();

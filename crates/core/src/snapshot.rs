@@ -20,6 +20,7 @@ use termherd_claude::color::ClaudeColor;
 use termherd_claude::session_file::SessionFile;
 
 use crate::app::SessionStatus;
+use crate::provider::Provider;
 
 /// Default number of trailing terminal lines a snapshot keeps per scoped
 /// session — enough to see the current screen, small enough to stay cheap.
@@ -276,7 +277,18 @@ pub struct ClaudeIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
     Shell,
-    Claude,
+    Agent(Provider),
+}
+
+impl SessionKind {
+    /// The agent provider this kind represents, or `None` for a plain shell.
+    #[must_use]
+    pub const fn provider(self) -> Option<Provider> {
+        match self {
+            Self::Shell => None,
+            Self::Agent(provider) => Some(provider),
+        }
+    }
 }
 
 /// Keep only the last `lines` lines of `text` (all of it when it is shorter, an

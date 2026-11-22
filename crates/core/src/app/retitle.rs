@@ -65,11 +65,14 @@ mod tests {
     use crate::claude_command::{ClaudeCommand, CommandKind, PromptInput};
 
     /// Open a Claude tab launched as `launch`, labelled `repo`.
-    fn open_claude(app: &mut App, launch: ClaudeLaunch) -> SessionId {
+    fn open_claude(app: &mut App, launch: AgentLaunch) -> SessionId {
         match app
             .apply(Event::LaunchSession(LaunchSpec {
                 cwd: Some("/repo".into()),
-                launch: Launch::Claude(launch),
+                launch: Launch::Agent {
+                    provider: crate::Provider::Claude,
+                    launch,
+                },
                 placement: Placement::Foreground,
                 title: "repo".into(),
             }))
@@ -95,7 +98,7 @@ mod tests {
     #[test]
     fn a_rescan_retitles_an_open_tab_with_claudes_rename() {
         let mut app = App::new();
-        open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
+        open_claude(&mut app, AgentLaunch::Resume("abc".into()));
         app.apply(Event::ScanCompleted(vec![scanned("abc", None, None)]));
         assert_eq!(title(&app), "the first prompt");
 
@@ -110,7 +113,7 @@ mod tests {
     #[test]
     fn a_rescan_retitles_a_fresh_tab_launched_under_a_minted_id() {
         let mut app = App::new();
-        open_claude(&mut app, ClaudeLaunch::Fresh(Some("minted".into())));
+        open_claude(&mut app, AgentLaunch::Fresh(Some("minted".into())));
         assert_eq!(title(&app), "repo", "nothing scanned yet");
 
         app.apply(Event::ScanCompleted(vec![scanned(
@@ -124,7 +127,7 @@ mod tests {
     #[test]
     fn claudes_rename_outranks_a_live_title_and_a_live_title_the_ai_title() {
         let mut app = App::new();
-        let session = open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
+        let session = open_claude(&mut app, AgentLaunch::Resume("abc".into()));
         app.apply(Event::ScanCompleted(vec![scanned(
             "abc",
             None,
@@ -159,7 +162,7 @@ mod tests {
     #[test]
     fn a_tab_the_scan_does_not_know_keeps_its_launch_label() {
         let mut app = App::new();
-        open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
+        open_claude(&mut app, AgentLaunch::Resume("abc".into()));
         app.apply(Event::ScanCompleted(vec![scanned(
             "other",
             Some("someone else"),
@@ -183,7 +186,7 @@ mod tests {
     #[test]
     fn a_claude_tab_takes_no_local_name() {
         let mut app = App::new();
-        open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
+        open_claude(&mut app, AgentLaunch::Resume("abc".into()));
         app.apply(Event::RenameTab {
             index: 0,
             title: "mine".into(),
@@ -196,7 +199,7 @@ mod tests {
     fn a_tab_is_renamed_through_claude_when_its_first_pane_runs_claude() {
         let mut app = App::new();
         launch(&mut app, "sh");
-        open_claude(&mut app, ClaudeLaunch::Fresh(None));
+        open_claude(&mut app, AgentLaunch::Fresh(None));
         app.apply(Event::SplitFocused(crate::workspace::SplitDir::Vertical));
         assert!(!app.tab_names_through_claude(0), "a shell tab");
         assert!(
@@ -209,7 +212,7 @@ mod tests {
     #[test]
     fn claudes_rename_outranks_a_name_kept_in_the_sidebar() {
         let mut app = App::new();
-        open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
+        open_claude(&mut app, AgentLaunch::Resume("abc".into()));
         app.apply(Event::RenameSession {
             session: "abc".into(),
             title: "local".into(),
@@ -232,7 +235,7 @@ mod tests {
         // one is a deliberate override (two sessions /clear left with the same
         // title), and a /rename typed after it is too.
         let mut app = App::new();
-        open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
+        open_claude(&mut app, AgentLaunch::Resume("abc".into()));
         app.apply(Event::ScanCompleted(vec![scanned(
             "abc",
             Some("shared"),
@@ -267,7 +270,7 @@ mod tests {
         // Claude has recorded nothing yet: the local name stands until it
         // does, and is outranked from then on.
         let mut app = App::new();
-        let session = open_claude(&mut app, ClaudeLaunch::Resume("abc".into()));
+        let session = open_claude(&mut app, AgentLaunch::Resume("abc".into()));
         app.apply(Event::RenameSession {
             session: "abc".into(),
             title: "local".into(),
@@ -306,7 +309,7 @@ mod tests {
     #[test]
     fn a_claude_tab_whose_claude_has_exited_is_named_like_a_shell() {
         let mut app = App::new();
-        let session = open_claude(&mut app, ClaudeLaunch::Fresh(None));
+        let session = open_claude(&mut app, AgentLaunch::Fresh(None));
         in_front(&mut app, session, a_claude_job());
         assert!(app.tab_names_through_claude(0), "Claude in front");
 
@@ -338,7 +341,7 @@ mod tests {
     fn a_pane_that_never_reports_its_foreground_still_names_through_claude() {
         // No foreground read yet, so the launch stands for it.
         let mut app = App::new();
-        open_claude(&mut app, ClaudeLaunch::Fresh(None));
+        open_claude(&mut app, AgentLaunch::Fresh(None));
         assert!(app.tab_names_through_claude(0));
     }
 }
