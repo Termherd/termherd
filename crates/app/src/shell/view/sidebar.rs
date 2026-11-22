@@ -356,9 +356,17 @@ impl Shell {
             strings::SIDEBAR_LAUNCH_CLAUDE,
             Message::LaunchClaude(group.path.clone()),
         );
+        let secondary_agents = self.providers.secondary_launchable(Provider::Claude);
         let mut header = row![fold, repo_star, name, launch_shell, launch_claude]
             .spacing(6)
             .align_y(iced::Center);
+        if !secondary_agents.is_empty() {
+            header = header.push(launch_button(
+                "▾",
+                strings::SIDEBAR_LAUNCH_OTHER,
+                Message::ToggleLaunchPicker(group.path.clone()),
+            ));
+        }
         // Only a declared repo can be taken back out; a discovered project has
         // no declaration to drop, and the button must not promise one.
         if self.core.is_repo_declared(&group.path) {
@@ -369,6 +377,31 @@ impl Shell {
             ));
         }
         let mut g = column![header].spacing(4);
+        if self.launch_picker.as_deref() == Some(group.path.as_str())
+            && !secondary_agents.is_empty()
+        {
+            let mut picker = row![].spacing(6).align_y(iced::Center);
+            for provider in secondary_agents {
+                let label = format!(
+                    "{} {}",
+                    kind_glyph(SessionKind::Agent(provider)),
+                    provider.display_name()
+                );
+                let hint = strings::sidebar_launch_agent(provider.display_name());
+                picker = picker.push(tooltip(
+                    button(text(label).size(11))
+                        .on_press(Message::LaunchAgent {
+                            cwd: group.path.clone(),
+                            provider,
+                        })
+                        .style(button::secondary)
+                        .padding([2, 6]),
+                    text(hint).size(11),
+                    tooltip::Position::Bottom,
+                ));
+            }
+            g = g.push(container(picker).padding([2, 0]));
+        }
         if empty {
             return g
                 .push(

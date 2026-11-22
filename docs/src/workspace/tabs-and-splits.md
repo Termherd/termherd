@@ -36,10 +36,11 @@ key produces. On AZERTY and QWERTZ, where the number row produces `&`, `é`, …
 without Shift, <kbd>Cmd</kbd>/<kbd>Alt</kbd>+<kbd>1</kbd> still lands on tab 1.
 
 Each tab carries its own **activity dot** (see
-[Status and attention](./status.md)), a **kind mark** — `✳` for a Claude
-session, `❯` for a shell — a title derived from its session, and a `×` to close
-it. In a split tab, the mark follows the focused pane. The kind is never part
-of the title, so renaming a tab or a retitle from Claude cannot lose it: a
+[Status and attention](./status.md)) — omitted for providers whose live
+activity is not monitored — a **kind mark** (`✳` for a Claude session, `✦` for
+Antigravity, `❯` for a shell), a title derived from its session, and a `×` to
+close it. In a split tab, the mark follows the focused pane. The kind is never
+part of the title, so renaming a tab or a retitle from Claude cannot lose it: a
 fresh tab is titled after its project alone. Hovering a tab shows the
 session's fuller description — the card the sidebar shows, for a fresh Claude
 tab as soon as the sidebar lists its session. Should `/clear` or a

@@ -24,8 +24,8 @@ use iced::{Point, Size, Subscription, Task, Theme, keyboard, window};
 use termherd_core::ports::{PathResolver, ProjectScanner, PtyHost};
 use termherd_core::workspace::SessionId;
 use termherd_core::{
-    ConfigInput, Keymap, Launch, Overlay, PointerEvent, ScrollTarget, SelectOp, SessionRecord,
-    SessionStatus,
+    AvailableProviders, ConfigInput, Keymap, Launch, Overlay, PointerEvent, Provider, ScrollTarget,
+    SelectOp, SessionRecord, SessionStatus,
 };
 use termherd_pty::{PtyEvent, Screen};
 
@@ -116,6 +116,8 @@ pub struct Startup {
     /// Where a launch with no context starts.
     pub fallback_cwd: String,
     pub claude_dir: Option<crate::paths::ClaudeDir>,
+    /// Agent CLIs detected on the host at startup.
+    pub providers: AvailableProviders,
 }
 
 /// The settings the MCP `snapshot` tool reports that `core` cannot read —
@@ -299,6 +301,11 @@ struct Shell {
     tab_menu: Option<tab_menu::TabMenu>,
     /// The open tab colour picker, if any — the focused tab's, like the menu.
     color_picker: Option<color_picker::ColorPicker>,
+    /// Agent CLIs detected on this host at startup.
+    providers: AvailableProviders,
+    /// Repo path whose secondary agent launch picker (`▾`) is open in the
+    /// sidebar, if any.
+    launch_picker: Option<String>,
     /// Set only while an MCP call is being served, so a prompt armed then is
     /// marked as one the user has not read (see `for_a_remote_caller`).
     serving_remote_caller: bool,
@@ -460,6 +467,15 @@ enum Message {
     /// Start a fresh Claude session in the given project directory (FR4a, `✳`
     /// button) — distinct from resuming an existing one.
     LaunchClaude(String),
+    /// Start a fresh session for `provider` in `cwd` (picked from the sidebar's
+    /// secondary agent selector).
+    LaunchAgent {
+        cwd: String,
+        provider: Provider,
+    },
+    /// Open or close the secondary agent launch picker (`▾`) under a project
+    /// header in the sidebar.
+    ToggleLaunchPicker(String),
     /// `git` finished adding a worktree to `repo`: its path, or why not.
     WorktreeAdded {
         ask: launch::WorktreeAsk,
@@ -782,6 +798,9 @@ impl Message {
             Self::SearchChanged(_)
                 | Self::SearchTitlesOnly(_)
                 | Self::LaunchProject(_)
+                | Self::LaunchClaude(_)
+                | Self::LaunchAgent { .. }
+                | Self::ToggleLaunchPicker(_)
                 | Self::LaunchSession { .. }
                 | Self::FocusSearch
                 | Self::FocusPane(_)
@@ -912,6 +931,8 @@ impl Shell {
             tab_rename: None,
             tab_menu: None,
             color_picker: None,
+            providers: startup.providers,
+            launch_picker: None,
             serving_remote_caller: false,
             // Populated by the first scan's `refresh_docs` — `discover` does
             // blocking fs I/O, which must stay off the UI thread.
@@ -1156,9 +1177,27 @@ impl Shell {
                     .apply(termherd_core::Event::SearchTitlesOnlyToggled(titles_only));
                 self.perform(effects)
             }
-            Message::LaunchProject(cwd) => self.launch(cwd, Launch::Shell),
+            Message::LaunchProject(cwd) => {
+                self.launch_picker = None;
+                self.launch(cwd, Launch::Shell)
+            }
             Message::WorktreeAdded { ask, added } => self.worktree_added(ask, added),
-            Message::LaunchClaude(cwd) => self.launch(cwd, Launch::claude_fresh(None)),
+            Message::LaunchClaude(cwd) => {
+                self.launch_picker = None;
+                self.launch(cwd, Launch::claude_fresh(None))
+            }
+            Message::LaunchAgent { cwd, provider } => {
+                self.launch_picker = None;
+                self.launch(cwd, Launch::agent_fresh(provider, None))
+            }
+            Message::ToggleLaunchPicker(path) => {
+                if self.launch_picker.as_deref() == Some(path.as_str()) {
+                    self.launch_picker = None;
+                } else {
+                    self.launch_picker = Some(path);
+                }
+                Task::none()
+            }
             Message::LaunchSession { cwd, resume } => {
                 // Re-clicking a session already open in TermHerd re-focuses its
                 // tab instead of spawning a second terminal for the same Claude
@@ -2003,6 +2042,7 @@ mod key_routing {
             settings_file: None,
             fallback_cwd: "/injected/home".to_owned(),
             claude_dir: None,
+            providers: AvailableProviders::default(),
         }
     }
 
@@ -4751,6 +4791,32 @@ mod key_routing {
         assert!(
             minted_fresh_claude(launches.last()).is_some(),
             "the bot button starts a fresh Claude session — never a shell, never a resume"
+        );
+    }
+
+    #[test]
+    fn the_agent_picker_toggles_and_launches_antigravity_without_minting_an_id() {
+        let (mut shell, pty) = shell_with_terminal();
+        assert_eq!(shell.launch_picker, None);
+
+        let _ = shell.update(Message::ToggleLaunchPicker("/tmp/project".to_string()));
+        assert_eq!(shell.launch_picker.as_deref(), Some("/tmp/project"));
+
+        let _ = shell.update(Message::ToggleLaunchPicker("/tmp/project".to_string()));
+        assert_eq!(shell.launch_picker, None);
+
+        let _ = shell.update(Message::ToggleLaunchPicker("/tmp/project".to_string()));
+        let before = pty.launches().len();
+        let _ = shell.update(Message::LaunchAgent {
+            cwd: "/tmp/project".to_string(),
+            provider: Provider::Antigravity,
+        });
+        assert_eq!(shell.launch_picker, None);
+        let launches = pty.launches();
+        assert_eq!(launches.len(), before + 1);
+        assert_eq!(
+            launches.last(),
+            Some(&Launch::agent_fresh(Provider::Antigravity, None))
         );
     }
 

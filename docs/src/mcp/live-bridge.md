@@ -97,7 +97,7 @@ tool-level error; the text reads keep working.
 
 | Tool | Args | Notes |
 | --- | --- | --- |
-| `open_session` | `project`, `kind`, `background` | `kind` is `"shell"` (default) or `"claude"`; omit `project` for the home dir; `background: true` opens without taking focus |
+| `open_session` | `project`, `kind`, `background` | `kind` is `"shell"` (default), `"claude"`, or `"antigravity"`; omit `project` for the home dir; `background: true` opens without taking focus |
 | `split_pane` | `direction`, `pane` | `"vertical"` (default) or `"horizontal"`; omit `pane` for the focused one |
 | `focus_pane` | `session` | |
 | `rename_tab` | `tab`, `title` | `tab` is the 0-based index `snapshot` reports; a blank title reverts a shell tab to the derived one. A Claude tab is renamed by arming `/rename <title>` for confirmation, answered as `claude_command` is; a blank title, or the name it already shows, arms nothing and leaves it as it is |
