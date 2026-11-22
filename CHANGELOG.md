@@ -7,6 +7,14 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (a session waiting for you is hard to miss)
+
+- A tab whose session waits for you is tinted red while another tab is
+  active, and in a split the waiting pane gets a red frame.
+- The tab strip ends with *N waiting*, and on macOS the Dock icon shows the
+  count. A click on the count, or the new `next-attention` action
+  (`mod+shift+a`), goes to the next waiting session (#602).
+
 ### Added (shortcuts shown where their action is offered)
 
 - Each tab menu line ends with its shortcut, and the sidebar's *Hide* and

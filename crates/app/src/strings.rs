@@ -267,6 +267,18 @@ pub fn archive_prompt(title: &str) -> String {
     format!("Archive “{title}”?")
 }
 
+/// The tab strip's count of the sessions waiting for the user.
+#[must_use]
+pub fn waiting_count(waiting: usize) -> String {
+    format!("{waiting} waiting")
+}
+
+/// The Dock badge for `waiting` sessions; none when none waits.
+#[must_use]
+pub fn dock_badge(waiting: usize) -> Option<String> {
+    (waiting > 0).then(|| waiting.to_string())
+}
+
 /// Every non-exited session dies on quit, Claude or shell, so `live` counts
 /// them all.
 #[must_use]
@@ -310,6 +322,19 @@ pub const SETTINGS_CLAUDE_NOTE: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_waiting_count_names_how_many_wait() {
+        assert_eq!(waiting_count(1), "1 waiting");
+        assert_eq!(waiting_count(3), "3 waiting");
+    }
+
+    #[test]
+    fn the_dock_badge_shows_the_count_and_clears_at_zero() {
+        assert_eq!(dock_badge(0), None);
+        assert_eq!(dock_badge(1).as_deref(), Some("1"));
+        assert_eq!(dock_badge(12).as_deref(), Some("12"));
+    }
 
     #[test]
     fn a_tooltip_ends_with_its_shortcut_when_one_is_bound() {

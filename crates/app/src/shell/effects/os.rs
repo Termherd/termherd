@@ -1,6 +1,6 @@
 //! OS handoffs the effect executor performs: opening a detected link in the
-//! default handler ([`open_url`]) and posting a desktop notification
-//! ([`notify`]). Both are fire-and-forget, never fatal. This module plus
+//! default handler ([`open_url`]), posting a desktop notification
+//! ([`notify`]), and the Dock badge ([`show_dock_badge`]). Both are fire-and-forget, never fatal. This module plus
 //! `crate::macos` are the only homes for `cfg(target_os)` in the app crate — OS
 //! divergence is quarantined here rather than scattered through the shell.
 
@@ -12,6 +12,18 @@ use super::super::notify_click::ClickSlot;
 /// Used to attribute desktop notifications to TermHerd; see [`notify`].
 #[cfg(target_os = "macos")]
 const MACOS_BUNDLE_ID: &str = "dev.termherd";
+
+/// Show `waiting` on the Dock icon, or clear it at zero. Only macOS has a
+/// Dock; `update` runs on the main thread AppKit needs.
+pub(in crate::shell) fn show_dock_badge(waiting: usize) {
+    let label = crate::strings::dock_badge(waiting);
+    #[cfg(target_os = "macos")]
+    if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+        crate::macos::set_dock_badge(mtm, label.as_deref());
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = label;
+}
 
 /// Hand a resolved file to the OS default handler — the same three openers a
 /// URL takes, since each accepts a path as readily as a URL. The `:line` the

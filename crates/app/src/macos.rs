@@ -43,6 +43,9 @@
 //! finishes launching, so a link that launched the app is caught too. It drops
 //! the link into the same inbox every other launch writes to.
 //!
+//! **The Dock badge.** [`set_dock_badge`] writes the count of sessions
+//! waiting for the user on the Dock icon; the shell decides when it changes.
+//!
 //! It is the lone exception to the workspace-wide `unsafe_code = "deny"` —
 //! every `unsafe` below is an ObjC message send or runtime call on the main
 //! thread, the standard `objc2` idiom.
@@ -71,6 +74,20 @@ pub fn install(mtm: MainThreadMarker) {
     add_character_palette_item(mtm);
     add_window_menu(mtm);
     route_stray_text_through_ime(mtm);
+}
+
+/// Show `label` on the app's Dock icon, or clear it with `None`. On the
+/// main thread, which `mtm` proves.
+pub fn set_dock_badge(mtm: MainThreadMarker, label: Option<&str>) {
+    let label = label.map(NSString::from_str);
+    // SAFETY: two AppKit message sends on the main thread (guaranteed by
+    // `mtm`); the tile is an owned `Retained`, and the label outlives the
+    // call that copies it.
+    unsafe {
+        NSApplication::sharedApplication(mtm)
+            .dockTile()
+            .setBadgeLabel(label.as_deref());
+    }
 }
 
 /// Repoint the app-menu **Quit** item from `terminate:` to `performClose:` so

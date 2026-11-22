@@ -295,6 +295,11 @@ impl Shell {
             Action::FocusRight => self.focus_dir(Direction::Right),
             Action::FocusUp => self.focus_dir(Direction::Up),
             Action::FocusDown => self.focus_dir(Direction::Down),
+            Action::NextAttention => self
+                .core
+                .next_waiting()
+                .and_then(|session| self.reveal_session(session))
+                .ok_or(Inertia::NoContext)?,
             // In the vocabulary since FR9, still unwired: the launch surfaces
             // that exist are `NewShellHere` / `NewClaudeSessionHere`.
             Action::OpenNewSession => return Err(Inertia::NoSurface),

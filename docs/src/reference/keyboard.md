@@ -105,6 +105,7 @@ without Shift. Off macOS it takes <kbd>Alt</kbd>, which costs the shell its
 | `focus-down` | `mod+shift+down` | … below |
 | `focus-next` | *(unbound)* | cycle forward through panes |
 | `focus-prev` | *(unbound)* | cycle backward |
+| `next-attention` | `mod+shift+a` | go to the next session [waiting for you](../workspace/status.md#when-a-session-waits-for-you) |
 
 ### Terminal
 

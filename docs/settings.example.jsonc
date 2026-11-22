@@ -233,6 +233,7 @@
   //   focus-left / -right       mod+Shift+Left / Right
   //   focus-up / -down          mod+Shift+Up / Down
   //   focus-next / focus-prev   (unbound)
+  //   next-attention            mod+Shift+A (the next session waiting for you)
   //   focus-search              mod+F ; Ctrl+Shift+F off macOS
   //   toggle-sidebar            mod+B ; Ctrl+Shift+B off macOS
   //   open-settings             mod+, (the settings panel, or close it)

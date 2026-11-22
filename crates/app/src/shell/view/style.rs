@@ -52,6 +52,8 @@ pub(super) enum Backdrop {
     Chrome,
     /// The active tab chip's fill, [`active_chip_fill`].
     ActiveChip,
+    /// A waiting tab chip's fill, [`waiting_chip_fill`].
+    WaitingChip,
 }
 
 /// The hue of a waiting session's marks before any shading, tuned for a dark
@@ -79,6 +81,7 @@ fn shade_status(hue: Color, palette: &Extended, backdrop: Backdrop) -> Color {
     match backdrop {
         Backdrop::Chrome => on_surface(hue, palette),
         Backdrop::ActiveChip => on_fill(hue, active_chip_fill(palette)),
+        Backdrop::WaitingChip => on_fill(hue, waiting_chip_fill(palette)),
     }
 }
 
@@ -92,13 +95,19 @@ fn status_color(status: SessionStatus, palette: &Extended, backdrop: Backdrop) -
 /// better of them is at least 4.58:1 on any colour — so the push never runs
 /// out. A fill has no theme-wide tuning to keep, unlike [`on_surface`].
 fn on_fill(hue: Color, fill: Color) -> Color {
+    on_fill_at(hue, fill, MARK_FLOOR)
+}
+
+/// [`on_fill`] with the contrast `floor` the shade must clear. The better of
+/// white and black clears [`TEXT_FLOOR`] too.
+fn on_fill_at(hue: Color, fill: Color, floor: f32) -> Color {
     let fill_luminance = luminance(fill);
     let away = if contrast_ratio(1.0, fill_luminance) >= contrast_ratio(0.0, fill_luminance) {
         Color::WHITE
     } else {
         Color::BLACK
     };
-    shade_until_it_reads(hue, away, &[fill], MARK_FLOOR)
+    shade_until_it_reads(hue, away, &[fill], floor)
 }
 
 /// The hues are tuned for a dark surface. The fixed light-theme darkening
@@ -141,6 +150,31 @@ fn shade_until_it_reads(start: Color, away: Color, surfaces: &[Color], floor: f3
 /// The active tab chip's fill.
 pub(super) fn active_chip_fill(palette: &Extended) -> Color {
     palette.primary.base.color
+}
+
+/// The fill of a tab chip whose tab waits for the user while another is
+/// active: the strip's surface tinted toward the attention hue.
+pub(super) fn waiting_chip_fill(palette: &Extended) -> Color {
+    mix(palette.background.base.color, ATTENTION_HUE, WAITING_TINT)
+}
+
+/// How far a waiting chip's fill moves from the strip toward the attention
+/// hue: enough to tell it from a plain chip at a glance, little enough to
+/// stay a tint rather than an alarm.
+const WAITING_TINT: f32 = 0.3;
+
+/// A waiting tab chip's text, shaded to read on [`waiting_chip_fill`].
+pub(super) fn waiting_chip_text(palette: &Extended) -> Color {
+    on_fill_at(
+        palette.background.base.text,
+        waiting_chip_fill(palette),
+        TEXT_FLOOR,
+    )
+}
+
+/// The border of a split pane that waits for the user.
+pub(super) fn waiting_ring(palette: &Extended) -> Color {
+    shade_status(ATTENTION_HUE, palette, Backdrop::Chrome)
 }
 
 /// The window surfaces a mark must read on. The active tab chip's fill is a
@@ -376,6 +410,61 @@ mod tests {
                     "{status:?} on {theme}'s chip: {ratio:.2}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn every_status_dot_reads_on_every_themes_waiting_chip() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            let fill = waiting_chip_fill(palette);
+            for status in ALL {
+                let dot = status_color(status, palette, Backdrop::WaitingChip).expect("monitored");
+                let ratio = contrast(dot, fill);
+                assert!(
+                    ratio >= MARK_FLOOR,
+                    "{status:?} on {theme}'s waiting chip: {ratio:.2}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_waiting_chips_title_reads_as_text_on_every_theme() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            let ratio = contrast(waiting_chip_text(palette), waiting_chip_fill(palette));
+            assert!(ratio >= TEXT_FLOOR, "{theme}: {ratio:.2}");
+        }
+    }
+
+    /// How much redder than green `c` is: the attention hue's lean.
+    fn red_lean(c: Color) -> f32 {
+        c.r - c.g
+    }
+
+    #[test]
+    fn a_waiting_chip_leans_red_against_its_strip_on_every_theme() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            let fill = waiting_chip_fill(palette);
+            let strip = palette.background.base.color;
+            assert!(
+                red_lean(fill) >= red_lean(strip) + 0.1,
+                "{theme}: fill {fill:?} on strip {strip:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_waiting_ring_is_the_attention_mark_on_every_theme() {
+        for theme in every_theme() {
+            let palette = theme.extended_palette();
+            assert_eq!(
+                Some(waiting_ring(palette)),
+                status_color(SessionStatus::Attention, palette, Backdrop::Chrome),
+                "{theme}"
+            );
         }
     }
 
