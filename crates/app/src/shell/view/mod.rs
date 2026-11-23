@@ -448,7 +448,7 @@ fn pane_frame_style(palette: &Extended, frame: PaneFrame) -> container::Style {
         border: Border {
             color,
             width,
-            radius: 3.0.into(),
+            radius: 4.0.into(),
         },
         ..container::Style::default()
     }

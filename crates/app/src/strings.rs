@@ -79,10 +79,10 @@ pub fn welcome_counts(sessions: usize, projects: usize) -> String {
 }
 
 // --- Doc viewer ---
-pub const DOC_CLOSE: &str = "✕ close";
-pub const DOC_SAVE: &str = "💾 save";
-pub const DOC_SAVED: &str = "saved";
-pub const DOC_MODIFIED: &str = "• modified";
+pub const DOC_CLOSE: &str = "Close";
+pub const DOC_SAVE: &str = "Save";
+pub const DOC_SAVED: &str = "Saved";
+pub const DOC_MODIFIED: &str = "• Modified";
 pub const DISCARD: &str = "Discard";
 
 /// Asked before a modified doc's unsaved edits are thrown away.

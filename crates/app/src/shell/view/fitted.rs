@@ -43,6 +43,7 @@ pub(super) fn fitted<'a, M>(
         style,
         width: Length::Fill,
         max_width: f32::INFINITY,
+        reserve: 0.0,
         content: Element::new(iced::widget::space()),
     }
 }
@@ -55,6 +56,7 @@ pub(super) struct Fitted<'a, M> {
     style: fn(&Theme) -> text::Style,
     width: Length,
     max_width: f32,
+    reserve: f32,
     /// The text widget drawing the cut, rebuilt at each layout.
     content: Element<'a, M>,
 }
@@ -69,6 +71,14 @@ impl<M> Fitted<'_, M> {
     /// The widest the line may grow, in pixels.
     pub(super) fn max_width(mut self, max_width: f32) -> Self {
         self.max_width = max_width;
+        self
+    }
+
+    /// Room to leave, in pixels, out of the width the line is given, for
+    /// what follows it in its row: a `Shrink` line laid out first would
+    /// otherwise take all of it.
+    pub(super) fn reserve(mut self, reserve: f32) -> Self {
+        self.reserve = reserve;
         self
     }
 }
@@ -96,8 +106,9 @@ impl<M> Widget<M, Theme, Renderer> for Fitted<'_, M> {
         renderer: &Renderer,
         limits: &layout::Limits,
     ) -> layout::Node {
+        let limits = limits.max_width(self.max_width);
         let limits = limits
-            .max_width(self.max_width)
+            .max_width((limits.max().width - self.reserve).max(0.0))
             .width(self.width)
             .height(Length::Shrink);
         let width = limits.max().width;
