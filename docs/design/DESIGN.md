@@ -130,12 +130,11 @@ grid and is the most used step: a choice, kept.
 | none | 0 | sidebar row |
 | hairline | 1 | sidebar colour bar |
 | sm | 2 | swatch, insertion caret |
-| md | 4 | tab chip |
+| md | 4 | tab chip, pane border |
 | lg | 6 | hover card |
 
 Borders are 1 px (card, swatch) or 2 px for a session-colour mark and a pane
-border (1 px when the pane is not focused). The pane border's 3 px radius
-(`view/mod.rs`) is off this scale.
+border (1 px when the pane is not focused).
 
 ## Layout
 
