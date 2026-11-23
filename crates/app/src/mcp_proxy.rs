@@ -206,7 +206,8 @@ pub(crate) fn serve_bridge<R: BufRead, W: Write>(reader: R, mut writer: W, targe
             Ok(HttpOutcome::NoContent) => None,
             Err(err) => {
                 let _ = writeln!(io::stderr(), "termherd mcp-proxy: {err}");
-                jsonrpc_error_response(&message, &err.to_string()).map(|v| v.to_string())
+                jsonrpc_error_response(&message, &format!("termherd live bridge error: {err}"))
+                    .map(|v| v.to_string())
             }
         };
         if let Some(reply) = reply {
@@ -324,37 +325,45 @@ fn post_json(target: &BridgeTarget, body: &str) -> Result<HttpOutcome, Transport
     }
 }
 
+fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    remaining: usize,
+) -> Result<Option<String>, TransportError> {
+    let mut buf = Vec::new();
+    let limit = remaining.saturating_add(1) as u64;
+    let read = reader.by_ref().take(limit).read_until(b'\n', &mut buf)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if read > remaining {
+        return Err(TransportError::MalformedHttp(
+            "response headers exceeded limit".to_owned(),
+        ));
+    }
+    String::from_utf8(buf)
+        .map(Some)
+        .map_err(|err| TransportError::MalformedHttp(err.to_string()))
+}
+
 fn read_response_head<R: BufRead>(
     reader: &mut R,
 ) -> Result<(u16, Option<usize>, bool), TransportError> {
-    let mut status_line = String::new();
-    let n = reader.read_line(&mut status_line)?;
-    if n == 0 {
+    let Some(status_line) = read_bounded_line(reader, MAX_HEADER_BYTES)? else {
         return Err(TransportError::MalformedHttp(
             "empty response from live bridge".to_owned(),
         ));
-    }
+    };
     let status: u16 = status_line
         .split_whitespace()
         .nth(1)
         .and_then(|code| code.parse().ok())
         .ok_or_else(|| TransportError::MalformedHttp(status_line.trim().to_owned()))?;
 
-    let mut header_bytes = n;
+    let mut header_bytes = status_line.len();
     let mut content_length = None;
     let mut chunked = false;
-    loop {
-        let mut line = String::new();
-        let read = reader.read_line(&mut line)?;
-        if read == 0 {
-            break;
-        }
-        header_bytes += read;
-        if header_bytes > MAX_HEADER_BYTES {
-            return Err(TransportError::MalformedHttp(
-                "response headers exceeded limit".to_owned(),
-            ));
-        }
+    while let Some(line) = read_bounded_line(reader, MAX_HEADER_BYTES - header_bytes)? {
+        header_bytes += line.len();
         let trimmed = line.trim();
         if trimmed.is_empty() {
             break;
@@ -445,7 +454,7 @@ fn jsonrpc_error_response(message: &Value, detail: &str) -> Option<Value> {
         "id": id,
         "error": {
             "code": -32000,
-            "message": format!("termherd live bridge error: {detail}"),
+            "message": detail,
         }
     }))
 }
@@ -486,6 +495,24 @@ mod tests {
         let mut cursor = io::Cursor::new(&wire[..]);
         let decoded = read_chunked_body(&mut cursor).expect("chunked body");
         assert_eq!(decoded, br#"{"a":1}"#);
+    }
+
+    #[test]
+    fn read_response_head_bounds_a_line_without_a_newline() {
+        let huge = vec![b'x'; MAX_HEADER_BYTES + 128];
+        let mut cursor = io::Cursor::new(&huge[..]);
+        assert!(matches!(
+            read_response_head(&mut cursor),
+            Err(TransportError::MalformedHttp(_))
+        ));
+    }
+
+    #[test]
+    fn run_fails_loudly_when_configured_file_is_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("does-not-exist.json");
+        let err = run(Some(&missing), None).expect_err("must not fall back to settings");
+        assert!(err.contains("could not read"), "got: {err}");
     }
 
     #[test]
