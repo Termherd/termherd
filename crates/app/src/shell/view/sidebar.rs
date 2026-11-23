@@ -350,10 +350,14 @@ impl Shell {
         let repo_star_glyph = if repo_starred { "★" } else { "☆" };
         let repo_star = || row_button(repo_star_glyph, Message::ToggleRepoStar(group.path.clone()));
         let name = || {
-            let name = button(text(project_label(&group.path).to_owned()).size(HEADING))
-                .style(button::text)
-                .padding(0)
-                .width(Fill);
+            let label = fitted(
+                project_label(&group.path).to_owned(),
+                HEADING,
+                text::default,
+            )
+            .width(iced::Length::Shrink)
+            .reserve(CONTROL_WIDTH + 6.0);
+            let name = button(label).style(button::text).padding(0);
             // An empty row has no list to fold, so the click is not merely
             // ineffective — it would store a fold nothing shows, to surface
             // the day the repo gains its first session.
@@ -368,11 +372,15 @@ impl Shell {
         // no declaration to drop, and the button must not promise one.
         let declared = self.core.is_repo_declared(&group.path);
         let header = |hovered: bool| {
+            // The star follows the name, so the name lines up with its
+            // sessions' titles rather than sitting a slot to their right.
+            // The pair fills what the buttons leave, the name cut to fit
+            // with the star's slot kept beside it.
             let star = slot(hovered || repo_starred, repo_star_glyph, repo_star());
+            let named = container(row![name(), star].spacing(6).align_y(iced::Center)).width(Fill);
             let mut header = row![
                 fold(),
-                star,
-                name(),
+                named,
                 launch_button(
                     kind_glyph(SessionKind::Shell),
                     strings::SIDEBAR_LAUNCH_SHELL,
@@ -432,11 +440,11 @@ impl Shell {
         }
         if empty {
             return g
-                .push(
+                .push(under_title(
                     text(strings::SIDEBAR_REPO_NO_SESSIONS)
                         .size(CAPTION)
                         .style(sidebar_secondary_text),
-                )
+                ))
                 .into();
         }
         // A folded project shows only its header, hiding the session list.
@@ -460,12 +468,12 @@ impl Shell {
                 SidebarFold::Truncated(hidden) => strings::sidebar_more(hidden),
                 SidebarFold::Expanded => strings::SIDEBAR_SHOW_LESS.to_owned(),
             };
-            g = g.push(
+            g = g.push(under_title(
                 button(text(label).size(BODY).style(sidebar_secondary_text))
                     .on_press(Message::ToggleExpanded(group.path.clone()))
                     .style(button::text)
                     .padding(0),
-            );
+            ));
         }
         g.into()
     }
@@ -499,8 +507,7 @@ impl Shell {
 
         let title = self.core.session_title(s);
         let renaming_this = self.renaming.as_ref().is_some_and(|(rid, _)| rid == id);
-        let actions =
-            |visible: bool| controls(self.session_actions(s, renaming_this, &title), visible);
+        let actions = || controls(self.session_actions(s, renaming_this, &title));
 
         let entry: Element<'_, Message> = if renaming_this {
             let buffer = self.renaming.as_ref().map_or("", |(_, b)| b.as_str());
@@ -514,7 +521,7 @@ impl Shell {
                 .size(BODY)
                 .padding(2)
                 .width(Fill);
-            row![star(true), field, actions(true)]
+            row![star(true), field, actions()]
                 .spacing(6)
                 .align_y(iced::Center)
                 .into()
@@ -586,11 +593,13 @@ impl Shell {
                 )
                 .into()
             };
+            // At rest the title takes the actions' room too; under the
+            // pointer they come back and the title is cut shorter.
             let layer = |hovered: bool| -> Element<'_, Message> {
-                row![star(hovered || starred), resume(hovered), actions(hovered)]
+                let row = row![star(hovered || starred), resume(hovered)]
                     .spacing(6)
-                    .align_y(iced::Center)
-                    .into()
+                    .align_y(iced::Center);
+                if hovered { row.push(actions()) } else { row }.into()
             };
             with_hover(layer(false), layer(true))
         };
@@ -599,9 +608,12 @@ impl Shell {
         // Title-only hits return `None` and stay single-line. The
         // core windows the line around the hit; we clip to the sidebar.
         match self.core.search_snippet(s) {
-            Some(snip) => column![entry, fitted(snip.line, CAPTION, sidebar_secondary_text),]
-                .spacing(1)
-                .into(),
+            Some(snip) => column![
+                entry,
+                under_title(fitted(snip.line, CAPTION, sidebar_secondary_text))
+            ]
+            .spacing(1)
+            .into(),
             None => entry,
         }
     }
@@ -648,9 +660,8 @@ fn row_button(glyph: &'static str, on_press: Message) -> button::Button<'static,
 }
 
 /// `control` in a fixed-width slot when `visible`, else its `glyph` drawn
-/// transparent and inert. The resting row keeps the hovered row's exact
-/// layout and height, so the two layers line up control for control and a
-/// press between the hovered row's buttons finds nothing beneath it.
+/// transparent and inert, so a mark that shows only under the pointer does
+/// not shift what follows it when it appears.
 fn slot<'a>(
     visible: bool,
     glyph: &'static str,
@@ -667,14 +678,13 @@ fn slot<'a>(
     container(content).center_x(CONTROL_WIDTH).into()
 }
 
-/// A row of glyph `actions`, shown as buttons when `visible`, else held by
-/// their inert [`slot`]s.
-fn controls<'a>(actions: [(&'static str, Message); 3], visible: bool) -> Element<'a, Message> {
+/// A row of glyph `actions`, each a button in its [`slot`].
+fn controls<'a>(actions: [(&'static str, Message); 3]) -> Element<'a, Message> {
     actions
         .into_iter()
         .fold(
             row![].spacing(6).align_y(iced::Center),
-            |row, (glyph, message)| row.push(slot(visible, glyph, row_button(glyph, message))),
+            |row, (glyph, message)| row.push(slot(true, glyph, row_button(glyph, message))),
         )
         .into()
 }
@@ -684,18 +694,29 @@ fn empty_slot<'a>() -> Element<'a, Message> {
     iced::widget::Space::new().width(CONTROL_WIDTH).into()
 }
 
+/// `line` set in from the left by a row's leading slot, so it starts where
+/// the session titles above it start.
+fn under_title<'a>(line: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    row![empty_slot(), line.into()].spacing(6).into()
+}
+
 /// `rest` with `hovered` drawn over it under the pointer, on the hovered
 /// row's opaque fill: the same row with its actions. Opaque, because a
 /// translucent tint over the title would lower its contrast.
+///
+/// The resting row leaves no room for actions it does not show, so its
+/// title reaches where the hovered row's buttons sit. A press the hovered
+/// row leaves unclaimed, between two buttons, must not fall through to that
+/// title and resume the session: `opaque` keeps every press on top.
 fn with_hover<'a>(
     rest: Element<'a, Message>,
     hovered: Element<'a, Message>,
 ) -> Element<'a, Message> {
     iced::widget::hover(
         rest,
-        container(hovered).width(Fill).style(|theme: &iced::Theme| {
+        iced::widget::opaque(container(hovered).width(Fill).style(|theme: &iced::Theme| {
             container::background(row_hover_fill(theme.extended_palette()))
-        }),
+        })),
     )
 }
 

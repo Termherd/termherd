@@ -33,12 +33,12 @@ Toggle it with <kbd>Cmd</kbd>+<kbd>B</kbd> (macOS) or
 │ ★ Favorites                    │
 │   my-app · fix the race        │
 ├────────────────────────────────┤
-│   new-repo     ❯  ✳            │  ← added by hand, no sessions yet
-│     No sessions yet …          │
-│ ▾ ★ my-app        ❯  ✳         │  ← launch a shell / a fresh Claude session
-│   ★ fix the race               │  ← starred
-│   ☆ add the cache  ↗ ✎ ⊟       │  ← under the pointer
-│     … 3 more                   │
+│   new-repo        ❯  ✳         │  ← added by hand, no sessions yet
+│   No sessions yet …            │
+│ ▾ my-app ★        ❯  ✳         │  ← launch a shell / a fresh Claude session
+│ ★ fix the race                 │  ← starred
+│ ☆ add the cache      ↗ ✎ ⊟     │  ← under the pointer
+│   … 3 more                     │
 │ ▸ other-repo      ❯  ✳         │
 ├────────────────────────────────┤
 │ Plans & memory                 │
@@ -139,10 +139,12 @@ large `~/.claude` history the first scan is the slow part, not the query.
 ## Stars, renames, archives
 
 At rest a session row shows what tells it apart: its colour bar and status dot
-when it has them, its title and message count, and a ★ when starred. Its four
-buttons appear when the pointer is over the row, which is drawn on a lighter
-or darker fill; a row being renamed keeps them in view. A project's ☆, and the
-✕ of a repository you added, work the same way.
+when it has them, its title and message count, and a ★ when starred. The
+title takes the whole row at rest. Its four buttons appear when the pointer is
+over the row, which is drawn on a lighter or darker fill, and the title is
+cut shorter to make room; a row being renamed keeps them in view. A project's
+☆, just after its name, and the ✕ of a repository you added, work the same
+way.
 
 A title too long for its row ends in `…` where the row runs out, and the
 message count keeps its place at the end; the card on hover shows the title
@@ -181,9 +183,9 @@ repo in the sidebar, an added repo with no session yet included. Clicking one
 loads it off-thread and opens it in the main pane, replacing the terminal view
 until you close it.
 
-The doc pane can **edit** — `💾 save`, with a `• modified` marker while there
-are unsaved changes and `saved` after a write. Two ways out, and they behave
-identically: the `✕ close` button, or <kbd>Escape</kbd>. With unsaved changes,
+The doc pane can **edit** — **Save**, with a `• Modified` marker while there
+are unsaved changes and `Saved` after a write. Two ways out, and they behave
+identically: the **Close** button, or <kbd>Escape</kbd>. With unsaved changes,
 both ask first — *Discard unsaved changes to “CLAUDE.md”?* — and clicking
 another doc in the sidebar asks too, naming both docs. <kbd>Enter</kbd> or
 `Discard` throws the edits away; <kbd>Escape</kbd> or `Cancel` goes back to the

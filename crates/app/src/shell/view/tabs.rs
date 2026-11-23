@@ -320,6 +320,9 @@ impl<'a> ListLine<'a> {
     }
 }
 
+/// How far a list card's lines are set in from its sides.
+const LIST_INSET: u16 = 8;
+
 /// A list drawn over the window for the focused tab: its title, then one
 /// line per entry, the `selected` one filled. A click on a runnable line runs
 /// it and hovering any line selects it, so the pointer moves the selection
@@ -331,6 +334,11 @@ fn list_card<'a>(
     on_run: fn(usize) -> Message,
     on_hover: fn(usize) -> Message,
 ) -> Element<'a, Message> {
+    // The heading takes the entries' inset, so its text starts where theirs
+    // does.
+    let heading = heading
+        .into_iter()
+        .map(|line| container(line).padding([0, LIST_INSET]).into());
     let mut card = column(heading).spacing(2).width(240);
     for (position, line) in lines.enumerate() {
         let style = if position == selected {
@@ -342,7 +350,7 @@ fn list_card<'a>(
             .on_press_maybe(line.runnable.then(|| on_run(position)))
             .style(style)
             .width(Fill)
-            .padding([4, 8]);
+            .padding([4, LIST_INSET]);
         card = card.push(mouse_area(line).on_enter(on_hover(position)));
     }
     modal_card(card)

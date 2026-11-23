@@ -17,6 +17,18 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   outside TermHerd, it serves `settings.json` tools with explicit `initialize`
   instructions explaining why the live tools are unavailable.
 
+### Changed (a polished chrome)
+
+- A sidebar title takes the whole row at rest, the room its hidden buttons
+  kept empty included; the buttons cut it shorter only under the pointer.
+- A project's name lines up with its sessions' titles, its ☆ moved after the
+  name; a long name is cut to leave the buttons in view. The `… more` line,
+  a search's matched line and an empty repository's hint line up too.
+- The document pane's buttons read **Save** and **Close**, its notes `Saved`
+  and `• Modified`, without the floppy-disk emoji.
+- The tab menu's heading starts where its entries do, and a pane's border
+  takes the same 4 px corner as a tab.
+
 ### Changed (larger, steadier text sizes)
 
 - The interface's text takes four sizes instead of eight: 11 for secondary
