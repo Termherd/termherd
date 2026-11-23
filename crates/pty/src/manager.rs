@@ -18,8 +18,9 @@ use crate::events::EventSink;
 use crate::grid::Palette;
 use crate::kill::finish_kill;
 use crate::launch::{
-    PrivateFiles, apply_integration, apply_terminal_env, discard_private_files, launch_command,
-    strip_inherited_session_env, write_mcp_config, write_title_settings,
+    PrivateFiles, apply_integration, apply_mcp_config_env, apply_terminal_env,
+    discard_private_files, launch_command, strip_inherited_session_env, strip_termherd_session_env,
+    write_mcp_config, write_title_settings,
 };
 use crate::session::{
     SCREEN_INTERVAL, Session, SharedMaster, SharedPalette, SharedWriter, TermCmd, spawn_reader,
@@ -141,6 +142,7 @@ fn shell_command(configured: Option<&Shell>, cwd: Option<&str>) -> CommandBuilde
         cmd.cwd(cwd);
     }
     strip_inherited_session_env(&mut cmd);
+    strip_termherd_session_env(&mut cmd);
     apply_terminal_env(&mut cmd);
     cmd
 }
@@ -175,10 +177,23 @@ impl PtyHost for PtyManager {
         };
         apply_integration(&self.private, spec.session, &program, &mut cmd);
 
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| PtyError::Spawn(e.to_string()))?;
+        // Write the per-session `mcpServers` config before spawning the shell,
+        // so both argv-based launches (`--mcp-config`) and env-based proxies
+        // can reference it. If spawning fails, discard every private file we
+        // just created so bearer tokens and startup dirs do not leak.
+        let mcp_config_path = spec
+            .mcp
+            .as_ref()
+            .and_then(|config| write_mcp_config(&self.private, spec.session, config));
+        apply_mcp_config_env(&mut cmd, mcp_config_path.as_deref());
+
+        let child = match pair.slave.spawn_command(cmd) {
+            Ok(child) => child,
+            Err(error) => {
+                discard_private_files(&self.private, spec.session);
+                return Err(PtyError::Spawn(error.to_string()));
+            }
+        };
         // The slave fd must close in this process so the reader sees EOF when
         // the child exits.
         drop(pair.slave);
@@ -196,14 +211,9 @@ impl PtyHost for PtyManager {
         let shell_pid = child.process_id();
         let master: SharedMaster = Arc::new(Mutex::new(pair.master));
 
-        // Start Claude by typing into the fresh shell (see `launch_command`).
-        // Shells buffer stdin, so writing immediately is safe even before the
-        // prompt appears. A Claude launch with an mcp endpoint first writes the
-        // `mcpServers` config file `--mcp-config` points at.
-        let mcp_config_path = spec
-            .mcp
-            .as_ref()
-            .and_then(|config| write_mcp_config(&self.private, spec.session, config));
+        // Start the agent CLI by typing into the fresh shell (see
+        // `launch_command`). Shells buffer stdin, so writing immediately is
+        // safe even before the prompt appears.
         // A Claude launch also carries the settings overlay that keeps its OSC
         // title — termherd's only status channel for it — switched on.
         let settings_path = (spec.launch.provider() == Some(termherd_core::Provider::Claude))

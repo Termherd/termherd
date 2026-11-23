@@ -20,6 +20,7 @@ mod log_file;
 #[cfg(target_os = "macos")]
 mod macos;
 mod mcp;
+mod mcp_proxy;
 mod metadata_store;
 mod paths;
 mod providers;
@@ -49,9 +50,22 @@ fn main() -> iced::Result {
     // that would disturb it: the single-instance lock below exits(2) on a second
     // process, which is the wrong answer to `termherd mcp-config`. Nor does it
     // open the log file, which could rotate the running instance's log.
-    if cli::parse(std::env::args()) == cli::Command::McpConfig {
-        tracing_init::init_tracing(None);
-        return report_mcp_config(data_dir.as_ref());
+    match cli::parse(std::env::args()) {
+        cli::Command::McpConfig => {
+            tracing_init::init_tracing(None);
+            return report_mcp_config(data_dir.as_ref());
+        }
+        cli::Command::McpProxy => {
+            let config_path = paths::mcp_config_path();
+            let settings_file = data_dir.as_ref().map(settings::path);
+            if let Err(err) = mcp_proxy::run(config_path.as_deref(), settings_file.as_deref()) {
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr(), "termherd mcp-proxy: {err}");
+                std::process::exit(1);
+            }
+            return Ok(());
+        }
+        cli::Command::Gui => {}
     }
 
     tracing_init::init_tracing(log_file::path(data_dir.as_ref()).as_deref());

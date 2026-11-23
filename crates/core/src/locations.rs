@@ -25,6 +25,11 @@ pub const CLAUDE_CONFIG_DIR_VAR: &str = "CLAUDE_CONFIG_DIR";
 /// real conversations.
 pub const ANTIGRAVITY_DIR_VAR: &str = "TERMHERD_ANTIGRAVITY_DIR";
 
+/// Path to the per-session private `mcpServers` config file exported into an
+/// agent session's PTY environment so `termherd mcp-proxy` can forward stdio
+/// MCP traffic to the parent instance's live bridge.
+pub const MCP_CONFIG_VAR: &str = "TERMHERD_MCP_CONFIG";
+
 /// The user's home directory: `%USERPROFILE%` (Windows) then `$HOME` (Unix).
 /// `None` when neither is set.
 #[must_use]
@@ -52,6 +57,13 @@ pub fn claude_dir(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
 pub fn antigravity_dir(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     overridden(env, ANTIGRAVITY_DIR_VAR)
         .or_else(|| home(env).map(|home| home.join(".gemini").join("antigravity-cli")))
+}
+
+/// Per-session live-bridge config path from [`MCP_CONFIG_VAR`], or `None` when
+/// unset or empty (no fallback: an absent variable means no session bridge).
+#[must_use]
+pub fn mcp_config_path(env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    overridden(env, MCP_CONFIG_VAR)
 }
 
 fn overridden(env: &impl Fn(&str) -> Option<OsString>, name: &str) -> Option<PathBuf> {
@@ -152,6 +164,16 @@ mod tests {
         assert_eq!(
             antigravity_dir(&env),
             Some(PathBuf::from("/h/.gemini/antigravity-cli"))
+        );
+    }
+
+    #[test]
+    fn mcp_config_path_reads_only_its_own_non_empty_var() {
+        assert_eq!(mcp_config_path(&env_of(&[("HOME", "/h")])), None);
+        assert_eq!(mcp_config_path(&env_of(&[(MCP_CONFIG_VAR, "")])), None);
+        assert_eq!(
+            mcp_config_path(&env_of(&[(MCP_CONFIG_VAR, "/tmp/termherd-mcp-1.json")])),
+            Some(PathBuf::from("/tmp/termherd-mcp-1.json"))
         );
     }
 }

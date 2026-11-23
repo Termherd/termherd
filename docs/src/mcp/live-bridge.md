@@ -17,6 +17,25 @@ A client TermHerd did **not** launch can reach the same server, and the same
 tools, once the instance is told to publish its address — see [Attaching from
 outside](./attach.md). Everything below applies unchanged there.
 
+## Antigravity (`agy`) and CLIs without `--mcp-config`
+
+Every agent session TermHerd spawns also receives `TERMHERD_MCP_CONFIG` in its
+PTY environment, pointing to that session's private `0600` `mcpServers` file
+(the bearer token stays in the file, never in the environment). Register
+`termherd mcp-proxy` once in Antigravity so every session launched from
+TermHerd gets the same live tools:
+
+```bash
+agy mcp add termherd /path/to/termherd mcp-proxy
+```
+
+When `TERMHERD_MCP_CONFIG` is present, `termherd mcp-proxy` forwards stdio
+JSON-RPC to that session's loopback bridge and surfaces transport or token
+errors directly as JSON-RPC errors. When `TERMHERD_MCP_CONFIG` is absent
+(launched outside TermHerd, or a host CLI that does not propagate it), it
+serves the `settings.json` tools (`list_options`, `set_option`) and states in
+its `initialize` instructions why the live workspace tools are unavailable.
+
 ## The tools
 
 ### Perception
